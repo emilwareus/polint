@@ -900,15 +900,19 @@ mod tests {
             calls: Vec::new(),
         });
         let file_key = db
-            .metadata_for(FactRef::new(FactFamily::SourceFile, u64::from(file.0)))
-            .expect("source metadata should exist")
-            .stable_key
-            .clone();
+            .resolve_stable_key(
+                db.metadata_for(FactRef::new(FactFamily::SourceFile, u64::from(file.0)))
+                    .expect("source metadata should exist")
+                    .stable_key,
+            )
+            .to_string();
         let function_key = db
-            .metadata_for(FactRef::new(FactFamily::Function, function.0))
-            .expect("function metadata should exist")
-            .stable_key
-            .clone();
+            .resolve_stable_key(
+                db.metadata_for(FactRef::new(FactFamily::Function, function.0))
+                    .expect("function metadata should exist")
+                    .stable_key,
+            )
+            .to_string();
 
         derive_requested_metrics(
             &mut db,
@@ -930,15 +934,32 @@ mod tests {
         assert_eq!(file_metric.precision, FactPrecision::Syntax);
         assert_eq!(file_metric.confidence, FactConfidence::High);
         assert_eq!(file_metric.validation, ValidationStatus::NativeTrusted);
-        assert!(file_metric.stable_key.contains(&file_key));
-        assert!(function_metric.stable_key.contains(&function_key));
-        assert!(function_metric.stable_key.contains("metric_name"));
-        assert!(function_metric.stable_key.contains("function_size"));
-        assert!(complexity_metric.stable_key.contains(&function_key));
-        assert!(complexity_metric.stable_key.contains("metric_name"));
         assert!(
-            complexity_metric
-                .stable_key
+            db.resolve_stable_key(file_metric.stable_key)
+                .contains(&file_key)
+        );
+        assert!(
+            db.resolve_stable_key(function_metric.stable_key)
+                .contains(&function_key)
+        );
+        assert!(
+            db.resolve_stable_key(function_metric.stable_key)
+                .contains("metric_name")
+        );
+        assert!(
+            db.resolve_stable_key(function_metric.stable_key)
+                .contains("function_size")
+        );
+        assert!(
+            db.resolve_stable_key(complexity_metric.stable_key)
+                .contains(&function_key)
+        );
+        assert!(
+            db.resolve_stable_key(complexity_metric.stable_key)
+                .contains("metric_name")
+        );
+        assert!(
+            db.resolve_stable_key(complexity_metric.stable_key)
                 .contains("cyclomatic_complexity")
         );
     }

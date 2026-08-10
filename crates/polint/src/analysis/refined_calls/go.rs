@@ -355,7 +355,7 @@ fn metadata_key(
     fallback: crate::core::StableKeyId,
 ) -> String {
     db.metadata_for(FactRef::new(family, run_id))
-        .map(|metadata| metadata.stable_key.clone())
+        .map(|metadata| db.resolve_stable_key(metadata.stable_key).to_string())
         .unwrap_or_else(|| db.resolve_stable_key(fallback).to_string())
 }
 

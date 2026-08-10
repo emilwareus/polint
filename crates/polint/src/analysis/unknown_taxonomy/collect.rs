@@ -657,7 +657,7 @@ fn policy_capability_docs_path(capability: &str) -> &'static str {
 
 fn stable_key_for(db: &AnalysisDb, family: FactFamily, run_id: u64) -> Option<String> {
     db.metadata_for(FactRef::new(family, run_id))
-        .map(|metadata| metadata.stable_key.clone())
+        .map(|metadata| db.resolve_stable_key(metadata.stable_key).to_string())
 }
 
 fn resolution_category(

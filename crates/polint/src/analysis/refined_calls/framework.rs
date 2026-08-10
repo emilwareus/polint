@@ -234,7 +234,7 @@ fn function_or_symbol_key(
 
 fn metadata_key(db: &AnalysisDb, family: FactFamily, run_id: u64, fallback: &str) -> String {
     db.metadata_for(FactRef::new(family, run_id))
-        .map(|metadata| metadata.stable_key.clone())
+        .map(|metadata| db.resolve_stable_key(metadata.stable_key).to_string())
         .unwrap_or_else(|| fallback.to_string())
 }
 

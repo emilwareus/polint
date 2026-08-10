@@ -1988,11 +1988,11 @@ impl AnalysisDb {
         let (precision, confidence) =
             type_metadata_precision(fact.status, fact.precision, Some(fact.confidence));
         fact_meta_from_stable_key(
-            FactFamily::Type,
+            &self.stable_keys,
             TYPE_VALUE_ALIAS_PROVIDER_ID,
             precision,
             confidence,
-            self.resolve_stable_key(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("status", format!("{:?}", fact.status)),
                 ("precision", format!("{:?}", fact.precision)),
@@ -2015,11 +2015,11 @@ impl AnalysisDb {
     fn narrowed_type_metadata(&self, fact: &NarrowedTypeFact) -> FactMeta {
         let (precision, confidence) = type_metadata_precision(fact.status, fact.precision, None);
         fact_meta_from_stable_key(
-            FactFamily::NarrowedType,
+            &self.stable_keys,
             TYPE_VALUE_ALIAS_PROVIDER_ID,
             precision,
             confidence,
-            self.resolve_stable_key(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("status", format!("{:?}", fact.status)),
                 ("precision", format!("{:?}", fact.precision)),
@@ -2044,11 +2044,11 @@ impl AnalysisDb {
     fn value_fact_metadata(&self, fact: &ValueFact) -> FactMeta {
         let (precision, confidence) = value_metadata_precision(fact.status, fact.precision);
         fact_meta_from_stable_key(
-            FactFamily::Value,
+            &self.stable_keys,
             TYPE_VALUE_ALIAS_PROVIDER_ID,
             precision,
             confidence,
-            self.resolve_stable_key(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("status", format!("{:?}", fact.status)),
                 ("precision", format!("{:?}", fact.precision)),
@@ -2062,11 +2062,11 @@ impl AnalysisDb {
 
     fn allocation_token_metadata(&self, fact: &AllocationTokenFact) -> FactMeta {
         fact_meta_from_stable_key(
-            FactFamily::AllocationToken,
+            &self.stable_keys,
             TYPE_VALUE_ALIAS_PROVIDER_ID,
             FactPrecision::SetupAware,
             FactConfidence::Medium,
-            self.resolve_stable_key(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("kind", format!("{:?}", fact.kind)),
                 ("language", language_label(fact.language).to_string()),
@@ -2100,11 +2100,11 @@ impl AnalysisDb {
             }
         };
         fact_meta_from_stable_key(
-            FactFamily::AccessPath,
+            &self.stable_keys,
             TYPE_VALUE_ALIAS_PROVIDER_ID,
             precision,
             FactConfidence::Medium,
-            self.resolve_stable_key(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("status", format!("{:?}", fact.status)),
                 ("language", language_label(fact.language).to_string()),
@@ -2120,11 +2120,11 @@ impl AnalysisDb {
     fn points_to_constraint_metadata(&self, fact: &PointsToConstraintFact) -> FactMeta {
         let (precision, confidence) = points_to_metadata_precision(fact.status, fact.precision);
         fact_meta_from_stable_key(
-            FactFamily::PointsToConstraint,
+            &self.stable_keys,
             TYPE_VALUE_ALIAS_PROVIDER_ID,
             precision,
             confidence,
-            self.resolve_stable_key(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("status", format!("{:?}", fact.status)),
                 ("precision", format!("{:?}", fact.precision)),
@@ -2136,11 +2136,11 @@ impl AnalysisDb {
     fn points_to_set_metadata(&self, fact: &PointsToSetFact) -> FactMeta {
         let (precision, confidence) = points_to_metadata_precision(fact.status, fact.precision);
         fact_meta_from_stable_key(
-            FactFamily::PointsToSet,
+            &self.stable_keys,
             TYPE_VALUE_ALIAS_PROVIDER_ID,
             precision,
             confidence,
-            self.resolve_stable_key(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("status", format!("{:?}", fact.status)),
                 ("precision", format!("{:?}", fact.precision)),
@@ -2154,11 +2154,11 @@ impl AnalysisDb {
     fn alias_answer_metadata(&self, fact: &AliasAnswerFact) -> FactMeta {
         let (precision, confidence) = alias_metadata_precision(fact.status, fact.precision);
         fact_meta_from_stable_key(
-            FactFamily::AliasAnswer,
+            &self.stable_keys,
             TYPE_VALUE_ALIAS_PROVIDER_ID,
             precision,
             confidence,
-            self.resolve_stable_key(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("status", format!("{:?}", fact.status)),
                 ("precision", format!("{:?}", fact.precision)),
@@ -2177,11 +2177,11 @@ impl AnalysisDb {
     ) -> FactMeta {
         let (precision, confidence) = entrypoint_precision_metadata(fact.status, fact.precision);
         fact_meta_from_stable_key(
-            FactFamily::Entrypoint,
+            interner,
             ENTRYPOINTS_PROVIDER_ID,
             precision,
             confidence,
-            interner.resolve(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("status", format!("{:?}", fact.status)),
                 ("precision", format!("{:?}", fact.precision)),
@@ -2211,11 +2211,11 @@ impl AnalysisDb {
         let (precision, confidence) =
             entrypoint_precision_metadata(EntrypointStatus::Resolved, fact.precision);
         fact_meta_from_stable_key(
-            FactFamily::TrustBoundary,
+            interner,
             ENTRYPOINTS_PROVIDER_ID,
             precision,
             confidence,
-            interner.resolve(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("source_kind", format!("{:?}", fact.source_kind)),
                 (
@@ -2237,11 +2237,11 @@ impl AnalysisDb {
         let (precision, confidence) =
             entrypoint_precision_metadata(EntrypointStatus::Resolved, fact.precision);
         fact_meta_from_stable_key(
-            FactFamily::DispatchEdge,
+            interner,
             ENTRYPOINTS_PROVIDER_ID,
             precision,
             confidence,
-            interner.resolve(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("edge_kind", format!("{:?}", fact.edge_kind)),
                 ("from_source", fact.from_source.clone()),
@@ -2258,11 +2258,11 @@ impl AnalysisDb {
         fact: &UnresolvedFrameworkFact,
     ) -> FactMeta {
         fact_meta_from_stable_key(
-            FactFamily::UnresolvedFramework,
+            interner,
             ENTRYPOINTS_PROVIDER_ID,
             FactPrecision::SetupAware,
             FactConfidence::Medium,
-            interner.resolve(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("reason", format!("{:?}", fact.reason)),
                 ("framework", fact.framework_id.clone()),
@@ -2276,7 +2276,7 @@ impl AnalysisDb {
     fn summary_fact_metadata(&self, fact: &SummaryFact) -> FactMeta {
         let (precision, confidence) = summary_precision_metadata(fact.status, fact.precision);
         FactMeta {
-            stable_key: self.resolve_stable_key(fact.stable_key).to_string(),
+            stable_key: fact.stable_key,
             producer_id: POLINT_DIRECT_SUMMARIES_PROVIDER_ID,
             layer_id: POLINT_DIRECT_SUMMARIES_PROVIDER_ID,
             precision,
@@ -2289,7 +2289,7 @@ impl AnalysisDb {
     fn summary_event_metadata(&self, fact: &SummaryEventFact) -> FactMeta {
         let (precision, confidence) = summary_precision_metadata(fact.status, fact.precision);
         FactMeta {
-            stable_key: self.resolve_stable_key(fact.stable_key).to_string(),
+            stable_key: fact.stable_key,
             producer_id: POLINT_DIRECT_SUMMARIES_PROVIDER_ID,
             layer_id: POLINT_DIRECT_SUMMARIES_PROVIDER_ID,
             precision,
@@ -2488,10 +2488,10 @@ impl AnalysisDb {
                 (
                     fact.id.0,
                     topology_fact_metadata(
-                        FactFamily::WorkspaceRoot,
+                        &interner,
                         MODULE_GRAPH_PROVIDER_ID,
                         fact.precision,
-                        interner.resolve(fact.stable_key).as_ref(),
+                        fact.stable_key,
                     ),
                 )
             })
@@ -2507,10 +2507,10 @@ impl AnalysisDb {
                 (
                     fact.id.0,
                     topology_fact_metadata(
-                        FactFamily::TopologyPackage,
+                        &interner,
                         MODULE_GRAPH_PROVIDER_ID,
                         fact.precision,
-                        interner.resolve(fact.stable_key).as_ref(),
+                        fact.stable_key,
                     ),
                 )
             })
@@ -2526,10 +2526,10 @@ impl AnalysisDb {
                 (
                     fact.id.0,
                     topology_fact_metadata(
-                        FactFamily::SourceSet,
+                        &interner,
                         MODULE_GRAPH_PROVIDER_ID,
                         fact.precision,
-                        interner.resolve(fact.stable_key).as_ref(),
+                        fact.stable_key,
                     ),
                 )
             })
@@ -2545,10 +2545,10 @@ impl AnalysisDb {
                 (
                     fact.id.0,
                     topology_fact_metadata(
-                        FactFamily::DependencyRequirement,
+                        &interner,
                         MODULE_GRAPH_PROVIDER_ID,
                         fact.precision,
-                        interner.resolve(fact.stable_key).as_ref(),
+                        fact.stable_key,
                     ),
                 )
             })
@@ -2564,10 +2564,10 @@ impl AnalysisDb {
                 (
                     fact.id.0,
                     topology_fact_metadata(
-                        FactFamily::ResolvedDependencyEdge,
+                        &interner,
                         MODULE_GRAPH_PROVIDER_ID,
                         fact.precision,
-                        interner.resolve(fact.stable_key).as_ref(),
+                        fact.stable_key,
                     ),
                 )
             })
@@ -2583,10 +2583,10 @@ impl AnalysisDb {
                 (
                     fact.id.0,
                     topology_fact_metadata(
-                        FactFamily::RepoTopologyOverlay,
+                        &interner,
                         MODULE_GRAPH_PROVIDER_ID,
                         fact.precision,
-                        interner.resolve(fact.stable_key).as_ref(),
+                        fact.stable_key,
                     ),
                 )
             })
@@ -2615,10 +2615,10 @@ impl AnalysisDb {
                 (
                     fact.id.0,
                     topology_fact_metadata(
-                        FactFamily::ImportToPackage,
+                        &interner,
                         MODULE_TOPOLOGY_PROVIDER_ID,
                         fact.precision,
-                        interner.resolve(fact.stable_key).as_ref(),
+                        fact.stable_key,
                     ),
                 )
             })
@@ -2651,7 +2651,7 @@ impl AnalysisDb {
             .map(|scope| {
                 (
                     scope.id.0,
-                    self.semantic_fact_metadata(FactFamily::Scope, scope.stable_key, scope.status),
+                    self.semantic_fact_metadata(scope.stable_key, scope.status),
                 )
             })
             .collect::<Vec<_>>();
@@ -2664,11 +2664,7 @@ impl AnalysisDb {
             .map(|fact| {
                 (
                     fact.id.0,
-                    self.semantic_fact_metadata(
-                        FactFamily::SemanticImport,
-                        fact.stable_key,
-                        fact.status,
-                    ),
+                    self.semantic_fact_metadata(fact.stable_key, fact.status),
                 )
             })
             .collect::<Vec<_>>();
@@ -2681,7 +2677,7 @@ impl AnalysisDb {
             .map(|fact| {
                 (
                     fact.id.0,
-                    self.semantic_fact_metadata(FactFamily::Export, fact.stable_key, fact.status),
+                    self.semantic_fact_metadata(fact.stable_key, fact.status),
                 )
             })
             .collect::<Vec<_>>();
@@ -2694,7 +2690,7 @@ impl AnalysisDb {
             .map(|fact| {
                 (
                     fact.id.0,
-                    self.semantic_fact_metadata(FactFamily::Alias, fact.stable_key, fact.status),
+                    self.semantic_fact_metadata(fact.stable_key, fact.status),
                 )
             })
             .collect::<Vec<_>>();
@@ -2707,11 +2703,7 @@ impl AnalysisDb {
             .map(|fact| {
                 (
                     fact.id.0,
-                    self.semantic_fact_metadata(
-                        FactFamily::Resolution,
-                        fact.stable_key,
-                        fact.status,
-                    ),
+                    self.semantic_fact_metadata(fact.stable_key, fact.status),
                 )
             })
             .collect::<Vec<_>>();
@@ -2724,11 +2716,7 @@ impl AnalysisDb {
             .map(|fact| {
                 (
                     fact.id.0,
-                    self.semantic_fact_metadata(
-                        FactFamily::GeneratedSymbol,
-                        fact.stable_key,
-                        fact.status,
-                    ),
+                    self.semantic_fact_metadata(fact.stable_key, fact.status),
                 )
             })
             .collect::<Vec<_>>();
@@ -2741,11 +2729,7 @@ impl AnalysisDb {
             .map(|fact| {
                 (
                     fact.id.0,
-                    self.semantic_fact_metadata(
-                        FactFamily::StableExport,
-                        fact.stable_key,
-                        fact.status,
-                    ),
+                    self.semantic_fact_metadata(fact.stable_key, fact.status),
                 )
             })
             .collect::<Vec<_>>();
@@ -3981,11 +3965,11 @@ impl AnalysisDb {
     fn symbol_fact_metadata(&self, fact: &SymbolFact) -> FactMeta {
         let (precision, confidence) = symbol_metadata(fact.precision);
         fact_meta_from_stable_key(
-            FactFamily::Symbol,
+            &self.stable_keys,
             SYMBOL_GRAPH_PROVIDER_ID,
             precision,
             confidence,
-            self.resolve_stable_key(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("id", fact.id.0.to_string()),
                 ("language", language_label(fact.language).to_string()),
@@ -4007,11 +3991,11 @@ impl AnalysisDb {
     fn definition_fact_metadata(&self, fact: &DefinitionFact) -> FactMeta {
         let (precision, confidence) = symbol_metadata(fact.precision);
         fact_meta_from_stable_key(
-            FactFamily::Definition,
+            &self.stable_keys,
             SYMBOL_GRAPH_PROVIDER_ID,
             precision,
             confidence,
-            self.resolve_stable_key(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("id", fact.id.0.to_string()),
                 ("symbol", fact.symbol.0.to_string()),
@@ -4034,11 +4018,11 @@ impl AnalysisDb {
     fn reference_fact_metadata(&self, fact: &ReferenceFact) -> FactMeta {
         let (precision, confidence) = symbol_metadata(fact.precision);
         fact_meta_from_stable_key(
-            FactFamily::Reference,
+            &self.stable_keys,
             SYMBOL_GRAPH_PROVIDER_ID,
             precision,
             confidence,
-            self.resolve_stable_key(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("id", fact.id.0.to_string()),
                 ("language", language_label(fact.language).to_string()),
@@ -4069,17 +4053,16 @@ impl AnalysisDb {
 
     fn semantic_fact_metadata(
         &self,
-        family: FactFamily,
         stable_key: crate::core::StableKeyId,
         status: SemanticStatus,
     ) -> FactMeta {
         let (precision, confidence) = semantic_status_metadata(status);
         fact_meta_from_stable_key(
-            family,
+            &self.stable_keys,
             SYMBOL_GRAPH_PROVIDER_ID,
             precision,
             confidence,
-            self.resolve_stable_key(stable_key).to_string(),
+            stable_key,
             stable_parts([("status", semantic_status_label(status).to_string())]),
         )
     }
@@ -4091,11 +4074,11 @@ impl AnalysisDb {
     ) -> FactMeta {
         let (precision, confidence) = mir_status_metadata(body.status);
         fact_meta_from_stable_key(
-            FactFamily::MirBody,
+            interner,
             SEMANTIC_MIR_PROVIDER_ID,
             precision,
             confidence,
-            interner.resolve(body.stable_key).to_string(),
+            body.stable_key,
             stable_parts([
                 ("status", mir_status_label(body.status).to_string()),
                 ("language", language_label(body.language).to_string()),
@@ -4128,11 +4111,11 @@ impl AnalysisDb {
     fn mir_operation_metadata(&self, operation: &MirOperation) -> FactMeta {
         let (precision, confidence) = mir_status_metadata(operation.status);
         fact_meta_from_stable_key(
-            FactFamily::MirOperation,
+            &self.stable_keys,
             SEMANTIC_MIR_PROVIDER_ID,
             precision,
             confidence,
-            self.resolve_stable_key(operation.stable_key).to_string(),
+            operation.stable_key,
             stable_parts([
                 ("status", mir_status_label(operation.status).to_string()),
                 (
@@ -4150,11 +4133,11 @@ impl AnalysisDb {
     fn place_metadata(&self, place: &PlaceFact) -> FactMeta {
         let (precision, confidence) = place_status_metadata(place.status);
         fact_meta_from_stable_key(
-            FactFamily::Place,
+            &self.stable_keys,
             SEMANTIC_MIR_PROVIDER_ID,
             precision,
             confidence,
-            self.resolve_stable_key(place.stable_key).to_string(),
+            place.stable_key,
             stable_parts([
                 ("status", place_status_label(place.status).to_string()),
                 ("language", language_label(place.language).to_string()),
@@ -4168,11 +4151,11 @@ impl AnalysisDb {
     fn unsupported_semantic_metadata(&self, row: &UnsupportedSemanticFact) -> FactMeta {
         let (precision, confidence) = mir_status_metadata(row.status);
         fact_meta_from_stable_key(
-            FactFamily::UnsupportedSemantic,
+            &self.stable_keys,
             SEMANTIC_MIR_PROVIDER_ID,
             precision,
             confidence,
-            self.resolve_stable_key(row.stable_key).to_string(),
+            row.stable_key,
             stable_parts([
                 ("status", mir_status_label(row.status).to_string()),
                 ("language", language_label(row.language).to_string()),
@@ -4213,11 +4196,11 @@ impl AnalysisDb {
     ) -> FactMeta {
         let (precision, confidence) = call_status_metadata(fact.status, fact.precision);
         fact_meta_from_stable_key(
-            FactFamily::CallSite,
+            interner,
             CALLS_PROVIDER_ID,
             precision,
             confidence,
-            interner.resolve(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("status", call_status_label(fact.status).to_string()),
                 (
@@ -4257,11 +4240,11 @@ impl AnalysisDb {
     ) -> FactMeta {
         let (precision, confidence) = call_status_metadata(fact.status, fact.precision);
         fact_meta_from_stable_key(
-            FactFamily::CallTarget,
+            interner,
             CALLS_PROVIDER_ID,
             precision,
             confidence,
-            interner.resolve(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("status", call_status_label(fact.status).to_string()),
                 (
@@ -4312,12 +4295,12 @@ impl AnalysisDb {
         let confidence = refined_call_confidence_metadata(fact.confidence, status_confidence);
         let validation = refined_call_validation_metadata(fact.validation);
         fact_meta_from_stable_key_with_validation(
-            FactFamily::RefinedCallEdge,
+            &self.stable_keys,
             REFINED_CALLS_PROVIDER_ID,
             precision,
             confidence,
             validation,
-            self.resolve_stable_key(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("status", call_status_label(fact.status).to_string()),
                 (
@@ -4411,12 +4394,12 @@ impl AnalysisDb {
         let confidence = data_flow_confidence_metadata(data_flow_confidence, status_confidence);
         let validation = data_flow_validation_metadata(data_flow_validation);
         fact_meta_from_stable_key_with_validation(
-            FactFamily::DataFlowNode,
+            interner,
             DATA_FLOW_PROVIDER_ID,
             precision,
             confidence,
             validation,
-            interner.resolve(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("kind", format!("{:?}", fact.kind)),
                 ("status", data_flow_status_label(status).to_string()),
@@ -4480,12 +4463,12 @@ impl AnalysisDb {
         let confidence = data_flow_confidence_metadata(fact.confidence, status_confidence);
         let validation = data_flow_validation_metadata(fact.validation);
         fact_meta_from_stable_key_with_validation(
-            FactFamily::DataFlowEdge,
+            interner,
             DATA_FLOW_PROVIDER_ID,
             precision,
             confidence,
             validation,
-            interner.resolve(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("kind", format!("{:?}", fact.kind)),
                 ("algorithm", format!("{:?}", fact.algorithm)),
@@ -4539,12 +4522,12 @@ impl AnalysisDb {
         let confidence = data_flow_confidence_metadata(fact.confidence, status_confidence);
         let validation = data_flow_validation_metadata(fact.validation);
         fact_meta_from_stable_key_with_validation(
-            FactFamily::DataFlowModel,
+            interner,
             DATA_FLOW_PROVIDER_ID,
             precision,
             confidence,
             validation,
-            interner.resolve(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("kind", format!("{:?}", fact.kind)),
                 ("language", language_label(fact.language).to_string()),
@@ -4566,11 +4549,11 @@ impl AnalysisDb {
         fact: &DataFlowBudgetFact,
     ) -> FactMeta {
         fact_meta_from_stable_key(
-            FactFamily::DataFlowBudget,
+            interner,
             DATA_FLOW_PROVIDER_ID,
             FactPrecision::Heuristic,
             FactConfidence::Medium,
-            interner.resolve(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("reason", format!("{:?}", fact.reason)),
                 ("status", data_flow_status_label(fact.status).to_string()),
@@ -4589,12 +4572,12 @@ impl AnalysisDb {
         let confidence = evidence_confidence_metadata(fact.confidence, status_confidence);
         let validation = evidence_validation_metadata(fact.validation);
         fact_meta_from_stable_key_with_validation(
-            FactFamily::EvidenceNode,
+            interner,
             EVIDENCE_PROVIDER_ID,
             precision,
             confidence,
             validation,
-            interner.resolve(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("kind", format!("{:?}", fact.kind)),
                 ("status", evidence_status_label(fact.status).to_string()),
@@ -4652,12 +4635,12 @@ impl AnalysisDb {
         let confidence = evidence_confidence_metadata(fact.confidence, status_confidence);
         let validation = evidence_validation_metadata(fact.validation);
         fact_meta_from_stable_key_with_validation(
-            FactFamily::EvidenceEdge,
+            interner,
             EVIDENCE_PROVIDER_ID,
             precision,
             confidence,
             validation,
-            interner.resolve(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("kind", format!("{:?}", fact.kind)),
                 ("query_mode", format!("{:?}", fact.query_mode)),
@@ -4706,12 +4689,12 @@ impl AnalysisDb {
         let confidence = evidence_confidence_metadata(fact.confidence, status_confidence);
         let validation = evidence_validation_metadata(fact.validation);
         fact_meta_from_stable_key_with_validation(
-            FactFamily::EvidenceBundle,
+            interner,
             EVIDENCE_PROVIDER_ID,
             precision,
             confidence,
             validation,
-            interner.resolve(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 (
                     "diagnostic_key",
@@ -4741,11 +4724,11 @@ impl AnalysisDb {
         let (precision, confidence) =
             evidence_status_metadata(fact.status, EvidencePrecision::Heuristic);
         fact_meta_from_stable_key(
-            FactFamily::EvidencePath,
+            interner,
             EVIDENCE_PROVIDER_ID,
             precision,
             confidence,
-            interner.resolve(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("query_mode", format!("{:?}", fact.query_mode)),
                 ("status", evidence_status_label(fact.status).to_string()),
@@ -4765,11 +4748,11 @@ impl AnalysisDb {
         let (precision, confidence) =
             evidence_status_metadata(fact.status, EvidencePrecision::Heuristic);
         fact_meta_from_stable_key(
-            FactFamily::EvidenceSlice,
+            interner,
             EVIDENCE_PROVIDER_ID,
             precision,
             confidence,
-            interner.resolve(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("query_mode", format!("{:?}", fact.query_mode)),
                 ("status", evidence_status_label(fact.status).to_string()),
@@ -4786,11 +4769,11 @@ impl AnalysisDb {
         fact: &EvidenceUnknownFact,
     ) -> FactMeta {
         fact_meta_from_stable_key(
-            FactFamily::EvidenceUnknown,
+            interner,
             EVIDENCE_PROVIDER_ID,
             FactPrecision::Unresolved,
             FactConfidence::Low,
-            interner.resolve(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("reason", format!("{:?}", fact.reason)),
                 ("message", fact.message.clone()),
@@ -4805,11 +4788,11 @@ impl AnalysisDb {
         fact: &EvidenceOmittedRegionFact,
     ) -> FactMeta {
         fact_meta_from_stable_key(
-            FactFamily::EvidenceOmittedRegion,
+            interner,
             EVIDENCE_PROVIDER_ID,
             FactPrecision::Unresolved,
             FactConfidence::Low,
-            interner.resolve(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("reason", format!("{:?}", fact.reason)),
                 ("hidden_node_count", fact.hidden_node_count.to_string()),
@@ -4828,11 +4811,11 @@ impl AnalysisDb {
         fact: &EvidenceReplayKeyFact,
     ) -> FactMeta {
         fact_meta_from_stable_key(
-            FactFamily::EvidenceReplayKey,
+            interner,
             EVIDENCE_PROVIDER_ID,
             FactPrecision::Heuristic,
             FactConfidence::Medium,
-            interner.resolve(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("query_mode", format!("{:?}", fact.query_mode)),
                 ("graph_schema", fact.graph_schema.clone()),
@@ -4856,11 +4839,11 @@ impl AnalysisDb {
     ) -> FactMeta {
         let (precision, confidence) = call_status_metadata(fact.status, fact.precision);
         fact_meta_from_stable_key(
-            FactFamily::UnresolvedCall,
+            interner,
             CALLS_PROVIDER_ID,
             precision,
             confidence,
-            interner.resolve(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("status", call_status_label(fact.status).to_string()),
                 (
@@ -4894,11 +4877,11 @@ impl AnalysisDb {
     ) -> FactMeta {
         let (precision, confidence) = domain_status_metadata(fact.status, fact.precision);
         fact_meta_from_stable_key(
-            FactFamily::DomainObservation,
+            interner,
             POLINT_ABSTRACT_DOMAINS_PROVIDER_ID,
             precision,
             confidence,
-            interner.resolve(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("status", fact.status.as_str().to_string()),
                 ("precision", fact.precision.as_str().to_string()),
@@ -4940,11 +4923,11 @@ impl AnalysisDb {
     ) -> FactMeta {
         let (precision, confidence) = domain_status_metadata(fact.status, fact.precision);
         fact_meta_from_stable_key(
-            FactFamily::DomainEvent,
+            interner,
             POLINT_ABSTRACT_DOMAINS_PROVIDER_ID,
             precision,
             confidence,
-            interner.resolve(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("status", fact.status.as_str().to_string()),
                 ("precision", fact.precision.as_str().to_string()),
@@ -4980,11 +4963,11 @@ impl AnalysisDb {
     fn cfg_function_metadata(&self, fact: &CfgFunctionFact) -> FactMeta {
         let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
         fact_meta_from_stable_key(
-            FactFamily::CfgFunction,
+            &self.stable_keys,
             CFG_PROVIDER_ID,
             precision,
             confidence,
-            self.resolve_stable_key(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("status", cfg_status_label(fact.status).to_string()),
                 ("precision", cfg_precision_label(fact.precision).to_string()),
@@ -5002,11 +4985,11 @@ impl AnalysisDb {
     fn cfg_node_metadata(&self, fact: &CfgNodeFact) -> FactMeta {
         let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
         fact_meta_from_stable_key(
-            FactFamily::CfgNode,
+            &self.stable_keys,
             CFG_PROVIDER_ID,
             precision,
             confidence,
-            self.resolve_stable_key(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("status", cfg_status_label(fact.status).to_string()),
                 ("precision", cfg_precision_label(fact.precision).to_string()),
@@ -5024,11 +5007,11 @@ impl AnalysisDb {
     fn cfg_block_metadata(&self, fact: &BasicBlockFact) -> FactMeta {
         let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
         fact_meta_from_stable_key(
-            FactFamily::BasicBlock,
+            &self.stable_keys,
             CFG_PROVIDER_ID,
             precision,
             confidence,
-            self.resolve_stable_key(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("status", cfg_status_label(fact.status).to_string()),
                 ("precision", cfg_precision_label(fact.precision).to_string()),
@@ -5046,11 +5029,11 @@ impl AnalysisDb {
     fn cfg_edge_metadata(&self, fact: &CfgEdgeFact) -> FactMeta {
         let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
         fact_meta_from_stable_key(
-            FactFamily::CfgEdge,
+            &self.stable_keys,
             CFG_PROVIDER_ID,
             precision,
             confidence,
-            self.resolve_stable_key(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("status", cfg_status_label(fact.status).to_string()),
                 ("precision", cfg_precision_label(fact.precision).to_string()),
@@ -5069,11 +5052,11 @@ impl AnalysisDb {
     fn cfg_reachability_metadata(&self, fact: &ReachabilityFact) -> FactMeta {
         let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
         fact_meta_from_stable_key(
-            FactFamily::CfgReachability,
+            &self.stable_keys,
             CFG_PROVIDER_ID,
             precision,
             confidence,
-            self.resolve_stable_key(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("status", cfg_status_label(fact.status).to_string()),
                 ("precision", cfg_precision_label(fact.precision).to_string()),
@@ -5087,11 +5070,11 @@ impl AnalysisDb {
     fn cfg_dominator_metadata(&self, fact: &DominatorFact) -> FactMeta {
         let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
         fact_meta_from_stable_key(
-            FactFamily::CfgDominator,
+            &self.stable_keys,
             CFG_PROVIDER_ID,
             precision,
             confidence,
-            self.resolve_stable_key(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("status", cfg_status_label(fact.status).to_string()),
                 ("precision", cfg_precision_label(fact.precision).to_string()),
@@ -5106,11 +5089,11 @@ impl AnalysisDb {
     fn cfg_postdominator_metadata(&self, fact: &PostDominatorFact) -> FactMeta {
         let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
         fact_meta_from_stable_key(
-            FactFamily::CfgPostDominator,
+            &self.stable_keys,
             CFG_PROVIDER_ID,
             precision,
             confidence,
-            self.resolve_stable_key(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("status", cfg_status_label(fact.status).to_string()),
                 ("precision", cfg_precision_label(fact.precision).to_string()),
@@ -5125,11 +5108,11 @@ impl AnalysisDb {
     fn cfg_control_dependence_metadata(&self, fact: &ControlDependenceFact) -> FactMeta {
         let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
         fact_meta_from_stable_key(
-            FactFamily::CfgControlDependence,
+            &self.stable_keys,
             CFG_PROVIDER_ID,
             precision,
             confidence,
-            self.resolve_stable_key(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("status", cfg_status_label(fact.status).to_string()),
                 ("precision", cfg_precision_label(fact.precision).to_string()),
@@ -5147,11 +5130,11 @@ impl AnalysisDb {
     fn unsupported_control_flow_metadata(&self, fact: &UnsupportedControlFlowFact) -> FactMeta {
         let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
         fact_meta_from_stable_key(
-            FactFamily::UnsupportedControlFlow,
+            &self.stable_keys,
             CFG_PROVIDER_ID,
             precision,
             confidence,
-            self.resolve_stable_key(fact.stable_key).to_string(),
+            fact.stable_key,
             stable_parts([
                 ("status", cfg_status_label(fact.status).to_string()),
                 ("precision", cfg_precision_label(fact.precision).to_string()),
@@ -5166,13 +5149,13 @@ impl AnalysisDb {
 
     fn fact_stable_key(&self, family: FactFamily, run_id: u64) -> String {
         self.metadata_for(FactRef::new(family, run_id))
-            .map(|metadata| metadata.stable_key.clone())
+            .map(|metadata| self.resolve_stable_key(metadata.stable_key).to_string())
             .unwrap_or_else(|| format!("<missing:{}:{run_id}>", family.label()))
     }
 
     fn source_file_key(&self, file: FileId) -> String {
         self.metadata_for(FactRef::new(FactFamily::SourceFile, u64::from(file.0)))
-            .map(|metadata| metadata.stable_key.clone())
+            .map(|metadata| self.resolve_stable_key(metadata.stable_key).to_string())
             .unwrap_or_else(|| self.path_for(file).replace('\\', "/"))
     }
 
@@ -5189,7 +5172,7 @@ impl AnalysisDb {
         span: &Span,
     ) -> String {
         self.metadata_for(FactRef::new(FactFamily::Function, function.0))
-            .map(|metadata| metadata.stable_key.clone())
+            .map(|metadata| interner.resolve(metadata.stable_key).to_string())
             .unwrap_or_else(|| {
                 stable_key_text_from_parts(
                     interner,

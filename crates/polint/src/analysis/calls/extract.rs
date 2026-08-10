@@ -481,7 +481,7 @@ fn owner_symbol(
 
 fn file_key(db: &AnalysisDb, file: FileId) -> String {
     db.metadata_for(FactRef::new(FactFamily::SourceFile, u64::from(file.0)))
-        .map(|metadata| metadata.stable_key.clone())
+        .map(|metadata| db.resolve_stable_key(metadata.stable_key).to_string())
         .or_else(|| {
             db.files()
                 .iter()
@@ -493,7 +493,7 @@ fn file_key(db: &AnalysisDb, file: FileId) -> String {
 
 fn caller_key(db: &AnalysisDb, function: FunctionId) -> String {
     db.metadata_for(FactRef::new(FactFamily::Function, function.0))
-        .map(|metadata| metadata.stable_key.clone())
+        .map(|metadata| db.resolve_stable_key(metadata.stable_key).to_string())
         .unwrap_or_else(|| format!("<missing-function:{}>", function.0))
 }
 

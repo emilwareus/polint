@@ -3204,10 +3204,12 @@ mod tests {
             language: Language::TypeScript,
         });
         let import_key = db
-            .metadata_for(FactRef::new(FactFamily::Import, import.0))
-            .expect("import metadata should exist")
-            .stable_key
-            .clone();
+            .resolve_stable_key(
+                db.metadata_for(FactRef::new(FactFamily::Import, import.0))
+                    .expect("import metadata should exist")
+                    .stable_key,
+            )
+            .to_string();
 
         db.replace_module_graph_facts(
             vec![crate::core::ResolvedImportFact {
@@ -3263,7 +3265,10 @@ mod tests {
         assert_eq!(resolved.precision, FactPrecision::SetupAware);
         assert_eq!(resolved.confidence, FactConfidence::High);
         assert_eq!(resolved.validation, ValidationStatus::NativeTrusted);
-        assert!(resolved.stable_key.contains(&import_key));
+        assert!(
+            db.resolve_stable_key(resolved.stable_key)
+                .contains(&import_key)
+        );
         assert_eq!(node.producer_id, "polint.module_graph");
         assert_eq!(edge.producer_id, "polint.module_graph");
     }

@@ -283,7 +283,7 @@ pub(crate) fn validate_calls(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
                 push_call_diagnostic(
                     diagnostics,
                     family.label(),
-                    &metadata.stable_key,
+                    db.resolve_stable_key(metadata.stable_key).as_ref(),
                     "precision",
                     "precision ceiling exceeded: polint.calls rows are SetupAware, not Exact",
                 );
@@ -517,10 +517,11 @@ mod tests {
         .expect("call rows should store");
         db.fact_meta_mut_for_test()
             .remove_for_test(FactRef::new(FactFamily::CallSite, 0));
+        let stable_key = db.stable_key_interner().intern("call-site:ok");
         db.fact_meta_mut_for_test().insert(
             FactRef::new(FactFamily::CallSite, 0),
             FactMeta {
-                stable_key: "call-site:ok".to_string(),
+                stable_key,
                 producer_id: "polint.calls",
                 layer_id: "polint.calls",
                 precision: FactPrecision::Exact,
@@ -577,10 +578,12 @@ mod tests {
         );
 
         let interner = crate::core::StableKeyInterner::default();
+        let mut dangling = target(0, CallSiteId(99), "call-target:without-site");
+        dangling.stable_key = interner.intern("call-target:without-site");
         let missing = CallStore::from_output(
             CallOutput {
                 sites: Vec::new(),
-                targets: vec![target(0, CallSiteId(99), "call-target:without-site")],
+                targets: vec![dangling],
                 unresolved: Vec::new(),
             },
             &interner,

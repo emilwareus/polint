@@ -125,7 +125,8 @@ struct MetadataDebugReport<'a> {
 struct MetadataDebugFields<'a> {
     family: &'static str,
     run_id: u64,
-    stable_key: &'a str,
+    #[serde(rename = "stable_key")]
+    stable_key_text: String,
     producer_id: &'a str,
     layer_id: &'a str,
     precision: &'static str,
@@ -559,9 +560,9 @@ fn file_rows(db: &AnalysisDb) -> Vec<FileDebugRow<'_>> {
         })
         .collect::<Vec<_>>();
     rows.sort_by(|left, right| {
-        (left.path, left.metadata.stable_key, left.metadata.run_id).cmp(&(
+        (left.path, left.metadata.stable_key_text.as_str(), left.metadata.run_id).cmp(&(
             right.path,
-            right.metadata.stable_key,
+            right.metadata.stable_key_text.as_str(),
             right.metadata.run_id,
         ))
     });
@@ -588,14 +589,14 @@ fn import_rows(db: &AnalysisDb) -> Vec<ImportDebugRow<'_>> {
             left.path,
             left.span.start_byte,
             left.import_path,
-            left.metadata.stable_key,
+            left.metadata.stable_key_text.as_str(),
             left.metadata.run_id,
         )
             .cmp(&(
                 right.path,
                 right.span.start_byte,
                 right.import_path,
-                right.metadata.stable_key,
+                right.metadata.stable_key_text.as_str(),
                 right.metadata.run_id,
             ))
     });
@@ -624,14 +625,14 @@ fn symbol_rows(db: &AnalysisDb) -> Vec<SymbolDebugRow<'_>> {
             left.path.unwrap_or(""),
             span_start(left.span),
             left.name,
-            left.metadata.stable_key,
+            left.metadata.stable_key_text.as_str(),
             left.metadata.run_id,
         )
             .cmp(&(
                 right.path.unwrap_or(""),
                 span_start(right.span),
                 right.name,
-                right.metadata.stable_key,
+                right.metadata.stable_key_text.as_str(),
                 right.metadata.run_id,
             ))
     });
@@ -663,14 +664,14 @@ fn reference_rows(db: &AnalysisDb) -> Vec<ReferenceDebugRow<'_>> {
             left.path.unwrap_or(""),
             span_start(left.span),
             left.name,
-            left.metadata.stable_key,
+            left.metadata.stable_key_text.as_str(),
             left.metadata.run_id,
         )
             .cmp(&(
                 right.path.unwrap_or(""),
                 span_start(right.span),
                 right.name,
-                right.metadata.stable_key,
+                right.metadata.stable_key_text.as_str(),
                 right.metadata.run_id,
             ))
     });
@@ -1628,7 +1629,7 @@ fn call_metadata_order(row: &CallDebugMetadata) -> (&str, u32, &str) {
 
 fn stable_key_for(db: &AnalysisDb, family: FactFamily, run_id: u64) -> Option<String> {
     db.metadata_for(FactRef::new(family, run_id))
-        .map(|metadata| metadata.stable_key.clone())
+        .map(|metadata| db.resolve_stable_key(metadata.stable_key).to_string())
 }
 
 fn call_index_counts(db: &AnalysisDb) -> BTreeMap<&'static str, usize> {
@@ -2105,10 +2106,11 @@ fn metadata_fields(
     run_id: u64,
 ) -> Option<MetadataDebugFields<'_>> {
     let meta = db.metadata_for(FactRef::new(family, run_id))?;
-    Some(metadata_debug_fields(family, run_id, meta))
+    Some(metadata_debug_fields(db, family, run_id, meta))
 }
 
 fn metadata_debug_fields<'a>(
+    db: &AnalysisDb,
     family: FactFamily,
     run_id: u64,
     meta: &'a FactMeta,
@@ -2116,7 +2118,7 @@ fn metadata_debug_fields<'a>(
     MetadataDebugFields {
         family: family.label(),
         run_id,
-        stable_key: meta.stable_key.as_str(),
+        stable_key_text: db.resolve_stable_key(meta.stable_key).to_string(),
         producer_id: meta.producer_id,
         layer_id: meta.layer_id,
         precision: fact_precision_label(meta.precision),

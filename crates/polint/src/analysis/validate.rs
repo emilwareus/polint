@@ -543,7 +543,7 @@ fn validate_semantic_mir_precision(db: &AnalysisDb, diagnostics: &mut Vec<Diagno
         }
         diagnostics.push(semantic_mir_diagnostic(
             reference.family,
-            metadata.stable_key.as_str(),
+            db.resolve_stable_key(metadata.stable_key).as_ref(),
             "FactMeta.precision",
             "provider precision ceiling exceeded: semantic MIR rows are setup-aware or lower, not exact",
         ));

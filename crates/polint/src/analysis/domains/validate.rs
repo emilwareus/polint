@@ -59,7 +59,7 @@ pub(crate) fn validate_abstract_domains(db: &AnalysisDb, diagnostics: &mut Vec<D
                 push_domain_diagnostic(
                     diagnostics,
                     family.label(),
-                    &metadata.stable_key,
+                    db.resolve_stable_key(metadata.stable_key).as_ref(),
                     "precision",
                     "precision ceiling exceeded: polint.abstract_domains metadata is SetupAware or weaker, not Exact",
                 );
@@ -293,7 +293,7 @@ fn check_metadata(
             "domain rows require polint.abstract_domains producer and layer metadata",
         );
     }
-    if metadata.stable_key != stable_key {
+    if db.resolve_stable_key(metadata.stable_key).as_ref() != stable_key {
         push_domain_diagnostic(
             diagnostics,
             family_label,
@@ -492,10 +492,11 @@ mod tests {
     fn unresolved_call_observation_allows_propagated_non_call_operation() {
         let stable_key = "domain:propagated-unresolved-call";
         let mut db = AnalysisDb::new();
+        let meta_stable_key = db.stable_key_interner().intern(stable_key);
         db.fact_meta_mut_for_test().insert(
             FactRef::new(FactFamily::DomainObservation, 0),
             FactMeta {
-                stable_key: stable_key.to_string(),
+                stable_key: meta_stable_key,
                 producer_id: "polint.abstract_domains",
                 layer_id: "polint.abstract_domains",
                 precision: FactPrecision::Unresolved,

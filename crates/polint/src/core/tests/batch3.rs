@@ -114,8 +114,8 @@
         assert_eq!(metadata.precision, FactPrecision::Exact);
         assert_eq!(metadata.confidence, FactConfidence::High);
         assert_eq!(metadata.validation, ValidationStatus::NativeTrusted);
-        assert!(metadata.stable_key.contains("4:path=11:src/main.go"));
-        assert!(metadata.stable_key.contains("12:content_hash="));
+        assert!(db.resolve_stable_key(metadata.stable_key).contains("4:path=11:src/main.go"));
+        assert!(db.resolve_stable_key(metadata.stable_key).contains("12:content_hash="));
         assert!(
             db.fact_meta_mut_for_test()
                 .get(FactRef::new(FactFamily::SourceFile, u64::from(file.0)))

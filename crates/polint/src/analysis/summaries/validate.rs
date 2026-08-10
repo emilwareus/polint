@@ -81,7 +81,7 @@ pub(crate) fn validate_summaries(db: &AnalysisDb, diagnostics: &mut Vec<Diagnost
                 push_summary_diagnostic(
                     diagnostics,
                     family.label(),
-                    &metadata.stable_key,
+                    db.resolve_stable_key(metadata.stable_key).as_ref(),
                     "precision",
                     "precision ceiling exceeded: polint.direct_summaries metadata is SetupAware or weaker, not Exact",
                 );
@@ -326,7 +326,7 @@ fn check_metadata(
             "summary rows require polint.direct_summaries producer and layer metadata",
         );
     }
-    if metadata.stable_key != stable_key {
+    if db.resolve_stable_key(metadata.stable_key).as_ref() != stable_key {
         push_summary_diagnostic(
             diagnostics,
             family_label,
@@ -593,10 +593,11 @@ mod tests {
         // Override metadata precision to Exact
         db.fact_meta_mut_for_test()
             .remove_for_test(FactRef::new(FactFamily::SummaryControl, 0));
+        let stable_key = db.stable_key_interner().intern("summary:exact");
         db.fact_meta_mut_for_test().insert(
             FactRef::new(FactFamily::SummaryControl, 0),
             FactMeta {
-                stable_key: "summary:exact".to_string(),
+                stable_key,
                 producer_id: "polint.direct_summaries",
                 layer_id: "polint.direct_summaries",
                 precision: FactPrecision::Exact,
@@ -703,10 +704,11 @@ mod tests {
         });
         db.fact_meta_mut_for_test()
             .remove_for_test(FactRef::new(FactFamily::SummaryControl, 0));
+        let stable_key = db.stable_key_interner().intern("summary:scc-exact");
         db.fact_meta_mut_for_test().insert(
             FactRef::new(FactFamily::SummaryControl, 0),
             FactMeta {
-                stable_key: "summary:scc-exact".to_string(),
+                stable_key,
                 producer_id: "polint.direct_summaries",
                 layer_id: "polint.direct_summaries",
                 precision: FactPrecision::Exact,

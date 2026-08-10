@@ -56,7 +56,7 @@ pub(crate) fn derive_refined_calls_with_cache_stats(
     for target in db.call_targets() {
         let base_target_key = db
             .metadata_for(FactRef::new(FactFamily::CallTarget, target.id.0))
-            .map(|metadata| metadata.stable_key.clone())
+            .map(|metadata| db.resolve_stable_key(metadata.stable_key).to_string())
             .unwrap_or_else(|| interner.resolve(target.stable_key).to_string());
         output.edges.push(refined_edge_from_base_target(
             interner,

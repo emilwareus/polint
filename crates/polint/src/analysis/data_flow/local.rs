@@ -645,7 +645,10 @@ pub(crate) fn node_from_place(
                 stable_key_from_parts(
                     interner,
                     FactFamily::DataFlowNode,
-                    &[("place", metadata.stable_key.clone())],
+                    &[(
+                        "place",
+                        db.resolve_stable_key(metadata.stable_key).to_string(),
+                    )],
                 )
             })
             .unwrap_or_else(|| {

@@ -22,9 +22,9 @@ use crate::analysis::mir::body::MirStatus;
 use crate::analysis::places::PlaceStatus;
 use crate::analysis::summaries::facts::{SummaryEventFact, SummaryFact};
 use crate::analysis_kernel::{
-    FactConfidence, FactFamily, FactMeta, FactPrecision, ValidationStatus,
-    stable_key_text_from_parts,
+    FactConfidence, FactFamily, FactMeta, FactPrecision, ValidationStatus, stable_key_from_parts,
 };
+use crate::core::StableKeyId;
 use crate::module_graph::topology::TopologyPrecision;
 use crate::symbol_graph::semantic::{
     AliasFact, ExportFact, GeneratedSymbolFact, ResolutionFact, ScopeFact, SemanticImportFact,
@@ -148,7 +148,7 @@ pub(super) fn extension_fact_metadata(
     let producer_id = leaked_extension_producer_id(&fact.extension_id, &fact.provider_id);
     let precision = extension_precision_metadata(fact.precision);
     let confidence = extension_confidence_metadata(fact.confidence);
-    let stable_key = interner.resolve(fact.stable_key).to_string();
+    let stable_key = fact.stable_key;
     let payload_extra_parts = [
         ("family", fact.fact_family.clone()),
         ("bindings", fact.binding_refs.join(",")),
@@ -156,7 +156,8 @@ pub(super) fn extension_fact_metadata(
         ("payload", fact.payload_labels.join(",")),
         ("status", format!("{:?}", fact.status)),
     ];
-    let payload_digest = metadata_payload_digest(&stable_key, &payload_extra_parts);
+    let payload_digest =
+        metadata_payload_digest(interner.resolve(stable_key).as_ref(), &payload_extra_parts);
 
     FactMeta {
         stable_key,
@@ -173,16 +174,16 @@ pub(super) fn adaptation_model_fact_metadata(
     interner: &crate::core::StableKeyInterner,
     fact: &AcceptedModelFact,
 ) -> FactMeta {
-    let stable_key = interner.resolve(fact.fact.stable_key).to_string();
+    let stable_key = fact.fact.stable_key;
     FactMeta {
-        stable_key: stable_key.clone(),
+        stable_key,
         producer_id: "polint.adaptation.model",
         layer_id: "polint.adaptation.model",
         precision: FactPrecision::Heuristic,
         confidence: FactConfidence::Medium,
         validation: ValidationStatus::SchemaValidated,
         payload_digest: metadata_payload_digest(
-            &stable_key,
+            interner.resolve(stable_key).as_ref(),
             &[
                 ("model_path", fact.fact.model_path.clone()),
                 ("source_pattern", fact.fact.source_pattern.clone()),
@@ -238,10 +239,11 @@ pub(super) fn fact_meta_from_parts<const STABLE: usize, const EXTRA: usize>(
     stable_parts: [(&'static str, String); STABLE],
     payload_extra_parts: [(&'static str, String); EXTRA],
 ) -> FactMeta {
-    let stable_key = stable_key_text_from_parts(interner, family, &stable_parts);
+    let stable_key = stable_key_from_parts(interner, family, &stable_parts);
     let mut payload_parts = stable_parts.to_vec();
     payload_parts.extend(payload_extra_parts);
-    let payload_digest = metadata_payload_digest(&stable_key, &payload_parts);
+    let payload_digest =
+        metadata_payload_digest(interner.resolve(stable_key).as_ref(), &payload_parts);
 
     FactMeta {
         stable_key,
@@ -255,14 +257,15 @@ pub(super) fn fact_meta_from_parts<const STABLE: usize, const EXTRA: usize>(
 }
 
 pub(super) fn fact_meta_from_stable_key<const EXTRA: usize>(
-    _family: FactFamily,
+    interner: &crate::core::StableKeyInterner,
     producer_id: &'static str,
     precision: FactPrecision,
     confidence: FactConfidence,
-    stable_key: String,
+    stable_key: StableKeyId,
     payload_extra_parts: [(&'static str, String); EXTRA],
 ) -> FactMeta {
-    let payload_digest = metadata_payload_digest(&stable_key, &payload_extra_parts);
+    let payload_digest =
+        metadata_payload_digest(interner.resolve(stable_key).as_ref(), &payload_extra_parts);
 
     FactMeta {
         stable_key,
@@ -276,15 +279,16 @@ pub(super) fn fact_meta_from_stable_key<const EXTRA: usize>(
 }
 
 pub(super) fn fact_meta_from_stable_key_with_validation<const EXTRA: usize>(
-    _family: FactFamily,
+    interner: &crate::core::StableKeyInterner,
     producer_id: &'static str,
     precision: FactPrecision,
     confidence: FactConfidence,
     validation: ValidationStatus,
-    stable_key: String,
+    stable_key: StableKeyId,
     payload_extra_parts: [(&'static str, String); EXTRA],
 ) -> FactMeta {
-    let payload_digest = metadata_payload_digest(&stable_key, &payload_extra_parts);
+    let payload_digest =
+        metadata_payload_digest(interner.resolve(stable_key).as_ref(), &payload_extra_parts);
 
     FactMeta {
         stable_key,
@@ -298,18 +302,18 @@ pub(super) fn fact_meta_from_stable_key_with_validation<const EXTRA: usize>(
 }
 
 pub(super) fn topology_fact_metadata(
-    family: FactFamily,
+    interner: &crate::core::StableKeyInterner,
     producer_id: &'static str,
     precision: TopologyPrecision,
-    stable_key: &str,
+    stable_key: StableKeyId,
 ) -> FactMeta {
     let (precision, confidence) = topology_precision_metadata(precision);
     fact_meta_from_stable_key(
-        family,
+        interner,
         producer_id,
         precision,
         confidence,
-        stable_key.to_string(),
+        stable_key,
         stable_parts([]),
     )
 }

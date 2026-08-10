@@ -34,21 +34,21 @@ pub(crate) fn refined_calls_debug_json_for_test(db: &AnalysisDb) -> serde_json::
             confidence: format!("{:?}", edge.confidence),
             site_stable_key: db
                 .metadata_for(FactRef::new(FactFamily::CallSite, edge.site.0))
-                .map(|metadata| metadata.stable_key.clone()),
+                .map(|metadata| db.resolve_stable_key(metadata.stable_key).to_string()),
             base_target_stable_key: edge.base_target.and_then(|target| {
                 db.metadata_for(FactRef::new(FactFamily::CallTarget, target.0))
-                    .map(|metadata| metadata.stable_key.clone())
+                    .map(|metadata| db.resolve_stable_key(metadata.stable_key).to_string())
             }),
             caller_stable_key: db
                 .metadata_for(FactRef::new(FactFamily::Function, edge.caller.0))
-                .map(|metadata| metadata.stable_key.clone()),
+                .map(|metadata| db.resolve_stable_key(metadata.stable_key).to_string()),
             target_function_stable_key: edge.target_function.and_then(|function| {
                 db.metadata_for(FactRef::new(FactFamily::Function, function.0))
-                    .map(|metadata| metadata.stable_key.clone())
+                    .map(|metadata| db.resolve_stable_key(metadata.stable_key).to_string())
             }),
             target_symbol_stable_key: edge.target_symbol.and_then(|symbol| {
                 db.metadata_for(FactRef::new(FactFamily::Symbol, symbol.0))
-                    .map(|metadata| metadata.stable_key.clone())
+                    .map(|metadata| db.resolve_stable_key(metadata.stable_key).to_string())
             }),
             synthetic_target: edge.synthetic_target.clone(),
             evidence_count: edge.evidence.len(),

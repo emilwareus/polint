@@ -357,7 +357,7 @@ fn native_stable_keys(db: &AnalysisDb) -> BTreeSet<String> {
     db.fact_meta()
         .rows()
         .filter(|(_reference, metadata)| !metadata.producer_id.starts_with("polint.extension."))
-        .map(|(_reference, metadata)| metadata.stable_key.clone())
+        .map(|(_reference, metadata)| db.resolve_stable_key(metadata.stable_key).to_string())
         .collect()
 }
 

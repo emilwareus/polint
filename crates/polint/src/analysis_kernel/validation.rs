@@ -1235,10 +1235,13 @@ mod abstract_domains {
         });
         db.fact_meta_mut_for_test()
             .remove_for_test(FactRef::new(FactFamily::DomainObservation, 0));
+        let stable_key = db
+            .stable_key_interner()
+            .intern("domain:exact-local-payload");
         db.fact_meta_mut_for_test().insert(
             FactRef::new(FactFamily::DomainObservation, 0),
             FactMeta {
-                stable_key: "domain:exact-local-payload".to_string(),
+                stable_key,
                 producer_id: "polint.abstract_domains",
                 layer_id: "polint.abstract_domains",
                 precision: FactPrecision::Exact,
@@ -1840,10 +1843,11 @@ mod semantic_mir {
         .expect("semantic rows should store");
         db.fact_meta_mut_for_test()
             .remove_for_test(FactRef::new(FactFamily::MirBody, 0));
+        let stable_key = db.stable_key_interner().intern("body:ok");
         db.fact_meta_mut_for_test().insert(
             FactRef::new(FactFamily::MirBody, 0),
             FactMeta {
-                stable_key: "body:ok".to_string(),
+                stable_key,
                 producer_id: "polint.semantic_mir",
                 layer_id: "polint.semantic_mir",
                 precision: FactPrecision::Exact,
@@ -2180,10 +2184,11 @@ mod cfg {
         .expect("cfg rows should store");
         db.fact_meta_mut_for_test()
             .remove_for_test(FactRef::new(FactFamily::CfgFunction, 0));
+        let stable_key = db.stable_key_interner().intern("cfg:function:ok");
         db.fact_meta_mut_for_test().insert(
             FactRef::new(FactFamily::CfgFunction, 0),
             FactMeta {
-                stable_key: "cfg:function:ok".to_string(),
+                stable_key,
                 producer_id: "polint.cfg",
                 layer_id: "polint.cfg",
                 precision: FactPrecision::Exact,
@@ -2509,10 +2514,11 @@ mod calls {
         .expect("call rows should store");
         db.fact_meta_mut_for_test()
             .remove_for_test(FactRef::new(FactFamily::CallSite, 0));
+        let stable_key = db.stable_key_interner().intern("call-site:ok");
         db.fact_meta_mut_for_test().insert(
             FactRef::new(FactFamily::CallSite, 0),
             FactMeta {
-                stable_key: "call-site:ok".to_string(),
+                stable_key,
                 producer_id: "polint.calls",
                 layer_id: "polint.calls",
                 precision: FactPrecision::Exact,
@@ -2569,10 +2575,12 @@ mod calls {
         );
 
         let interner = crate::core::StableKeyInterner::default();
+        let mut dangling = target(0, CallSiteId(99), "call-target:without-site");
+        dangling.stable_key = interner.intern("call-target:without-site");
         let missing = CallStore::from_output(
             CallOutput {
                 sites: Vec::new(),
-                targets: vec![target(0, CallSiteId(99), "call-target:without-site")],
+                targets: vec![dangling],
                 unresolved: Vec::new(),
             },
             &interner,
@@ -2831,10 +2839,11 @@ mod semantic_index {
         );
         db.fact_meta_mut_for_test()
             .remove_for_test(FactRef::new(FactFamily::GeneratedSymbol, 0));
+        let stable_key = db.stable_key_interner().intern("generated:answer");
         db.fact_meta_mut_for_test().insert(
             FactRef::new(FactFamily::GeneratedSymbol, 0),
             FactMeta {
-                stable_key: "generated:answer".to_string(),
+                stable_key,
                 producer_id: "polint.symbol_graph",
                 layer_id: "polint.symbol_graph",
                 precision: FactPrecision::Exact,
@@ -3432,14 +3441,32 @@ fn validate_missing_metadata(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
 }
 
 fn validate_stable_key_conflicts(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
-    for conflict in db.fact_meta().stable_key_conflicts() {
+    let mut conflicts = db.fact_meta().stable_key_conflicts().collect::<Vec<_>>();
+    conflicts.sort_by(|left, right| {
+        (
+            left.family,
+            db.resolve_stable_key(left.stable_key),
+            left.existing,
+            left.incoming,
+        )
+            .cmp(&(
+                right.family,
+                db.resolve_stable_key(right.stable_key),
+                right.existing,
+                right.incoming,
+            ))
+    });
+    for conflict in conflicts {
         diagnostics.push(
             internal_diagnostic(format!(
                 "Fact metadata stable key conflict detected for {} stable key.",
                 conflict.family.label()
             ))
             .with_evidence("family", conflict.family.label())
-            .with_evidence("stable_key", conflict.stable_key.clone())
+            .with_evidence(
+                "stable_key",
+                db.resolve_stable_key(conflict.stable_key).to_string(),
+            )
             .with_evidence("existing_ref", fact_ref_value(conflict.existing))
             .with_evidence("incoming_ref", fact_ref_value(conflict.incoming)),
         );
@@ -4535,7 +4562,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
         {
             diagnostics.push(semantic_diagnostic(
                 reference.family,
-                metadata.stable_key.as_str(),
+                db.resolve_stable_key(metadata.stable_key).as_ref(),
                 "provider precision ceiling exceeded: semantic rows from polint.symbol_graph are setup-aware, not exact",
             ));
         }
@@ -5516,14 +5543,10 @@ mod tests {
         let existing = FactRef::new(FactFamily::Import, 1);
         let incoming = FactRef::new(FactFamily::Import, 2);
 
-        db.fact_meta_mut_for_test().insert(
-            existing,
-            test_meta(FactFamily::Import, "import:key", "payload:a"),
-        );
-        db.fact_meta_mut_for_test().insert(
-            incoming,
-            test_meta(FactFamily::Import, "import:key", "payload:b"),
-        );
+        let meta = test_meta(&db, FactFamily::Import, "import:key", "payload:a");
+        db.fact_meta_mut_for_test().insert(existing, meta);
+        let meta = test_meta(&db, FactFamily::Import, "import:key", "payload:b");
+        db.fact_meta_mut_for_test().insert(incoming, meta);
 
         let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
 
@@ -5770,10 +5793,11 @@ mod tests {
     #[test]
     fn metadata_validation_precision_ceiling_violations_name_provider_family_and_precision() {
         let mut db = AnalysisDb::new();
+        let stable_key = db.stable_key_interner().intern("metric:key");
         db.fact_meta_mut_for_test().insert(
             FactRef::new(FactFamily::FileMetric, 0),
             FactMeta {
-                stable_key: "metric:key".to_string(),
+                stable_key,
                 producer_id: "polint.metrics",
                 layer_id: "polint.metrics",
                 precision: FactPrecision::Exact,
@@ -5800,10 +5824,11 @@ mod tests {
     #[test]
     fn metadata_validation_reports_unknown_producer_and_layer_ids() {
         let mut db = AnalysisDb::new();
+        let stable_key = db.stable_key_interner().intern("metric:key");
         db.fact_meta_mut_for_test().insert(
             FactRef::new(FactFamily::FileMetric, 0),
             FactMeta {
-                stable_key: "metric:key".to_string(),
+                stable_key,
                 producer_id: "polint.unknown_producer",
                 layer_id: "polint.unknown_layer",
                 precision: FactPrecision::Syntax,
@@ -5872,9 +5897,14 @@ mod tests {
         }));
     }
 
-    fn test_meta(family: FactFamily, stable_key: &str, payload_digest: &str) -> FactMeta {
+    fn test_meta(
+        db: &AnalysisDb,
+        family: FactFamily,
+        stable_key: &str,
+        payload_digest: &str,
+    ) -> FactMeta {
         FactMeta {
-            stable_key: stable_key.to_string(),
+            stable_key: db.stable_key_interner().intern(stable_key),
             producer_id: match family {
                 FactFamily::SourceFile => "polint.source",
                 FactFamily::FileMetric => "polint.metrics",

@@ -422,7 +422,7 @@ fn provider_output_summary_parts(db: &AnalysisDb, manifest: &ProviderManifest) -
             [
                 format!("fact_family={}", reference.family.label()),
                 format!("run_id={}", reference.run_id),
-                format!("stable_key={}", metadata.stable_key),
+                format!("stable_key={}", db.resolve_stable_key(metadata.stable_key)),
                 format!("payload_digest={}", metadata.payload_digest),
                 format!("precision={:?}", metadata.precision),
                 format!("validation={:?}", metadata.validation),

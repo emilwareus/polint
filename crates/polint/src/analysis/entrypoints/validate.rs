@@ -226,7 +226,7 @@ pub(crate) fn validate_entrypoints(db: &AnalysisDb, diagnostics: &mut Vec<Diagno
                 push_entrypoint_diagnostic(
                     diagnostics,
                     family.label(),
-                    &metadata.stable_key,
+                    db.resolve_stable_key(metadata.stable_key).as_ref(),
                     "precision",
                     "precision ceiling exceeded: framework facts must not claim Exact",
                 );
@@ -474,10 +474,11 @@ mod tests {
         // Manually override the metadata to claim Exact precision
         db.fact_meta_mut_for_test()
             .remove_for_test(FactRef::new(FactFamily::Entrypoint, 0));
+        let stable_key = db.stable_key_interner().intern("ep:exact");
         db.fact_meta_mut_for_test().insert(
             FactRef::new(FactFamily::Entrypoint, 0),
             FactMeta {
-                stable_key: "ep:exact".to_string(),
+                stable_key,
                 producer_id: "polint.entrypoints",
                 layer_id: "polint.entrypoints",
                 precision: FactPrecision::Exact,

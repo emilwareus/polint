@@ -1529,9 +1529,18 @@ export function answer() {{
         assert_eq!(symbol_meta.precision, FactPrecision::SetupAware);
         assert_eq!(symbol_meta.confidence, FactConfidence::High);
         assert_eq!(symbol_meta.validation, ValidationStatus::NativeTrusted);
-        assert_eq!(symbol_meta.stable_key, "symbol:key:value");
-        assert_eq!(definition_meta.stable_key, "definition:key:value");
-        assert_eq!(reference_meta.stable_key, "reference:key:value");
+        assert_eq!(
+            db.resolve_stable_key(symbol_meta.stable_key).as_ref(),
+            "symbol:key:value"
+        );
+        assert_eq!(
+            db.resolve_stable_key(definition_meta.stable_key).as_ref(),
+            "definition:key:value"
+        );
+        assert_eq!(
+            db.resolve_stable_key(reference_meta.stable_key).as_ref(),
+            "reference:key:value"
+        );
     }
 
     #[test]

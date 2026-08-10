@@ -935,7 +935,7 @@ fn is_identifier(value: &str) -> bool {
 
 fn file_stable_key(db: &AnalysisDb, file: FileId) -> String {
     db.metadata_for(FactRef::new(FactFamily::SourceFile, u64::from(file.0)))
-        .map(|metadata| metadata.stable_key.clone())
+        .map(|metadata| db.resolve_stable_key(metadata.stable_key).to_string())
         .or_else(|| {
             db.files()
                 .iter()

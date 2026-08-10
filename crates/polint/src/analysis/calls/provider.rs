@@ -203,7 +203,7 @@ fn function_key_map(db: &AnalysisDb) -> BTreeMap<FunctionId, String> {
 
 fn function_key(db: &AnalysisDb, function: &FunctionFact) -> String {
     db.metadata_for(FactRef::new(FactFamily::Function, function.id.0))
-        .map(|metadata| metadata.stable_key.clone())
+        .map(|metadata| db.resolve_stable_key(metadata.stable_key).to_string())
         .unwrap_or_else(|| {
             format!(
                 "{}:{}:{}",
@@ -223,7 +223,7 @@ fn symbol_key_map(db: &AnalysisDb) -> BTreeMap<SymbolId, String> {
 
 fn symbol_key(db: &AnalysisDb, symbol: &SymbolFact) -> String {
     db.metadata_for(FactRef::new(FactFamily::Symbol, symbol.id.0))
-        .map(|metadata| metadata.stable_key.clone())
+        .map(|metadata| db.resolve_stable_key(metadata.stable_key).to_string())
         .unwrap_or_else(|| db.resolve_stable_key(symbol.stable_key).to_string())
 }
 

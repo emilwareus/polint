@@ -298,6 +298,7 @@ None,
     }
 
     fn test_call_site(
+        interner: &crate::core::StableKeyInterner,
         id: u64,
         file: FileId,
         caller: FunctionId,
@@ -327,15 +328,16 @@ None,
             result: None,
             status: CallTargetStatus::Resolved,
             precision: CallPrecision::Exact,
-            stable_key: StableKeyId(id as u32),
+            stable_key: interner.intern(stable_key),
         }
     }
 
     fn test_call_target(
+        interner: &crate::core::StableKeyInterner,
         id: u64,
         site: CallSiteId,
         caller: FunctionId,
-        _stable_key: &str,
+        stable_key: &str,
     ) -> crate::analysis::calls::facts::CallTargetFact {
         use crate::analysis::calls::facts::{
             CallAlgorithm, CallEdgeKind, CallPrecision, CallProvenance, CallTargetFact,
@@ -354,14 +356,15 @@ None,
             reason: None,
             provenance: CallProvenance::Native,
             precision: CallPrecision::Exact,
-            stable_key: StableKeyId(id as u32),
+            stable_key: interner.intern(stable_key),
         }
     }
 
     fn test_unresolved_call(
+        interner: &crate::core::StableKeyInterner,
         site: CallSiteId,
         caller: FunctionId,
-        _stable_key: &str,
+        stable_key: &str,
     ) -> crate::analysis::calls::facts::UnresolvedCallFact {
         use crate::analysis::calls::facts::{
             CallAlgorithm, CallPrecision, CallProvenance, CallTargetStatus, UnresolvedCallFact,
@@ -376,7 +379,7 @@ None,
             algorithm: CallAlgorithm::SyntaxOnly,
             provenance: CallProvenance::MirShape,
             precision: CallPrecision::Unknown,
-            stable_key: StableKeyId(site.0 as u32),
+            stable_key: interner.intern(stable_key),
         }
     }
 
@@ -392,22 +395,37 @@ None,
                 "src/app.ts".to_string(),
                 "function app() { first(); second(); }\n".to_string(),
             );
+            let interner = db.stable_key_interner();
             let first = CallOutput {
-                sites: vec![test_call_site(1, file, FunctionId(1), "call-site:first")],
+                sites: vec![test_call_site(
+                    &interner,
+                    1,
+                    file,
+                    FunctionId(1),
+                    "call-site:first",
+                )],
                 targets: vec![test_call_target(
+                    &interner,
                     1,
                     CallSiteId(1),
                     FunctionId(1),
                     "call-target:first",
                 )],
                 unresolved: vec![test_unresolved_call(
+                    &interner,
                     CallSiteId(1),
                     FunctionId(1),
                     "unresolved:first",
                 )],
             };
             let second = CallOutput {
-                sites: vec![test_call_site(2, file, FunctionId(2), "call-site:second")],
+                sites: vec![test_call_site(
+                    &interner,
+                    2,
+                    file,
+                    FunctionId(2),
+                    "call-site:second",
+                )],
                 targets: Vec::new(),
                 unresolved: Vec::new(),
             };
@@ -645,16 +663,25 @@ None,
                 "src/app.ts".to_string(),
                 "function app() { run(); }\n".to_string(),
             );
+            let interner = db.stable_key_interner();
 
             db.replace_call_facts(CallOutput {
-                sites: vec![test_call_site(0, file, FunctionId(1), "call-site:metadata")],
+                sites: vec![test_call_site(
+                    &interner,
+                    0,
+                    file,
+                    FunctionId(1),
+                    "call-site:metadata",
+                )],
                 targets: vec![test_call_target(
+                    &interner,
                     0,
                     CallSiteId(0),
                     FunctionId(1),
                     "call-target:metadata",
                 )],
                 unresolved: vec![test_unresolved_call(
+                    &interner,
                     CallSiteId(0),
                     FunctionId(1),
                     "unresolved:metadata",
@@ -688,15 +715,26 @@ None,
                 "src/app.ts".to_string(),
                 "function app() { target[key](); }\n".to_string(),
             );
-            let mut site = test_call_site(0, file, FunctionId(1), "call-site:unsupported");
+            let interner = db.stable_key_interner();
+            let mut site =
+                test_call_site(&interner, 0, file, FunctionId(1), "call-site:unsupported");
             site.status = CallTargetStatus::Unsupported;
             site.precision = CallPrecision::Unsupported;
-            let mut target =
-                test_call_target(0, CallSiteId(0), FunctionId(1), "call-target:setup-missing");
+            let mut target = test_call_target(
+                &interner,
+                0,
+                CallSiteId(0),
+                FunctionId(1),
+                "call-target:setup-missing",
+            );
             target.status = CallTargetStatus::SetupMissing;
             target.precision = CallPrecision::Unknown;
-            let unresolved =
-                test_unresolved_call(CallSiteId(0), FunctionId(1), "unresolved:unknown");
+            let unresolved = test_unresolved_call(
+                &interner,
+                CallSiteId(0),
+                FunctionId(1),
+                "unresolved:unknown",
+            );
 
             db.replace_call_facts(CallOutput {
                 sites: vec![site],
