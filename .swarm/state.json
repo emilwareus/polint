@@ -827,17 +827,20 @@
         "T-INTERN-A"
       ],
       "created_at": "2026-08-10T10:04:15+02:00",
-      "branch": "swarm/T-INTERN-B-mir",
-      "dispatched_at": "2026-08-10T13:46:49+02:00",
+      "branch": "swarm/T-INTERN-B-calls / swarm/T-INTERN-B-cfg",
+      "dispatched_at": "2026-08-10T15:00:54+02:00",
       "attempts": 1,
-      "slice": "mir",
+      "slice": "calls+cfg",
       "fact_family_locks": [
+        "calls",
+        "cfg"
+      ],
+      "note": "MIR MERGED@2e2178bb; dispatching calls+cfg parallel",
+      "slices_done": [
+        "symbols",
         "mir"
       ],
-      "note": "symbols MERGED@e9ef53b3; next MIR",
-      "slices_done": [
-        "symbols"
-      ]
+      "updated_at": "2026-08-10T14:23:48+02:00"
     },
     "T-INTERN-C": {
       "state": "BLOCKED",
@@ -871,9 +874,13 @@
   "locks": {
     "golden": null,
     "fact_family": {},
-    "fact_family:mir": {
+    "fact_family:calls": {
       "holder": "T-INTERN-B",
-      "at": "2026-08-10T13:46:49+02:00"
+      "at": "2026-08-10T15:00:54+02:00"
+    },
+    "fact_family:cfg": {
+      "holder": "T-INTERN-B",
+      "at": "2026-08-10T15:00:54+02:00"
     }
   },
   "milestone": "PRE-SHIP",
@@ -926,7 +933,7 @@
   },
   "integration_branch": "static-analysis-architecture-review",
   "never_merge_to_main": true,
-  "integration_head": "e9ef53b3",
+  "integration_head": "2e2178bb",
   "m0_gate": {
     "status": "PASS",
     "completed_at": "2026-08-08T11:52:00+02:00",
@@ -1043,6 +1050,11 @@
       "at": "2026-08-10T13:46:49+02:00",
       "event": "T-INTERN-B symbols MERGED",
       "commit": "e9ef53b3"
+    },
+    {
+      "at": "2026-08-10T15:00:54+02:00",
+      "event": "T-INTERN-B mir MERGED",
+      "commit": "2e2178bb"
     }
   ],
   "ready": [],
