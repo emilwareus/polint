@@ -969,7 +969,7 @@
   },
   "integration_branch": "static-analysis-architecture-review",
   "never_merge_to_main": true,
-  "integration_head": "22263b22",
+  "integration_head": "7ccbca94",
   "m0_gate": {
     "status": "PASS",
     "completed_at": "2026-08-08T11:52:00+02:00",
@@ -1076,7 +1076,8 @@
     "2026-08-11T00:05:40+0200: T-INTERN-C claimed fact_family:metadata for FactMeta migration",
     "2026-08-11T00:17:59+0200: T-INTERN-C implementation complete; preparing commits; fact_family:metadata still held",
     "2026-08-11T00:18:22+0200: T-INTERN-C MERGED @932cfd0b; released fact_family:metadata; T-SPLIT READY",
-    "2026-08-11T00:18:39+0200: integration_head synced to T-INTERN-C land tip 22263b22"
+    "2026-08-11T00:18:39+0200: integration_head synced to T-INTERN-C land tip 22263b22",
+    "2026-08-11T00:18:45+0200: integration_head -> 7ccbca94 after T-INTERN-C SHA bookkeeping"
   ],
   "events": [
     "2026-08-08T15:10:20+02:00: W2.2d+e landed FF @271ccd15; core/mod.rs 8739 LOC; capability+rule extracted; main untouched",
