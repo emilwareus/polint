@@ -891,7 +891,7 @@
         "public_surface_leak": "PASS_markers_7_of_8_probe_sandbox_blocked"
       },
       "land_commit": "22263b22",
-      "tip": "f2118eaf"
+      "tip": "c7e3a147"
     },
     "T-SPLIT": {
       "state": "READY",
@@ -971,7 +971,7 @@
   },
   "integration_branch": "static-analysis-architecture-review",
   "never_merge_to_main": true,
-  "integration_head": "f2118eaf",
+  "integration_head": "c7e3a147",
   "m0_gate": {
     "status": "PASS",
     "completed_at": "2026-08-08T11:52:00+02:00",
