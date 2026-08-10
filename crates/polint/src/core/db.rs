@@ -1327,14 +1327,17 @@ impl AnalysisDb {
         &mut self,
         output: SemanticGraphOutput,
     ) -> Result<(), AnalysisError> {
-        self.replace_normalized_semantic_graph_facts(output.normalized())
+        let interner = self.stable_key_interner();
+        self.replace_normalized_semantic_graph_facts(output.normalized(&interner))
     }
 
     pub(crate) fn replace_normalized_semantic_graph_facts(
         &mut self,
         output: SemanticGraphOutput,
     ) -> Result<(), AnalysisError> {
-        *self.semantic_graph_store_mut() = SemanticGraphStore::from_normalized_output(output)?;
+        let interner = self.stable_key_interner();
+        *self.semantic_graph_store_mut() =
+            SemanticGraphStore::from_normalized_output(output, &interner)?;
         Ok(())
     }
 
@@ -2593,7 +2596,7 @@ impl AnalysisDb {
             .map(|scope| {
                 (
                     scope.id.0,
-                    self.semantic_fact_metadata(FactFamily::Scope, &scope.stable_key, scope.status),
+                    self.semantic_fact_metadata(FactFamily::Scope, scope.stable_key, scope.status),
                 )
             })
             .collect::<Vec<_>>();
@@ -2608,7 +2611,7 @@ impl AnalysisDb {
                     fact.id.0,
                     self.semantic_fact_metadata(
                         FactFamily::SemanticImport,
-                        &fact.stable_key,
+                        fact.stable_key,
                         fact.status,
                     ),
                 )
@@ -2623,7 +2626,7 @@ impl AnalysisDb {
             .map(|fact| {
                 (
                     fact.id.0,
-                    self.semantic_fact_metadata(FactFamily::Export, &fact.stable_key, fact.status),
+                    self.semantic_fact_metadata(FactFamily::Export, fact.stable_key, fact.status),
                 )
             })
             .collect::<Vec<_>>();
@@ -2636,7 +2639,7 @@ impl AnalysisDb {
             .map(|fact| {
                 (
                     fact.id.0,
-                    self.semantic_fact_metadata(FactFamily::Alias, &fact.stable_key, fact.status),
+                    self.semantic_fact_metadata(FactFamily::Alias, fact.stable_key, fact.status),
                 )
             })
             .collect::<Vec<_>>();
@@ -2651,7 +2654,7 @@ impl AnalysisDb {
                     fact.id.0,
                     self.semantic_fact_metadata(
                         FactFamily::Resolution,
-                        &fact.stable_key,
+                        fact.stable_key,
                         fact.status,
                     ),
                 )
@@ -2668,7 +2671,7 @@ impl AnalysisDb {
                     fact.id.0,
                     self.semantic_fact_metadata(
                         FactFamily::GeneratedSymbol,
-                        &fact.stable_key,
+                        fact.stable_key,
                         fact.status,
                     ),
                 )
@@ -2685,7 +2688,7 @@ impl AnalysisDb {
                     fact.id.0,
                     self.semantic_fact_metadata(
                         FactFamily::StableExport,
-                        &fact.stable_key,
+                        fact.stable_key,
                         fact.status,
                     ),
                 )
@@ -4012,7 +4015,7 @@ impl AnalysisDb {
     fn semantic_fact_metadata(
         &self,
         family: FactFamily,
-        stable_key: &str,
+        stable_key: crate::core::StableKeyId,
         status: SemanticStatus,
     ) -> FactMeta {
         let (precision, confidence) = semantic_status_metadata(status);
@@ -4021,7 +4024,7 @@ impl AnalysisDb {
             SYMBOL_GRAPH_PROVIDER_ID,
             precision,
             confidence,
-            stable_key.to_string(),
+            self.resolve_stable_key(stable_key).to_string(),
             stable_parts([("status", semantic_status_label(status).to_string())]),
         )
     }

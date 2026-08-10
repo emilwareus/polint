@@ -86,13 +86,14 @@ fn counts(db: &AnalysisDb) -> SemanticGraphCounts {
 }
 
 fn node_rows(db: &AnalysisDb) -> Vec<NodeRow> {
+    let interner = db.stable_key_interner();
     let mut rows: Vec<NodeRow> = db
         .semantic_nodes()
         .iter()
         .map(|node: &SemanticNodeFact| NodeRow {
             kind: node.kind.as_str().to_string(),
             precision: node.precision.as_str().to_string(),
-            stable_key: node.stable_key.clone(),
+            stable_key: interner.resolve(node.stable_key).to_string(),
         })
         .collect();
     rows.sort_by(|a, b| a.stable_key.cmp(&b.stable_key));
@@ -100,13 +101,14 @@ fn node_rows(db: &AnalysisDb) -> Vec<NodeRow> {
 }
 
 fn edge_rows(db: &AnalysisDb) -> Vec<EdgeRow> {
+    let interner = db.stable_key_interner();
     let mut rows: Vec<EdgeRow> = db
         .semantic_edges()
         .iter()
         .map(|edge: &SemanticEdgeFact| EdgeRow {
             kind: edge.kind.as_str().to_string(),
             precision: edge.precision.as_str().to_string(),
-            stable_key: edge.stable_key.clone(),
+            stable_key: interner.resolve(edge.stable_key).to_string(),
         })
         .collect();
     rows.sort_by(|a, b| a.stable_key.cmp(&b.stable_key));
@@ -114,13 +116,17 @@ fn edge_rows(db: &AnalysisDb) -> Vec<EdgeRow> {
 }
 
 fn constraint_rows(db: &AnalysisDb) -> Vec<ConstraintRow> {
+    let interner = db.stable_key_interner();
     let mut rows: Vec<ConstraintRow> = db
         .semantic_constraints()
         .iter()
         .map(|constraint: &ConstraintFact| ConstraintRow {
             kind: constraint.kind.as_str().to_string(),
             status: format!("{:?}", constraint.status),
-            source: if constraint.stable_key.contains("ts_direct_binding") {
+            source: if interner
+                .resolve(constraint.stable_key)
+                .contains("ts_direct_binding")
+            {
                 "ts_direct_binding".to_string()
             } else {
                 "semantic_graph".to_string()
@@ -131,7 +137,7 @@ fn constraint_rows(db: &AnalysisDb) -> Vec<ConstraintRow> {
                 .into_iter()
                 .map(|node| node.0)
                 .collect(),
-            stable_key: constraint.stable_key.clone(),
+            stable_key: interner.resolve(constraint.stable_key).to_string(),
         })
         .collect();
     rows.sort_by(|a, b| a.stable_key.cmp(&b.stable_key));
@@ -158,8 +164,8 @@ mod tests {
         let mut db = AnalysisDb::new();
         db.replace_semantic_graph_facts(SemanticGraphOutput {
             nodes: vec![
-                node(0, FunctionId(1), "node:function:target"),
-                node(1, FunctionId(2), "node:function:callsite"),
+                node(&db, 0, FunctionId(1), "node:function:target"),
+                node(&db, 1, FunctionId(2), "node:function:callsite"),
             ],
             edges: Vec::new(),
             constraints: vec![ConstraintFact {
@@ -170,7 +176,9 @@ mod tests {
                 },
                 status: PointsToStatus::Present,
                 precision: PointsToPrecision::FlowInsensitive,
-                stable_key: "constraint:ts_direct_binding:copy".to_string(),
+                stable_key: db
+                    .stable_key_interner()
+                    .intern("constraint:ts_direct_binding:copy"),
             }],
         })
         .expect("store graph");
@@ -184,12 +192,12 @@ mod tests {
         );
     }
 
-    fn node(id: u64, function: FunctionId, stable_key: &str) -> SemanticNodeFact {
+    fn node(db: &AnalysisDb, id: u64, function: FunctionId, stable_key: &str) -> SemanticNodeFact {
         SemanticNodeFact {
             id: SemanticNodeId(id),
             kind: NodeKind::Function(function),
             precision: SemanticPrecision::Conservative,
-            stable_key: stable_key.to_string(),
+            stable_key: db.stable_key_interner().intern(stable_key),
         }
     }
 }

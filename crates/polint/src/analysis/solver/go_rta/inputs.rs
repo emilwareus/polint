@@ -126,11 +126,11 @@ impl GoRtaInputs {
         // recipe `polint.semantic_graph` used (composition over a private coupling):
         // a Go semantic function maps to a node iff a core FunctionFact matches it and
         // that function was interned as a graph node.
-        let function_node_by_stable_key: BTreeMap<&str, SemanticNodeId> = db
+        let function_node_by_stable_key: BTreeMap<String, SemanticNodeId> = db
             .semantic_nodes()
             .iter()
             .filter(|node| matches!(node.kind, NodeKind::Function(_)))
-            .map(|node| (node.stable_key.as_str(), node.id))
+            .map(|node| (db.resolve_stable_key(node.stable_key).to_string(), node.id))
             .collect();
 
         // Build the Go-only core-function / call-site / callsite-node indexes ONCE (FIX 1,
@@ -504,7 +504,7 @@ impl<'a> GoCoreIndex<'a> {
             if matches!(node.kind, NodeKind::Callsite(_)) {
                 // First-occurrence wins (mirrors the replaced `.find()`).
                 callsite_node_by_stable_key
-                    .entry(node.stable_key.clone())
+                    .entry(db.resolve_stable_key(node.stable_key).to_string())
                     .or_insert(node.id);
             }
         }
@@ -920,7 +920,7 @@ mod tests {
 
         // The semantic-graph function node, keyed exactly like the builder would key it.
         let node_stable_key = function_node_key(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &db.stable_key_interner(),
             &db,
             db.functions().iter().find(|f| f.id == function_id).unwrap(),
         );
@@ -929,7 +929,7 @@ mod tests {
                 id: SemanticNodeId(0),
                 kind: NodeKind::Function(function_id),
                 precision: SemanticPrecision::Conservative,
-                stable_key: node_stable_key.clone(),
+                stable_key: db.stable_key_interner().intern(node_stable_key.clone()),
             }],
             edges: Vec::new(),
             constraints: Vec::new(),
@@ -938,7 +938,7 @@ mod tests {
         let expected_node = db
             .semantic_nodes()
             .iter()
-            .find(|node| node.stable_key == node_stable_key)
+            .find(|node| db.resolve_stable_key(node.stable_key).as_ref() == node_stable_key)
             .expect("function node stored")
             .id;
 
@@ -1057,7 +1057,7 @@ mod tests {
             calls: Vec::new(),
         });
         let node_stable_key = function_node_key(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &db.stable_key_interner(),
             &db,
             db.functions().iter().find(|f| f.id == function_id).unwrap(),
         );
@@ -1066,7 +1066,7 @@ mod tests {
                 id: SemanticNodeId(0),
                 kind: NodeKind::Function(function_id),
                 precision: SemanticPrecision::Conservative,
-                stable_key: node_stable_key,
+                stable_key: db.stable_key_interner().intern(node_stable_key),
             }],
             edges: Vec::new(),
             constraints: Vec::new(),
@@ -1550,12 +1550,12 @@ mod tests {
             calls: Vec::new(),
         });
         let key_a = function_node_key(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &db.stable_key_interner(),
             &db,
             db.functions().iter().find(|f| f.id == fn_a).unwrap(),
         );
         let key_b = function_node_key(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &db.stable_key_interner(),
             &db,
             db.functions().iter().find(|f| f.id == fn_b).unwrap(),
         );
@@ -1565,13 +1565,13 @@ mod tests {
                     id: SemanticNodeId(0),
                     kind: NodeKind::Function(fn_a),
                     precision: SemanticPrecision::Conservative,
-                    stable_key: key_a.clone(),
+                    stable_key: db.stable_key_interner().intern(key_a.clone()),
                 },
                 SemanticNodeFact {
                     id: SemanticNodeId(1),
                     kind: NodeKind::Function(fn_b),
                     precision: SemanticPrecision::Conservative,
-                    stable_key: key_b.clone(),
+                    stable_key: db.stable_key_interner().intern(key_b.clone()),
                 },
             ],
             edges: Vec::new(),
@@ -1581,13 +1581,13 @@ mod tests {
         let node_a = db
             .semantic_nodes()
             .iter()
-            .find(|n| n.stable_key == key_a)
+            .find(|n| db.resolve_stable_key(n.stable_key).as_ref() == key_a)
             .unwrap()
             .id;
         let node_b = db
             .semantic_nodes()
             .iter()
-            .find(|n| n.stable_key == key_b)
+            .find(|n| db.resolve_stable_key(n.stable_key).as_ref() == key_b)
             .unwrap()
             .id;
 
@@ -1671,12 +1671,12 @@ mod tests {
             calls: Vec::new(),
         });
         let method_key = function_node_key(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &db.stable_key_interner(),
             &db,
             db.functions().iter().find(|f| f.id == method_id).unwrap(),
         );
         let free_key = function_node_key(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &db.stable_key_interner(),
             &db,
             db.functions().iter().find(|f| f.id == free_id).unwrap(),
         );
@@ -1686,13 +1686,13 @@ mod tests {
                     id: SemanticNodeId(0),
                     kind: NodeKind::Function(method_id),
                     precision: SemanticPrecision::Conservative,
-                    stable_key: method_key.clone(),
+                    stable_key: db.stable_key_interner().intern(method_key.clone()),
                 },
                 SemanticNodeFact {
                     id: SemanticNodeId(1),
                     kind: NodeKind::Function(free_id),
                     precision: SemanticPrecision::Conservative,
-                    stable_key: free_key.clone(),
+                    stable_key: db.stable_key_interner().intern(free_key.clone()),
                 },
             ],
             edges: Vec::new(),
@@ -1702,13 +1702,13 @@ mod tests {
         let method_node = db
             .semantic_nodes()
             .iter()
-            .find(|n| n.stable_key == method_key)
+            .find(|n| db.resolve_stable_key(n.stable_key).as_ref() == method_key)
             .unwrap()
             .id;
         let free_node = db
             .semantic_nodes()
             .iter()
-            .find(|n| n.stable_key == free_key)
+            .find(|n| db.resolve_stable_key(n.stable_key).as_ref() == free_key)
             .unwrap()
             .id;
 

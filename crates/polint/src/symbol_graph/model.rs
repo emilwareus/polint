@@ -4,7 +4,7 @@ use crate::core::{
     SymbolId, SymbolKind, SymbolNamespace, SymbolPrecision, SymbolResolutionStatus,
 };
 use crate::diagnostics::{Diagnostic, TextRange};
-use crate::symbol_graph::semantic::SemanticIndexOutput;
+use crate::symbol_graph::semantic::CachedSemanticIndexOutput;
 use crate::symbol_graph::stable_id::{
     StableDefinitionKey, StableKeyHash, StableReferenceKey, StableSymbolKey,
     default_stable_key_hash, definition_id_from_key_with_hash, reference_id_from_key_with_hash,
@@ -31,7 +31,7 @@ pub(crate) struct SymbolGraphLayerPayload {
     pub(crate) symbols: Vec<CachedSymbolFact>,
     pub(crate) definitions: Vec<CachedDefinitionFact>,
     pub(crate) references: Vec<CachedReferenceFact>,
-    pub(crate) semantic_index: SemanticIndexOutput,
+    pub(crate) semantic_index: CachedSemanticIndexOutput,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

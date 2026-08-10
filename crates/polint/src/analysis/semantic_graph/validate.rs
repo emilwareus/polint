@@ -24,6 +24,7 @@ use crate::diagnostics::{Diagnostic, TextRange};
 /// `field`/`reason` evidence, mirroring `reachability::validate`.
 pub(crate) fn validate_semantic_graph(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
     validate_semantic_graph_rows(
+        &db.stable_key_interner(),
         db.semantic_nodes(),
         db.semantic_edges(),
         db.semantic_constraints(),
@@ -32,6 +33,7 @@ pub(crate) fn validate_semantic_graph(db: &AnalysisDb, diagnostics: &mut Vec<Dia
 }
 
 fn validate_semantic_graph_rows(
+    interner: &crate::core::StableKeyInterner,
     nodes: &[SemanticNodeFact],
     edges: &[SemanticEdgeFact],
     constraints: &[ConstraintFact],
@@ -41,44 +43,51 @@ fn validate_semantic_graph_rows(
     check_duplicate_stable_keys(
         diagnostics,
         "SemanticNode",
-        nodes.iter().map(|row| row.stable_key.as_str()),
+        nodes.iter().map(|row| interner.resolve(row.stable_key)),
     );
     check_duplicate_stable_keys(
         diagnostics,
         "SemanticEdge",
-        edges.iter().map(|row| row.stable_key.as_str()),
+        edges.iter().map(|row| interner.resolve(row.stable_key)),
     );
     check_duplicate_stable_keys(
         diagnostics,
         "SemanticConstraint",
-        constraints.iter().map(|row| row.stable_key.as_str()),
+        constraints
+            .iter()
+            .map(|row| interner.resolve(row.stable_key)),
     );
 
     // Dense IDs contiguous (0..n) and stable-key-sorted, per family.
     check_dense_ids_sorted(
         diagnostics,
         "SemanticNode",
-        nodes.iter().map(|row| (row.id.0, row.stable_key.as_str())),
+        nodes
+            .iter()
+            .map(|row| (row.id.0, interner.resolve(row.stable_key))),
     );
     check_dense_ids_sorted(
         diagnostics,
         "SemanticEdge",
-        edges.iter().map(|row| (row.id.0, row.stable_key.as_str())),
+        edges
+            .iter()
+            .map(|row| (row.id.0, interner.resolve(row.stable_key))),
     );
     check_dense_ids_sorted(
         diagnostics,
         "SemanticConstraint",
         constraints
             .iter()
-            .map(|row| (row.id.0, row.stable_key.as_str())),
+            .map(|row| (row.id.0, interner.resolve(row.stable_key))),
     );
 
     let node_ids: BTreeSet<SemanticNodeId> = nodes.iter().map(|node| node.id).collect();
 
     // Referential checks + precision ceiling on nodes.
     for node in nodes {
+        let stable_key = interner.resolve(node.stable_key);
         if let Some(diagnostic) =
-            reject_exact_node_edge_precision("SemanticNode", node.precision, &node.stable_key)
+            reject_exact_node_edge_precision("SemanticNode", node.precision, &stable_key)
         {
             diagnostics.push(diagnostic);
         }
@@ -86,11 +95,12 @@ fn validate_semantic_graph_rows(
 
     // Edge endpoint referential checks + precision ceiling.
     for edge in edges {
+        let stable_key = interner.resolve(edge.stable_key);
         if !node_ids.contains(&edge.source) {
             push_diagnostic(
                 diagnostics,
                 "SemanticEdge",
-                &edge.stable_key,
+                &stable_key,
                 "source",
                 "dangling semantic edge source node reference",
             );
@@ -99,13 +109,13 @@ fn validate_semantic_graph_rows(
             push_diagnostic(
                 diagnostics,
                 "SemanticEdge",
-                &edge.stable_key,
+                &stable_key,
                 "target",
                 "dangling semantic edge target node reference",
             );
         }
         if let Some(diagnostic) =
-            reject_exact_node_edge_precision("SemanticEdge", edge.precision, &edge.stable_key)
+            reject_exact_node_edge_precision("SemanticEdge", edge.precision, &stable_key)
         {
             diagnostics.push(diagnostic);
         }
@@ -115,12 +125,13 @@ fn validate_semantic_graph_rows(
     // references the type substrate (a different family) and is intentionally not
     // checked against the node set here.
     for constraint in constraints {
+        let stable_key = interner.resolve(constraint.stable_key);
         for node in constraint.kind.referenced_nodes() {
             if !node_ids.contains(&node) {
                 push_diagnostic(
                     diagnostics,
                     "SemanticConstraint",
-                    &constraint.stable_key,
+                    &stable_key,
                     "node_ref",
                     "dangling semantic constraint node reference",
                 );
@@ -163,18 +174,18 @@ pub(crate) fn reject_exact_precision(
     }
 }
 
-fn check_duplicate_stable_keys<'a>(
+fn check_duplicate_stable_keys(
     diagnostics: &mut Vec<Diagnostic>,
     family: &'static str,
-    keys: impl Iterator<Item = &'a str>,
+    keys: impl Iterator<Item = std::sync::Arc<str>>,
 ) {
     let mut seen = BTreeSet::new();
     for key in keys {
-        if !seen.insert(key) {
+        if !seen.insert(key.clone()) {
             push_diagnostic(
                 diagnostics,
                 family,
-                key,
+                &key,
                 "stable_key",
                 "duplicate stable key",
             );
@@ -185,29 +196,29 @@ fn check_duplicate_stable_keys<'a>(
 /// Asserts the dense IDs are exactly `0..n` in stable-key order: each row's dense id
 /// must equal its index, and the stable keys must be non-decreasing. A mismatch means
 /// `normalized()` was skipped or the store was mutated out of band.
-fn check_dense_ids_sorted<'a>(
+fn check_dense_ids_sorted(
     diagnostics: &mut Vec<Diagnostic>,
     family: &'static str,
-    rows: impl Iterator<Item = (u64, &'a str)>,
+    rows: impl Iterator<Item = (u64, std::sync::Arc<str>)>,
 ) {
-    let mut previous_key: Option<&str> = None;
+    let mut previous_key: Option<std::sync::Arc<str>> = None;
     for (index, (id, stable_key)) in rows.enumerate() {
         if id != index as u64 {
             push_diagnostic(
                 diagnostics,
                 family,
-                stable_key,
+                &stable_key,
                 "id",
                 "dense id is not contiguous with the stable-key sort order",
             );
         }
-        if let Some(previous) = previous_key
-            && previous > stable_key
+        if let Some(previous) = &previous_key
+            && previous > &stable_key
         {
             push_diagnostic(
                 diagnostics,
                 family,
-                stable_key,
+                &stable_key,
                 "stable_key",
                 "rows are not sorted by stable key",
             );
@@ -263,19 +274,30 @@ mod tests {
         EdgeKind, NodeKind, SemanticEdgeFact, SemanticNodeFact,
     };
     use crate::analysis::semantic_graph::store::SemanticGraphOutput;
-    use crate::core::{AnalysisDb, FunctionId};
+    use crate::core::{AnalysisDb, FunctionId, stable_key_for_test, test_stable_key_interner};
 
     fn node(kind: NodeKind, precision: SemanticPrecision, stable_key: &str) -> SemanticNodeFact {
         SemanticNodeFact {
             id: Default::default(),
             kind,
             precision,
-            stable_key: stable_key.to_string(),
+            stable_key: stable_key_for_test(stable_key),
         }
     }
 
-    fn store_db(output: SemanticGraphOutput) -> AnalysisDb {
+    fn store_db(mut output: SemanticGraphOutput) -> AnalysisDb {
         let mut db = AnalysisDb::new();
+        let source = test_stable_key_interner();
+        let target = db.stable_key_interner();
+        for row in &mut output.nodes {
+            row.stable_key = target.intern(source.resolve(row.stable_key).to_string());
+        }
+        for row in &mut output.edges {
+            row.stable_key = target.intern(source.resolve(row.stable_key).to_string());
+        }
+        for row in &mut output.constraints {
+            row.stable_key = target.intern(source.resolve(row.stable_key).to_string());
+        }
         db.replace_semantic_graph_facts(output)
             .expect("semantic graph facts store");
         db
@@ -302,7 +324,7 @@ mod tests {
                 target: SemanticNodeId(1),
                 kind: EdgeKind::Call,
                 precision: SemanticPrecision::Conservative,
-                stable_key: "edge|call|a|b".to_string(),
+                stable_key: stable_key_for_test("edge|call|a|b"),
             }],
             constraints: vec![ConstraintFact {
                 id: Default::default(),
@@ -311,7 +333,7 @@ mod tests {
                 },
                 status: PointsToStatus::Present,
                 precision: PointsToPrecision::FlowInsensitive,
-                stable_key: "constraint|call_constraint|b".to_string(),
+                stable_key: stable_key_for_test("constraint|call_constraint|b"),
             }],
         };
         let db = store_db(output);
@@ -366,11 +388,17 @@ mod tests {
             },
             status: PointsToStatus::Present,
             precision: PointsToPrecision::FlowInsensitive,
-            stable_key: "constraint|ts_direct_binding|dangling".to_string(),
+            stable_key: stable_key_for_test("constraint|ts_direct_binding|dangling"),
         }];
         let mut diagnostics = Vec::new();
 
-        validate_semantic_graph_rows(&nodes, &[], &constraints, &mut diagnostics);
+        validate_semantic_graph_rows(
+            &test_stable_key_interner(),
+            &nodes,
+            &[],
+            &constraints,
+            &mut diagnostics,
+        );
 
         assert!(
             diagnostics.iter().any(|diagnostic| {
@@ -396,7 +424,7 @@ mod tests {
                 },
                 status: PointsToStatus::Present,
                 precision: PointsToPrecision::FlowInsensitive,
-                stable_key: "constraint|object_model|dangling_alloc".to_string(),
+                stable_key: stable_key_for_test("constraint|object_model|dangling_alloc"),
             },
             ConstraintFact {
                 id: Default::default(),
@@ -407,7 +435,7 @@ mod tests {
                 },
                 status: PointsToStatus::Present,
                 precision: PointsToPrecision::FlowInsensitive,
-                stable_key: "constraint|object_model|dangling_load".to_string(),
+                stable_key: stable_key_for_test("constraint|object_model|dangling_load"),
             },
             ConstraintFact {
                 id: Default::default(),
@@ -418,12 +446,18 @@ mod tests {
                 },
                 status: PointsToStatus::Present,
                 precision: PointsToPrecision::FlowInsensitive,
-                stable_key: "constraint|object_model|dangling_store".to_string(),
+                stable_key: stable_key_for_test("constraint|object_model|dangling_store"),
             },
         ];
         let mut diagnostics = Vec::new();
 
-        validate_semantic_graph_rows(&nodes, &[], &constraints, &mut diagnostics);
+        validate_semantic_graph_rows(
+            &test_stable_key_interner(),
+            &nodes,
+            &[],
+            &constraints,
+            &mut diagnostics,
+        );
 
         let dangling_count = diagnostics
             .iter()

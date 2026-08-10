@@ -257,7 +257,10 @@ impl<'a> SolverProjectionIndex<'a> {
             else {
                 continue;
             };
-            callsite_by_stable_key.insert(constraint.stable_key.clone(), site);
+            callsite_by_stable_key.insert(
+                db.resolve_stable_key(constraint.stable_key).to_string(),
+                site,
+            );
         }
         for callsite in db.go_semantic_callsites() {
             let Some(site) = core_callsite_for_go_semantic_callsite(db, callsite) else {
@@ -790,11 +793,13 @@ mod solver_projection_tests {
         db.replace_semantic_graph_facts(SemanticGraphOutput {
             nodes: vec![
                 semantic_node(
+                    &db,
                     SemanticNodeId(0),
                     NodeKind::Function(FunctionId(0)),
                     "node:function:caller",
                 ),
                 semantic_node(
+                    &db,
                     SemanticNodeId(1),
                     NodeKind::Function(FunctionId(1)),
                     "node:function:callee",
@@ -882,16 +887,19 @@ mod solver_projection_tests {
         db.replace_semantic_graph_facts(SemanticGraphOutput {
             nodes: vec![
                 semantic_node(
+                    &db,
                     SemanticNodeId(0),
                     NodeKind::Function(FunctionId(0)),
                     "node:function:caller",
                 ),
                 semantic_node(
+                    &db,
                     SemanticNodeId(1),
                     NodeKind::Function(FunctionId(1)),
                     "node:function:callee",
                 ),
                 semantic_node(
+                    &db,
                     SemanticNodeId(2),
                     NodeKind::Callsite(CallSiteId(0)),
                     "node:callsite:callee",
@@ -905,7 +913,9 @@ mod solver_projection_tests {
                 },
                 status: PointsToStatus::Present,
                 precision: PointsToPrecision::FlowInsensitive,
-                stable_key: "constraint:go-semantic-callsite".to_string(),
+                stable_key: db
+                    .stable_key_interner()
+                    .intern("constraint:go-semantic-callsite"),
             }],
         })
         .expect("valid semantic graph");
@@ -1084,11 +1094,13 @@ mod solver_projection_tests {
         db.replace_semantic_graph_facts(SemanticGraphOutput {
             nodes: vec![
                 semantic_node(
+                    &db,
                     SemanticNodeId(0),
                     NodeKind::Function(FunctionId(0)),
                     "node:function:handler-handle",
                 ),
                 semantic_node(
+                    &db,
                     SemanticNodeId(1),
                     NodeKind::Function(FunctionId(1)),
                     "node:function:speak",
@@ -1266,12 +1278,17 @@ mod solver_projection_tests {
         }
     }
 
-    fn semantic_node(id: SemanticNodeId, kind: NodeKind, stable_key: &str) -> SemanticNodeFact {
+    fn semantic_node(
+        db: &AnalysisDb,
+        id: SemanticNodeId,
+        kind: NodeKind,
+        stable_key: &str,
+    ) -> SemanticNodeFact {
         SemanticNodeFact {
             id,
             kind,
             precision: SemanticPrecision::SetupAware,
-            stable_key: stable_key.to_string(),
+            stable_key: db.stable_key_interner().intern(stable_key),
         }
     }
 

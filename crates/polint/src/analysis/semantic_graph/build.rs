@@ -392,7 +392,12 @@ struct GraphBuilder {
 impl GraphBuilder {
     /// Intern a node by its composed stable key, returning the (stable) pre-sort id.
     /// Idempotent: a repeated identity reuses the existing node.
-    fn intern_node(&mut self, kind: NodeKind, stable_key: String) -> SemanticNodeId {
+    fn intern_node(
+        &mut self,
+        interner: &crate::core::StableKeyInterner,
+        kind: NodeKind,
+        stable_key: String,
+    ) -> SemanticNodeId {
         if let Some(&id) = self.node_by_key.get(&stable_key) {
             return id;
         }
@@ -409,7 +414,7 @@ impl GraphBuilder {
             // Conservative: graph rows are derived/aggregated, never `ResolvedStatic`
             // (the Exact-equivalent ceiling). Plan 03 validates the ceiling.
             precision: SemanticPrecision::Conservative,
-            stable_key,
+            stable_key: interner.intern(stable_key),
         });
         id
     }
@@ -426,16 +431,18 @@ impl GraphBuilder {
         // stable keys from the interned node table.
         let source_key = self.node_key_for(source);
         let target_key = self.node_key_for(target);
-        let stable_key = semantic_stable_key(
-            interner,
-            FactFamily::Reference,
-            &[
-                ("edge_kind", kind.as_str().to_string()),
-                ("source", source_key),
-                ("target", target_key),
-            ],
-        )
-        .into_string();
+        let stable_key = interner.intern(
+            semantic_stable_key(
+                interner,
+                FactFamily::Reference,
+                &[
+                    ("edge_kind", kind.as_str().to_string()),
+                    ("source", source_key),
+                    ("target", target_key),
+                ],
+            )
+            .into_string(),
+        );
         self.edges.push(SemanticEdgeFact {
             id: Default::default(),
             source,
@@ -452,15 +459,17 @@ impl GraphBuilder {
         kind: ConstraintKind,
         identity: &str,
     ) {
-        let stable_key = semantic_stable_key(
-            interner,
-            FactFamily::PointsToConstraint,
-            &[
-                ("constraint_kind", kind.as_str().to_string()),
-                ("identity", identity.to_string()),
-            ],
-        )
-        .into_string();
+        let stable_key = interner.intern(
+            semantic_stable_key(
+                interner,
+                FactFamily::PointsToConstraint,
+                &[
+                    ("constraint_kind", kind.as_str().to_string()),
+                    ("identity", identity.to_string()),
+                ],
+            )
+            .into_string(),
+        );
         self.constraints.push(ConstraintFact {
             id: Default::default(),
             kind,
@@ -490,20 +499,21 @@ impl GraphBuilder {
         let interner = &interner_handle;
         for function in db.functions() {
             let key = function_node_key(interner, db, function);
-            self.intern_node(NodeKind::Function(function.id), key);
+            self.intern_node(interner, NodeKind::Function(function.id), key);
         }
         for package in db.packages() {
             let key = package_node_key(db, package);
-            self.intern_node(NodeKind::Package(package.id), key);
+            self.intern_node(interner, NodeKind::Package(package.id), key);
         }
         for scope in db.scopes() {
-            let key = node_key_from_identity(interner, "scope", &scope.stable_key);
-            self.intern_node(NodeKind::Scope(scope.id), key);
+            let key =
+                node_key_from_identity(interner, "scope", &interner.resolve(scope.stable_key));
+            self.intern_node(interner, NodeKind::Scope(scope.id), key);
         }
         for site in db.call_sites() {
             let key =
                 node_key_from_identity(interner, "callsite", &interner.resolve(site.stable_key));
-            self.intern_node(NodeKind::Callsite(site.id), key);
+            self.intern_node(interner, NodeKind::Callsite(site.id), key);
         }
     }
 
@@ -880,7 +890,8 @@ impl GraphBuilder {
             let Some(package_id) = scope.package else {
                 continue;
             };
-            let scope_key = node_key_from_identity(interner, "scope", &scope.stable_key);
+            let scope_key =
+                node_key_from_identity(interner, "scope", &interner.resolve(scope.stable_key));
             let Some(&scope_node) = self.node_by_key.get(&scope_key) else {
                 continue;
             };
@@ -937,10 +948,12 @@ impl GraphBuilder {
             };
 
             let dst_node = self.intern_node(
+                interner,
                 NodeKind::Place(dst_place),
                 place_node_key(interner, dst_stable),
             );
             let src_node = self.intern_node(
+                interner,
                 NodeKind::Place(src_place),
                 place_node_key(interner, src_stable),
             );
@@ -1787,6 +1800,7 @@ impl<'a> TsObjectModelNodeContext<'a> {
     ) -> Option<SemanticNodeId> {
         let token = *self.object_token_by_key.get(object_stable_key)?;
         Some(builder.intern_node(
+            interner,
             NodeKind::AbstractObject(token),
             object_node_key(interner, object_stable_key),
         ))
@@ -1880,12 +1894,14 @@ impl<'a> TsObjectModelNodeContext<'a> {
     ) -> Option<SemanticNodeId> {
         if let Some(place) = self.place_by_stable_key.get(place_stable_key) {
             return Some(builder.intern_node(
+                interner,
                 NodeKind::Place(*place),
                 place_node_key(interner, place_stable_key),
             ));
         }
         let place = *self.synthetic_place_by_key.get(place_stable_key)?;
         Some(builder.intern_node(
+            interner,
             NodeKind::Place(place),
             place_node_key(interner, place_stable_key),
         ))
@@ -2356,7 +2372,8 @@ mod tests {
 
         // The projected graph passes referential validation end-to-end: every edge
         // endpoint and every constraint node reference resolves to a stored node.
-        let store = SemanticGraphStore::from_output(output).expect("graph validates");
+        let store = SemanticGraphStore::from_output(output, &db.stable_key_interner())
+            .expect("graph validates");
         assert!(!store.nodes().is_empty());
     }
 
@@ -2364,8 +2381,8 @@ mod tests {
     fn semantic_graph_model_edge_lowers_only_accepted_model_facts() {
         let db = fixture_db();
         let base = build_semantic_graph(&db);
-        let source = node_key(&base, |kind| matches!(kind, NodeKind::Callsite(_)));
-        let target = node_key(&base, |kind| matches!(kind, NodeKind::Function(_)));
+        let source = node_key(&db, &base, |kind| matches!(kind, NodeKind::Callsite(_)));
+        let target = node_key(&db, &base, |kind| matches!(kind, NodeKind::Function(_)));
         let store = model_store(
             vec![model_fact(&source, &target)],
             std::slice::from_ref(&source),
@@ -2397,7 +2414,8 @@ mod tests {
         assert_eq!(confidence, "heuristic");
         assert_eq!(evidence, &vec!["src/app.ts:10".to_string()]);
 
-        let graph_store = SemanticGraphStore::from_output(output).expect("graph validates");
+        let graph_store = SemanticGraphStore::from_output(output, &db.stable_key_interner())
+            .expect("graph validates");
         assert_eq!(
             graph_store
                 .constraints()
@@ -2412,8 +2430,8 @@ mod tests {
     fn adaptation_model_rejections_do_not_lower_to_model_edges() {
         let db = fixture_db();
         let base = build_semantic_graph(&db);
-        let source = node_key(&base, |kind| matches!(kind, NodeKind::Callsite(_)));
-        let target = node_key(&base, |kind| matches!(kind, NodeKind::Function(_)));
+        let source = node_key(&db, &base, |kind| matches!(kind, NodeKind::Callsite(_)));
+        let target = node_key(&db, &base, |kind| matches!(kind, NodeKind::Function(_)));
         let rejected_target = model_store(
             vec![model_fact(&source, "node|function|missing")],
             std::slice::from_ref(&source),
@@ -2459,14 +2477,20 @@ mod tests {
         assert_eq!(accepted.accepted().len(), 1);
     }
 
-    fn node_key(output: &SemanticGraphOutput, predicate: impl Fn(&NodeKind) -> bool) -> String {
-        output
-            .nodes
-            .iter()
-            .find(|node| predicate(&node.kind))
-            .expect("node exists")
-            .stable_key
-            .clone()
+    fn node_key(
+        db: &AnalysisDb,
+        output: &SemanticGraphOutput,
+        predicate: impl Fn(&NodeKind) -> bool,
+    ) -> String {
+        db.resolve_stable_key(
+            output
+                .nodes
+                .iter()
+                .find(|node| predicate(&node.kind))
+                .expect("node exists")
+                .stable_key,
+        )
+        .to_string()
     }
 
     fn model_store(
@@ -2497,14 +2521,11 @@ mod tests {
         let db = fixture_db();
         // Building twice over the same db yields byte-identical normalized output —
         // the projection mutates nothing and is order-independent.
-        let a = build_semantic_graph(&db).normalized();
-        let b = build_semantic_graph(&db).normalized();
-        let a_json = serde_json::to_string(&a.constraints).expect("serialize a");
-        let b_json = serde_json::to_string(&b.constraints).expect("serialize b");
-        assert_eq!(a_json, b_json);
-        let a_nodes = serde_json::to_string(&a.nodes).expect("serialize a nodes");
-        let b_nodes = serde_json::to_string(&b.nodes).expect("serialize b nodes");
-        assert_eq!(a_nodes, b_nodes);
+        let interner = db.stable_key_interner();
+        let a = build_semantic_graph(&db).normalized(&interner);
+        let b = build_semantic_graph(&db).normalized(&interner);
+        assert_eq!(a.constraints, b.constraints);
+        assert_eq!(a.nodes, b.nodes);
 
         // Building does not mutate any upstream fact family (D-13): the db's call
         // sites and functions are unchanged after a build.
@@ -2541,7 +2562,7 @@ function run() {
 
             let bindings = resolve_direct_bindings(&inventory, &scope);
             let output = build_semantic_graph_with_ts_direct_bindings(&db, &bindings.bindings);
-            assert_ts_direct_projection(output);
+            assert_ts_direct_projection(&db, output);
         }
 
         #[test]
@@ -2627,7 +2648,7 @@ function run() {
             let bindings =
                 resolve_direct_bindings_with_modules(&app_inventory, &app_scope, &module_input);
             let output = build_semantic_graph_with_ts_direct_bindings(&db, &bindings.bindings);
-            assert_ts_direct_projection(output);
+            assert_ts_direct_projection(&db, output);
         }
 
         #[test]
@@ -2655,7 +2676,7 @@ function run() {
             let before_targets = db.call_targets().len();
             let output = build_semantic_graph_with_ts_direct_bindings(&db, &bindings.bindings);
 
-            assert_ts_direct_projection(output);
+            assert_ts_direct_projection(&db, output);
             assert_eq!(db.call_targets().len(), before_targets);
         }
 
@@ -2698,7 +2719,7 @@ function run() {
             assert!(!source.contains(concat!("token", " propagation")));
         }
 
-        fn assert_ts_direct_projection(output: SemanticGraphOutput) {
+        fn assert_ts_direct_projection(db: &AnalysisDb, output: SemanticGraphOutput) {
             let copy_edges = output
                 .constraints
                 .iter()
@@ -2714,7 +2735,8 @@ function run() {
 
             assert!(copy_edges >= 1, "expected TS direct CopyEdge");
             assert!(call_constraints >= 1, "expected TS direct CallConstraint");
-            SemanticGraphStore::from_output(output).expect("TS direct graph validates");
+            SemanticGraphStore::from_output(output, &db.stable_key_interner())
+                .expect("TS direct graph validates");
         }
 
         fn unresolved_binding(reason: TsDirectBindingReason) -> TsDirectBindingFact {
@@ -2808,9 +2830,12 @@ function run() {
             }));
             assert!(output.constraints.iter().any(|constraint| {
                 matches!(constraint.kind, ConstraintKind::CopyEdge { .. })
-                    && constraint.stable_key.contains("receiver")
+                    && db
+                        .resolve_stable_key(constraint.stable_key)
+                        .contains("receiver")
             }));
-            SemanticGraphStore::from_output(output).expect("object model graph validates");
+            SemanticGraphStore::from_output(output, &db.stable_key_interner())
+                .expect("object model graph validates");
         }
 
         #[test]
@@ -2858,9 +2883,12 @@ function run() {
 
             assert!(output.constraints.iter().any(|constraint| {
                 matches!(constraint.kind, ConstraintKind::CallConstraint { .. })
-                    && constraint.stable_key.contains("read:holder.target")
+                    && db
+                        .resolve_stable_key(constraint.stable_key)
+                        .contains("read:holder.target")
             }));
-            SemanticGraphStore::from_output(output).expect("object callsite graph validates");
+            SemanticGraphStore::from_output(output, &db.stable_key_interner())
+                .expect("object callsite graph validates");
         }
 
         fn allocation(
@@ -2984,9 +3012,12 @@ function run() {
                 matches!(
                     constraint.kind,
                     ConstraintKind::CallConstraint { .. } | ConstraintKind::CopyEdge { .. }
-                ) && constraint.stable_key.contains("go-call")
+                ) && db
+                    .resolve_stable_key(constraint.stable_key)
+                    .contains("go-call")
             }));
-            SemanticGraphStore::from_output(output).expect("Go semantic graph validates");
+            SemanticGraphStore::from_output(output, &db.stable_key_interner())
+                .expect("Go semantic graph validates");
         }
 
         #[test]
@@ -3005,7 +3036,9 @@ function run() {
                 .iter()
                 .filter(|constraint| {
                     matches!(constraint.kind, ConstraintKind::CopyEdge { .. })
-                        && constraint.stable_key.contains("go-call")
+                        && db
+                            .resolve_stable_key(constraint.stable_key)
+                            .contains("go-call")
                 })
                 .count();
             assert_eq!(go_copy_edges, 0);

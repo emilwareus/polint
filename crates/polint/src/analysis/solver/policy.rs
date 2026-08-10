@@ -253,15 +253,16 @@ mod ts_points_to {
             let node_key_by_id = db
                 .semantic_nodes()
                 .iter()
-                .map(|node| (node.id, node.stable_key.clone()))
+                .map(|node| (node.id, db.resolve_stable_key(node.stable_key).to_string()))
                 .collect::<BTreeMap<_, _>>();
             let constraint_key_by_callsite = db
                 .semantic_constraints()
                 .iter()
                 .filter_map(|constraint| match constraint.kind {
-                    ConstraintKind::CallConstraint { callsite } => {
-                        Some((callsite, constraint.stable_key.clone()))
-                    }
+                    ConstraintKind::CallConstraint { callsite } => Some((
+                        callsite,
+                        db.resolve_stable_key(constraint.stable_key).to_string(),
+                    )),
                     _ => None,
                 })
                 .collect::<BTreeMap<_, _>>();
@@ -270,9 +271,10 @@ mod ts_points_to {
                 .semantic_nodes()
                 .iter()
                 .filter_map(|node| match node.kind {
-                    NodeKind::Function(_) => {
-                        Some((object_for_node(node.id), (node.id, node.stable_key.clone())))
-                    }
+                    NodeKind::Function(_) => Some((
+                        object_for_node(node.id),
+                        (node.id, db.resolve_stable_key(node.stable_key).to_string()),
+                    )),
                     _ => None,
                 })
                 .collect();
@@ -391,7 +393,7 @@ mod ts_points_to {
             .iter()
             .filter_map(|constraint| match constraint.kind {
                 ConstraintKind::CallConstraint { callsite } => {
-                    Some((constraint.stable_key.as_str(), callsite))
+                    Some((constraint.stable_key, callsite))
                 }
                 _ => None,
             })
@@ -431,9 +433,7 @@ mod ts_points_to {
                         base: var_for_node(*base),
                         field: field.clone(),
                     });
-                    if let Some(callsite) =
-                        callsite_by_source_key.get(constraint.stable_key.as_str())
-                    {
+                    if let Some(callsite) = callsite_by_source_key.get(&constraint.stable_key) {
                         kinds.insert(PointsToConstraintKind::Copy {
                             dst: var_for_node(*callsite),
                             src: var_for_node(*dst),

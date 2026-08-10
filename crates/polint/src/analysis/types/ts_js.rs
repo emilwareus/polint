@@ -766,7 +766,7 @@ fn collect_module_namespace_values(
         let key = format!(
             "{}:{local}:{}",
             language_label(import.language),
-            import.stable_key
+            interner.resolve(import.stable_key)
         );
         if !seen.insert(key.clone()) {
             continue;
@@ -788,7 +788,10 @@ fn collect_module_namespace_values(
                 FactFamily::AllocationToken,
                 [
                     ("language", language_label(import.language).to_string()),
-                    ("semantic_import", import.stable_key.clone()),
+                    (
+                        "semantic_import",
+                        interner.resolve(import.stable_key).to_string(),
+                    ),
                     ("kind", "module_namespace".to_string()),
                 ],
             ),
@@ -810,7 +813,10 @@ fn collect_module_namespace_values(
                 FactFamily::Value,
                 [
                     ("language", language_label(import.language).to_string()),
-                    ("semantic_import", import.stable_key.clone()),
+                    (
+                        "semantic_import",
+                        interner.resolve(import.stable_key).to_string(),
+                    ),
                     ("kind", "module_object".to_string()),
                 ],
             ),

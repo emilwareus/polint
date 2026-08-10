@@ -38,11 +38,11 @@ pub(super) fn normalize_scope_facts(
     facts: &mut [ScopeFact],
 ) {
     for fact in facts.iter_mut() {
-        if fact.stable_key.is_empty() {
+        if interner.resolve(fact.stable_key).is_empty() {
             fact.stable_key = fact.computed_stable_key(interner);
         }
     }
-    facts.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    facts.sort_by_key(|fact| interner.resolve(fact.stable_key));
 }
 
 pub(super) fn normalize_semantic_import_facts(
@@ -50,11 +50,11 @@ pub(super) fn normalize_semantic_import_facts(
     facts: &mut [SemanticImportFact],
 ) {
     for fact in facts.iter_mut() {
-        if fact.stable_key.is_empty() {
+        if interner.resolve(fact.stable_key).is_empty() {
             fact.stable_key = fact.computed_stable_key(interner);
         }
     }
-    facts.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    facts.sort_by_key(|fact| interner.resolve(fact.stable_key));
 }
 
 pub(super) fn normalize_export_facts(
@@ -62,11 +62,11 @@ pub(super) fn normalize_export_facts(
     facts: &mut [ExportFact],
 ) {
     for fact in facts.iter_mut() {
-        if fact.stable_key.is_empty() {
+        if interner.resolve(fact.stable_key).is_empty() {
             fact.stable_key = fact.computed_stable_key(interner);
         }
     }
-    facts.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    facts.sort_by_key(|fact| interner.resolve(fact.stable_key));
 }
 
 pub(super) fn normalize_alias_facts(
@@ -74,11 +74,11 @@ pub(super) fn normalize_alias_facts(
     facts: &mut [AliasFact],
 ) {
     for fact in facts.iter_mut() {
-        if fact.stable_key.is_empty() {
+        if interner.resolve(fact.stable_key).is_empty() {
             fact.stable_key = fact.computed_stable_key(interner);
         }
     }
-    facts.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    facts.sort_by_key(|fact| interner.resolve(fact.stable_key));
 }
 
 pub(super) fn normalize_resolution_facts(
@@ -86,11 +86,11 @@ pub(super) fn normalize_resolution_facts(
     facts: &mut [ResolutionFact],
 ) {
     for fact in facts.iter_mut() {
-        if fact.stable_key.is_empty() {
+        if interner.resolve(fact.stable_key).is_empty() {
             fact.stable_key = fact.computed_stable_key(interner);
         }
     }
-    facts.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    facts.sort_by_key(|fact| interner.resolve(fact.stable_key));
 }
 
 pub(super) fn normalize_generated_symbol_facts(
@@ -98,11 +98,11 @@ pub(super) fn normalize_generated_symbol_facts(
     facts: &mut [GeneratedSymbolFact],
 ) {
     for fact in facts.iter_mut() {
-        if fact.stable_key.is_empty() {
+        if interner.resolve(fact.stable_key).is_empty() {
             fact.stable_key = fact.computed_stable_key(interner);
         }
     }
-    facts.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    facts.sort_by_key(|fact| interner.resolve(fact.stable_key));
 }
 
 pub(super) fn normalize_stable_export_identities(
@@ -110,11 +110,11 @@ pub(super) fn normalize_stable_export_identities(
     facts: &mut [StableExportIdentity],
 ) {
     for fact in facts.iter_mut() {
-        if fact.stable_key.is_empty() {
+        if interner.resolve(fact.stable_key).is_empty() {
             fact.stable_key = fact.computed_stable_key(interner);
         }
     }
-    facts.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    facts.sort_by_key(|fact| interner.resolve(fact.stable_key));
 }
 
 pub(super) fn source_file_metadata(

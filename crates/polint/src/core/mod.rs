@@ -84,6 +84,8 @@ pub use ids::{
 pub use lang::Language;
 pub use span::{Span, TextRange};
 pub(crate) use stable_key::{StableKeyId, StableKeyInterner};
+#[cfg(test)]
+pub(crate) use stable_key::{stable_key_for_test, test_stable_key_interner};
 
 pub use review::ChangeStatus;
 pub(crate) use review::{ChangedFile, ReviewChangeset};

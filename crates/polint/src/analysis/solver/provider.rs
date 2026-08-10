@@ -335,16 +335,25 @@ mod tests {
         Digest::absent(DigestKind::ProviderOutput, kind)
     }
 
-    fn node(id: u64, stable_key: &str) -> SemanticNodeFact {
+    fn node(
+        interner: &crate::core::StableKeyInterner,
+        id: u64,
+        stable_key: &str,
+    ) -> SemanticNodeFact {
         SemanticNodeFact {
             id: SemanticNodeId(id),
             kind: NodeKind::Function(FunctionId(id)),
             precision: SemanticPrecision::Conservative,
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key),
         }
     }
 
-    fn copy(src: u64, dst: u64, stable_key: &str) -> ConstraintFact {
+    fn copy(
+        interner: &crate::core::StableKeyInterner,
+        src: u64,
+        dst: u64,
+        stable_key: &str,
+    ) -> ConstraintFact {
         ConstraintFact {
             id: SemanticConstraintId(0),
             kind: ConstraintKind::CopyEdge {
@@ -353,7 +362,7 @@ mod tests {
             },
             status: PointsToStatus::Present,
             precision: PointsToPrecision::FlowInsensitive,
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key),
         }
     }
 
@@ -361,16 +370,17 @@ mod tests {
     /// derives the transitive edge a -> c.
     fn db_with_copy_chain() -> AnalysisDb {
         let mut db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
         let graph = SemanticGraphOutput {
             nodes: vec![
-                node(0, "node|function|a"),
-                node(1, "node|function|b"),
-                node(2, "node|function|c"),
+                node(&interner, 0, "node|function|a"),
+                node(&interner, 1, "node|function|b"),
+                node(&interner, 2, "node|function|c"),
             ],
             edges: Vec::new(),
             constraints: vec![
-                copy(0, 1, "constraint|copy|a-b"),
-                copy(1, 2, "constraint|copy|b-c"),
+                copy(&interner, 0, 1, "constraint|copy|a-b"),
+                copy(&interner, 1, 2, "constraint|copy|b-c"),
             ],
         };
         db.replace_semantic_graph_facts(graph)

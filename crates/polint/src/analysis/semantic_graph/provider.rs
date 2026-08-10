@@ -105,7 +105,7 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
         ts_direct_binding_output_digest(ts_direct_bindings.output());
     let base_output =
         build_semantic_graph_with_ts_direct_binding_collection(db, &ts_direct_bindings)
-            .normalized();
+            .normalized(interner);
     let adaptation_models =
         collect_adaptation_model_input(interner, loaded, &base_output, adaptation_budget);
     let output = if adaptation_models.store.accepted().is_empty() {
@@ -116,7 +116,7 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
             &ts_direct_bindings,
             &adaptation_models.store,
         )
-        .normalized()
+        .normalized(interner)
     };
 
     // Step: digest over the stored stable KEYS (never dense IDs — see
@@ -259,7 +259,7 @@ fn collect_adaptation_model_input(
     let node_keys = base_output
         .nodes
         .iter()
-        .map(|node| node.stable_key.clone())
+        .map(|node| interner.resolve(node.stable_key).to_string())
         .collect::<Vec<_>>();
     let universe = ValidationUniverse::new(node_keys.clone(), node_keys);
     let store = AdaptationModelStore::build(facts, &universe, budget);
@@ -516,40 +516,43 @@ fn semantic_graph_output_digest(
 
     // Post-normalize node dense id (== position) -> stable key, so a constraint can
     // contribute its endpoints by their stable keys rather than dense handles.
-    let node_key_by_id: Vec<&str> = output
+    let interner = db.stable_key_interner();
+    let node_key_by_id: Vec<_> = output
         .nodes
         .iter()
-        .map(|node| node.stable_key.as_str())
+        .map(|node| interner.resolve(node.stable_key))
         .collect();
 
-    parts.extend(
-        output
-            .nodes
-            .iter()
-            .map(|node| format!("node={}|prec={:?}", node.stable_key, node.precision)),
-    );
-    parts.extend(
-        output
-            .edges
-            .iter()
-            .map(|edge| format!("edge={}|prec={:?}", edge.stable_key, edge.precision)),
-    );
+    parts.extend(output.nodes.iter().map(|node| {
+        format!(
+            "node={}|prec={:?}",
+            interner.resolve(node.stable_key),
+            node.precision
+        )
+    }));
+    parts.extend(output.edges.iter().map(|edge| {
+        format!(
+            "edge={}|prec={:?}",
+            interner.resolve(edge.stable_key),
+            edge.precision
+        )
+    }));
     parts.extend(output.constraints.iter().map(|constraint| {
-        let mut refs: Vec<&str> = constraint
+        let mut refs: Vec<_> = constraint
             .kind
             .referenced_nodes()
             .into_iter()
             .map(|node| {
                 node_key_by_id
                     .get(node.0 as usize)
-                    .copied()
-                    .unwrap_or("<unresolved>")
+                    .cloned()
+                    .unwrap_or_else(|| "<unresolved>".into())
             })
             .collect();
         refs.sort_unstable();
         format!(
             "constraint={}|status={:?}|prec={:?}|refs=[{}]",
-            constraint.stable_key,
+            interner.resolve(constraint.stable_key),
             constraint.status,
             constraint.precision,
             refs.join(","),
@@ -841,9 +844,10 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         let loaded = loaded_config(temp.path());
         let mut db = db_with_go_main();
-        let base = build_semantic_graph_with_ts_direct_bindings(&db, &[]).normalized();
-        let source = &base.nodes[0].stable_key;
-        let target = &base.nodes[1].stable_key;
+        let interner = db.stable_key_interner();
+        let base = build_semantic_graph_with_ts_direct_bindings(&db, &[]).normalized(&interner);
+        let source = interner.resolve(base.nodes[0].stable_key);
+        let target = interner.resolve(base.nodes[1].stable_key);
         let model_dir = temp.path().join(".polint/models");
         fs::create_dir_all(&model_dir).expect("model dir");
         fs::write(

@@ -604,7 +604,10 @@ mod tests {
             imported_name: Some("makeThing".to_string()),
             namespace: SymbolNamespace::Value,
             kind: SemanticImportKind::StaticNamed,
-            stable_key: "semantic-import:makeThing".to_string(),
+            stable_key: fixture
+                .db
+                .stable_key_interner()
+                .intern("semantic-import:makeThing"),
             status: SemanticStatus::Resolved,
         });
         fixture.store_symbols_and_semantic_imports();

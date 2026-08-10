@@ -837,15 +837,17 @@ fn setup_missing_semantic_index_for_files(
                 file: Some(file.id),
                 package: None,
                 module: None,
-                source_stable_key: source_key.clone(),
+                source_stable_key: interner.intern(source_key.clone()),
                 target_stable_keys: Vec::new(),
                 step: ResolutionStepKind::UnknownFallback,
-                stable_key: format!("{source_key}|step:UnknownFallback|status:setup_missing"),
+                stable_key: interner.intern(format!(
+                    "{source_key}|step:UnknownFallback|status:setup_missing"
+                )),
                 status: SemanticStatus::SetupMissing,
             },
         );
     }
-    builder.finish()
+    builder.finish(interner)
 }
 
 fn derive_go_semantic_index(
@@ -870,7 +872,7 @@ fn derive_go_semantic_index(
                 parent: scope_ids.get(scope.parent_key.as_str()).copied(),
                 scope_path: go_scope_path(scope),
                 kind: go_scope_kind(&scope.kind),
-                stable_key: scope.key.clone(),
+                stable_key: interner.intern(scope.key.clone()),
                 status: SemanticStatus::Resolved,
             },
         );
@@ -901,11 +903,13 @@ fn derive_go_semantic_index(
                 imported_name: None,
                 namespace: SymbolNamespace::Package,
                 kind: go_import_kind(&import.alias_kind),
-                stable_key: source_key.clone(),
+                stable_key: interner.intern(source_key.clone()),
                 status,
             },
         );
-        if let Some(alias) = go_import_alias_fact(import, resolution, status, symbol_stable_keys) {
+        if let Some(alias) =
+            go_import_alias_fact(interner, import, resolution, status, symbol_stable_keys)
+        {
             builder.add_alias(interner, alias);
         }
     }
@@ -924,7 +928,7 @@ fn derive_go_semantic_index(
                 export_name: export.export_name.clone(),
                 namespace: symbol_namespace(&export.namespace),
                 kind: ExportKind::Named,
-                stable_key: go_export_stable_key(export),
+                stable_key: interner.intern(go_export_stable_key(export)),
                 status: if export.generated {
                     SemanticStatus::Generated
                 } else {
@@ -942,9 +946,10 @@ fn derive_go_semantic_index(
                 module_key: None,
                 export_name: export.export_name.clone(),
                 namespace: symbol_namespace(&export.namespace),
-                symbol_stable_key: mapped_symbol_key(symbol_stable_keys, &export.symbol_key),
+                symbol_stable_key: interner
+                    .intern(mapped_symbol_key(symbol_stable_keys, &export.symbol_key)),
                 generated_discriminator: Some("native".to_string()),
-                stable_key: go_stable_export_key(export),
+                stable_key: interner.intern(go_stable_export_key(export)),
                 status: SemanticStatus::Resolved,
             },
         );
@@ -960,10 +965,16 @@ fn derive_go_semantic_index(
                 file: None,
                 package: None,
                 module: None,
-                source_stable_key: mapped_reference_key(reference_stable_keys, &step.reference_key),
-                target_stable_keys,
+                source_stable_key: interner.intern(mapped_reference_key(
+                    reference_stable_keys,
+                    &step.reference_key,
+                )),
+                target_stable_keys: target_stable_keys
+                    .into_iter()
+                    .map(|key| interner.intern(key))
+                    .collect(),
                 step: go_resolution_step_kind(&step.step),
-                stable_key: go_resolution_stable_key(step),
+                stable_key: interner.intern(go_resolution_stable_key(step)),
                 status: semantic_status(&step.status),
             },
         );
@@ -982,17 +993,18 @@ fn derive_go_semantic_index(
                     file: file_for_path(files, &reference.file).map(|file| file.id),
                     package: None,
                     module: None,
-                    source_stable_key: mapped_reference_key(reference_stable_keys, &reference_key),
+                    source_stable_key: interner
+                        .intern(mapped_reference_key(reference_stable_keys, &reference_key)),
                     target_stable_keys: Vec::new(),
                     step: ResolutionStepKind::UnknownFallback,
-                    stable_key: go_reference_unknown_fallback_key(reference),
+                    stable_key: interner.intern(go_reference_unknown_fallback_key(reference)),
                     status: SemanticStatus::Unresolved,
                 },
             );
         }
     }
 
-    builder.finish()
+    builder.finish(interner)
 }
 
 fn go_files_by_path(db: &AnalysisDb) -> BTreeMap<&str, &SourceFile> {
@@ -1067,6 +1079,7 @@ fn go_import_local_name(import: &GoSidecarImport) -> Option<String> {
 }
 
 fn go_import_alias_fact(
+    interner: &crate::core::StableKeyInterner,
     import: &GoSidecarImport,
     resolution: Option<&GoSidecarResolutionStep>,
     status: SemanticStatus,
@@ -1082,12 +1095,15 @@ fn go_import_alias_fact(
         file: None,
         package: None,
         module: None,
-        source_symbol_stable_key: source_key.clone(),
+        source_symbol_stable_key: interner.intern(source_key.clone()),
         target_symbol_stable_keys: resolution
             .map(|step| mapped_candidate_keys(step, symbol_stable_keys))
-            .unwrap_or_default(),
+            .unwrap_or_default()
+            .into_iter()
+            .map(|key| interner.intern(key))
+            .collect(),
         kind: AliasKind::ImportAlias,
-        stable_key: format!("{source_key}|alias"),
+        stable_key: interner.intern(format!("{source_key}|alias")),
         status,
     })
 }
@@ -1594,7 +1610,7 @@ mod semantic_conversion {
         let sidecar = parse_sidecar_output(json).expect("sidecar fixture parses");
 
         derive_go_semantic_index(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &crate::core::test_stable_key_interner(),
             &sidecar,
             &files,
             &BTreeMap::new(),
@@ -1678,7 +1694,16 @@ mod semantic_conversion {
         assert!(output.aliases.iter().any(|alias| {
             alias.kind == AliasKind::ImportAlias
                 && alias.status == SemanticStatus::Resolved
-                && alias.target_symbol_stable_keys == vec!["fmt.Println".to_string()]
+                && alias
+                    .target_symbol_stable_keys
+                    .iter()
+                    .map(|key| {
+                        crate::core::test_stable_key_interner()
+                            .resolve(*key)
+                            .to_string()
+                    })
+                    .collect::<Vec<_>>()
+                    == vec!["fmt.Println".to_string()]
         }));
         assert!(output.aliases.iter().any(|alias| {
             alias.kind == AliasKind::ImportAlias && alias.status == SemanticStatus::Ambiguous
@@ -1713,7 +1738,10 @@ mod semantic_conversion {
         assert!(output.stable_exports.iter().any(|export| {
             export.export_name == "Build"
                 && export.package_key.as_deref() == Some("go:package:example.com/app")
-                && export.symbol_stable_key == "go:package|package:example.com/app|name:Build"
+                && crate::core::test_stable_key_interner()
+                    .resolve(export.symbol_stable_key)
+                    .as_ref()
+                    == "go:package|package:example.com/app|name:Build"
                 && export.generated_discriminator.as_deref() == Some("native")
         }));
     }
@@ -1754,7 +1782,9 @@ mod semantic_setup_missing {
         assert!(output.resolutions.iter().any(|resolution| {
             resolution.step == ResolutionStepKind::UnknownFallback
                 && resolution.status == SemanticStatus::SetupMissing
-                && resolution.source_stable_key.contains("main.go")
+                && crate::core::test_stable_key_interner()
+                    .resolve(resolution.source_stable_key)
+                    .contains("main.go")
         }));
     }
 
@@ -1797,7 +1827,9 @@ mod semantic_setup_missing {
         assert!(output.resolutions.iter().any(|resolution| {
             resolution.step == ResolutionStepKind::UnknownFallback
                 && resolution.status == SemanticStatus::Unresolved
-                && resolution.source_stable_key.contains("Missing")
+                && crate::core::test_stable_key_interner()
+                    .resolve(resolution.source_stable_key)
+                    .contains("Missing")
         }));
     }
 

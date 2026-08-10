@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::analysis::ids::{CallSiteId, ObjectTokenId, PlaceId, SemanticEdgeId, SemanticNodeId};
-use crate::core::{FunctionId, ModuleNodeId, PackageId};
+use crate::core::{FunctionId, ModuleNodeId, PackageId, StableKeyId};
 use crate::symbol_graph::semantic::ScopeId;
 
 // ---------------------------------------------------------------------------
@@ -122,30 +122,28 @@ impl SemanticPrecision {
 /// `id` is a run-local post-normalization read concern only and MUST NOT enter any
 /// serialized stable payload that feeds the output digest (D-06) — `#[serde(skip)]`
 /// strips it; serde restores it via `SemanticNodeId::default()` (= 0).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SemanticNodeFact {
-    #[serde(skip)]
     pub(crate) id: SemanticNodeId,
     pub(crate) kind: NodeKind,
     pub(crate) precision: SemanticPrecision,
     /// Built from the referenced existing identity (D-06), never run-local dense
     /// IDs. Populated by Plan 03's builder; the skeleton carries the field.
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
 /// One semantic-graph edge. `source`/`target` are dense `SemanticNodeId` handles
 /// resolved after normalization; the persistent identity is carried by
 /// `stable_key`, built from the source/target node stable keys (D-06). The dense
 /// `id` carries `#[serde(skip)]` for the same digest discipline as the node fact.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SemanticEdgeFact {
-    #[serde(skip)]
     pub(crate) id: SemanticEdgeId,
     pub(crate) source: SemanticNodeId,
     pub(crate) target: SemanticNodeId,
     pub(crate) kind: EdgeKind,
     pub(crate) precision: SemanticPrecision,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
 #[cfg(test)]
@@ -265,42 +263,37 @@ mod tests {
     }
 
     #[test]
-    fn node_fact_round_trips_through_serde_json() {
+    fn node_fact_keeps_dense_and_stable_ids_separate() {
+        let db = crate::core::AnalysisDb::new();
         let node = SemanticNodeFact {
             id: SemanticNodeId(7),
             kind: NodeKind::Function(FunctionId(3)),
             precision: SemanticPrecision::SetupAware,
-            stable_key: "node|function|pkg.F".to_string(),
+            stable_key: db.stable_key_interner().intern("node|function|pkg.F"),
         };
-        let json = serde_json::to_string(&node).expect("serialize");
-        // The dense id is skipped, so the round-tripped value carries the default
-        // id (0) while every other field is preserved.
-        let restored: SemanticNodeFact = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(restored.id, SemanticNodeId(0));
-        assert_eq!(restored.kind, node.kind);
-        assert_eq!(restored.precision, node.precision);
-        assert_eq!(restored.stable_key, node.stable_key);
-        // The skipped dense id must not appear in the serialized payload.
-        assert!(!json.contains("\"id\""));
+        assert_eq!(node.id, SemanticNodeId(7));
+        assert_eq!(
+            db.resolve_stable_key(node.stable_key).as_ref(),
+            "node|function|pkg.F"
+        );
     }
 
     #[test]
-    fn edge_fact_round_trips_through_serde_json() {
+    fn edge_fact_keeps_dense_and_stable_ids_separate() {
+        let db = crate::core::AnalysisDb::new();
         let edge = SemanticEdgeFact {
             id: SemanticEdgeId(9),
             source: SemanticNodeId(1),
             target: SemanticNodeId(2),
             kind: EdgeKind::Call,
             precision: SemanticPrecision::Conservative,
-            stable_key: "edge|call|a|b".to_string(),
+            stable_key: db.stable_key_interner().intern("edge|call|a|b"),
         };
-        let json = serde_json::to_string(&edge).expect("serialize");
-        let restored: SemanticEdgeFact = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(restored.id, SemanticEdgeId(0));
-        assert_eq!(restored.source, edge.source);
-        assert_eq!(restored.target, edge.target);
-        assert_eq!(restored.kind, edge.kind);
-        assert_eq!(restored.stable_key, edge.stable_key);
+        assert_eq!(edge.id, SemanticEdgeId(9));
+        assert_eq!(
+            db.resolve_stable_key(edge.stable_key).as_ref(),
+            "edge|call|a|b"
+        );
     }
 
     #[test]

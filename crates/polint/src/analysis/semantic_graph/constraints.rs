@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::analysis::ids::{SemanticConstraintId, SemanticNodeId, TypeFactId};
 use crate::analysis::points_to::facts::{PointsToPrecision, PointsToStatus};
+use crate::core::StableKeyId;
 
 // ---------------------------------------------------------------------------
 // ConstraintKind
@@ -197,16 +198,15 @@ impl ConstraintKind {
 /// enter any serialized stable payload that feeds the output digest (D-06) —
 /// `#[serde(skip)]` strips it; serde restores it via `SemanticConstraintId::default()`
 /// (= 0).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ConstraintFact {
-    #[serde(skip)]
     pub(crate) id: SemanticConstraintId,
     pub(crate) kind: ConstraintKind,
     pub(crate) status: PointsToStatus,
     pub(crate) precision: PointsToPrecision,
     /// Built from the referenced existing identity (D-06), never run-local dense
     /// IDs. Populated by `build_semantic_graph`.
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
 #[cfg(test)]
@@ -349,9 +349,10 @@ mod tests {
     }
 
     #[test]
-    fn constraint_fact_mirrors_points_to_shape_and_skips_dense_id() {
+    fn constraint_fact_keeps_dense_and_stable_ids_separate() {
         // D-10: the fact carries exactly { id, kind, status, precision, stable_key }
         // and reuses the points-to status/precision vocabulary.
+        let db = crate::core::AnalysisDb::new();
         let fact = ConstraintFact {
             id: SemanticConstraintId(7),
             kind: ConstraintKind::CallConstraint {
@@ -359,18 +360,15 @@ mod tests {
             },
             status: PointsToStatus::Present,
             precision: PointsToPrecision::FlowInsensitive,
-            stable_key: "constraint|call_constraint|cs".to_string(),
+            stable_key: db
+                .stable_key_interner()
+                .intern("constraint|call_constraint|cs"),
         };
-        let json = serde_json::to_string(&fact).expect("serialize");
-        // The dense id is skipped, so the round-tripped value carries the default id
-        // (0) while every other field is preserved.
-        let restored: ConstraintFact = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(restored.id, SemanticConstraintId(0));
-        assert_eq!(restored.kind, fact.kind);
-        assert_eq!(restored.status, fact.status);
-        assert_eq!(restored.precision, fact.precision);
-        assert_eq!(restored.stable_key, fact.stable_key);
-        assert!(!json.contains("\"id\""));
+        assert_eq!(fact.id, SemanticConstraintId(7));
+        assert_eq!(
+            db.resolve_stable_key(fact.stable_key).as_ref(),
+            "constraint|call_constraint|cs"
+        );
     }
 
     #[test]

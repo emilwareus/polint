@@ -90,7 +90,7 @@ fn solver_resolved_site(db: &AnalysisDb, site: crate::analysis::ids::CallSiteId)
         .iter()
         .filter_map(|constraint| match constraint.kind {
             ConstraintKind::CallConstraint { callsite } if callsite == callsite_node => {
-                Some(constraint.stable_key.as_str())
+                Some(db.resolve_stable_key(constraint.stable_key).to_string())
             }
             _ => None,
         })
@@ -103,7 +103,7 @@ fn solver_resolved_site(db: &AnalysisDb, site: crate::analysis::ids::CallSiteId)
                 .provenance
                 .contributing_facts
                 .iter()
-                .any(|fact| constraint_keys.contains(fact.stable_key.as_str()))
+                .any(|fact| constraint_keys.contains(&fact.stable_key))
     })
 }
 

@@ -1,5 +1,7 @@
-use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
-use crate::core::{FileId, Language, ModuleNodeId, PackageId, Span, SymbolId, SymbolNamespace};
+use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
+use crate::core::{
+    FileId, Language, ModuleNodeId, PackageId, Span, StableKeyId, SymbolId, SymbolNamespace,
+};
 use crate::diagnostics::{Diagnostic, TextRange};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -27,7 +29,7 @@ pub(crate) struct GeneratedSymbolId(pub(crate) u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) struct StableExportId(pub(crate) u64);
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ScopeFact {
     pub(crate) id: ScopeId,
     pub(crate) language: Language,
@@ -37,11 +39,11 @@ pub(crate) struct ScopeFact {
     pub(crate) parent: Option<ScopeId>,
     pub(crate) scope_path: Vec<String>,
     pub(crate) kind: ScopeKind,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) status: SemanticStatus,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SemanticImportFact {
     pub(crate) id: SemanticImportId,
     pub(crate) language: Language,
@@ -54,11 +56,11 @@ pub(crate) struct SemanticImportFact {
     pub(crate) imported_name: Option<String>,
     pub(crate) namespace: SymbolNamespace,
     pub(crate) kind: SemanticImportKind,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) status: SemanticStatus,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ExportFact {
     pub(crate) id: ExportId,
     pub(crate) language: Language,
@@ -70,57 +72,57 @@ pub(crate) struct ExportFact {
     pub(crate) export_name: String,
     pub(crate) namespace: SymbolNamespace,
     pub(crate) kind: ExportKind,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) status: SemanticStatus,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AliasFact {
     pub(crate) id: AliasId,
     pub(crate) language: Language,
     pub(crate) file: Option<FileId>,
     pub(crate) package: Option<PackageId>,
     pub(crate) module: Option<ModuleNodeId>,
-    pub(crate) source_symbol_stable_key: String,
-    pub(crate) target_symbol_stable_keys: Vec<String>,
+    pub(crate) source_symbol_stable_key: StableKeyId,
+    pub(crate) target_symbol_stable_keys: Vec<StableKeyId>,
     pub(crate) kind: AliasKind,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) status: SemanticStatus,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolutionFact {
     pub(crate) id: ResolutionId,
     pub(crate) language: Language,
     pub(crate) file: Option<FileId>,
     pub(crate) package: Option<PackageId>,
     pub(crate) module: Option<ModuleNodeId>,
-    pub(crate) source_stable_key: String,
-    pub(crate) target_stable_keys: Vec<String>,
+    pub(crate) source_stable_key: StableKeyId,
+    pub(crate) target_stable_keys: Vec<StableKeyId>,
     pub(crate) step: ResolutionStepKind,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) status: SemanticStatus,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GeneratedSymbolFact {
     pub(crate) id: GeneratedSymbolId,
     pub(crate) language: Language,
     pub(crate) file: Option<FileId>,
     pub(crate) package: Option<PackageId>,
     pub(crate) module: Option<ModuleNodeId>,
-    pub(crate) symbol_stable_key: String,
-    pub(crate) source_stable_key: String,
+    pub(crate) symbol_stable_key: StableKeyId,
+    pub(crate) source_stable_key: StableKeyId,
     pub(crate) producer_id: String,
     pub(crate) generator: String,
     pub(crate) generated_discriminator: String,
     pub(crate) kind: GeneratedSymbolKind,
     pub(crate) span: Option<Span>,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) status: SemanticStatus,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StableExportIdentity {
     pub(crate) id: StableExportId,
     pub(crate) export: ExportId,
@@ -129,13 +131,13 @@ pub(crate) struct StableExportIdentity {
     pub(crate) module_key: Option<String>,
     pub(crate) export_name: String,
     pub(crate) namespace: SymbolNamespace,
-    pub(crate) symbol_stable_key: String,
+    pub(crate) symbol_stable_key: StableKeyId,
     pub(crate) generated_discriminator: Option<String>,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) status: SemanticStatus,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct SemanticIndexOutput {
     pub(crate) scopes: Vec<ScopeFact>,
     pub(crate) semantic_imports: Vec<SemanticImportFact>,
@@ -144,6 +146,405 @@ pub(crate) struct SemanticIndexOutput {
     pub(crate) resolutions: Vec<ResolutionFact>,
     pub(crate) generated_symbols: Vec<GeneratedSymbolFact>,
     pub(crate) stable_exports: Vec<StableExportIdentity>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct CachedSemanticIndexOutput {
+    pub(crate) scopes: Vec<CachedScopeFact>,
+    pub(crate) semantic_imports: Vec<CachedSemanticImportFact>,
+    pub(crate) exports: Vec<CachedExportFact>,
+    pub(crate) aliases: Vec<CachedAliasFact>,
+    pub(crate) resolutions: Vec<CachedResolutionFact>,
+    pub(crate) generated_symbols: Vec<CachedGeneratedSymbolFact>,
+    pub(crate) stable_exports: Vec<CachedStableExportIdentity>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct CachedScopeFact {
+    id: ScopeId,
+    language: Language,
+    file: Option<FileId>,
+    package: Option<PackageId>,
+    module: Option<ModuleNodeId>,
+    parent: Option<ScopeId>,
+    scope_path: Vec<String>,
+    kind: ScopeKind,
+    pub(crate) stable_key_text: String,
+    status: SemanticStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct CachedSemanticImportFact {
+    id: SemanticImportId,
+    language: Language,
+    file: Option<FileId>,
+    package: Option<PackageId>,
+    module: Option<ModuleNodeId>,
+    scope: Option<ScopeId>,
+    import_path: String,
+    local_name: Option<String>,
+    imported_name: Option<String>,
+    namespace: SymbolNamespace,
+    kind: SemanticImportKind,
+    stable_key_text: String,
+    status: SemanticStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct CachedExportFact {
+    id: ExportId,
+    language: Language,
+    file: Option<FileId>,
+    package: Option<PackageId>,
+    module: Option<ModuleNodeId>,
+    scope: Option<ScopeId>,
+    symbol: Option<SymbolId>,
+    export_name: String,
+    namespace: SymbolNamespace,
+    kind: ExportKind,
+    stable_key_text: String,
+    status: SemanticStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct CachedAliasFact {
+    id: AliasId,
+    language: Language,
+    file: Option<FileId>,
+    package: Option<PackageId>,
+    module: Option<ModuleNodeId>,
+    source_symbol_stable_key_text: String,
+    target_symbol_stable_key_texts: Vec<String>,
+    kind: AliasKind,
+    stable_key_text: String,
+    status: SemanticStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct CachedResolutionFact {
+    id: ResolutionId,
+    language: Language,
+    file: Option<FileId>,
+    package: Option<PackageId>,
+    module: Option<ModuleNodeId>,
+    source_stable_key_text: String,
+    target_stable_key_texts: Vec<String>,
+    step: ResolutionStepKind,
+    stable_key_text: String,
+    status: SemanticStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct CachedGeneratedSymbolFact {
+    id: GeneratedSymbolId,
+    language: Language,
+    file: Option<FileId>,
+    package: Option<PackageId>,
+    module: Option<ModuleNodeId>,
+    symbol_stable_key_text: String,
+    source_stable_key_text: String,
+    producer_id: String,
+    generator: String,
+    generated_discriminator: String,
+    kind: GeneratedSymbolKind,
+    span: Option<Span>,
+    stable_key_text: String,
+    status: SemanticStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct CachedStableExportIdentity {
+    pub(crate) id: StableExportId,
+    pub(crate) export: ExportId,
+    language: Language,
+    package_key: Option<String>,
+    pub(crate) module_key: Option<String>,
+    export_name: String,
+    namespace: SymbolNamespace,
+    pub(crate) symbol_stable_key_text: String,
+    generated_discriminator: Option<String>,
+    pub(crate) stable_key_text: String,
+    status: SemanticStatus,
+}
+
+impl CachedSemanticIndexOutput {
+    pub(crate) fn from_output(
+        interner: &crate::core::StableKeyInterner,
+        output: &SemanticIndexOutput,
+    ) -> Self {
+        Self {
+            scopes: output
+                .scopes
+                .iter()
+                .map(|row| CachedScopeFact {
+                    id: row.id,
+                    language: row.language,
+                    file: row.file,
+                    package: row.package,
+                    module: row.module,
+                    parent: row.parent,
+                    scope_path: row.scope_path.clone(),
+                    kind: row.kind,
+                    stable_key_text: interner.resolve(row.stable_key).to_string(),
+                    status: row.status,
+                })
+                .collect(),
+            semantic_imports: output
+                .semantic_imports
+                .iter()
+                .map(|row| CachedSemanticImportFact {
+                    id: row.id,
+                    language: row.language,
+                    file: row.file,
+                    package: row.package,
+                    module: row.module,
+                    scope: row.scope,
+                    import_path: row.import_path.clone(),
+                    local_name: row.local_name.clone(),
+                    imported_name: row.imported_name.clone(),
+                    namespace: row.namespace,
+                    kind: row.kind,
+                    stable_key_text: interner.resolve(row.stable_key).to_string(),
+                    status: row.status,
+                })
+                .collect(),
+            exports: output
+                .exports
+                .iter()
+                .map(|row| CachedExportFact {
+                    id: row.id,
+                    language: row.language,
+                    file: row.file,
+                    package: row.package,
+                    module: row.module,
+                    scope: row.scope,
+                    symbol: row.symbol,
+                    export_name: row.export_name.clone(),
+                    namespace: row.namespace,
+                    kind: row.kind,
+                    stable_key_text: interner.resolve(row.stable_key).to_string(),
+                    status: row.status,
+                })
+                .collect(),
+            aliases: output
+                .aliases
+                .iter()
+                .map(|row| CachedAliasFact {
+                    id: row.id,
+                    language: row.language,
+                    file: row.file,
+                    package: row.package,
+                    module: row.module,
+                    source_symbol_stable_key_text: interner
+                        .resolve(row.source_symbol_stable_key)
+                        .to_string(),
+                    target_symbol_stable_key_texts: row
+                        .target_symbol_stable_keys
+                        .iter()
+                        .map(|key| interner.resolve(*key).to_string())
+                        .collect(),
+                    kind: row.kind,
+                    stable_key_text: interner.resolve(row.stable_key).to_string(),
+                    status: row.status,
+                })
+                .collect(),
+            resolutions: output
+                .resolutions
+                .iter()
+                .map(|row| CachedResolutionFact {
+                    id: row.id,
+                    language: row.language,
+                    file: row.file,
+                    package: row.package,
+                    module: row.module,
+                    source_stable_key_text: interner.resolve(row.source_stable_key).to_string(),
+                    target_stable_key_texts: row
+                        .target_stable_keys
+                        .iter()
+                        .map(|key| interner.resolve(*key).to_string())
+                        .collect(),
+                    step: row.step,
+                    stable_key_text: interner.resolve(row.stable_key).to_string(),
+                    status: row.status,
+                })
+                .collect(),
+            generated_symbols: output
+                .generated_symbols
+                .iter()
+                .map(|row| CachedGeneratedSymbolFact {
+                    id: row.id,
+                    language: row.language,
+                    file: row.file,
+                    package: row.package,
+                    module: row.module,
+                    symbol_stable_key_text: interner.resolve(row.symbol_stable_key).to_string(),
+                    source_stable_key_text: interner.resolve(row.source_stable_key).to_string(),
+                    producer_id: row.producer_id.clone(),
+                    generator: row.generator.clone(),
+                    generated_discriminator: row.generated_discriminator.clone(),
+                    kind: row.kind,
+                    span: row.span.clone(),
+                    stable_key_text: interner.resolve(row.stable_key).to_string(),
+                    status: row.status,
+                })
+                .collect(),
+            stable_exports: output
+                .stable_exports
+                .iter()
+                .map(|row| CachedStableExportIdentity {
+                    id: row.id,
+                    export: row.export,
+                    language: row.language,
+                    package_key: row.package_key.clone(),
+                    module_key: row.module_key.clone(),
+                    export_name: row.export_name.clone(),
+                    namespace: row.namespace,
+                    symbol_stable_key_text: interner.resolve(row.symbol_stable_key).to_string(),
+                    generated_discriminator: row.generated_discriminator.clone(),
+                    stable_key_text: interner.resolve(row.stable_key).to_string(),
+                    status: row.status,
+                })
+                .collect(),
+        }
+    }
+
+    pub(crate) fn into_output(
+        self,
+        interner: &crate::core::StableKeyInterner,
+    ) -> SemanticIndexOutput {
+        SemanticIndexOutput {
+            scopes: self
+                .scopes
+                .into_iter()
+                .map(|row| ScopeFact {
+                    id: row.id,
+                    language: row.language,
+                    file: row.file,
+                    package: row.package,
+                    module: row.module,
+                    parent: row.parent,
+                    scope_path: row.scope_path,
+                    kind: row.kind,
+                    stable_key: interner.intern(row.stable_key_text),
+                    status: row.status,
+                })
+                .collect(),
+            semantic_imports: self
+                .semantic_imports
+                .into_iter()
+                .map(|row| SemanticImportFact {
+                    id: row.id,
+                    language: row.language,
+                    file: row.file,
+                    package: row.package,
+                    module: row.module,
+                    scope: row.scope,
+                    import_path: row.import_path,
+                    local_name: row.local_name,
+                    imported_name: row.imported_name,
+                    namespace: row.namespace,
+                    kind: row.kind,
+                    stable_key: interner.intern(row.stable_key_text),
+                    status: row.status,
+                })
+                .collect(),
+            exports: self
+                .exports
+                .into_iter()
+                .map(|row| ExportFact {
+                    id: row.id,
+                    language: row.language,
+                    file: row.file,
+                    package: row.package,
+                    module: row.module,
+                    scope: row.scope,
+                    symbol: row.symbol,
+                    export_name: row.export_name,
+                    namespace: row.namespace,
+                    kind: row.kind,
+                    stable_key: interner.intern(row.stable_key_text),
+                    status: row.status,
+                })
+                .collect(),
+            aliases: self
+                .aliases
+                .into_iter()
+                .map(|row| AliasFact {
+                    id: row.id,
+                    language: row.language,
+                    file: row.file,
+                    package: row.package,
+                    module: row.module,
+                    source_symbol_stable_key: interner.intern(row.source_symbol_stable_key_text),
+                    target_symbol_stable_keys: row
+                        .target_symbol_stable_key_texts
+                        .into_iter()
+                        .map(|key| interner.intern(key))
+                        .collect(),
+                    kind: row.kind,
+                    stable_key: interner.intern(row.stable_key_text),
+                    status: row.status,
+                })
+                .collect(),
+            resolutions: self
+                .resolutions
+                .into_iter()
+                .map(|row| ResolutionFact {
+                    id: row.id,
+                    language: row.language,
+                    file: row.file,
+                    package: row.package,
+                    module: row.module,
+                    source_stable_key: interner.intern(row.source_stable_key_text),
+                    target_stable_keys: row
+                        .target_stable_key_texts
+                        .into_iter()
+                        .map(|key| interner.intern(key))
+                        .collect(),
+                    step: row.step,
+                    stable_key: interner.intern(row.stable_key_text),
+                    status: row.status,
+                })
+                .collect(),
+            generated_symbols: self
+                .generated_symbols
+                .into_iter()
+                .map(|row| GeneratedSymbolFact {
+                    id: row.id,
+                    language: row.language,
+                    file: row.file,
+                    package: row.package,
+                    module: row.module,
+                    symbol_stable_key: interner.intern(row.symbol_stable_key_text),
+                    source_stable_key: interner.intern(row.source_stable_key_text),
+                    producer_id: row.producer_id,
+                    generator: row.generator,
+                    generated_discriminator: row.generated_discriminator,
+                    kind: row.kind,
+                    span: row.span,
+                    stable_key: interner.intern(row.stable_key_text),
+                    status: row.status,
+                })
+                .collect(),
+            stable_exports: self
+                .stable_exports
+                .into_iter()
+                .map(|row| StableExportIdentity {
+                    id: row.id,
+                    export: row.export,
+                    language: row.language,
+                    package_key: row.package_key,
+                    module_key: row.module_key,
+                    export_name: row.export_name,
+                    namespace: row.namespace,
+                    symbol_stable_key: interner.intern(row.symbol_stable_key_text),
+                    generated_discriminator: row.generated_discriminator,
+                    stable_key: interner.intern(row.stable_key_text),
+                    status: row.status,
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -291,7 +692,7 @@ impl SemanticIndexBuilder {
     ) -> ScopeId {
         let id = ScopeId(self.scopes.len() as u64);
         fact.id = id;
-        if fact.stable_key.is_empty() {
+        if interner.resolve(fact.stable_key).is_empty() {
             fact.stable_key = fact.computed_stable_key(interner);
         }
         self.scopes.push(fact);
@@ -305,7 +706,7 @@ impl SemanticIndexBuilder {
     ) -> SemanticImportId {
         let id = SemanticImportId(self.semantic_imports.len() as u64);
         fact.id = id;
-        if fact.stable_key.is_empty() {
+        if interner.resolve(fact.stable_key).is_empty() {
             fact.stable_key = fact.computed_stable_key(interner);
         }
         self.semantic_imports.push(fact);
@@ -319,7 +720,7 @@ impl SemanticIndexBuilder {
     ) -> ExportId {
         let id = ExportId(self.exports.len() as u64);
         fact.id = id;
-        if fact.stable_key.is_empty() {
+        if interner.resolve(fact.stable_key).is_empty() {
             fact.stable_key = fact.computed_stable_key(interner);
         }
         self.exports.push(fact);
@@ -333,7 +734,7 @@ impl SemanticIndexBuilder {
     ) -> AliasId {
         let id = AliasId(self.aliases.len() as u64);
         fact.id = id;
-        if fact.stable_key.is_empty() {
+        if interner.resolve(fact.stable_key).is_empty() {
             fact.stable_key = fact.computed_stable_key(interner);
         }
         self.aliases.push(fact);
@@ -347,7 +748,7 @@ impl SemanticIndexBuilder {
     ) -> ResolutionId {
         let id = ResolutionId(self.resolutions.len() as u64);
         fact.id = id;
-        if fact.stable_key.is_empty() {
+        if interner.resolve(fact.stable_key).is_empty() {
             fact.stable_key = fact.computed_stable_key(interner);
         }
         self.resolutions.push(fact);
@@ -357,13 +758,13 @@ impl SemanticIndexBuilder {
     #[cfg(test)]
     pub(crate) fn add_generated_symbol(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         mut fact: GeneratedSymbolFact,
     ) -> GeneratedSymbolId {
         let id = GeneratedSymbolId(self.generated_symbols.len() as u64);
         fact.id = id;
-        if fact.stable_key.is_empty() {
-            fact.stable_key =
-                fact.computed_stable_key(&crate::core::AnalysisDb::new().stable_key_interner());
+        if interner.resolve(fact.stable_key).is_empty() {
+            fact.stable_key = fact.computed_stable_key(interner);
         }
         self.generated_symbols.push(fact);
         id
@@ -376,22 +777,28 @@ impl SemanticIndexBuilder {
     ) -> StableExportId {
         let id = StableExportId(self.stable_exports.len() as u64);
         fact.id = id;
-        if fact.stable_key.is_empty() {
+        if interner.resolve(fact.stable_key).is_empty() {
             fact.stable_key = fact.computed_stable_key(interner);
         }
         self.stable_exports.push(fact);
         id
     }
 
-    pub(crate) fn finish(self) -> SemanticIndexOutput {
+    pub(crate) fn finish(self, interner: &crate::core::StableKeyInterner) -> SemanticIndexOutput {
         SemanticIndexOutput {
-            scopes: sort_rows(self.scopes, scope_sort_key),
-            semantic_imports: sort_rows(self.semantic_imports, semantic_import_sort_key),
-            exports: sort_rows(self.exports, export_sort_key),
-            aliases: sort_rows(self.aliases, alias_sort_key),
-            resolutions: sort_rows(self.resolutions, resolution_sort_key),
-            generated_symbols: sort_rows(self.generated_symbols, generated_symbol_sort_key),
-            stable_exports: sort_rows(self.stable_exports, stable_export_sort_key),
+            scopes: sort_rows(self.scopes, |row| scope_sort_key(interner, row)),
+            semantic_imports: sort_rows(self.semantic_imports, |row| {
+                semantic_import_sort_key(interner, row)
+            }),
+            exports: sort_rows(self.exports, |row| export_sort_key(interner, row)),
+            aliases: sort_rows(self.aliases, |row| alias_sort_key(interner, row)),
+            resolutions: sort_rows(self.resolutions, |row| resolution_sort_key(interner, row)),
+            generated_symbols: sort_rows(self.generated_symbols, |row| {
+                generated_symbol_sort_key(interner, row)
+            }),
+            stable_exports: sort_rows(self.stable_exports, |row| {
+                stable_export_sort_key(interner, row)
+            }),
         }
     }
 }
@@ -419,33 +826,31 @@ pub(crate) fn alias_reexport_closure(
         .iter()
         .map(|alias| {
             (
-                alias.source_symbol_stable_key.as_str(),
-                alias
-                    .target_symbol_stable_keys
-                    .iter()
-                    .map(String::as_str)
-                    .collect::<Vec<_>>(),
+                alias.source_symbol_stable_key,
+                alias.target_symbol_stable_keys.clone(),
             )
         })
         .collect::<BTreeMap<_, _>>();
-    let mut closure_aliases = BTreeMap::<String, AliasFact>::new();
-    let mut closure_resolutions = BTreeMap::<String, ResolutionFact>::new();
+    let mut closure_aliases = BTreeMap::<StableKeyId, AliasFact>::new();
+    let mut closure_resolutions = BTreeMap::<StableKeyId, ResolutionFact>::new();
 
     for alias in aliases {
-        let (targets, status) = resolve_alias_targets(alias, &alias_targets, max_iterations);
+        let (targets, status) =
+            resolve_alias_targets(interner, alias, &alias_targets, max_iterations);
         let mut closure = alias.clone();
-        closure.target_symbol_stable_keys = targets.into_iter().collect();
+        closure.target_symbol_stable_keys = sorted_stable_key_ids(interner, targets);
         closure.status = closure_status(alias.status, status);
         closure.stable_key = closure_alias_stable_key(interner, alias, &closure);
         let resolution = closure_resolution_for_alias(interner, &closure);
-        closure_resolutions.insert(resolution.stable_key.clone(), resolution);
-        closure_aliases.insert(closure.stable_key.clone(), closure);
+        closure_resolutions.insert(resolution.stable_key, resolution);
+        closure_aliases.insert(closure.stable_key, closure);
     }
 
     let stable_export_targets = stable_exports
         .iter()
-        .map(|export| export.symbol_stable_key.clone())
+        .map(|export| export.symbol_stable_key)
         .collect::<BTreeSet<_>>();
+    let stable_export_targets = sorted_stable_key_ids(interner, stable_export_targets);
     for export in exports
         .iter()
         .filter(|export| matches!(export.kind, ExportKind::Star | ExportKind::StarReexport))
@@ -456,24 +861,25 @@ pub(crate) fn alias_reexport_closure(
             file: export.file,
             package: export.package,
             module: export.module,
-            source_symbol_stable_key: export.stable_key.clone(),
-            target_symbol_stable_keys: stable_export_targets.iter().cloned().collect(),
+            source_symbol_stable_key: export.stable_key,
+            target_symbol_stable_keys: stable_export_targets.clone(),
             kind: AliasKind::ReExport,
-            stable_key: String::new(),
+            stable_key: interner.intern(""),
             status: SemanticStatus::Ambiguous,
         };
         closure.stable_key = closure.computed_stable_key(interner);
         let resolution = closure_resolution_for_alias(interner, &closure);
-        closure_resolutions.insert(resolution.stable_key.clone(), resolution);
-        closure_aliases.insert(closure.stable_key.clone(), closure);
+        closure_resolutions.insert(resolution.stable_key, resolution);
+        closure_aliases.insert(closure.stable_key, closure);
     }
 
     AliasReexportClosureOutput {
-        aliases: sort_rows(closure_aliases.into_values().collect(), alias_sort_key),
-        resolutions: sort_rows(
-            closure_resolutions.into_values().collect(),
-            resolution_sort_key,
-        ),
+        aliases: sort_rows(closure_aliases.into_values().collect(), |row| {
+            alias_sort_key(interner, row)
+        }),
+        resolutions: sort_rows(closure_resolutions.into_values().collect(), |row| {
+            resolution_sort_key(interner, row)
+        }),
     }
 }
 
@@ -481,9 +887,9 @@ pub(crate) fn emit_native_generated_symbol_hooks(
     interner: &crate::core::StableKeyInterner,
     semantic: &SemanticIndexOutput,
 ) -> NativeGeneratedHooksOutput {
-    let mut generated = BTreeMap::<String, GeneratedSymbolFact>::new();
-    let mut resolutions = BTreeMap::<String, ResolutionFact>::new();
-    let mut diagnostics = BTreeMap::<String, Diagnostic>::new();
+    let mut generated = BTreeMap::<StableKeyId, GeneratedSymbolFact>::new();
+    let mut resolutions = BTreeMap::<StableKeyId, ResolutionFact>::new();
+    let mut diagnostics = BTreeMap::<StableKeyId, Diagnostic>::new();
 
     for stable_export in &semantic.stable_exports {
         let Some(discriminator) = stable_export.generated_discriminator.as_ref() else {
@@ -495,35 +901,39 @@ pub(crate) fn emit_native_generated_symbol_hooks(
             file: None,
             package: None,
             module: None,
-            symbol_stable_key: stable_export.symbol_stable_key.clone(),
-            source_stable_key: stable_export.stable_key.clone(),
+            symbol_stable_key: stable_export.symbol_stable_key,
+            source_stable_key: stable_export.stable_key,
             producer_id: SYMBOL_GRAPH_PRODUCER_ID.to_string(),
             generator: SYMBOL_GRAPH_PRODUCER_ID.to_string(),
             generated_discriminator: discriminator.clone(),
             kind: GeneratedSymbolKind::Unknown,
             span: None,
-            stable_key: String::new(),
+            stable_key: interner.intern(""),
             status: SemanticStatus::Generated,
         };
         row.stable_key = row.computed_stable_key(interner);
 
         if let Some(existing) = generated.get(&row.stable_key) {
             if existing != &row {
-                diagnostics
-                    .entry(row.stable_key.clone())
-                    .or_insert_with(|| generated_symbol_conflict_diagnostic(&row.stable_key));
+                diagnostics.entry(row.stable_key).or_insert_with(|| {
+                    generated_symbol_conflict_diagnostic(&interner.resolve(row.stable_key))
+                });
             }
             continue;
         }
 
         let resolution = generated_hint_resolution(interner, stable_export, &row);
-        resolutions.insert(resolution.stable_key.clone(), resolution);
-        generated.insert(row.stable_key.clone(), row);
+        resolutions.insert(resolution.stable_key, resolution);
+        generated.insert(row.stable_key, row);
     }
 
     NativeGeneratedHooksOutput {
-        generated_symbols: sort_rows(generated.into_values().collect(), generated_symbol_sort_key),
-        resolutions: sort_rows(resolutions.into_values().collect(), resolution_sort_key),
+        generated_symbols: sort_rows(generated.into_values().collect(), |row| {
+            generated_symbol_sort_key(interner, row)
+        }),
+        resolutions: sort_rows(resolutions.into_values().collect(), |row| {
+            resolution_sort_key(interner, row)
+        }),
         diagnostics: diagnostics.into_values().collect(),
     }
 }
@@ -539,10 +949,10 @@ fn generated_hint_resolution(
         file: None,
         package: None,
         module: None,
-        source_stable_key: stable_export.stable_key.clone(),
-        target_stable_keys: vec![generated.stable_key.clone()],
+        source_stable_key: stable_export.stable_key,
+        target_stable_keys: vec![generated.stable_key],
         step: ResolutionStepKind::GeneratedHintLookup,
-        stable_key: String::new(),
+        stable_key: interner.intern(""),
         status: SemanticStatus::Generated,
     };
     resolution.stable_key = resolution.computed_stable_key(interner);
@@ -562,10 +972,11 @@ fn generated_symbol_conflict_diagnostic(stable_key: &str) -> Diagnostic {
 }
 
 fn resolve_alias_targets(
+    interner: &crate::core::StableKeyInterner,
     alias: &AliasFact,
-    alias_targets: &BTreeMap<&str, Vec<&str>>,
+    alias_targets: &BTreeMap<StableKeyId, Vec<StableKeyId>>,
     max_iterations: usize,
-) -> (BTreeSet<String>, SemanticStatus) {
+) -> (BTreeSet<StableKeyId>, SemanticStatus) {
     if !matches!(
         alias.status,
         SemanticStatus::Resolved | SemanticStatus::Generated
@@ -580,7 +991,7 @@ fn resolve_alias_targets(
     let mut stack = alias
         .target_symbol_stable_keys
         .iter()
-        .map(|target| (target.as_str(), 0usize))
+        .map(|target| (*target, 0usize))
         .collect::<Vec<_>>();
     let mut seen_edges = BTreeSet::<(String, String)>::new();
     let mut status = SemanticStatus::Resolved;
@@ -590,17 +1001,20 @@ fn resolve_alias_targets(
             status = SemanticStatus::Cycle;
             continue;
         }
-        if let Some(next_targets) = alias_targets.get(target) {
+        if let Some(next_targets) = alias_targets.get(&target) {
             for next in next_targets {
-                let edge = (target.to_string(), (*next).to_string());
+                let edge = (
+                    interner.resolve(target).to_string(),
+                    interner.resolve(*next).to_string(),
+                );
                 if !seen_edges.insert(edge) {
                     status = SemanticStatus::Cycle;
                     continue;
                 }
-                stack.push((next, depth + 1));
+                stack.push((*next, depth + 1));
             }
         } else {
-            terminals.insert(target.to_string());
+            terminals.insert(target);
         }
     }
 
@@ -619,15 +1033,18 @@ fn closure_alias_stable_key(
     interner: &crate::core::StableKeyInterner,
     original: &AliasFact,
     closure: &AliasFact,
-) -> String {
-    stable_key_text_from_parts(
+) -> StableKeyId {
+    stable_key_from_parts(
         interner,
         FactFamily::Alias,
         &[
-            ("base_alias", original.stable_key.clone()),
+            (
+                "base_alias",
+                interner.resolve(original.stable_key).to_string(),
+            ),
             (
                 "targets",
-                sorted_repeated_value(&closure.target_symbol_stable_keys),
+                sorted_stable_key_value(interner, &closure.target_symbol_stable_keys),
             ),
             ("status", semantic_status_label(closure.status).to_string()),
         ],
@@ -644,10 +1061,10 @@ fn closure_resolution_for_alias(
         file: alias.file,
         package: alias.package,
         module: alias.module,
-        source_stable_key: alias.source_symbol_stable_key.clone(),
+        source_stable_key: alias.source_symbol_stable_key,
         target_stable_keys: alias.target_symbol_stable_keys.clone(),
         step: ResolutionStepKind::ImportAliasLookup,
-        stable_key: String::new(),
+        stable_key: interner.intern(""),
         status: alias.status,
     };
     resolution.stable_key = resolution.computed_stable_key(interner);
@@ -655,7 +1072,10 @@ fn closure_resolution_for_alias(
 }
 
 impl ScopeFact {
-    pub(crate) fn computed_stable_key(&self, interner: &crate::core::StableKeyInterner) -> String {
+    pub(crate) fn computed_stable_key(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+    ) -> StableKeyId {
         Self::stable_key_for(
             interner,
             self.language,
@@ -675,9 +1095,9 @@ impl ScopeFact {
         package_key: Option<String>,
         module_key: Option<String>,
         pair: (ScopeKind, SemanticStatus),
-    ) -> String {
+    ) -> StableKeyId {
         let (kind, status) = pair;
-        stable_key_text_from_parts(
+        stable_key_from_parts(
             interner,
             FactFamily::Scope,
             &[
@@ -694,8 +1114,11 @@ impl ScopeFact {
 }
 
 impl SemanticImportFact {
-    pub(crate) fn computed_stable_key(&self, interner: &crate::core::StableKeyInterner) -> String {
-        stable_key_text_from_parts(
+    pub(crate) fn computed_stable_key(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+    ) -> StableKeyId {
+        stable_key_from_parts(
             interner,
             FactFamily::SemanticImport,
             &[
@@ -726,8 +1149,11 @@ impl SemanticImportFact {
 }
 
 impl ExportFact {
-    pub(crate) fn computed_stable_key(&self, interner: &crate::core::StableKeyInterner) -> String {
-        stable_key_text_from_parts(
+    pub(crate) fn computed_stable_key(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+    ) -> StableKeyId {
+        stable_key_from_parts(
             interner,
             FactFamily::Export,
             &[
@@ -756,8 +1182,11 @@ impl ExportFact {
 }
 
 impl AliasFact {
-    pub(crate) fn computed_stable_key(&self, interner: &crate::core::StableKeyInterner) -> String {
-        stable_key_text_from_parts(
+    pub(crate) fn computed_stable_key(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+    ) -> StableKeyId {
+        stable_key_from_parts(
             interner,
             FactFamily::Alias,
             &[
@@ -776,10 +1205,13 @@ impl AliasFact {
                         .map(module_node_id_key)
                         .unwrap_or_else(none_value),
                 ),
-                ("symbol_stable_key", self.source_symbol_stable_key.clone()),
+                (
+                    "symbol_stable_key",
+                    interner.resolve(self.source_symbol_stable_key).to_string(),
+                ),
                 (
                     "target_symbol_stable_keys",
-                    sorted_repeated_value(&self.target_symbol_stable_keys),
+                    sorted_stable_key_value(interner, &self.target_symbol_stable_keys),
                 ),
                 ("kind", alias_kind_label(self.kind).to_string()),
                 ("status", semantic_status_label(self.status).to_string()),
@@ -789,8 +1221,11 @@ impl AliasFact {
 }
 
 impl ResolutionFact {
-    pub(crate) fn computed_stable_key(&self, interner: &crate::core::StableKeyInterner) -> String {
-        stable_key_text_from_parts(
+    pub(crate) fn computed_stable_key(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+    ) -> StableKeyId {
+        stable_key_from_parts(
             interner,
             FactFamily::Resolution,
             &[
@@ -809,10 +1244,13 @@ impl ResolutionFact {
                         .map(module_node_id_key)
                         .unwrap_or_else(none_value),
                 ),
-                ("symbol_stable_key", self.source_stable_key.clone()),
+                (
+                    "symbol_stable_key",
+                    interner.resolve(self.source_stable_key).to_string(),
+                ),
                 (
                     "target_stable_keys",
-                    sorted_repeated_value(&self.target_stable_keys),
+                    sorted_stable_key_value(interner, &self.target_stable_keys),
                 ),
                 ("kind", resolution_step_kind_label(self.step).to_string()),
                 ("status", semantic_status_label(self.status).to_string()),
@@ -822,8 +1260,11 @@ impl ResolutionFact {
 }
 
 impl GeneratedSymbolFact {
-    pub(crate) fn computed_stable_key(&self, interner: &crate::core::StableKeyInterner) -> String {
-        stable_key_text_from_parts(
+    pub(crate) fn computed_stable_key(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+    ) -> StableKeyId {
+        stable_key_from_parts(
             interner,
             FactFamily::GeneratedSymbol,
             &[
@@ -842,8 +1283,14 @@ impl GeneratedSymbolFact {
                         .map(module_node_id_key)
                         .unwrap_or_else(none_value),
                 ),
-                ("symbol_stable_key", self.symbol_stable_key.clone()),
-                ("source_stable_key", self.source_stable_key.clone()),
+                (
+                    "symbol_stable_key",
+                    interner.resolve(self.symbol_stable_key).to_string(),
+                ),
+                (
+                    "source_stable_key",
+                    interner.resolve(self.source_stable_key).to_string(),
+                ),
                 ("producer_id", self.producer_id.clone()),
                 (
                     "generated_discriminator",
@@ -857,8 +1304,11 @@ impl GeneratedSymbolFact {
 }
 
 impl StableExportIdentity {
-    pub(crate) fn computed_stable_key(&self, interner: &crate::core::StableKeyInterner) -> String {
-        stable_key_text_from_parts(
+    pub(crate) fn computed_stable_key(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+    ) -> StableKeyId {
+        stable_key_from_parts(
             interner,
             FactFamily::StableExport,
             &[
@@ -867,7 +1317,10 @@ impl StableExportIdentity {
                 ("module", option_key(self.module_key.clone())),
                 ("export_name", self.export_name.clone()),
                 ("namespace", namespace_label(self.namespace).to_string()),
-                ("symbol_stable_key", self.symbol_stable_key.clone()),
+                (
+                    "symbol_stable_key",
+                    interner.resolve(self.symbol_stable_key).to_string(),
+                ),
                 (
                     "generated_discriminator",
                     option_key(self.generated_discriminator.clone()),
@@ -889,6 +1342,31 @@ fn sorted_repeated_value(values: &[String]) -> String {
         .map(|value| format!("{}:{value}", value.len()))
         .collect::<Vec<_>>()
         .join(",")
+}
+
+fn sorted_stable_key_value(
+    interner: &crate::core::StableKeyInterner,
+    values: &[StableKeyId],
+) -> String {
+    let mut values = values
+        .iter()
+        .map(|value| interner.resolve(*value).replace('\\', "/"))
+        .collect::<Vec<_>>();
+    values.sort();
+    values
+        .into_iter()
+        .map(|value| format!("{}:{value}", value.len()))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn sorted_stable_key_ids(
+    interner: &crate::core::StableKeyInterner,
+    values: BTreeSet<StableKeyId>,
+) -> Vec<StableKeyId> {
+    let mut values = values.into_iter().collect::<Vec<_>>();
+    values.sort_by_key(|value| interner.resolve(*value));
+    values
 }
 
 fn option_key(value: Option<String>) -> String {
@@ -958,9 +1436,12 @@ fn sort_rows<T, K: Ord>(mut rows: Vec<T>, key: impl Fn(&T) -> K) -> Vec<T> {
     rows
 }
 
-fn scope_sort_key(fact: &ScopeFact) -> (String, Vec<String>, Option<FileId>, ScopeKind) {
+fn scope_sort_key(
+    interner: &crate::core::StableKeyInterner,
+    fact: &ScopeFact,
+) -> (String, Vec<String>, Option<FileId>, ScopeKind) {
     (
-        fact.stable_key.clone(),
+        interner.resolve(fact.stable_key).to_string(),
         fact.scope_path.clone(),
         fact.file,
         fact.kind,
@@ -968,6 +1449,7 @@ fn scope_sort_key(fact: &ScopeFact) -> (String, Vec<String>, Option<FileId>, Sco
 }
 
 fn semantic_import_sort_key(
+    interner: &crate::core::StableKeyInterner,
     fact: &SemanticImportFact,
 ) -> (
     String,
@@ -978,7 +1460,7 @@ fn semantic_import_sort_key(
     SemanticStatus,
 ) {
     (
-        fact.stable_key.clone(),
+        interner.resolve(fact.stable_key).to_string(),
         fact.file,
         fact.import_path.clone(),
         fact.local_name.clone(),
@@ -988,6 +1470,7 @@ fn semantic_import_sort_key(
 }
 
 fn export_sort_key(
+    interner: &crate::core::StableKeyInterner,
     fact: &ExportFact,
 ) -> (
     String,
@@ -998,7 +1481,7 @@ fn export_sort_key(
     SemanticStatus,
 ) {
     (
-        fact.stable_key.clone(),
+        interner.resolve(fact.stable_key).to_string(),
         fact.file,
         fact.export_name.clone(),
         namespace_label(fact.namespace).to_string(),
@@ -1008,6 +1491,7 @@ fn export_sort_key(
 }
 
 fn alias_sort_key(
+    interner: &crate::core::StableKeyInterner,
     fact: &AliasFact,
 ) -> (
     String,
@@ -1018,16 +1502,20 @@ fn alias_sort_key(
     SemanticStatus,
 ) {
     (
-        fact.stable_key.clone(),
+        interner.resolve(fact.stable_key).to_string(),
         fact.file,
-        fact.source_symbol_stable_key.clone(),
-        fact.target_symbol_stable_keys.clone(),
+        interner.resolve(fact.source_symbol_stable_key).to_string(),
+        fact.target_symbol_stable_keys
+            .iter()
+            .map(|key| interner.resolve(*key).to_string())
+            .collect(),
         fact.kind,
         fact.status,
     )
 }
 
 fn resolution_sort_key(
+    interner: &crate::core::StableKeyInterner,
     fact: &ResolutionFact,
 ) -> (
     String,
@@ -1038,16 +1526,20 @@ fn resolution_sort_key(
     SemanticStatus,
 ) {
     (
-        fact.stable_key.clone(),
+        interner.resolve(fact.stable_key).to_string(),
         fact.file,
-        fact.source_stable_key.clone(),
-        fact.target_stable_keys.clone(),
+        interner.resolve(fact.source_stable_key).to_string(),
+        fact.target_stable_keys
+            .iter()
+            .map(|key| interner.resolve(*key).to_string())
+            .collect(),
         fact.step,
         fact.status,
     )
 }
 
 fn generated_symbol_sort_key(
+    interner: &crate::core::StableKeyInterner,
     fact: &GeneratedSymbolFact,
 ) -> (
     String,
@@ -1058,9 +1550,9 @@ fn generated_symbol_sort_key(
     SemanticStatus,
 ) {
     (
-        fact.stable_key.clone(),
+        interner.resolve(fact.stable_key).to_string(),
         fact.file,
-        fact.symbol_stable_key.clone(),
+        interner.resolve(fact.symbol_stable_key).to_string(),
         fact.generated_discriminator.clone(),
         fact.kind,
         fact.status,
@@ -1078,14 +1570,17 @@ type StableExportSortKey = (
     SemanticStatus,
 );
 
-fn stable_export_sort_key(fact: &StableExportIdentity) -> StableExportSortKey {
+fn stable_export_sort_key(
+    interner: &crate::core::StableKeyInterner,
+    fact: &StableExportIdentity,
+) -> StableExportSortKey {
     (
-        fact.stable_key.clone(),
+        interner.resolve(fact.stable_key).to_string(),
         fact.package_key.clone(),
         fact.module_key.clone(),
         fact.export_name.clone(),
         namespace_label(fact.namespace).to_string(),
-        fact.symbol_stable_key.clone(),
+        interner.resolve(fact.symbol_stable_key).to_string(),
         fact.generated_discriminator.clone(),
         fact.status,
     )
@@ -1190,12 +1685,16 @@ fn generated_symbol_kind_label(kind: GeneratedSymbolKind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{FileId, Language, ModuleNodeId, PackageId, SymbolNamespace};
+    use crate::core::{
+        FileId, Language, ModuleNodeId, PackageId, SymbolNamespace, stable_key_for_test,
+        test_stable_key_interner,
+    };
 
     #[test]
     fn scope_stable_keys_are_deterministic_across_input_order() {
+        let interner = test_stable_key_interner();
         let first = ScopeFact::stable_key_for(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &interner,
             Language::TypeScript,
             &["module".to_string(), "function:handler".to_string()],
             Some("src/api.ts".to_string()),
@@ -1204,7 +1703,7 @@ mod tests {
             (ScopeKind::Function, SemanticStatus::Resolved),
         );
         let second = ScopeFact::stable_key_for(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &interner,
             Language::TypeScript,
             &["function:handler".to_string(), "module".to_string()],
             Some("src/api.ts".to_string()),
@@ -1218,6 +1717,7 @@ mod tests {
 
     #[test]
     fn stable_export_identity_key_includes_required_context() {
+        let interner = test_stable_key_interner();
         let identity = StableExportIdentity {
             id: StableExportId(17),
             export: ExportId(3),
@@ -1226,14 +1726,13 @@ mod tests {
             module_key: Some("mod:service".to_string()),
             export_name: "Handler".to_string(),
             namespace: SymbolNamespace::Value,
-            symbol_stable_key: "symbol:handler".to_string(),
+            symbol_stable_key: interner.intern("symbol:handler"),
             generated_discriminator: Some("route:/users".to_string()),
-            stable_key: String::new(),
+            stable_key: interner.intern(""),
             status: SemanticStatus::Generated,
         };
 
-        let stable_key =
-            identity.computed_stable_key(&crate::core::AnalysisDb::new().stable_key_interner());
+        let stable_key = interner.resolve(identity.computed_stable_key(&interner));
 
         assert!(stable_key.contains("language"));
         assert!(stable_key.contains("package"));
@@ -1267,10 +1766,10 @@ mod tests {
                 file: Some(FileId(0)),
                 package: Some(PackageId(1)),
                 module: Some(ModuleNodeId(2)),
-                source_symbol_stable_key: format!("alias:{index}"),
+                source_symbol_stable_key: stable_key_for_test(&format!("alias:{index}")),
                 target_symbol_stable_keys: Vec::new(),
                 kind: AliasKind::ReExport,
-                stable_key: format!("alias-key:{index}"),
+                stable_key: stable_key_for_test(&format!("alias-key:{index}")),
                 status,
             })
             .count();
@@ -1280,9 +1779,10 @@ mod tests {
 
     #[test]
     fn semantic_index_builder_sorts_scope_rows_by_stable_key() {
+        let interner = test_stable_key_interner();
         let mut builder = SemanticIndexBuilder::new();
         builder.add_scope(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &interner,
             ScopeFact {
                 id: ScopeId(0),
                 language: Language::TypeScript,
@@ -1292,12 +1792,12 @@ mod tests {
                 parent: None,
                 scope_path: vec!["src/app.ts".to_string(), "function@20-40".to_string()],
                 kind: ScopeKind::Function,
-                stable_key: "z-scope".to_string(),
+                stable_key: interner.intern("z-scope"),
                 status: SemanticStatus::Resolved,
             },
         );
         builder.add_scope(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &interner,
             ScopeFact {
                 id: ScopeId(0),
                 language: Language::TypeScript,
@@ -1307,28 +1807,29 @@ mod tests {
                 parent: None,
                 scope_path: vec!["src/app.ts".to_string(), "module@0-50".to_string()],
                 kind: ScopeKind::Module,
-                stable_key: "a-scope".to_string(),
+                stable_key: interner.intern("a-scope"),
                 status: SemanticStatus::Resolved,
             },
         );
 
-        let output = builder.finish();
+        let output = builder.finish(&interner);
 
         assert_eq!(
             output
                 .scopes
                 .iter()
-                .map(|scope| scope.stable_key.as_str())
+                .map(|scope| interner.resolve(scope.stable_key).to_string())
                 .collect::<Vec<_>>(),
-            vec!["a-scope", "z-scope"]
+            vec!["a-scope".to_string(), "z-scope".to_string()]
         );
     }
 
     #[test]
     fn semantic_index_builder_collects_all_row_families() {
+        let interner = test_stable_key_interner();
         let mut builder = SemanticIndexBuilder::new();
         builder.add_semantic_import(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &interner,
             SemanticImportFact {
                 id: SemanticImportId(0),
                 language: Language::TypeScript,
@@ -1341,12 +1842,12 @@ mod tests {
                 imported_name: Some("default".to_string()),
                 namespace: SymbolNamespace::Value,
                 kind: SemanticImportKind::EsDefault,
-                stable_key: String::new(),
+                stable_key: interner.intern(""),
                 status: SemanticStatus::Resolved,
             },
         );
         let export = builder.add_export_identity(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &interner,
             ExportFact {
                 id: ExportId(0),
                 language: Language::TypeScript,
@@ -1358,58 +1859,61 @@ mod tests {
                 export_name: "target".to_string(),
                 namespace: SymbolNamespace::Value,
                 kind: ExportKind::Default,
-                stable_key: String::new(),
+                stable_key: interner.intern(""),
                 status: SemanticStatus::Resolved,
             },
         );
         builder.add_alias(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &interner,
             AliasFact {
                 id: AliasId(0),
                 language: Language::TypeScript,
                 file: Some(FileId(0)),
                 package: None,
                 module: None,
-                source_symbol_stable_key: "alias:source".to_string(),
-                target_symbol_stable_keys: vec!["alias:target".to_string()],
+                source_symbol_stable_key: interner.intern("alias:source"),
+                target_symbol_stable_keys: vec![interner.intern("alias:target")],
                 kind: AliasKind::Import,
-                stable_key: String::new(),
+                stable_key: interner.intern(""),
                 status: SemanticStatus::Resolved,
             },
         );
         builder.add_resolution(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &interner,
             ResolutionFact {
                 id: ResolutionId(0),
                 language: Language::TypeScript,
                 file: Some(FileId(0)),
                 package: None,
                 module: None,
-                source_stable_key: "ref:source".to_string(),
-                target_stable_keys: vec!["symbol:target".to_string()],
+                source_stable_key: interner.intern("ref:source"),
+                target_stable_keys: vec![interner.intern("symbol:target")],
                 step: ResolutionStepKind::Lexical,
-                stable_key: String::new(),
+                stable_key: interner.intern(""),
                 status: SemanticStatus::Resolved,
             },
         );
-        builder.add_generated_symbol(GeneratedSymbolFact {
-            id: GeneratedSymbolId(0),
-            language: Language::TypeScript,
-            file: Some(FileId(0)),
-            package: None,
-            module: None,
-            symbol_stable_key: "symbol:generated".to_string(),
-            source_stable_key: "stable-export:generated".to_string(),
-            producer_id: "polint.symbol_graph".to_string(),
-            generator: "test".to_string(),
-            generated_discriminator: "native".to_string(),
-            kind: GeneratedSymbolKind::Unknown,
-            span: None,
-            stable_key: String::new(),
-            status: SemanticStatus::Generated,
-        });
+        builder.add_generated_symbol(
+            &interner,
+            GeneratedSymbolFact {
+                id: GeneratedSymbolId(0),
+                language: Language::TypeScript,
+                file: Some(FileId(0)),
+                package: None,
+                module: None,
+                symbol_stable_key: interner.intern("symbol:generated"),
+                source_stable_key: interner.intern("stable-export:generated"),
+                producer_id: "polint.symbol_graph".to_string(),
+                generator: "test".to_string(),
+                generated_discriminator: "native".to_string(),
+                kind: GeneratedSymbolKind::Unknown,
+                span: None,
+                stable_key: interner.intern(""),
+                status: SemanticStatus::Generated,
+            },
+        );
         builder.add_stable_export(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &interner,
             StableExportIdentity {
                 id: StableExportId(0),
                 export,
@@ -1418,14 +1922,14 @@ mod tests {
                 module_key: Some("src/target.ts".to_string()),
                 export_name: "target".to_string(),
                 namespace: SymbolNamespace::Value,
-                symbol_stable_key: "symbol:target".to_string(),
+                symbol_stable_key: interner.intern("symbol:target"),
                 generated_discriminator: Some("native".to_string()),
-                stable_key: String::new(),
+                stable_key: interner.intern(""),
                 status: SemanticStatus::Resolved,
             },
         );
 
-        let output = builder.finish();
+        let output = builder.finish(&interner);
 
         assert_eq!(output.semantic_imports.len(), 1);
         assert_eq!(output.exports.len(), 1);
@@ -1439,27 +1943,31 @@ mod tests {
 #[cfg(test)]
 mod alias_reexport_closure_tests {
     use super::*;
-    use crate::core::{FileId, Language, SymbolNamespace};
+    use crate::core::{FileId, Language, SymbolNamespace, test_stable_key_interner};
 
     fn alias(source: &str, targets: &[&str], status: SemanticStatus) -> AliasFact {
+        let interner = test_stable_key_interner();
         let mut fact = AliasFact {
             id: AliasId(0),
             language: Language::TypeScript,
             file: Some(FileId(0)),
             package: None,
             module: None,
-            source_symbol_stable_key: source.to_string(),
-            target_symbol_stable_keys: targets.iter().map(|target| (*target).to_string()).collect(),
+            source_symbol_stable_key: interner.intern(source),
+            target_symbol_stable_keys: targets
+                .iter()
+                .map(|target| interner.intern(*target))
+                .collect(),
             kind: AliasKind::Import,
-            stable_key: String::new(),
+            stable_key: interner.intern(""),
             status,
         };
-        fact.stable_key =
-            fact.computed_stable_key(&crate::core::AnalysisDb::new().stable_key_interner());
+        fact.stable_key = fact.computed_stable_key(&interner);
         fact
     }
 
     fn star_export(stable_key: &str, status: SemanticStatus) -> ExportFact {
+        let interner = test_stable_key_interner();
         ExportFact {
             id: ExportId(0),
             language: Language::TypeScript,
@@ -1471,12 +1979,13 @@ mod alias_reexport_closure_tests {
             export_name: "*".to_string(),
             namespace: SymbolNamespace::Module,
             kind: ExportKind::StarReexport,
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key),
             status,
         }
     }
 
     fn stable_export(export_name: &str, symbol_key: &str) -> StableExportIdentity {
+        let interner = test_stable_key_interner();
         StableExportIdentity {
             id: StableExportId(0),
             export: ExportId(0),
@@ -1485,17 +1994,18 @@ mod alias_reexport_closure_tests {
             module_key: Some("src/mod.ts".to_string()),
             export_name: export_name.to_string(),
             namespace: SymbolNamespace::Value,
-            symbol_stable_key: symbol_key.to_string(),
+            symbol_stable_key: interner.intern(symbol_key),
             generated_discriminator: Some("native".to_string()),
-            stable_key: format!("stable-export:{export_name}"),
+            stable_key: interner.intern(format!("stable-export:{export_name}")),
             status: SemanticStatus::Resolved,
         }
     }
 
     #[test]
     fn acyclic_import_alias_chains_resolve_to_deterministic_targets() {
+        let interner = test_stable_key_interner();
         let output = super::alias_reexport_closure(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &interner,
             &[
                 alias("import:a", &["import:b"], SemanticStatus::Resolved),
                 alias("import:b", &["symbol:c"], SemanticStatus::Resolved),
@@ -1507,14 +2017,26 @@ mod alias_reexport_closure_tests {
         let closure_alias = output
             .aliases
             .iter()
-            .find(|alias| alias.source_symbol_stable_key == "import:a")
+            .find(|alias| interner.resolve(alias.source_symbol_stable_key).as_ref() == "import:a")
             .expect("closure contains source alias");
 
         assert_eq!(closure_alias.status, SemanticStatus::Resolved);
-        assert_eq!(closure_alias.target_symbol_stable_keys, vec!["symbol:c"]);
+        assert_eq!(
+            closure_alias
+                .target_symbol_stable_keys
+                .iter()
+                .map(|key| interner.resolve(*key).to_string())
+                .collect::<Vec<_>>(),
+            vec!["symbol:c".to_string()]
+        );
         assert!(output.resolutions.iter().any(|resolution| {
-            resolution.source_stable_key == "import:a"
-                && resolution.target_stable_keys == vec!["symbol:c".to_string()]
+            interner.resolve(resolution.source_stable_key).as_ref() == "import:a"
+                && resolution
+                    .target_stable_keys
+                    .iter()
+                    .map(|key| interner.resolve(*key).to_string())
+                    .collect::<Vec<_>>()
+                    == vec!["symbol:c".to_string()]
                 && resolution.step == ResolutionStepKind::ImportAliasLookup
                 && resolution.status == SemanticStatus::Resolved
         }));
@@ -1522,8 +2044,9 @@ mod alias_reexport_closure_tests {
 
     #[test]
     fn reexport_cycles_terminate_and_emit_cycle_rows() {
+        let interner = test_stable_key_interner();
         let output = super::alias_reexport_closure(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &interner,
             &[
                 alias("reexport:a", &["reexport:b"], SemanticStatus::Resolved),
                 alias("reexport:b", &["reexport:a"], SemanticStatus::Resolved),
@@ -1533,10 +2056,11 @@ mod alias_reexport_closure_tests {
         );
 
         assert!(output.aliases.iter().any(|alias| {
-            alias.source_symbol_stable_key == "reexport:a" && alias.status == SemanticStatus::Cycle
+            interner.resolve(alias.source_symbol_stable_key).as_ref() == "reexport:a"
+                && alias.status == SemanticStatus::Cycle
         }));
         assert!(output.resolutions.iter().any(|resolution| {
-            resolution.source_stable_key == "reexport:a"
+            interner.resolve(resolution.source_stable_key).as_ref() == "reexport:a"
                 && resolution.step == ResolutionStepKind::ImportAliasLookup
                 && resolution.status == SemanticStatus::Cycle
         }));
@@ -1544,8 +2068,9 @@ mod alias_reexport_closure_tests {
 
     #[test]
     fn star_exports_with_incomplete_targets_emit_ambiguous_closure_rows() {
+        let interner = test_stable_key_interner();
         let output = super::alias_reexport_closure(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &interner,
             &[],
             &[star_export(
                 "export:*:src/star.ts",
@@ -1557,21 +2082,31 @@ mod alias_reexport_closure_tests {
         let alias = output
             .aliases
             .iter()
-            .find(|alias| alias.source_symbol_stable_key == "export:*:src/star.ts")
+            .find(|alias| {
+                interner.resolve(alias.source_symbol_stable_key).as_ref() == "export:*:src/star.ts"
+            })
             .expect("star export gets conservative closure alias");
 
         assert_eq!(alias.status, SemanticStatus::Ambiguous);
-        assert_eq!(alias.target_symbol_stable_keys, vec!["symbol:known"]);
+        assert_eq!(
+            alias
+                .target_symbol_stable_keys
+                .iter()
+                .map(|key| interner.resolve(*key).to_string())
+                .collect::<Vec<_>>(),
+            vec!["symbol:known".to_string()]
+        );
         assert!(output.resolutions.iter().any(|resolution| {
-            resolution.source_stable_key == "export:*:src/star.ts"
+            interner.resolve(resolution.source_stable_key).as_ref() == "export:*:src/star.ts"
                 && resolution.status == SemanticStatus::Ambiguous
         }));
     }
 
     #[test]
     fn star_reexport_closure_keys_include_original_export_key() {
+        let interner = test_stable_key_interner();
         let output = super::alias_reexport_closure(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &interner,
             &[],
             &[
                 star_export("export:*:src/a.ts", SemanticStatus::Unresolved),
@@ -1582,7 +2117,7 @@ mod alias_reexport_closure_tests {
         let stable_keys = output
             .aliases
             .iter()
-            .map(|alias| alias.stable_key.as_str())
+            .map(|alias| interner.resolve(alias.stable_key).to_string())
             .collect::<std::collections::BTreeSet<_>>();
 
         assert_eq!(stable_keys.len(), 2);
@@ -1596,6 +2131,7 @@ mod native_generated_hooks {
     use crate::core::{AnalysisDb, Language, SymbolNamespace};
 
     fn stable_export(
+        interner: &crate::core::StableKeyInterner,
         language: Language,
         export_name: &str,
         generated: bool,
@@ -1609,9 +2145,9 @@ mod native_generated_hooks {
             module_key: (language != Language::Go).then(|| "src/mod.ts".to_string()),
             export_name: export_name.to_string(),
             namespace: SymbolNamespace::Value,
-            symbol_stable_key: format!("symbol:{export_name}"),
+            symbol_stable_key: interner.intern(format!("symbol:{export_name}")),
             generated_discriminator: generated.then(|| "native".to_string()),
-            stable_key: format!("stable-export:{export_name}"),
+            stable_key: interner.intern(format!("stable-export:{export_name}")),
             status: if generated {
                 SemanticStatus::Generated
             } else {
@@ -1622,61 +2158,71 @@ mod native_generated_hooks {
 
     #[test]
     fn ts_native_stable_exports_emit_generated_symbol_hooks_with_provenance() {
+        let interner = crate::core::test_stable_key_interner();
         let mut semantic = SemanticIndexOutput::default();
-        semantic
-            .stable_exports
-            .push(stable_export(Language::TypeScript, "route", true));
+        semantic.stable_exports.push(stable_export(
+            &interner,
+            Language::TypeScript,
+            "route",
+            true,
+        ));
 
-        let output = super::emit_native_generated_symbol_hooks(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            &semantic,
-        );
+        let output = super::emit_native_generated_symbol_hooks(&interner, &semantic);
 
         assert_eq!(output.generated_symbols.len(), 1);
         let generated = &output.generated_symbols[0];
         assert_eq!(generated.status, SemanticStatus::Generated);
         assert_eq!(generated.producer_id, "polint.symbol_graph");
-        assert_eq!(generated.source_stable_key, "stable-export:route");
+        assert_eq!(
+            interner.resolve(generated.source_stable_key).as_ref(),
+            "stable-export:route"
+        );
         assert_eq!(generated.generated_discriminator, "native");
-        assert!(generated.stable_key.contains("polint.symbol_graph"));
+        assert!(
+            interner
+                .resolve(generated.stable_key)
+                .contains("polint.symbol_graph")
+        );
         assert!(output.resolutions.iter().any(|resolution| {
             resolution.step == ResolutionStepKind::GeneratedHintLookup
                 && resolution.status == SemanticStatus::Generated
-                && resolution.source_stable_key == "stable-export:route"
+                && interner.resolve(resolution.source_stable_key).as_ref() == "stable-export:route"
         }));
     }
 
     #[test]
     fn go_generated_stable_exports_emit_generated_symbol_hooks() {
+        let interner = crate::core::test_stable_key_interner();
         let mut semantic = SemanticIndexOutput::default();
         semantic
             .stable_exports
-            .push(stable_export(Language::Go, "Handler", true));
+            .push(stable_export(&interner, Language::Go, "Handler", true));
 
-        let output = super::emit_native_generated_symbol_hooks(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            &semantic,
-        );
+        let output = super::emit_native_generated_symbol_hooks(&interner, &semantic);
 
         assert_eq!(output.generated_symbols.len(), 1);
         let generated = &output.generated_symbols[0];
         assert_eq!(generated.language, Language::Go);
         assert_eq!(generated.status, SemanticStatus::Generated);
         assert_eq!(generated.producer_id, "polint.symbol_graph");
-        assert_eq!(generated.source_stable_key, "stable-export:Handler");
+        assert_eq!(
+            interner.resolve(generated.source_stable_key).as_ref(),
+            "stable-export:Handler"
+        );
     }
 
     #[test]
     fn generated_hooks_have_metadata_after_semantic_replacement() {
-        let mut semantic = SemanticIndexOutput::default();
-        semantic
-            .stable_exports
-            .push(stable_export(Language::TypeScript, "route", true));
-        let output = super::emit_native_generated_symbol_hooks(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            &semantic,
-        );
         let mut db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
+        let mut semantic = SemanticIndexOutput::default();
+        semantic.stable_exports.push(stable_export(
+            &interner,
+            Language::TypeScript,
+            "route",
+            true,
+        ));
+        let output = super::emit_native_generated_symbol_hooks(&interner, &semantic);
         db.add_file(
             std::path::PathBuf::from("src/mod.ts"),
             "src/mod.ts".to_string(),

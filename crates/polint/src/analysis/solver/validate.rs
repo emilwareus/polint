@@ -354,7 +354,7 @@ mod tests {
     fn provenance() -> DerivedEdgeProvenance {
         DerivedEdgeProvenance::new(
             vec![ContributingFact::from_parts(
-                &crate::core::AnalysisDb::new().stable_key_interner(),
+                &crate::core::test_stable_key_interner(),
                 FactFamily::PointsToConstraint,
                 &[("constraint", "copy".to_string())],
             )],
@@ -387,7 +387,7 @@ mod tests {
             },
             status: PointsToStatus::Present,
             precision: PointsToPrecision::FlowInsensitive,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
@@ -399,7 +399,7 @@ mod tests {
             },
             status: PointsToStatus::Present,
             precision: PointsToPrecision::FlowInsensitive,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 

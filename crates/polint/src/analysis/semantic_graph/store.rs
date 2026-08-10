@@ -6,6 +6,7 @@ use crate::analysis::semantic_graph::constraints::{ConstraintFact, ConstraintKin
 use crate::analysis::semantic_graph::facts::{
     EdgeKind, NodeKind, SemanticEdgeFact, SemanticNodeFact,
 };
+use crate::core::StableKeyInterner;
 
 pub(crate) const SEMANTIC_GRAPH_PROVIDER_ID: &str = "polint.semantic_graph";
 
@@ -32,9 +33,10 @@ impl SemanticGraphOutput {
     /// after the stable-key sort). Edge `source`/`target` handles are remapped from
     /// the pre-sort node IDs to the post-sort dense node IDs so the adjacency stays
     /// consistent after re-densification.
-    pub(crate) fn normalized(mut self) -> Self {
+    pub(crate) fn normalized(mut self, interner: &StableKeyInterner) -> Self {
         self.nodes.sort_by(|left, right| {
-            (left.stable_key.as_str(), left.id).cmp(&(right.stable_key.as_str(), right.id))
+            (interner.resolve(left.stable_key), left.id)
+                .cmp(&(interner.resolve(right.stable_key), right.id))
         });
         // Map each node's pre-sort dense id to its post-sort dense id so edges can
         // be rewritten to the new node numbering.
@@ -55,7 +57,8 @@ impl SemanticGraphOutput {
             }
         }
         self.edges.sort_by(|left, right| {
-            (left.stable_key.as_str(), left.id).cmp(&(right.stable_key.as_str(), right.id))
+            (interner.resolve(left.stable_key), left.id)
+                .cmp(&(interner.resolve(right.stable_key), right.id))
         });
         for (index, edge) in self.edges.iter_mut().enumerate() {
             edge.id = SemanticEdgeId(index as u64);
@@ -71,7 +74,8 @@ impl SemanticGraphOutput {
                 .remap_nodes(|node| remap.get(&node).copied().unwrap_or(node));
         }
         self.constraints.sort_by(|left, right| {
-            (left.stable_key.as_str(), left.id).cmp(&(right.stable_key.as_str(), right.id))
+            (interner.resolve(left.stable_key), left.id)
+                .cmp(&(interner.resolve(right.stable_key), right.id))
         });
         for (index, constraint) in self.constraints.iter_mut().enumerate() {
             constraint.id = SemanticConstraintId(index as u64);
@@ -79,7 +83,10 @@ impl SemanticGraphOutput {
         self
     }
 
-    pub(crate) fn validate_references(&self) -> Result<(), AnalysisError> {
+    pub(crate) fn validate_references(
+        &self,
+        interner: &StableKeyInterner,
+    ) -> Result<(), AnalysisError> {
         let node_ids: BTreeSet<SemanticNodeId> = self.nodes.iter().map(|node| node.id).collect();
 
         for edge in &self.edges {
@@ -88,7 +95,8 @@ impl SemanticGraphOutput {
                     provider: SEMANTIC_GRAPH_PROVIDER_ID,
                     reason: format!(
                         "dangling edge source {:?} for semantic edge `{}`",
-                        edge.source, edge.stable_key
+                        edge.source,
+                        interner.resolve(edge.stable_key)
                     ),
                 });
             }
@@ -97,7 +105,8 @@ impl SemanticGraphOutput {
                     provider: SEMANTIC_GRAPH_PROVIDER_ID,
                     reason: format!(
                         "dangling edge target {:?} for semantic edge `{}`",
-                        edge.target, edge.stable_key
+                        edge.target,
+                        interner.resolve(edge.stable_key)
                     ),
                 });
             }
@@ -112,7 +121,8 @@ impl SemanticGraphOutput {
                         provider: SEMANTIC_GRAPH_PROVIDER_ID,
                         reason: format!(
                             "dangling constraint node {:?} for semantic constraint `{}`",
-                            node, constraint.stable_key
+                            node,
+                            interner.resolve(constraint.stable_key)
                         ),
                     });
                 }
@@ -148,14 +158,18 @@ impl SemanticGraphStore {
     /// `source`/`target` resolves to a stored node (dangling endpoint ->
     /// [`AnalysisError::InvalidFact`], mirroring the reachability store) and building
     /// the four deterministic index sidecars.
-    pub(crate) fn from_output(output: SemanticGraphOutput) -> Result<Self, AnalysisError> {
-        Self::from_normalized_output(output.normalized())
+    pub(crate) fn from_output(
+        output: SemanticGraphOutput,
+        interner: &StableKeyInterner,
+    ) -> Result<Self, AnalysisError> {
+        Self::from_normalized_output(output.normalized(interner), interner)
     }
 
     pub(crate) fn from_normalized_output(
         output: SemanticGraphOutput,
+        interner: &StableKeyInterner,
     ) -> Result<Self, AnalysisError> {
-        output.validate_references()?;
+        output.validate_references(interner)?;
         let mut store = Self {
             nodes: output.nodes,
             edges: output.edges,
@@ -246,14 +260,14 @@ mod tests {
     use crate::analysis::ids::{CallSiteId, ObjectTokenId, SemanticConstraintId};
     use crate::analysis::points_to::facts::{PointsToPrecision, PointsToStatus};
     use crate::analysis::semantic_graph::facts::SemanticPrecision;
-    use crate::core::FunctionId;
+    use crate::core::{FunctionId, stable_key_for_test, test_stable_key_interner};
 
     fn node(id: u64, kind: NodeKind, stable_key: &str) -> SemanticNodeFact {
         SemanticNodeFact {
             id: SemanticNodeId(id),
             kind,
             precision: SemanticPrecision::SetupAware,
-            stable_key: stable_key.to_string(),
+            stable_key: stable_key_for_test(stable_key),
         }
     }
 
@@ -270,7 +284,7 @@ mod tests {
             target: SemanticNodeId(target),
             kind,
             precision: SemanticPrecision::Conservative,
-            stable_key: stable_key.to_string(),
+            stable_key: stable_key_for_test(stable_key),
         }
     }
 
@@ -280,7 +294,7 @@ mod tests {
             kind,
             status: PointsToStatus::Present,
             precision: PointsToPrecision::FlowInsensitive,
-            stable_key: stable_key.to_string(),
+            stable_key: stable_key_for_test(stable_key),
         }
     }
 
@@ -313,13 +327,23 @@ mod tests {
             edges: Vec::new(),
             constraints: Vec::new(),
         }
-        .normalized();
+        .normalized(&test_stable_key_interner());
         // Sorted by stable_key: "node|callsite|z" < "node|function|a" ('c' < 'f'),
         // so the callsite node sorts first and is assigned dense id 0, regardless of
         // its larger pre-sort id (99). Dense IDs are assigned only after the sort.
-        assert_eq!(normalized.nodes[0].stable_key, "node|callsite|z");
+        assert_eq!(
+            test_stable_key_interner()
+                .resolve(normalized.nodes[0].stable_key)
+                .as_ref(),
+            "node|callsite|z"
+        );
         assert_eq!(normalized.nodes[0].id, SemanticNodeId(0));
-        assert_eq!(normalized.nodes[1].stable_key, "node|function|a");
+        assert_eq!(
+            test_stable_key_interner()
+                .resolve(normalized.nodes[1].stable_key)
+                .as_ref(),
+            "node|function|a"
+        );
         assert_eq!(normalized.nodes[1].id, SemanticNodeId(1));
     }
 
@@ -331,18 +355,15 @@ mod tests {
         shuffled.nodes.reverse();
         shuffled.edges.reverse();
 
-        let a = base.normalized();
-        let b = shuffled.normalized();
+        let interner = test_stable_key_interner();
+        let a = base.normalized(&interner);
+        let b = shuffled.normalized(&interner);
 
         // Byte-identical serialized output under shuffle: serialize node and edge
         // vectors (dense `id` is `#[serde(skip)]`, so this captures kind/precision/
         // stable_key/endpoints).
-        let a_nodes = serde_json::to_string(&a.nodes).expect("serialize a nodes");
-        let b_nodes = serde_json::to_string(&b.nodes).expect("serialize b nodes");
-        assert_eq!(a_nodes, b_nodes);
-        let a_edges = serde_json::to_string(&a.edges).expect("serialize a edges");
-        let b_edges = serde_json::to_string(&b.edges).expect("serialize b edges");
-        assert_eq!(a_edges, b_edges);
+        assert_eq!(a.nodes, b.nodes);
+        assert_eq!(a.edges, b.edges);
         // The dense IDs assigned are identical too.
         assert_eq!(
             a.nodes.iter().map(|n| n.id).collect::<Vec<_>>(),
@@ -356,7 +377,8 @@ mod tests {
 
     #[test]
     fn from_output_builds_deterministic_kind_indexes() {
-        let store = SemanticGraphStore::from_output(sample_output()).expect("store");
+        let store = SemanticGraphStore::from_output(sample_output(), &test_stable_key_interner())
+            .expect("store");
         assert_eq!(store.nodes().len(), 2);
         assert_eq!(store.edges().len(), 1);
         assert_eq!(
@@ -382,19 +404,20 @@ mod tests {
 
     #[test]
     fn incoming_adjacency_is_built_and_consistent_with_outgoing() {
-        let store = SemanticGraphStore::from_output(sample_output()).expect("store");
+        let interner = test_stable_key_interner();
+        let store = SemanticGraphStore::from_output(sample_output(), &interner).expect("store");
 
         // Resolve the dense node ids after normalization by stable key.
         let source = store
             .nodes()
             .iter()
-            .find(|n| n.stable_key == "node|function|a")
+            .find(|n| interner.resolve(n.stable_key).as_ref() == "node|function|a")
             .expect("source node")
             .id;
         let target = store
             .nodes()
             .iter()
-            .find(|n| n.stable_key == "node|callsite|b")
+            .find(|n| interner.resolve(n.stable_key).as_ref() == "node|callsite|b")
             .expect("target node")
             .id;
         let edge_id = store.edges()[0].id;
@@ -421,15 +444,16 @@ mod tests {
             edges: vec![edge(0, 0, 5, EdgeKind::Call, "edge|call|a|missing")],
             constraints: Vec::new(),
         };
-        let error =
-            SemanticGraphStore::from_output(output).expect_err("dangling endpoint rejected");
+        let error = SemanticGraphStore::from_output(output, &test_stable_key_interner())
+            .expect_err("dangling endpoint rejected");
         assert!(error.to_string().contains("dangling edge target"));
         assert!(error.to_string().contains("polint.semantic_graph"));
     }
 
     #[test]
     fn from_output_builds_constraints_by_kind_index() {
-        let store = SemanticGraphStore::from_output(sample_output()).expect("store");
+        let interner = test_stable_key_interner();
+        let store = SemanticGraphStore::from_output(sample_output(), &interner).expect("store");
         assert_eq!(store.constraints().len(), 1);
         // The CallConstraint is indexed by its snake_case tag.
         assert_eq!(
@@ -459,7 +483,7 @@ mod tests {
         let callsite_node = store
             .nodes()
             .iter()
-            .find(|n| n.stable_key == "node|callsite|b")
+            .find(|n| interner.resolve(n.stable_key).as_ref() == "node|callsite|b")
             .expect("callsite node")
             .id;
         match &store.constraints()[0].kind {
@@ -502,12 +526,11 @@ mod tests {
         shuffled.nodes.reverse();
         shuffled.constraints.reverse();
 
-        let a = base.normalized();
-        let b = shuffled.normalized();
+        let interner = test_stable_key_interner();
+        let a = base.normalized(&interner);
+        let b = shuffled.normalized(&interner);
 
-        let a_constraints = serde_json::to_string(&a.constraints).expect("serialize a constraints");
-        let b_constraints = serde_json::to_string(&b.constraints).expect("serialize b constraints");
-        assert_eq!(a_constraints, b_constraints);
+        assert_eq!(a.constraints, b.constraints);
         assert_eq!(
             a.constraints.iter().map(|c| c.id).collect::<Vec<_>>(),
             b.constraints.iter().map(|c| c.id).collect::<Vec<_>>()
@@ -537,16 +560,19 @@ mod tests {
                 "constraint|copy_edge|a|missing",
             )],
         };
-        let error =
-            SemanticGraphStore::from_output(output).expect_err("dangling constraint ref rejected");
+        let error = SemanticGraphStore::from_output(output, &test_stable_key_interner())
+            .expect_err("dangling constraint ref rejected");
         assert!(error.to_string().contains("dangling constraint node"));
         assert!(error.to_string().contains("polint.semantic_graph"));
     }
 
     #[test]
     fn empty_output_builds_empty_store() {
-        let store =
-            SemanticGraphStore::from_output(SemanticGraphOutput::empty()).expect("empty store");
+        let store = SemanticGraphStore::from_output(
+            SemanticGraphOutput::empty(),
+            &test_stable_key_interner(),
+        )
+        .expect("empty store");
         assert!(store.nodes().is_empty());
         assert!(store.edges().is_empty());
         assert!(store.constraints().is_empty());

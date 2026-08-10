@@ -303,7 +303,8 @@ pub(crate) fn module_topology_layer_dependency_edges(
             &from,
             CacheNode::Input(format!(
                 "semantic_import:{}:{}",
-                semantic_import.stable_key, semantic_import.import_path
+                db.resolve_stable_key(semantic_import.stable_key),
+                semantic_import.import_path
             )),
             DependencyKind::Input,
             ShapeKind::ModuleTopology,
@@ -504,7 +505,8 @@ pub(crate) fn derive_import_to_package_edges(db: &AnalysisDb) -> Vec<ImportToPac
         .iter()
         .map(|fact| (fact.import, fact))
         .collect::<BTreeMap<_, _>>();
-    let semantic_by_file_path = semantic_imports_by_file_path(db.semantic_imports());
+    let semantic_by_file_path =
+        semantic_imports_by_file_path(&db.stable_key_interner(), db.semantic_imports());
     let source_sets_by_file = source_sets_by_file(db.source_sets());
 
     sorted_imports(db)
@@ -577,7 +579,9 @@ pub(crate) fn derive_import_to_package_edges(db: &AnalysisDb) -> Vec<ImportToPac
                 id: ImportToPackageId(index as u64),
                 syntax_import: Some(import.id),
                 resolved_import: resolved.map(|fact| fact.id),
-                semantic_import_stable_key: semantic.unique.map(|fact| fact.stable_key.clone()),
+                semantic_import_stable_key: semantic
+                    .unique
+                    .map(|fact| db.resolve_stable_key(fact.stable_key).to_string()),
                 from_file: Some(import.file),
                 from_package: from_package.map(|package| package.id),
                 to_package: to_package.map(|package| package.id),
@@ -719,11 +723,12 @@ fn derive_module_topology_uncached(db: &mut AnalysisDb) -> ModuleTopologyDerivat
     }
 }
 
-fn semantic_imports_by_file_path(
-    semantic_imports: &[SemanticImportFact],
-) -> BTreeMap<(FileId, String), Vec<&SemanticImportFact>> {
+fn semantic_imports_by_file_path<'a>(
+    interner: &crate::core::StableKeyInterner,
+    semantic_imports: &'a [SemanticImportFact],
+) -> BTreeMap<(FileId, String), Vec<&'a SemanticImportFact>> {
     let mut imports = semantic_imports.iter().collect::<Vec<_>>();
-    imports.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    imports.sort_by_key(|import| interner.resolve(import.stable_key));
     let mut by_file_path = BTreeMap::new();
     for import in imports {
         if let Some(file) = import.file {
@@ -4251,7 +4256,9 @@ mod import_to_package {
                 imported_name: None,
                 namespace: crate::core::SymbolNamespace::Value,
                 kind,
-                stable_key: format!("semantic-import:{path}"),
+                stable_key: db
+                    .stable_key_interner()
+                    .intern(format!("semantic-import:{path}")),
                 status,
             }],
             Vec::new(),
@@ -4484,7 +4491,7 @@ mod import_to_package {
                     imported_name: None,
                     namespace: crate::core::SymbolNamespace::Value,
                     kind: SemanticImportKind::DynamicImport,
-                    stable_key: "semantic-import:dynamic".to_string(),
+                    stable_key: db.stable_key_interner().intern("semantic-import:dynamic"),
                     status: SemanticStatus::Dynamic,
                 },
                 SemanticImportFact {
@@ -4499,7 +4506,7 @@ mod import_to_package {
                     imported_name: None,
                     namespace: crate::core::SymbolNamespace::Value,
                     kind: SemanticImportKind::StaticDefault,
-                    stable_key: "semantic-import:static".to_string(),
+                    stable_key: db.stable_key_interner().intern("semantic-import:static"),
                     status: SemanticStatus::Resolved,
                 },
             ],
@@ -4615,7 +4622,7 @@ mod import_to_package {
                     imported_name: None,
                     namespace: crate::core::SymbolNamespace::Value,
                     kind: SemanticImportKind::DynamicImport,
-                    stable_key: "semantic-import:dynamic-a".to_string(),
+                    stable_key: db.stable_key_interner().intern("semantic-import:dynamic-a"),
                     status: SemanticStatus::Dynamic,
                 },
                 SemanticImportFact {
@@ -4630,7 +4637,7 @@ mod import_to_package {
                     imported_name: None,
                     namespace: crate::core::SymbolNamespace::Value,
                     kind: SemanticImportKind::DynamicImport,
-                    stable_key: "semantic-import:dynamic-b".to_string(),
+                    stable_key: db.stable_key_interner().intern("semantic-import:dynamic-b"),
                     status: SemanticStatus::Dynamic,
                 },
             ],
@@ -5315,7 +5322,7 @@ mod module_topology_layer_cache {
                 imported_name: None,
                 namespace: crate::core::SymbolNamespace::Value,
                 kind: SemanticImportKind::StaticDefault,
-                stable_key: "semantic-import:target".to_string(),
+                stable_key: db.stable_key_interner().intern("semantic-import:target"),
                 status: SemanticStatus::Resolved,
             }],
             Vec::new(),

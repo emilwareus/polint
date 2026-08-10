@@ -4268,14 +4268,14 @@ mod tests {
                 },
                 status: PointsToStatus::Present,
                 precision: PointsToPrecision::FlowInsensitive,
-                stable_key: stable_key.to_string(),
+                stable_key: crate::core::stable_key_for_test(stable_key),
             }
         }
 
         let constraints = vec![copy("copy|a-b", 1, 2), copy("copy|b-c", 2, 3)];
         let budget = crate::analysis::solver::budget::SolverBudget::default();
         let output = derive_edges(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &crate::core::test_stable_key_interner(),
             &constraints,
             &budget,
         );

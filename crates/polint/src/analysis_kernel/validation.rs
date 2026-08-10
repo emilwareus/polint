@@ -2740,14 +2740,14 @@ mod semantic_index {
                 file: Some(FileId(404)),
                 package: None,
                 module: None,
-                symbol_stable_key: "symbol:answer".to_string(),
-                source_stable_key: String::new(),
+                symbol_stable_key: db.stable_key_interner().intern("symbol:answer"),
+                source_stable_key: db.stable_key_interner().intern(""),
                 producer_id: String::new(),
                 generator: "test".to_string(),
                 generated_discriminator: String::new(),
                 kind: GeneratedSymbolKind::BuildGenerated,
                 span: Some(span(FileId(404), 0, 999)),
-                stable_key: "generated:bad".to_string(),
+                stable_key: db.stable_key_interner().intern("generated:bad"),
                 status: SemanticStatus::Resolved,
             }],
             Vec::new(),
@@ -2793,14 +2793,14 @@ mod semantic_index {
                 file: Some(FileId(0)),
                 package: None,
                 module: None,
-                symbol_stable_key: "symbol:answer".to_string(),
-                source_stable_key: "symbol:answer".to_string(),
+                symbol_stable_key: db.stable_key_interner().intern("symbol:answer"),
+                source_stable_key: db.stable_key_interner().intern("symbol:answer"),
                 producer_id: "polint.symbol_graph".to_string(),
                 generator: "test".to_string(),
                 generated_discriminator: "entrypoint".to_string(),
                 kind: GeneratedSymbolKind::BuildGenerated,
                 span: Some(span(FileId(0), 0, 1)),
-                stable_key: "generated:answer".to_string(),
+                stable_key: db.stable_key_interner().intern("generated:answer"),
                 status: SemanticStatus::Generated,
             }],
             Vec::new(),
@@ -2859,7 +2859,7 @@ mod semantic_index {
                 export_name: "answer".to_string(),
                 namespace: SymbolNamespace::Value,
                 kind: ExportKind::Named,
-                stable_key: "export:answer".to_string(),
+                stable_key: db.stable_key_interner().intern("export:answer"),
                 status: SemanticStatus::Resolved,
             }],
             Vec::new(),
@@ -2873,9 +2873,9 @@ mod semantic_index {
                 module_key: Some("src/app.ts".to_string()),
                 export_name: "answer".to_string(),
                 namespace: SymbolNamespace::Value,
-                symbol_stable_key: "symbol:missing".to_string(),
+                symbol_stable_key: db.stable_key_interner().intern("symbol:missing"),
                 generated_discriminator: Some("native".to_string()),
-                stable_key: "stable-export:answer".to_string(),
+                stable_key: db.stable_key_interner().intern("stable-export:answer"),
                 status: SemanticStatus::Resolved,
             }],
         );
@@ -3116,7 +3116,7 @@ mod topology {
                 imported_name: None,
                 namespace: crate::core::SymbolNamespace::Value,
                 kind: SemanticImportKind::DynamicImport,
-                stable_key: "semantic:react".to_string(),
+                stable_key: db.stable_key_interner().intern("semantic:react"),
                 status: SemanticStatus::Dynamic,
             }],
             Vec::new(),
@@ -3372,7 +3372,7 @@ impl IdSets {
             semantic_import_stable_keys: db
                 .semantic_imports()
                 .iter()
-                .map(|fact| fact.stable_key.clone())
+                .map(|fact| db.resolve_stable_key(fact.stable_key).to_string())
                 .collect(),
             symbol_stable_keys: db
                 .symbols()
@@ -4202,7 +4202,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.files,
             FactFamily::Scope,
-            scope.stable_key.as_str(),
+            db.resolve_stable_key(scope.stable_key).as_ref(),
             "ScopeFact.file",
             scope.file,
         );
@@ -4210,7 +4210,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.packages,
             FactFamily::Scope,
-            scope.stable_key.as_str(),
+            db.resolve_stable_key(scope.stable_key).as_ref(),
             "ScopeFact.package",
             scope.package,
         );
@@ -4218,7 +4218,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.module_nodes,
             FactFamily::Scope,
-            scope.stable_key.as_str(),
+            db.resolve_stable_key(scope.stable_key).as_ref(),
             "ScopeFact.module",
             scope.module,
         );
@@ -4226,7 +4226,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.scopes,
             FactFamily::Scope,
-            scope.stable_key.as_str(),
+            db.resolve_stable_key(scope.stable_key).as_ref(),
             "ScopeFact.parent",
             scope.parent,
         );
@@ -4237,7 +4237,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.files,
             FactFamily::SemanticImport,
-            import.stable_key.as_str(),
+            db.resolve_stable_key(import.stable_key).as_ref(),
             "SemanticImportFact.file",
             import.file,
         );
@@ -4245,7 +4245,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.packages,
             FactFamily::SemanticImport,
-            import.stable_key.as_str(),
+            db.resolve_stable_key(import.stable_key).as_ref(),
             "SemanticImportFact.package",
             import.package,
         );
@@ -4253,7 +4253,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.module_nodes,
             FactFamily::SemanticImport,
-            import.stable_key.as_str(),
+            db.resolve_stable_key(import.stable_key).as_ref(),
             "SemanticImportFact.module",
             import.module,
         );
@@ -4261,7 +4261,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.scopes,
             FactFamily::SemanticImport,
-            import.stable_key.as_str(),
+            db.resolve_stable_key(import.stable_key).as_ref(),
             "SemanticImportFact.scope",
             import.scope,
         );
@@ -4272,7 +4272,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.files,
             FactFamily::Export,
-            export.stable_key.as_str(),
+            db.resolve_stable_key(export.stable_key).as_ref(),
             "ExportFact.file",
             export.file,
         );
@@ -4280,7 +4280,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.packages,
             FactFamily::Export,
-            export.stable_key.as_str(),
+            db.resolve_stable_key(export.stable_key).as_ref(),
             "ExportFact.package",
             export.package,
         );
@@ -4288,7 +4288,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.module_nodes,
             FactFamily::Export,
-            export.stable_key.as_str(),
+            db.resolve_stable_key(export.stable_key).as_ref(),
             "ExportFact.module",
             export.module,
         );
@@ -4296,7 +4296,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.scopes,
             FactFamily::Export,
-            export.stable_key.as_str(),
+            db.resolve_stable_key(export.stable_key).as_ref(),
             "ExportFact.scope",
             export.scope,
         );
@@ -4305,7 +4305,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
                 diagnostics,
                 &ids.symbols,
                 FactFamily::Export,
-                export.stable_key.as_str(),
+                db.resolve_stable_key(export.stable_key).as_ref(),
                 "ExportFact.symbol",
                 export.symbol,
             );
@@ -4317,7 +4317,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.files,
             FactFamily::Alias,
-            alias.stable_key.as_str(),
+            db.resolve_stable_key(alias.stable_key).as_ref(),
             "AliasFact.file",
             alias.file,
         );
@@ -4325,7 +4325,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.packages,
             FactFamily::Alias,
-            alias.stable_key.as_str(),
+            db.resolve_stable_key(alias.stable_key).as_ref(),
             "AliasFact.package",
             alias.package,
         );
@@ -4333,7 +4333,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.module_nodes,
             FactFamily::Alias,
-            alias.stable_key.as_str(),
+            db.resolve_stable_key(alias.stable_key).as_ref(),
             "AliasFact.module",
             alias.module,
         );
@@ -4342,18 +4342,19 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
                 diagnostics,
                 &semantic_keys,
                 FactFamily::Alias,
-                alias.stable_key.as_str(),
+                db.resolve_stable_key(alias.stable_key).as_ref(),
                 "AliasFact.source_symbol_stable_key",
-                alias.source_symbol_stable_key.as_str(),
+                db.resolve_stable_key(alias.source_symbol_stable_key)
+                    .as_ref(),
             );
             for target in &alias.target_symbol_stable_keys {
                 check_semantic_key_ref(
                     diagnostics,
                     &semantic_keys,
                     FactFamily::Alias,
-                    alias.stable_key.as_str(),
+                    db.resolve_stable_key(alias.stable_key).as_ref(),
                     "AliasFact.target_symbol_stable_keys",
-                    target.as_str(),
+                    db.resolve_stable_key(*target).as_ref(),
                 );
             }
         }
@@ -4364,7 +4365,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.files,
             FactFamily::Resolution,
-            resolution.stable_key.as_str(),
+            db.resolve_stable_key(resolution.stable_key).as_ref(),
             "ResolutionFact.file",
             resolution.file,
         );
@@ -4372,7 +4373,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.packages,
             FactFamily::Resolution,
-            resolution.stable_key.as_str(),
+            db.resolve_stable_key(resolution.stable_key).as_ref(),
             "ResolutionFact.package",
             resolution.package,
         );
@@ -4380,7 +4381,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.module_nodes,
             FactFamily::Resolution,
-            resolution.stable_key.as_str(),
+            db.resolve_stable_key(resolution.stable_key).as_ref(),
             "ResolutionFact.module",
             resolution.module,
         );
@@ -4389,18 +4390,18 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
                 diagnostics,
                 &semantic_keys,
                 FactFamily::Resolution,
-                resolution.stable_key.as_str(),
+                db.resolve_stable_key(resolution.stable_key).as_ref(),
                 "ResolutionFact.source_stable_key",
-                resolution.source_stable_key.as_str(),
+                db.resolve_stable_key(resolution.source_stable_key).as_ref(),
             );
             for target in &resolution.target_stable_keys {
                 check_semantic_key_ref(
                     diagnostics,
                     &semantic_keys,
                     FactFamily::Resolution,
-                    resolution.stable_key.as_str(),
+                    db.resolve_stable_key(resolution.stable_key).as_ref(),
                     "ResolutionFact.target_stable_keys",
-                    target.as_str(),
+                    db.resolve_stable_key(*target).as_ref(),
                 );
             }
         }
@@ -4411,7 +4412,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.files,
             FactFamily::GeneratedSymbol,
-            generated.stable_key.as_str(),
+            db.resolve_stable_key(generated.stable_key).as_ref(),
             "GeneratedSymbolFact.file",
             generated.file,
         );
@@ -4419,7 +4420,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.packages,
             FactFamily::GeneratedSymbol,
-            generated.stable_key.as_str(),
+            db.resolve_stable_key(generated.stable_key).as_ref(),
             "GeneratedSymbolFact.package",
             generated.package,
         );
@@ -4427,7 +4428,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.module_nodes,
             FactFamily::GeneratedSymbol,
-            generated.stable_key.as_str(),
+            db.resolve_stable_key(generated.stable_key).as_ref(),
             "GeneratedSymbolFact.module",
             generated.module,
         );
@@ -4435,28 +4436,28 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &semantic_keys,
             FactFamily::GeneratedSymbol,
-            generated.stable_key.as_str(),
+            db.resolve_stable_key(generated.stable_key).as_ref(),
             "GeneratedSymbolFact.source_stable_key",
-            generated.source_stable_key.as_str(),
+            db.resolve_stable_key(generated.source_stable_key).as_ref(),
         );
         if generated.producer_id != SYMBOL_GRAPH_PROVIDER_ID {
             diagnostics.push(semantic_diagnostic(
                 FactFamily::GeneratedSymbol,
-                generated.stable_key.as_str(),
+                db.resolve_stable_key(generated.stable_key).as_ref(),
                 format!("GeneratedSymbolFact.producer_id must be {SYMBOL_GRAPH_PROVIDER_ID}"),
             ));
         }
         if generated.generated_discriminator.is_empty() {
             diagnostics.push(semantic_diagnostic(
                 FactFamily::GeneratedSymbol,
-                generated.stable_key.as_str(),
+                db.resolve_stable_key(generated.stable_key).as_ref(),
                 "GeneratedSymbolFact.generated_discriminator is empty",
             ));
         }
         if generated.status != SemanticStatus::Generated {
             diagnostics.push(semantic_diagnostic(
                 FactFamily::GeneratedSymbol,
-                generated.stable_key.as_str(),
+                db.resolve_stable_key(generated.stable_key).as_ref(),
                 "GeneratedSymbolFact.status must be Generated",
             ));
         }
@@ -4465,7 +4466,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
         {
             diagnostics.push(semantic_diagnostic(
                 FactFamily::GeneratedSymbol,
-                generated.stable_key.as_str(),
+                db.resolve_stable_key(generated.stable_key).as_ref(),
                 format!("GeneratedSymbolFact.span {reason}"),
             ));
         }
@@ -4476,22 +4477,26 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.exports,
             FactFamily::StableExport,
-            stable_export.stable_key.as_str(),
+            db.resolve_stable_key(stable_export.stable_key).as_ref(),
             "StableExportIdentity.export",
             stable_export.export,
         );
         if stable_export.status != SemanticStatus::Generated
-            && !ids
-                .symbol_stable_keys
-                .contains(stable_export.symbol_stable_key.as_str())
-            && !semantic_keys.contains(stable_export.symbol_stable_key.as_str())
+            && !ids.symbol_stable_keys.contains(
+                db.resolve_stable_key(stable_export.symbol_stable_key)
+                    .as_ref(),
+            )
+            && !semantic_keys.contains(
+                db.resolve_stable_key(stable_export.symbol_stable_key)
+                    .as_ref(),
+            )
         {
             diagnostics.push(semantic_diagnostic(
                 FactFamily::StableExport,
-                stable_export.stable_key.as_str(),
+                db.resolve_stable_key(stable_export.stable_key).as_ref(),
                 format!(
                     "StableExportIdentity.symbol_stable_key does not exist: {}",
-                    stable_export.symbol_stable_key
+                    db.resolve_stable_key(stable_export.symbol_stable_key)
                 ),
             ));
         }
@@ -5140,25 +5145,25 @@ fn semantic_reference_keys(db: &AnalysisDb, ids: &IdSets) -> BTreeSet<String> {
     let mut keys = ids.symbol_stable_keys.clone();
     keys.extend(ids.reference_stable_keys.iter().cloned());
     for scope in db.scopes() {
-        keys.insert(scope.stable_key.clone());
+        keys.insert(db.resolve_stable_key(scope.stable_key).to_string());
     }
     for import in db.semantic_imports() {
-        keys.insert(import.stable_key.clone());
+        keys.insert(db.resolve_stable_key(import.stable_key).to_string());
     }
     for export in db.exports() {
-        keys.insert(export.stable_key.clone());
+        keys.insert(db.resolve_stable_key(export.stable_key).to_string());
     }
     for alias in db.aliases() {
-        keys.insert(alias.stable_key.clone());
+        keys.insert(db.resolve_stable_key(alias.stable_key).to_string());
     }
     for resolution in db.resolution_facts() {
-        keys.insert(resolution.stable_key.clone());
+        keys.insert(db.resolve_stable_key(resolution.stable_key).to_string());
     }
     for generated in db.generated_symbols() {
-        keys.insert(generated.stable_key.clone());
+        keys.insert(db.resolve_stable_key(generated.stable_key).to_string());
     }
     for stable_export in db.stable_exports() {
-        keys.insert(stable_export.stable_key.clone());
+        keys.insert(db.resolve_stable_key(stable_export.stable_key).to_string());
     }
     keys
 }

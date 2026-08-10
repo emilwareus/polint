@@ -1,10 +1,11 @@
-use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
+use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
 use crate::analysis_plan::AnalysisPlan;
 use crate::config::LoadedConfig;
 use crate::core::{
     AnalysisDb, CapabilitySupport, CapabilitySupportStatus, DefinitionKind, FileId, Language,
     ModuleNodeId, ReferenceKind, ResolutionStatus, ResolvedImportFact, SourceFile, Span,
-    SymbolId as PolintSymbolId, SymbolKind, SymbolNamespace, SymbolPrecision, span_from_byte_range,
+    StableKeyId, SymbolId as PolintSymbolId, SymbolKind, SymbolNamespace, SymbolPrecision,
+    span_from_byte_range,
 };
 use crate::diagnostics::{Diagnostic, TextRange};
 use crate::symbol_graph::LanguageSymbolOutput;
@@ -292,7 +293,7 @@ fn derive_ts_semantic_index(
     requests_references: bool,
 ) -> SemanticIndexOutput {
     let mut builder = SemanticIndexBuilder::new();
-    let mut ids_by_stable_key = BTreeMap::<String, ScopeId>::new();
+    let mut ids_by_stable_key = BTreeMap::<StableKeyId, ScopeId>::new();
     let export_symbol_stable_keys =
         export_symbol_stable_keys(file, source, program, scoping, nodes);
 
@@ -318,7 +319,7 @@ fn derive_ts_semantic_index(
                 parent,
                 scope_path: scope_path_for_scope(file, scoping, nodes, scope_id),
                 kind,
-                stable_key: stable_key.clone(),
+                stable_key,
                 status: SemanticStatus::Resolved,
             },
         );
@@ -372,7 +373,7 @@ fn derive_ts_semantic_index(
                 parent,
                 scope_path,
                 kind,
-                stable_key: stable_key.clone(),
+                stable_key,
                 status: SemanticStatus::Resolved,
             },
         );
@@ -392,7 +393,7 @@ fn derive_ts_semantic_index(
         add_ts_semantic_resolution_rows(interner, &mut builder, file, source, scoping, nodes);
     }
 
-    builder.finish()
+    builder.finish(interner)
 }
 
 fn export_symbol_stable_keys(
@@ -849,8 +850,11 @@ fn add_alias_row(
             file: Some(file.id),
             package: None,
             module: None,
-            source_symbol_stable_key,
-            target_symbol_stable_keys,
+            source_symbol_stable_key: interner.intern(source_symbol_stable_key),
+            target_symbol_stable_keys: target_symbol_stable_keys
+                .into_iter()
+                .map(|key| interner.intern(key))
+                .collect(),
             kind,
             stable_key,
             status,
@@ -883,8 +887,11 @@ fn add_resolution_row(
             file: Some(file.id),
             package: None,
             module: None,
-            source_stable_key,
-            target_stable_keys,
+            source_stable_key: interner.intern(source_stable_key),
+            target_stable_keys: target_stable_keys
+                .into_iter()
+                .map(|key| interner.intern(key))
+                .collect(),
             step,
             stable_key,
             status,
@@ -941,9 +948,9 @@ fn add_stable_export_identity(
             module_key: Some(file.relative_path.clone()),
             export_name: export_name.to_string(),
             namespace,
-            symbol_stable_key,
+            symbol_stable_key: interner.intern(symbol_stable_key),
             generated_discriminator: Some("native".to_string()),
-            stable_key: String::new(),
+            stable_key: interner.intern(""),
             status,
         },
     )
@@ -957,9 +964,9 @@ fn ts_semantic_import_stable_key(
     imported_name: Option<&str>,
     namespace: SymbolNamespace,
     pair: (SemanticImportKind, SemanticStatus),
-) -> String {
+) -> StableKeyId {
     let (kind, status) = pair;
-    stable_key_text_from_parts(
+    stable_key_from_parts(
         interner,
         FactFamily::SemanticImport,
         &[
@@ -985,8 +992,8 @@ fn ts_export_stable_key(
     namespace: SymbolNamespace,
     kind: ExportKind,
     status: SemanticStatus,
-) -> String {
-    stable_key_text_from_parts(
+) -> StableKeyId {
+    stable_key_from_parts(
         interner,
         FactFamily::Export,
         &[
@@ -1007,11 +1014,11 @@ fn ts_alias_stable_key(
     target_symbol_stable_keys: &[String],
     kind: AliasKind,
     status: SemanticStatus,
-) -> String {
+) -> StableKeyId {
     let mut targets = target_symbol_stable_keys.to_vec();
     targets.sort();
     targets.dedup();
-    stable_key_text_from_parts(
+    stable_key_from_parts(
         interner,
         FactFamily::Alias,
         &[
@@ -1032,11 +1039,11 @@ fn ts_resolution_stable_key(
     target_stable_keys: &[String],
     step: ResolutionStepKind,
     status: SemanticStatus,
-) -> String {
+) -> StableKeyId {
     let mut targets = target_stable_keys.to_vec();
     targets.sort();
     targets.dedup();
-    stable_key_text_from_parts(
+    stable_key_from_parts(
         interner,
         FactFamily::Resolution,
         &[
@@ -1295,7 +1302,7 @@ fn scope_stable_key(
     scoping: &Scoping,
     nodes: &AstNodes<'_>,
     scope_id: oxc_semantic::ScopeId,
-) -> String {
+) -> StableKeyId {
     let kind = scope_kind_for_ast(nodes.kind(scoping.get_node_id(scope_id)));
     ScopeFact::stable_key_for(
         interner,
@@ -1316,13 +1323,16 @@ fn reference_scope_stable_key(
     reference_id: OxcReferenceId,
 ) -> String {
     let reference = scoping.get_reference(reference_id);
-    scope_stable_key(
-        &crate::core::AnalysisDb::new().stable_key_interner(),
-        file,
-        scoping,
-        nodes,
-        reference.scope_id(),
-    )
+    let interner = crate::core::test_stable_key_interner();
+    interner
+        .resolve(scope_stable_key(
+            &interner,
+            file,
+            scoping,
+            nodes,
+            reference.scope_id(),
+        ))
+        .to_string()
 }
 
 fn add_ts_semantic_resolution_rows(
@@ -1455,7 +1465,7 @@ fn nearest_semantic_scope_parent(
     file: &SourceFile,
     nodes: &AstNodes<'_>,
     node_id: oxc_semantic::NodeId,
-    ids_by_stable_key: &BTreeMap<String, ScopeId>,
+    ids_by_stable_key: &BTreeMap<StableKeyId, ScopeId>,
 ) -> Option<ScopeId> {
     nodes.ancestors_enumerated(node_id).find_map(|(_, node)| {
         let kind = semantic_scope_kind_for_ast(node.kind())?;
@@ -2848,7 +2858,7 @@ class Widget {
         let semantic = SemanticBuilder::new().build(parsed.program()).semantic;
 
         let output = derive_ts_semantic_index(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &crate::core::test_stable_key_interner(),
             &file,
             source,
             parsed.program(),
@@ -2933,7 +2943,7 @@ mod semantic_imports_exports {
         let semantic = SemanticBuilder::new().build(parsed.program()).semantic;
 
         derive_ts_semantic_index(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &crate::core::test_stable_key_interner(),
             &file,
             source,
             parsed.program(),
@@ -2978,7 +2988,11 @@ import "./setup-b";
             .semantic_imports
             .iter()
             .filter(|fact| fact.kind == SemanticImportKind::SideEffect)
-            .map(|fact| fact.stable_key.as_str())
+            .map(|fact| {
+                crate::core::test_stable_key_interner()
+                    .resolve(fact.stable_key)
+                    .to_string()
+            })
             .collect::<BTreeSet<_>>();
 
         assert_eq!(side_effect_keys.len(), 2);
@@ -3024,8 +3038,17 @@ export * from "./b";
         let reexport_keys = output
             .aliases
             .iter()
-            .filter(|alias| alias.source_symbol_stable_key == "export:*")
-            .map(|alias| alias.stable_key.as_str())
+            .filter(|alias| {
+                crate::core::test_stable_key_interner()
+                    .resolve(alias.source_symbol_stable_key)
+                    .as_ref()
+                    == "export:*"
+            })
+            .map(|alias| {
+                crate::core::test_stable_key_interner()
+                    .resolve(alias.stable_key)
+                    .to_string()
+            })
             .collect::<BTreeSet<_>>();
 
         assert_eq!(reexport_keys.len(), 2);
@@ -3085,7 +3108,7 @@ mod semantic_resolution {
         let semantic = SemanticBuilder::new().build(parsed.program()).semantic;
 
         derive_ts_semantic_index(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &crate::core::test_stable_key_interner(),
             &file,
             source,
             parsed.program(),
@@ -3132,7 +3155,9 @@ export const doubled = value + value;
         assert!(output.resolutions.iter().any(|resolution| {
             resolution.step == ResolutionStepKind::LexicalLookup
                 && resolution.status == SemanticStatus::Resolved
-                && resolution.source_stable_key.contains("value")
+                && crate::core::test_stable_key_interner()
+                    .resolve(resolution.source_stable_key)
+                    .contains("value")
         }));
     }
 
@@ -3166,7 +3191,9 @@ export const used = localThing;
         assert!(output.resolutions.iter().any(|resolution| {
             resolution.step == ResolutionStepKind::UnknownFallback
                 && resolution.status == SemanticStatus::Unresolved
-                && resolution.source_stable_key.contains("missingGlobal")
+                && crate::core::test_stable_key_interner()
+                    .resolve(resolution.source_stable_key)
+                    .contains("missingGlobal")
         }));
     }
 
@@ -3177,13 +3204,15 @@ export const used = localThing;
         assert!(output.stable_exports.iter().any(|identity| {
             identity.export_name == "value"
                 && identity.generated_discriminator.as_deref() == Some("native")
-                && identity.symbol_stable_key.contains("value")
+                && crate::core::test_stable_key_interner()
+                    .resolve(identity.symbol_stable_key)
+                    .contains("value")
         }));
     }
 
     #[test]
     fn stable_export_symbol_key_matches_exported_symbol_fact_key() {
-        let (interner, symbols, semantic) =
+        let (_interner, symbols, semantic) =
             derive_symbols_and_semantic("export const value = 1;\n");
         let exported_symbol = symbols
             .iter()
@@ -3195,10 +3224,7 @@ export const used = localThing;
             .find(|identity| identity.export_name == "value")
             .expect("stable export exists");
 
-        assert_eq!(
-            stable_export.symbol_stable_key,
-            interner.resolve(exported_symbol.stable_key).as_ref()
-        );
+        assert_eq!(stable_export.symbol_stable_key, exported_symbol.stable_key);
     }
 
     #[test]

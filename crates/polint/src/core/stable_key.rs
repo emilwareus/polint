@@ -66,6 +66,19 @@ impl StableKeyInterner {
 }
 
 #[cfg(test)]
+pub(crate) fn stable_key_for_test(key: &str) -> StableKeyId {
+    test_stable_key_interner().intern(key)
+}
+
+#[cfg(test)]
+pub(crate) fn test_stable_key_interner() -> StableKeyInterner {
+    use std::sync::OnceLock;
+
+    static INTERNER: OnceLock<StableKeyInterner> = OnceLock::new();
+    INTERNER.get_or_init(StableKeyInterner::default).clone()
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

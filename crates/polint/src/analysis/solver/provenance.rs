@@ -151,7 +151,7 @@ mod tests {
 
     fn fact(name: &str) -> ContributingFact {
         ContributingFact::from_parts(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &crate::core::test_stable_key_interner(),
             FactFamily::PointsToConstraint,
             &[("constraint", name.to_string())],
         )
@@ -224,7 +224,7 @@ mod tests {
             },
             status: PointsToStatus::Present,
             precision: PointsToPrecision::FlowInsensitive,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
@@ -245,7 +245,7 @@ mod tests {
 
         // Baseline: the transitive a -> c edge is derived, with 2 contributing facts.
         let baseline = derive_edges(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &crate::core::test_stable_key_interner(),
             &constraints,
             &budget,
         );
@@ -270,7 +270,7 @@ mod tests {
             // Re-run WITHOUT the constraint whose stable key is `deleted`.
             let remaining: Vec<ConstraintFact> = constraints
                 .iter()
-                .filter(|c| &c.stable_key != deleted)
+                .filter(|c| c.stable_key != crate::core::stable_key_for_test(deleted))
                 .cloned()
                 .collect();
             assert_eq!(
@@ -280,7 +280,7 @@ mod tests {
             );
 
             let rerun = derive_edges(
-                &crate::core::AnalysisDb::new().stable_key_interner(),
+                &crate::core::test_stable_key_interner(),
                 &remaining,
                 &budget,
             );
