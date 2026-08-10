@@ -156,7 +156,10 @@ pub(crate) fn call_graph_unknown_facts_from_kernel_output(
         .map(|unresolved| {
             ObservedItem::Fact(ObservedFact {
                 family: "UnresolvedCall".to_string(),
-                stable_key: unresolved.stable_key.clone(),
+                stable_key: output
+                    .db
+                    .resolve_stable_key(unresolved.stable_key)
+                    .to_string(),
                 mode: AssertionMode::Partial,
                 producer_id: Some("polint.calls".to_string()),
                 provenance: Some(format!("{:?}", unresolved.provenance)),

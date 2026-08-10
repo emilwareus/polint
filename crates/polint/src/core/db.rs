@@ -939,7 +939,7 @@ impl AnalysisDb {
         let interner_handle = self.stable_key_interner();
         let interner = &interner_handle;
         self.populate_call_owner_symbols(&mut output);
-        let store = CallStore::from_output(output)?;
+        let store = CallStore::from_output(output, interner)?;
         *self.calls_store_mut() = store;
         self.refresh_call_metadata(interner);
         Ok(())
@@ -1641,12 +1641,12 @@ impl AnalysisDb {
         }
 
         for fact in &call_targets {
-            let metadata = self.call_target_metadata(fact);
+            let metadata = self.call_target_metadata(interner, fact);
             self.record_fact_meta(FactFamily::CallTarget, fact.id.0, metadata);
         }
 
         for (index, fact) in unresolved_calls.iter().enumerate() {
-            let metadata = self.unresolved_call_metadata(fact);
+            let metadata = self.unresolved_call_metadata(interner, fact);
             self.record_fact_meta(FactFamily::UnresolvedCall, index as u64, metadata);
         }
 
@@ -4159,7 +4159,7 @@ impl AnalysisDb {
             CALLS_PROVIDER_ID,
             precision,
             confidence,
-            fact.stable_key.clone(),
+            interner.resolve(fact.stable_key).to_string(),
             stable_parts([
                 ("status", call_status_label(fact.status).to_string()),
                 (
@@ -4192,14 +4192,18 @@ impl AnalysisDb {
         )
     }
 
-    fn call_target_metadata(&self, fact: &CallTargetFact) -> FactMeta {
+    fn call_target_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        fact: &CallTargetFact,
+    ) -> FactMeta {
         let (precision, confidence) = call_status_metadata(fact.status, fact.precision);
         fact_meta_from_stable_key(
             FactFamily::CallTarget,
             CALLS_PROVIDER_ID,
             precision,
             confidence,
-            fact.stable_key.clone(),
+            interner.resolve(fact.stable_key).to_string(),
             stable_parts([
                 ("status", call_status_label(fact.status).to_string()),
                 (
@@ -4736,14 +4740,18 @@ impl AnalysisDb {
 }
 
 impl AnalysisDb {
-    fn unresolved_call_metadata(&self, fact: &UnresolvedCallFact) -> FactMeta {
+    fn unresolved_call_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        fact: &UnresolvedCallFact,
+    ) -> FactMeta {
         let (precision, confidence) = call_status_metadata(fact.status, fact.precision);
         fact_meta_from_stable_key(
             FactFamily::UnresolvedCall,
             CALLS_PROVIDER_ID,
             precision,
             confidence,
-            fact.stable_key.clone(),
+            interner.resolve(fact.stable_key).to_string(),
             stable_parts([
                 ("status", call_status_label(fact.status).to_string()),
                 (

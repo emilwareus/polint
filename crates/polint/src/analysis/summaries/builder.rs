@@ -488,7 +488,7 @@ fn build_call_effects(
     if let Some(call_store) = db.call_store() {
         let targets = call_store.outgoing_by_function(function);
         for target in &targets {
-            direct_callees.insert(target.stable_key.clone());
+            direct_callees.insert(db.resolve_stable_key(target.stable_key).to_string());
         }
     }
 
@@ -1124,7 +1124,9 @@ mod tests {
                 result: None,
                 status: CallTargetStatus::Unresolved,
                 precision: CallPrecision::Unknown,
-                stable_key: "call-site:dynamic".to_string(),
+                stable_key: db
+                    .stable_key_interner()
+                    .intern("call-site:dynamic".to_string()),
             }],
             targets: Vec::new(),
             unresolved: vec![UnresolvedCallFact {
@@ -1135,7 +1137,9 @@ mod tests {
                 algorithm: CallAlgorithm::SyntaxOnly,
                 provenance: CallProvenanceFact::MirShape,
                 precision: CallPrecision::Unknown,
-                stable_key: "unresolved:dynamic".to_string(),
+                stable_key: db
+                    .stable_key_interner()
+                    .intern("unresolved:dynamic".to_string()),
             }],
         });
 
@@ -1757,7 +1761,9 @@ mod tests {
                 result: None,
                 status: CallTargetStatus::Unresolved,
                 precision: CallPrecision::Unknown,
-                stable_key: "call-site:unknown".to_string(),
+                stable_key: db
+                    .stable_key_interner()
+                    .intern("call-site:unknown".to_string()),
             }],
             targets: Vec::new(),
             unresolved: vec![UnresolvedCallFact {
@@ -1768,7 +1774,9 @@ mod tests {
                 algorithm: CallAlgorithm::SyntaxOnly,
                 provenance: CallProvenanceFact::MirShape,
                 precision: CallPrecision::Unknown,
-                stable_key: "unresolved:dyn".to_string(),
+                stable_key: db
+                    .stable_key_interner()
+                    .intern("unresolved:dyn".to_string()),
             }],
         });
 

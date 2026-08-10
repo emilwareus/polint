@@ -961,7 +961,7 @@ mod tests {
             result: None,
             status: CallTargetStatus::Unresolved,
             precision: CallPrecision::Unknown,
-            stable_key: "call-site:synthetic".to_string(),
+            stable_key: crate::core::StableKeyId(0),
         };
         (db, file, site)
     }
@@ -979,7 +979,7 @@ mod tests {
             reason: None,
             provenance: CallProvenance::Native,
             precision: CallPrecision::Unsupported,
-            stable_key: format!("call-target:synthetic:{status:?}"),
+            stable_key: crate::core::StableKeyId(status as u32 + 1),
         }
     }
 
@@ -1022,7 +1022,7 @@ mod tests {
                 algorithm: CallAlgorithm::Unsupported,
                 provenance: CallProvenance::Native,
                 precision: CallPrecision::Unknown,
-                stable_key: "unresolved:dynamic".to_string(),
+                stable_key: crate::core::StableKeyId(1),
             },
             UnresolvedCallFact {
                 site: site.id,
@@ -1032,7 +1032,7 @@ mod tests {
                 algorithm: CallAlgorithm::Unsupported,
                 provenance: CallProvenance::Native,
                 precision: CallPrecision::Unsupported,
-                stable_key: "unresolved:reflection".to_string(),
+                stable_key: crate::core::StableKeyId(2),
             },
         ];
         db.replace_call_facts(CallOutput {
@@ -1094,12 +1094,12 @@ mod tests {
         let (mut db, _file, site) = db_with_one_site();
         let resolved = CallTargetFact {
             id: CallTargetId(0),
-            stable_key: "call-target:resolved".to_string(),
+            stable_key: crate::core::StableKeyId(1),
             ..target_with_status(site.id, CallTargetStatus::Resolved)
         };
         let ambiguous = CallTargetFact {
             id: CallTargetId(1),
-            stable_key: "call-target:ambiguous".to_string(),
+            stable_key: crate::core::StableKeyId(2),
             ..target_with_status(site.id, CallTargetStatus::Ambiguous)
         };
         db.replace_call_facts(CallOutput {

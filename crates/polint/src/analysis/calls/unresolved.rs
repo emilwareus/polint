@@ -53,7 +53,7 @@ fn insert_unresolved(
 ) {
     let status = status_for_reason(reason);
     let stable_key = unresolved_stable_key(interner, site, reason, status, evidence);
-    rows.entry(stable_key.clone())
+    rows.entry(interner.resolve(stable_key).to_string())
         .or_insert(UnresolvedCallFact {
             site: site.id,
             caller: site.caller,
@@ -165,19 +165,21 @@ fn unresolved_stable_key(
     reason: UnresolvedCallReason,
     status: CallTargetStatus,
     evidence: &str,
-) -> String {
-    semantic_stable_key(
-        interner,
-        FactFamily::UnresolvedCall,
-        &[
-            ("site", site.stable_key.clone()),
-            ("reason", format!("{reason:?}")),
-            ("status", format!("{status:?}")),
-            ("algorithm", format!("{:?}", algorithm_for_reason(reason))),
-            ("evidence", evidence.to_string()),
-        ],
+) -> crate::core::StableKeyId {
+    interner.intern(
+        semantic_stable_key(
+            interner,
+            FactFamily::UnresolvedCall,
+            &[
+                ("site", interner.resolve(site.stable_key).to_string()),
+                ("reason", format!("{reason:?}")),
+                ("status", format!("{status:?}")),
+                ("algorithm", format!("{:?}", algorithm_for_reason(reason))),
+                ("evidence", evidence.to_string()),
+            ],
+        )
+        .into_string(),
     )
-    .into_string()
 }
 
 fn status_for_reason(reason: UnresolvedCallReason) -> CallTargetStatus {
@@ -263,6 +265,7 @@ mod tests {
     }
 
     fn site(
+        db: &AnalysisDb,
         language: Language,
         file: FileId,
         caller: FunctionId,
@@ -287,7 +290,7 @@ mod tests {
             result: Some(PlaceId(2)),
             status: CallTargetStatus::Unresolved,
             precision: CallPrecision::Conservative,
-            stable_key: format!("call-site:{site}"),
+            stable_key: db.stable_key_interner().intern(format!("call-site:{site}")),
         }
     }
 
@@ -381,6 +384,7 @@ mod tests {
         row.span = span(file, 99);
         replace_unsupported(&mut db, Language::TypeScript, file, function, vec![row]);
         let sites = vec![site(
+            &db,
             Language::TypeScript,
             file,
             function,
@@ -402,6 +406,7 @@ mod tests {
         let (db, file, caller) = db_with_function(Language::TypeScript, "src/app.ts");
         let sites = vec![
             site(
+                &db,
                 Language::TypeScript,
                 file,
                 caller,
@@ -410,6 +415,7 @@ mod tests {
                 CallSyntaxKind::FunctionValue,
             ),
             site(
+                &db,
                 Language::TypeScript,
                 file,
                 caller,
@@ -451,6 +457,7 @@ mod tests {
         let (db, file, caller) = db_with_function(Language::TypeScript, "src/app.ts");
         let sites = vec![
             site(
+                &db,
                 Language::TypeScript,
                 file,
                 caller,
@@ -462,6 +469,7 @@ mod tests {
                 CallSyntaxKind::Function,
             ),
             site(
+                &db,
                 Language::TypeScript,
                 file,
                 caller,
@@ -510,6 +518,7 @@ mod tests {
         ];
         replace_unsupported(&mut db, Language::TypeScript, file, caller, unsupported);
         let sites = vec![site(
+            &db,
             Language::TypeScript,
             file,
             caller,
@@ -545,6 +554,7 @@ mod tests {
         ];
         replace_unsupported(&mut db, Language::Go, file, caller, unsupported);
         let sites = vec![site(
+            &db,
             Language::Go,
             file,
             caller,

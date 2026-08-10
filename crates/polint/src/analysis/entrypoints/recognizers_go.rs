@@ -1117,7 +1117,7 @@ mod tests {
             result: None,
             status: CallTargetStatus::Unresolved,
             precision: CallPrecision::Conservative,
-            stable_key: format!("call-site:{id}"),
+            stable_key: crate::core::StableKeyId(id as u32),
         }
     }
 

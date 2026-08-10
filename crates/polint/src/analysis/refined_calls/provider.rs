@@ -58,7 +58,7 @@ pub(crate) fn derive_refined_calls_with_cache_stats(
         let base_target_key = db
             .metadata_for(FactRef::new(FactFamily::CallTarget, target.id.0))
             .map(|metadata| metadata.stable_key.clone())
-            .unwrap_or_else(|| target.stable_key.clone());
+            .unwrap_or_else(|| interner.resolve(target.stable_key).to_string());
         output.edges.push(refined_edge_from_base_target(
             interner,
             target,
@@ -211,7 +211,7 @@ fn refined_edge_from_solver_edge(
 
 struct SolverProjectionIndex<'a> {
     function_by_node: BTreeMap<crate::analysis::ids::SemanticNodeId, crate::core::FunctionId>,
-    callsite_by_stable_key: BTreeMap<&'a str, &'a CallSiteFact>,
+    callsite_by_stable_key: BTreeMap<String, &'a CallSiteFact>,
 }
 
 impl<'a> SolverProjectionIndex<'a> {
@@ -244,7 +244,7 @@ impl<'a> SolverProjectionIndex<'a> {
         let mut callsite_by_stable_key = db
             .call_sites()
             .iter()
-            .map(|site| (site.stable_key.as_str(), site))
+            .map(|site| (db.resolve_stable_key(site.stable_key).to_string(), site))
             .collect::<BTreeMap<_, _>>();
         for constraint in db.semantic_constraints() {
             let ConstraintKind::CallConstraint { callsite } = &constraint.kind else {
@@ -257,13 +257,13 @@ impl<'a> SolverProjectionIndex<'a> {
             else {
                 continue;
             };
-            callsite_by_stable_key.insert(constraint.stable_key.as_str(), site);
+            callsite_by_stable_key.insert(constraint.stable_key.clone(), site);
         }
         for callsite in db.go_semantic_callsites() {
             let Some(site) = core_callsite_for_go_semantic_callsite(db, callsite) else {
                 continue;
             };
-            callsite_by_stable_key.insert(callsite.stable_key.as_str(), site);
+            callsite_by_stable_key.insert(callsite.stable_key.clone(), site);
         }
         Self {
             function_by_node,
@@ -321,7 +321,7 @@ fn core_callsite_for_go_semantic_callsite<'a>(
     }
     candidates
         .into_iter()
-        .min_by_key(|site| site.stable_key.as_str())
+        .min_by_key(|site| db.resolve_stable_key(site.stable_key))
 }
 
 fn core_function_for_go_semantic_function(
@@ -474,7 +474,7 @@ fn stable_refined_call_key_from_solver_edge(
         &[
             ("tier", format!("{:?}", RefinedCallTier::PointsToAssisted)),
             ("solver_edge", edge.stable_key.clone()),
-            ("site", site.stable_key.clone()),
+            ("site", interner.resolve(site.stable_key).to_string()),
         ],
     )
 }
@@ -781,7 +781,7 @@ mod solver_projection_tests {
                 result: None,
                 status: CallTargetStatus::Resolved,
                 precision: CallPrecision::SetupAware,
-                stable_key: "call-site:callee".to_string(),
+                stable_key: crate::core::StableKeyId(0),
             }],
             targets: Vec::new(),
             unresolved: Vec::new(),
@@ -873,7 +873,7 @@ mod solver_projection_tests {
                 result: None,
                 status: CallTargetStatus::Resolved,
                 precision: CallPrecision::SetupAware,
-                stable_key: "core-call-site:callee".to_string(),
+                stable_key: crate::core::StableKeyId(0),
             }],
             targets: Vec::new(),
             unresolved: Vec::new(),
@@ -1052,7 +1052,7 @@ mod solver_projection_tests {
                     result: None,
                     status: CallTargetStatus::Unresolved,
                     precision: CallPrecision::Conservative,
-                    stable_key: "z-correct-callsite".to_string(),
+                    stable_key: crate::core::StableKeyId(1),
                 },
                 CallSiteFact {
                     in_throw: false,
@@ -1074,7 +1074,7 @@ mod solver_projection_tests {
                     result: None,
                     status: CallTargetStatus::Unresolved,
                     precision: CallPrecision::Conservative,
-                    stable_key: "a-decoy-callsite".to_string(),
+                    stable_key: crate::core::StableKeyId(0),
                 },
             ],
             targets: Vec::new(),
@@ -1362,6 +1362,8 @@ mod tests {
 
     #[test]
     fn refined_key_is_stable_for_base_target_and_tier() {
+        let db = crate::core::AnalysisDb::new();
+        let interner = db.stable_key_interner();
         let target = CallTargetFact {
             id: CallTargetId(7),
             site: CallSiteId(3),
@@ -1374,21 +1376,21 @@ mod tests {
             reason: None,
             provenance: CallProvenance::Native,
             precision: CallPrecision::SetupAware,
-            stable_key: "call-target:stable".to_string(),
+            stable_key: interner.intern("call-target:stable".to_string()),
         };
 
         assert_eq!(
             stable_refined_call_key(
-                &crate::core::AnalysisDb::new().stable_key_interner(),
+                &interner,
                 &target,
                 RefinedCallTier::DirectOnly,
-                &target.stable_key
+                "call-target:stable"
             ),
             stable_refined_call_key(
-                &crate::core::AnalysisDb::new().stable_key_interner(),
+                &interner,
                 &target,
                 RefinedCallTier::DirectOnly,
-                &target.stable_key
+                "call-target:stable"
             )
         );
     }

@@ -290,7 +290,7 @@ mod ts_points_to {
                         constraint_stable_key: constraint_key_by_callsite
                             .get(&callsite_node)
                             .cloned()
-                            .unwrap_or_else(|| site.stable_key.clone()),
+                            .unwrap_or_else(|| db.resolve_stable_key(site.stable_key).to_string()),
                     })
                 })
                 .collect();

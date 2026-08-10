@@ -327,7 +327,7 @@ None,
             result: None,
             status: CallTargetStatus::Resolved,
             precision: CallPrecision::Exact,
-            stable_key: stable_key.to_string(),
+            stable_key: StableKeyId(id as u32),
         }
     }
 
@@ -335,7 +335,7 @@ None,
         id: u64,
         site: CallSiteId,
         caller: FunctionId,
-        stable_key: &str,
+        _stable_key: &str,
     ) -> crate::analysis::calls::facts::CallTargetFact {
         use crate::analysis::calls::facts::{
             CallAlgorithm, CallEdgeKind, CallPrecision, CallProvenance, CallTargetFact,
@@ -354,14 +354,14 @@ None,
             reason: None,
             provenance: CallProvenance::Native,
             precision: CallPrecision::Exact,
-            stable_key: stable_key.to_string(),
+            stable_key: StableKeyId(id as u32),
         }
     }
 
     fn test_unresolved_call(
         site: CallSiteId,
         caller: FunctionId,
-        stable_key: &str,
+        _stable_key: &str,
     ) -> crate::analysis::calls::facts::UnresolvedCallFact {
         use crate::analysis::calls::facts::{
             CallAlgorithm, CallPrecision, CallProvenance, CallTargetStatus, UnresolvedCallFact,
@@ -376,7 +376,7 @@ None,
             algorithm: CallAlgorithm::SyntaxOnly,
             provenance: CallProvenance::MirShape,
             precision: CallPrecision::Unknown,
-            stable_key: stable_key.to_string(),
+            stable_key: StableKeyId(site.0 as u32),
         }
     }
 
@@ -437,7 +437,10 @@ None,
 
             db.replace_call_facts(second).expect("second call replace");
 
-            assert_eq!(db.call_sites()[0].stable_key, "call-site:second");
+            assert_eq!(
+                db.resolve_stable_key(db.call_sites()[0].stable_key).as_ref(),
+                "call-site:second"
+            );
             assert!(db.call_targets().is_empty());
             assert!(db.unresolved_calls().is_empty());
         }

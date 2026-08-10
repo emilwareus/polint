@@ -2371,7 +2371,7 @@ mod calls {
                     arguments: vec![PlaceId(99)],
                     receiver: Some(PlaceId(98)),
                     result: Some(PlaceId(97)),
-                    stable_key: "call-site:dup".to_string(),
+                    stable_key: crate::core::StableKeyId(0),
                     ..site(1, "call-site:bad")
                 },
             ],
@@ -2383,7 +2383,7 @@ mod calls {
                     reason: Some(UnresolvedCallReason::DynamicProperty),
                     target_function: None,
                     target_symbol: None,
-                    stable_key: "call-target:contradictory".to_string(),
+                    stable_key: crate::core::StableKeyId(1),
                     ..target(1, CallSiteId(0), "call-target:ok")
                 },
                 CallTargetFact {
@@ -2391,7 +2391,7 @@ mod calls {
                     status: CallTargetStatus::Unresolved,
                     target_function: None,
                     target_symbol: None,
-                    stable_key: "call-target:missing-reason".to_string(),
+                    stable_key: crate::core::StableKeyId(2),
                     ..target(2, CallSiteId(0), "call-target:ok")
                 },
             ],
@@ -2403,7 +2403,7 @@ mod calls {
                 algorithm: CallAlgorithm::DirectReference,
                 provenance: CallProvenance::Native,
                 precision: CallPrecision::Exact,
-                stable_key: "call-unresolved:bad".to_string(),
+                stable_key: crate::core::StableKeyId(3),
             }],
         })
         .expect("call rows should store for validation");
@@ -2451,7 +2451,7 @@ mod calls {
                 reason: Some(UnresolvedCallReason::FrameworkDispatch),
                 target_function: Some(FunctionId(1)),
                 target_symbol: Some(SymbolId(1)),
-                stable_key: "call-target:unsupported-with-target".to_string(),
+                stable_key: crate::core::StableKeyId(1),
                 ..target(0, CallSiteId(0), "call-target:ok")
             }],
             unresolved: Vec::new(),
@@ -2521,7 +2521,9 @@ mod calls {
             targets: vec![target(0, CallSiteId(0), "call-target:ok")],
             unresolved: vec![unresolved(0, "call-unresolved:ok")],
         };
-        let store = CallStore::from_output(output).expect("call store should index rows");
+        let interner = crate::core::StableKeyInterner::default();
+        let store =
+            CallStore::from_output(output, &interner).expect("call store should index rows");
 
         assert_eq!(store.sites_by_caller(FunctionId(0)).len(), 1);
         assert_eq!(store.targets_by_site(CallSiteId(0)).len(), 1);
@@ -2542,11 +2544,15 @@ mod calls {
             1
         );
 
-        let missing = CallStore::from_output(CallOutput {
-            sites: Vec::new(),
-            targets: vec![target(0, CallSiteId(99), "call-target:without-site")],
-            unresolved: Vec::new(),
-        })
+        let interner = crate::core::StableKeyInterner::default();
+        let missing = CallStore::from_output(
+            CallOutput {
+                sites: Vec::new(),
+                targets: vec![target(0, CallSiteId(99), "call-target:without-site")],
+                unresolved: Vec::new(),
+            },
+            &interner,
+        )
         .expect_err("targets without sites should be rejected before indexing");
         assert!(missing.to_string().contains("dangling call site"));
     }
@@ -2616,7 +2622,7 @@ mod calls {
         }
     }
 
-    fn site(id: u64, stable_key: &str) -> CallSiteFact {
+    fn site(id: u64, _stable_key: &str) -> CallSiteFact {
         CallSiteFact {
             in_throw: false,
             id: CallSiteId(id),
@@ -2637,11 +2643,11 @@ mod calls {
             result: None,
             status: CallTargetStatus::Resolved,
             precision: CallPrecision::SetupAware,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::StableKeyId(id as u32),
         }
     }
 
-    fn target(id: u64, site: CallSiteId, stable_key: &str) -> CallTargetFact {
+    fn target(id: u64, site: CallSiteId, _stable_key: &str) -> CallTargetFact {
         CallTargetFact {
             id: CallTargetId(id),
             site,
@@ -2654,11 +2660,11 @@ mod calls {
             reason: None,
             provenance: CallProvenance::Native,
             precision: CallPrecision::SetupAware,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::StableKeyId(id as u32),
         }
     }
 
-    fn unresolved(site: u64, stable_key: &str) -> UnresolvedCallFact {
+    fn unresolved(site: u64, _stable_key: &str) -> UnresolvedCallFact {
         UnresolvedCallFact {
             site: CallSiteId(site),
             caller: FunctionId(0),
@@ -2667,7 +2673,7 @@ mod calls {
             algorithm: CallAlgorithm::SyntaxOnly,
             provenance: CallProvenance::MirShape,
             precision: CallPrecision::Unknown,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::StableKeyId(site as u32),
         }
     }
 

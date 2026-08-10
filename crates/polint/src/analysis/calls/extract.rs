@@ -118,7 +118,8 @@ pub(crate) fn extract_call_sites(db: &AnalysisDb) -> Vec<CallSiteFact> {
     }
 
     sites.sort_by(|left, right| {
-        (left.stable_key.as_str(), left.id).cmp(&(right.stable_key.as_str(), right.id))
+        (db.resolve_stable_key(left.stable_key), left.id)
+            .cmp(&(db.resolve_stable_key(right.stable_key), right.id))
     });
     sites
 }
@@ -441,23 +442,25 @@ fn call_site_stable_key(
     kind: CallSyntaxKind,
     callee_shape: &str,
     operation_stable_key: &str,
-) -> String {
+) -> crate::core::StableKeyId {
     let interner_handle = db.stable_key_interner();
     let interner = &interner_handle;
-    semantic_stable_key(
-        interner,
-        FactFamily::CallSite,
-        &[
-            ("language", format!("{:?}", body.language)),
-            ("file_key", file_key(db, body.file)),
-            ("caller_key", caller_key(db, body.function)),
-            ("span", span_key(&operation.span)),
-            ("callee_shape", callee_shape.to_string()),
-            ("operation_key", operation_stable_key.to_string()),
-            ("call_kind", format!("{kind:?}")),
-        ],
+    interner.intern(
+        semantic_stable_key(
+            interner,
+            FactFamily::CallSite,
+            &[
+                ("language", format!("{:?}", body.language)),
+                ("file_key", file_key(db, body.file)),
+                ("caller_key", caller_key(db, body.function)),
+                ("span", span_key(&operation.span)),
+                ("callee_shape", callee_shape.to_string()),
+                ("operation_key", operation_stable_key.to_string()),
+                ("call_kind", format!("{kind:?}")),
+            ],
+        )
+        .into_string(),
     )
-    .into_string()
 }
 
 fn owner_symbol(
@@ -788,7 +791,7 @@ mod tests {
         .expect("semantic MIR should store");
 
         let sites = super::extract_call_sites(&db);
-        let stable_key = &sites[0].stable_key;
+        let stable_key = db.resolve_stable_key(sites[0].stable_key);
 
         assert!(stable_key.contains("8:CallSite"));
         assert!(stable_key.contains("8:language=10:TypeScript"));
@@ -883,11 +886,11 @@ mod tests {
 
         let first_keys = super::extract_call_sites(&first)
             .into_iter()
-            .map(|site| site.stable_key)
+            .map(|site| first.resolve_stable_key(site.stable_key))
             .collect::<Vec<_>>();
         let second_keys = super::extract_call_sites(&second)
             .into_iter()
-            .map(|site| site.stable_key)
+            .map(|site| second.resolve_stable_key(site.stable_key))
             .collect::<Vec<_>>();
 
         assert_eq!(first_keys, second_keys);

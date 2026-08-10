@@ -43,7 +43,7 @@ fn unresolved_edge(
         UnresolvedCallReason::UnsupportedSyntax => CallTargetStatus::Unsupported,
         _ => CallTargetStatus::Unresolved,
     };
-    let unresolved_key = unresolved.stable_key.clone();
+    let unresolved_key = db.resolve_stable_key(unresolved.stable_key).to_string();
     let place = callable_place(site);
 
     Some(RefinedCallEdgeFact {
@@ -160,7 +160,7 @@ mod tests {
             result: None,
             status: CallTargetStatus::Unresolved,
             precision: CallPrecision::Unknown,
-            stable_key: "call-site:fn".to_string(),
+            stable_key: crate::core::StableKeyId(0),
         };
         db.replace_call_facts(CallOutput {
             sites: vec![site],
@@ -173,7 +173,7 @@ mod tests {
                 algorithm: CallAlgorithm::Unsupported,
                 provenance: CallProvenance::MirShape,
                 precision: CallPrecision::Unknown,
-                stable_key: "unresolved:fn".to_string(),
+                stable_key: crate::core::StableKeyId(1),
             }],
         })
         .expect("valid call facts");

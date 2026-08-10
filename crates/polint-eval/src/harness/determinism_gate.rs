@@ -342,20 +342,15 @@ fn go_rta_solver_output_is_byte_identical_under_permuted_fact_insertion_order() 
 
     let solver_json = |db: &crate::core::AnalysisDb| -> String {
         let constraints = db.semantic_constraints().to_vec();
+        let interner = db.stable_key_interner();
         let engine = SolverEngine::new(
             vec![
-                Box::new(GoRtaPolicy::new(GoRtaInputs::from_db(
-                    &crate::core::AnalysisDb::new().stable_key_interner(),
-                    db,
-                ))),
+                Box::new(GoRtaPolicy::new(GoRtaInputs::from_db(&interner, db))),
                 Box::new(TsPointsToPolicy::new(TsPointsToInputs::from_db(db))),
             ],
             budget,
         );
-        let solver_output = engine.run_to_solver_output(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            &constraints,
-        );
+        let solver_output = engine.run_to_solver_output(&interner, &constraints);
         serde_json::to_string(&(&solver_output.derived_edges, solver_output.budget_status))
             .expect("serialize solver output")
     };

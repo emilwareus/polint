@@ -222,7 +222,11 @@ fn refined_call_refs_resolve(db: &AnalysisDb, candidate: &ExtensionFactCandidate
 fn resolve_call_site_ref(db: &AnalysisDb, value: &str) -> bool {
     if let Some(id) = value.strip_prefix("call_site:") {
         return id.parse::<u64>().map_or_else(
-            |_| db.call_sites().iter().any(|site| site.stable_key == id),
+            |_| {
+                db.call_sites()
+                    .iter()
+                    .any(|site| db.resolve_stable_key(site.stable_key).as_ref() == id)
+            },
             |id| {
                 db.call_sites()
                     .iter()
@@ -230,12 +234,13 @@ fn resolve_call_site_ref(db: &AnalysisDb, value: &str) -> bool {
             },
         );
     }
-    value
-        .strip_prefix("stable:")
-        .is_some_and(|stable| db.call_sites().iter().any(|site| site.stable_key == stable))
-        || value
-            .strip_prefix("file_span:")
-            .is_some_and(|file_span| resolve_call_site_file_span_ref(db, file_span))
+    value.strip_prefix("stable:").is_some_and(|stable| {
+        db.call_sites()
+            .iter()
+            .any(|site| db.resolve_stable_key(site.stable_key).as_ref() == stable)
+    }) || value
+        .strip_prefix("file_span:")
+        .is_some_and(|file_span| resolve_call_site_file_span_ref(db, file_span))
         || value
             .strip_prefix("file_callee:")
             .is_some_and(|file_callee| resolve_call_site_file_callee_ref(db, file_callee))
@@ -533,7 +538,7 @@ mod tests {
                 result: None,
                 status: CallTargetStatus::Ambiguous,
                 precision: CallPrecision::Heuristic,
-                stable_key: "call-site:model".to_string(),
+                stable_key: crate::core::StableKeyId(0),
             }],
             targets: Vec::new(),
             unresolved: Vec::new(),

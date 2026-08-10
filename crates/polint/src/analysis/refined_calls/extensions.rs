@@ -98,7 +98,7 @@ fn resolve_site(db: &AnalysisDb, value: &str) -> Option<CallSiteId> {
         return db
             .call_sites()
             .iter()
-            .find(|site| site.stable_key == id)
+            .find(|site| db.resolve_stable_key(site.stable_key).as_ref() == id)
             .map(|site| site.id);
     }
     value
@@ -106,7 +106,7 @@ fn resolve_site(db: &AnalysisDb, value: &str) -> Option<CallSiteId> {
         .and_then(|stable| {
             db.call_sites()
                 .iter()
-                .find(|site| site.stable_key == stable)
+                .find(|site| db.resolve_stable_key(site.stable_key).as_ref() == stable)
                 .map(|site| site.id)
         })
         .or_else(|| {
@@ -361,7 +361,7 @@ mod tests {
                 result: None,
                 status: CallTargetStatus::Ambiguous,
                 precision: CallPrecision::Heuristic,
-                stable_key: "call-site:model".to_string(),
+                stable_key: crate::core::StableKeyId(0),
             }],
             targets: Vec::new(),
             unresolved: Vec::new(),

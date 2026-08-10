@@ -1062,7 +1062,9 @@ mod tests {
                 result: None,
                 status: CallTargetStatus::BudgetExceeded,
                 precision: CallPrecision::Unknown,
-                stable_key: "callsite:budget".to_string(),
+                stable_key: db
+                    .stable_key_interner()
+                    .intern("callsite:budget".to_string()),
             }],
             targets: Vec::new(),
             unresolved: Vec::new(),
@@ -1112,7 +1114,9 @@ mod tests {
                 result: None,
                 status: CallTargetStatus::BudgetExceeded,
                 precision: CallPrecision::Unknown,
-                stable_key: "callsite:budget".to_string(),
+                stable_key: db
+                    .stable_key_interner()
+                    .intern("callsite:budget".to_string()),
             }],
             targets: Vec::new(),
             unresolved: Vec::new(),
@@ -1228,7 +1232,9 @@ mod tests {
                 result: None,
                 status: CallTargetStatus::Unresolved,
                 precision: CallPrecision::Unknown,
-                stable_key: "callsite:unknown".to_string(),
+                stable_key: db
+                    .stable_key_interner()
+                    .intern("callsite:unknown".to_string()),
             }],
             targets: Vec::new(),
             unresolved: Vec::new(),
@@ -1306,7 +1312,9 @@ mod tests {
                 result: None,
                 status: CallTargetStatus::BudgetExceeded,
                 precision: CallPrecision::Unknown,
-                stable_key: "callsite:budget".to_string(),
+                stable_key: db
+                    .stable_key_interner()
+                    .intern("callsite:budget".to_string()),
             }],
             targets: Vec::new(),
             unresolved: Vec::new(),

@@ -1468,7 +1468,7 @@ fn call_site_rows(db: &AnalysisDb) -> Vec<CallSiteDebugRow> {
                 db,
                 FactFamily::CallSite,
                 row.id.0,
-                row.stable_key.as_str(),
+                &db.resolve_stable_key(row.stable_key),
                 call_status_label(row.status),
                 call_precision_label(row.precision),
                 Some(row.file),
@@ -1490,7 +1490,7 @@ fn call_target_rows(db: &AnalysisDb) -> Vec<CallTargetDebugRow> {
     let site_keys = db
         .call_sites()
         .iter()
-        .map(|site| (site.id, site.stable_key.clone()))
+        .map(|site| (site.id, db.resolve_stable_key(site.stable_key).to_string()))
         .collect::<BTreeMap<_, _>>();
     let mut rows = db
         .call_targets()
@@ -1501,7 +1501,7 @@ fn call_target_rows(db: &AnalysisDb) -> Vec<CallTargetDebugRow> {
                 db,
                 FactFamily::CallTarget,
                 row.id.0,
-                row.stable_key.as_str(),
+                &db.resolve_stable_key(row.stable_key),
                 call_status_label(row.status),
                 call_precision_label(row.precision),
                 site.map(|site| site.file),
@@ -1532,7 +1532,7 @@ fn unresolved_call_rows(db: &AnalysisDb) -> Vec<UnresolvedCallDebugRow> {
     let site_keys = db
         .call_sites()
         .iter()
-        .map(|site| (site.id, site.stable_key.clone()))
+        .map(|site| (site.id, db.resolve_stable_key(site.stable_key).to_string()))
         .collect::<BTreeMap<_, _>>();
     let mut rows = db
         .unresolved_calls()
@@ -1544,7 +1544,7 @@ fn unresolved_call_rows(db: &AnalysisDb) -> Vec<UnresolvedCallDebugRow> {
                 db,
                 FactFamily::UnresolvedCall,
                 index as u64,
-                row.stable_key.as_str(),
+                &db.resolve_stable_key(row.stable_key),
                 call_status_label(row.status),
                 call_precision_label(row.precision),
                 site.map(|site| site.file),
@@ -2856,7 +2856,7 @@ mod calls_debug_json {
                 algorithm: CallAlgorithm::SyntaxOnly,
                 provenance: CallProvenance::MirShape,
                 precision: CallPrecision::Unknown,
-                stable_key: "call-unresolved:function-value".to_string(),
+                stable_key: crate::core::StableKeyId(2),
             }],
         })
         .expect("call rows should store");
@@ -2933,7 +2933,7 @@ mod calls_debug_json {
         db
     }
 
-    fn site(id: u64, stable_key: &str) -> CallSiteFact {
+    fn site(id: u64, _stable_key: &str) -> CallSiteFact {
         CallSiteFact {
             in_throw: false,
             id: CallSiteId(id),
@@ -2954,11 +2954,11 @@ mod calls_debug_json {
             result: None,
             status: CallTargetStatus::Resolved,
             precision: CallPrecision::SetupAware,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::StableKeyId(id as u32),
         }
     }
 
-    fn target(id: u64, stable_key: &str) -> CallTargetFact {
+    fn target(id: u64, _stable_key: &str) -> CallTargetFact {
         CallTargetFact {
             id: CallTargetId(id),
             site: CallSiteId(0),
@@ -2971,11 +2971,11 @@ mod calls_debug_json {
             reason: None,
             provenance: CallProvenance::Native,
             precision: CallPrecision::SetupAware,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::StableKeyId(id as u32),
         }
     }
 
-    fn unresolved(stable_key: &str) -> UnresolvedCallFact {
+    fn unresolved(_stable_key: &str) -> UnresolvedCallFact {
         UnresolvedCallFact {
             site: CallSiteId(0),
             caller: FunctionId(0),
@@ -2984,7 +2984,7 @@ mod calls_debug_json {
             algorithm: CallAlgorithm::SyntaxOnly,
             provenance: CallProvenance::MirShape,
             precision: CallPrecision::Unknown,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::StableKeyId(0),
         }
     }
 

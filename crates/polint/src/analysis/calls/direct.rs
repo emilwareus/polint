@@ -112,7 +112,8 @@ pub(crate) fn resolve_direct_call_targets(
     }
 
     rows.sort_by(|left, right| {
-        (left.stable_key.as_str(), left.site).cmp(&(right.stable_key.as_str(), right.site))
+        (interner.resolve(left.stable_key), left.site)
+            .cmp(&(interner.resolve(right.stable_key), right.site))
     });
     rows.dedup_by(|left, right| left.stable_key == right.stable_key);
     for (index, row) in rows.iter_mut().enumerate() {
@@ -422,50 +423,54 @@ fn target_stable_key(
     site: &CallSiteFact,
     algorithm: CallAlgorithm,
     symbol: &SymbolFact,
-) -> String {
-    semantic_stable_key(
-        interner,
-        FactFamily::CallTarget,
-        &[
-            ("site", site.stable_key.clone()),
-            ("algorithm", format!("{algorithm:?}")),
-            ("target", interner.resolve(symbol.stable_key).to_string()),
-            ("provider", crate::core::CALLS_PROVIDER_ID.to_string()),
-            ("schema", "calls-facts-1:1".to_string()),
-            ("model", "absent".to_string()),
-        ],
+) -> crate::core::StableKeyId {
+    interner.intern(
+        semantic_stable_key(
+            interner,
+            FactFamily::CallTarget,
+            &[
+                ("site", interner.resolve(site.stable_key).to_string()),
+                ("algorithm", format!("{algorithm:?}")),
+                ("target", interner.resolve(symbol.stable_key).to_string()),
+                ("provider", crate::core::CALLS_PROVIDER_ID.to_string()),
+                ("schema", "calls-facts-1:1".to_string()),
+                ("model", "absent".to_string()),
+            ],
+        )
+        .into_string(),
     )
-    .into_string()
 }
 
 fn lexical_target_stable_key(
     interner: &crate::core::StableKeyInterner,
     site: &CallSiteFact,
     function: &FunctionFact,
-) -> String {
-    semantic_stable_key(
-        interner,
-        FactFamily::CallTarget,
-        &[
-            ("site", site.stable_key.clone()),
-            ("algorithm", format!("{:?}", CallAlgorithm::SyntaxOnly)),
-            (
-                "target",
-                format!(
-                    "{}:{}:{}:{}:{}",
-                    function.name,
-                    function.file.0,
-                    function.span.start_line,
-                    function.span.start_col,
-                    function.span.start_byte
+) -> crate::core::StableKeyId {
+    interner.intern(
+        semantic_stable_key(
+            interner,
+            FactFamily::CallTarget,
+            &[
+                ("site", interner.resolve(site.stable_key).to_string()),
+                ("algorithm", format!("{:?}", CallAlgorithm::SyntaxOnly)),
+                (
+                    "target",
+                    format!(
+                        "{}:{}:{}:{}:{}",
+                        function.name,
+                        function.file.0,
+                        function.span.start_line,
+                        function.span.start_col,
+                        function.span.start_byte
+                    ),
                 ),
-            ),
-            ("provider", crate::core::CALLS_PROVIDER_ID.to_string()),
-            ("schema", "calls-facts-1:1".to_string()),
-            ("model", "absent".to_string()),
-        ],
+                ("provider", crate::core::CALLS_PROVIDER_ID.to_string()),
+                ("schema", "calls-facts-1:1".to_string()),
+                ("model", "absent".to_string()),
+            ],
+        )
+        .into_string(),
     )
-    .into_string()
 }
 
 #[cfg(test)]
@@ -869,7 +874,10 @@ mod tests {
                 result: None,
                 status: CallTargetStatus::Unresolved,
                 precision: CallPrecision::Conservative,
-                stable_key: format!("call-site:{id}"),
+                stable_key: self
+                    .db
+                    .stable_key_interner()
+                    .intern(format!("call-site:{id}")),
             }
         }
 
@@ -939,6 +947,7 @@ mod non_direct_cases {
         let (db, file, caller) = db_with_function(Language::Go, "flow.go");
         let sites = vec![
             site(
+                &db,
                 Language::Go,
                 file,
                 caller,
@@ -947,6 +956,7 @@ mod non_direct_cases {
                 CallSyntaxKind::FunctionValue,
             ),
             site(
+                &db,
                 Language::Go,
                 file,
                 caller,
@@ -966,6 +976,7 @@ mod non_direct_cases {
         let (db, file, caller) = db_with_function(Language::TypeScript, "src/app.ts");
         let sites = vec![
             site(
+                &db,
                 Language::TypeScript,
                 file,
                 caller,
@@ -977,6 +988,7 @@ mod non_direct_cases {
                 CallSyntaxKind::Index,
             ),
             site(
+                &db,
                 Language::TypeScript,
                 file,
                 caller,
@@ -987,6 +999,7 @@ mod non_direct_cases {
                 CallSyntaxKind::Unknown,
             ),
             site(
+                &db,
                 Language::TypeScript,
                 file,
                 caller,
@@ -1025,6 +1038,7 @@ mod non_direct_cases {
     }
 
     fn site(
+        db: &AnalysisDb,
         language: Language,
         file: FileId,
         caller: FunctionId,
@@ -1049,7 +1063,7 @@ mod non_direct_cases {
             result: None,
             status: CallTargetStatus::Unresolved,
             precision: CallPrecision::Conservative,
-            stable_key: format!("call-site:{id}"),
+            stable_key: db.stable_key_interner().intern(format!("call-site:{id}")),
         }
     }
 

@@ -54,7 +54,7 @@ pub(crate) fn derive_calls_with_cache_stats(
         targets,
         unresolved,
     }
-    .normalized();
+    .normalized(&db.stable_key_interner());
     let output_digest = calls_output_digest(
         db,
         manifest,
@@ -126,13 +126,13 @@ fn calls_output_digest(
             .map(|digest| format!("upstream_syntax={digest}")),
     );
 
-    let site_keys = call_site_key_map(output);
+    let site_keys = call_site_key_map(db, output);
     let function_keys = function_key_map(db);
     let symbol_keys = symbol_key_map(db);
     parts.extend(output.sites.iter().map(|site| {
         format!(
             "call_site={} language={:?} span={} kind={:?} status={:?} precision={:?} callee={}",
-            site.stable_key,
+            db.resolve_stable_key(site.stable_key),
             site.language,
             span_part(&site.span),
             site.kind,
@@ -144,7 +144,7 @@ fn calls_output_digest(
     parts.extend(output.targets.iter().map(|target| {
         format!(
             "call_target={} site={} edge={:?} algorithm={:?} status={:?} reason={} provenance={:?} precision={:?} target_function={} target_symbol={}",
-            target.stable_key,
+            db.resolve_stable_key(target.stable_key),
             stable_site_key(&site_keys, target.site),
             target.edge_kind,
             target.algorithm,
@@ -159,7 +159,7 @@ fn calls_output_digest(
     parts.extend(output.unresolved.iter().map(|unresolved| {
         format!(
             "unresolved_call={} site={} algorithm={:?} status={:?} reason={:?} provenance={:?} precision={:?}",
-            unresolved.stable_key,
+            db.resolve_stable_key(unresolved.stable_key),
             stable_site_key(&site_keys, unresolved.site),
             unresolved.algorithm,
             unresolved.status,
@@ -186,11 +186,11 @@ fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[I
     }));
 }
 
-fn call_site_key_map(output: &CallOutput) -> BTreeMap<CallSiteId, String> {
+fn call_site_key_map(db: &AnalysisDb, output: &CallOutput) -> BTreeMap<CallSiteId, String> {
     output
         .sites
         .iter()
-        .map(|site| (site.id, site.stable_key.clone()))
+        .map(|site| (site.id, db.resolve_stable_key(site.stable_key).to_string()))
         .collect()
 }
 
@@ -322,8 +322,8 @@ mod calls_provider {
     use crate::analysis_plan::AnalysisPlan;
     use crate::config::load_config;
     use crate::core::{
-        AnalysisDb, FileId, FunctionFact, FunctionId, Language, ReferenceId, Span, SymbolFact,
-        SymbolId, SymbolKind, SymbolNamespace, SymbolPrecision,
+        AnalysisDb, FileId, FunctionFact, FunctionId, Language, ReferenceId, Span, StableKeyId,
+        SymbolFact, SymbolId, SymbolKind, SymbolNamespace, SymbolPrecision,
     };
 
     #[test]
@@ -418,6 +418,18 @@ mod calls_provider {
         target_symbol_key: &str,
     ) -> Digest {
         let db = db_for_output(output, target_function_name, target_symbol_key);
+        let interner = db.stable_key_interner();
+        let mut output = output.clone();
+        for site in &mut output.sites {
+            site.stable_key = interner.intern("call-site:stable".to_string());
+        }
+        for target in &mut output.targets {
+            target.stable_key = interner.intern("call-target:stable".to_string());
+        }
+        for unresolved in &mut output.unresolved {
+            unresolved.stable_key = interner.intern("unresolved-call:stable".to_string());
+        }
+        let output = output.normalized(&interner);
         let temp = tempdir().expect("tempdir");
         fs::write(temp.path().join(".polint.toml"), "").expect("config");
         let loaded = load_config(temp.path()).expect("config loads");
@@ -443,7 +455,7 @@ mod calls_provider {
             &Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["a"]),
             &Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["a"]),
             &[],
-            output,
+            &output,
         )
     }
 
@@ -665,7 +677,7 @@ mod calls_provider {
             result: Some(PlaceId(id_offset + 1)),
             status: CallTargetStatus::Resolved,
             precision: CallPrecision::Exact,
-            stable_key: "call-site:stable".to_string(),
+            stable_key: StableKeyId(0),
         };
         let target_status = if status == "resolved" {
             CallTargetStatus::Resolved
@@ -684,7 +696,7 @@ mod calls_provider {
             reason: None,
             provenance: CallProvenance::Native,
             precision: CallPrecision::Exact,
-            stable_key: "call-target:stable".to_string(),
+            stable_key: StableKeyId(1),
         };
         let unresolved = UnresolvedCallFact {
             site: site.id,
@@ -694,7 +706,7 @@ mod calls_provider {
             algorithm: CallAlgorithm::SyntaxOnly,
             provenance: CallProvenance::MirShape,
             precision: CallPrecision::Unknown,
-            stable_key: "unresolved-call:stable".to_string(),
+            stable_key: StableKeyId(2),
         };
 
         crate::analysis::calls::store::CallOutput {
@@ -702,7 +714,6 @@ mod calls_provider {
             targets: vec![target],
             unresolved: vec![unresolved],
         }
-        .normalized()
     }
 
     fn span(file: FileId, line: u32, start_byte: u32) -> Span {

@@ -45,7 +45,12 @@ fn edge_from_summary(
         summary.id.0,
         &summary.stable_key,
     );
-    let target_key = metadata_key(db, FactFamily::CallTarget, target.id.0, &target.stable_key);
+    let target_key = metadata_key(
+        db,
+        FactFamily::CallTarget,
+        target.id.0,
+        &db.resolve_stable_key(target.stable_key),
+    );
     RefinedCallEdgeFact {
         id: RefinedCallEdgeId(index as u64),
         site: target.site,
@@ -215,7 +220,7 @@ mod tests {
                 result: None,
                 status: CallTargetStatus::Resolved,
                 precision: CallPrecision::SetupAware,
-                stable_key: "call-site:callee".to_string(),
+                stable_key: crate::core::StableKeyId(0),
             }],
             targets: vec![CallTargetFact {
                 id: CallTargetId(0),
@@ -229,7 +234,7 @@ mod tests {
                 reason: None,
                 provenance: CallProvenance::NativeDirect,
                 precision: CallPrecision::SetupAware,
-                stable_key: "call-target:callee".to_string(),
+                stable_key: crate::core::StableKeyId(1),
             }],
             unresolved: Vec::new(),
         })

@@ -143,7 +143,12 @@ fn type_edge_from_target(
     let type_key = type_fact
         .map(|fact| metadata_key(db, FactFamily::Type, fact.id.0, &fact.stable_key))
         .unwrap_or_else(|| "type:none".to_string());
-    let target_key = metadata_key(db, FactFamily::CallTarget, target.id.0, &target.stable_key);
+    let target_key = metadata_key(
+        db,
+        FactFamily::CallTarget,
+        target.id.0,
+        &db.resolve_stable_key(target.stable_key),
+    );
     edge_from_target(
         target,
         RefinedCallEdgeId(index as u64),
@@ -179,7 +184,12 @@ fn points_to_edge_from_target(
     let points_to_key = points_to
         .map(|fact| metadata_key(db, FactFamily::PointsToSet, fact.id.0, &fact.stable_key))
         .unwrap_or_else(|| "points-to:none".to_string());
-    let target_key = metadata_key(db, FactFamily::CallTarget, target.id.0, &target.stable_key);
+    let target_key = metadata_key(
+        db,
+        FactFamily::CallTarget,
+        target.id.0,
+        &db.resolve_stable_key(target.stable_key),
+    );
     edge_from_target(
         target,
         RefinedCallEdgeId(index as u64),
@@ -253,16 +263,16 @@ fn unresolved_go_edge(
 ) -> RefinedCallEdgeFact {
     let interner_handle = db.stable_key_interner();
     let interner = &interner_handle;
+    let unresolved_stable_key = db.resolve_stable_key(unresolved.stable_key);
     let unresolved_key = metadata_key(
         db,
         FactFamily::UnresolvedCall,
-        unresolved
-            .stable_key
+        unresolved_stable_key
             .rsplit(':')
             .next()
             .and_then(|part| part.parse::<u64>().ok())
             .unwrap_or(index as u64),
-        &unresolved.stable_key,
+        &unresolved_stable_key,
     );
     RefinedCallEdgeFact {
         id: RefinedCallEdgeId(index as u64),
@@ -503,7 +513,7 @@ mod tests {
                 algorithm: CallAlgorithm::Unsupported,
                 provenance: CallProvenance::Native,
                 precision: CallPrecision::Unknown,
-                stable_key: "unresolved:interface:0".to_string(),
+                stable_key: crate::core::StableKeyId(0),
             }],
         })
         .expect("valid call facts");
@@ -584,7 +594,7 @@ mod tests {
             result: None,
             status: CallTargetStatus::Ambiguous,
             precision: CallPrecision::Unknown,
-            stable_key: "call-site:receiver".to_string(),
+            stable_key: crate::core::StableKeyId(0),
         }
     }
 
@@ -601,7 +611,7 @@ mod tests {
             reason: None,
             provenance: CallProvenance::Native,
             precision: CallPrecision::SetupAware,
-            stable_key: "call-target:go-method".to_string(),
+            stable_key: crate::core::StableKeyId(1),
         }
     }
 

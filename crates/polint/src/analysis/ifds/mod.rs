@@ -723,7 +723,7 @@ mod tests {
             status: CallTargetStatus::Resolved,
             precision: CallPrecision::Exact,
             in_throw: false,
-            stable_key: format!("site:{id}"),
+            stable_key: crate::core::StableKeyId(id as u32),
         }
     }
 

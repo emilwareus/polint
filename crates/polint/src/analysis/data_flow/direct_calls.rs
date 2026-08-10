@@ -1250,7 +1250,7 @@ mod tests {
             result: Some(PlaceId(30)),
             status: CallTargetStatus::Resolved,
             precision: CallPrecision::Exact,
-            stable_key: "call-site:2".to_string(),
+            stable_key: crate::core::StableKeyId(2),
         }
     }
 
@@ -1264,7 +1264,7 @@ mod tests {
             operation: MirOpId(id.0),
             arguments,
             result,
-            stable_key: format!("call-site:{}", id.0),
+            stable_key: crate::core::StableKeyId(id.0 as u32),
             ..call_site(None)
         }
     }

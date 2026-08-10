@@ -328,7 +328,7 @@ mod tests {
                 result: None,
                 status: CallTargetStatus::Resolved,
                 precision: CallPrecision::SetupAware,
-                stable_key: "call-site:callee".to_string(),
+                stable_key: crate::core::StableKeyId(0),
             }],
             targets: Vec::new(),
             unresolved: Vec::new(),

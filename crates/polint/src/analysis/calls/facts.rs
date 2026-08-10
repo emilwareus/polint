@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::analysis::ids::{CallSiteId, CallTargetId, MirBodyId, MirOpId, PlaceId};
-use crate::core::{FileId, FunctionId, Language, ReferenceId, Span, SymbolId};
+use crate::core::{FileId, FunctionId, Language, ReferenceId, Span, StableKeyId, SymbolId};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CallSiteFact {
     pub(crate) id: CallSiteId,
     pub(crate) language: Language,
@@ -24,12 +24,11 @@ pub(crate) struct CallSiteFact {
     /// (`throw new E(... f() ...)`). Such calls sit on error paths that the
     /// demand-driven oracle does not exercise, so resolvers skip them to avoid
     /// false edges (e.g. express's `gettype(fn)` in a middleware-type-check throw).
-    #[serde(default)]
     pub(crate) in_throw: bool,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CallTargetFact {
     pub(crate) id: CallTargetId,
     pub(crate) site: CallSiteId,
@@ -42,10 +41,10 @@ pub(crate) struct CallTargetFact {
     pub(crate) reason: Option<UnresolvedCallReason>,
     pub(crate) provenance: CallProvenance,
     pub(crate) precision: CallPrecision,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct UnresolvedCallFact {
     pub(crate) site: CallSiteId,
     pub(crate) caller: FunctionId,
@@ -54,7 +53,7 @@ pub(crate) struct UnresolvedCallFact {
     pub(crate) algorithm: CallAlgorithm,
     pub(crate) provenance: CallProvenance,
     pub(crate) precision: CallPrecision,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -197,7 +196,7 @@ pub(crate) enum CallProvenance {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{FileId, FunctionId, Language, SymbolId};
+    use crate::core::{AnalysisDb, FileId, FunctionId, Language, SymbolId};
     use serde::Serialize;
     use serde::de::DeserializeOwned;
     use std::fmt::Debug;
@@ -230,6 +229,8 @@ mod tests {
 
     #[test]
     fn call_facts_keep_dense_ids_and_stable_keys_separate() {
+        let db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
         let site = CallSiteFact {
             in_throw: false,
             id: CallSiteId(1),
@@ -250,7 +251,7 @@ mod tests {
             result: Some(PlaceId(8)),
             status: CallTargetStatus::Resolved,
             precision: CallPrecision::Exact,
-            stable_key: "call-site:test".to_string(),
+            stable_key: interner.intern("call-site:test".to_string()),
         };
 
         let target = CallTargetFact {
@@ -265,7 +266,7 @@ mod tests {
             reason: None,
             provenance: CallProvenance::Native,
             precision: CallPrecision::Exact,
-            stable_key: "call-target:test".to_string(),
+            stable_key: interner.intern("call-target:test".to_string()),
         };
 
         assert_ne!(site.stable_key, target.stable_key);

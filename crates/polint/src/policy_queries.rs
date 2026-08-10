@@ -1269,7 +1269,7 @@ fn control_event_for_edge(
         range: site.span.diagnostic_range(),
         target_label,
         candidates,
-        order: control_order(site, operation_orders),
+        order: control_order(db, site, operation_orders),
         order_source: control_order_source(site, operation_orders),
         status: edge.status,
         precision: edge.precision,
@@ -1289,7 +1289,7 @@ fn control_event_for_site(
         range: site.span.diagnostic_range(),
         target_label: label.clone(),
         candidates: vec![label],
-        order: control_order(site, operation_orders),
+        order: control_order(db, site, operation_orders),
         order_source: control_order_source(site, operation_orders),
         status: site.status,
         precision: site.precision,
@@ -1298,6 +1298,7 @@ fn control_event_for_site(
 }
 
 fn control_order(
+    db: &AnalysisDb,
     site: &CallSiteFact,
     operation_orders: &BTreeMap<(MirBodyId, MirOpId), OperationOrder>,
 ) -> ControlOrder {
@@ -1310,7 +1311,7 @@ fn control_order(
         line: site.span.start_line,
         col: site.span.start_col,
         byte: site.span.start_byte,
-        stable_key: site.stable_key.clone(),
+        stable_key: db.resolve_stable_key(site.stable_key).to_string(),
     }
 }
 
@@ -3460,7 +3461,7 @@ mod tests {
             status: CallTargetStatus::Resolved,
             precision: CallPrecision::Exact,
             in_throw: false,
-            stable_key: format!("site:{id}:{callee}"),
+            stable_key: crate::core::StableKeyId(id as u32),
         }
     }
 
@@ -3494,7 +3495,7 @@ mod tests {
             reason: None,
             provenance: CallProvenance::NativeDirect,
             precision: CallPrecision::SetupAware,
-            stable_key: format!("target:{id}"),
+            stable_key: crate::core::StableKeyId(id as u32),
         }
     }
 

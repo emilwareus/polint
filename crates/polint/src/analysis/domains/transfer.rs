@@ -93,7 +93,7 @@ impl<'a> TransferCx<'a> {
             algorithm: CallAlgorithm::Unsupported,
             provenance: CallProvenance::MirShape,
             precision: CallPrecision::Unknown,
-            stable_key: "unresolved:test".to_string(),
+            stable_key: crate::core::StableKeyId(0),
         }));
         TransferCx {
             unresolved_calls: BTreeMap::from([(site, &*row)]),

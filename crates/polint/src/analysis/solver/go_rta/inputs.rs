@@ -774,8 +774,12 @@ fn callsite_constraint_node_indexed(
     let file = callsite.file?;
     let span = callsite.span.as_ref()?;
     let candidates = index.call_sites_at(file, span);
-    let core_callsite = select_constraint_callsite(candidates, caller)?;
-    let node_key = node_key_from_identity(interner, "callsite", &core_callsite.stable_key);
+    let core_callsite = select_constraint_callsite(interner, candidates, caller)?;
+    let node_key = node_key_from_identity(
+        interner,
+        "callsite",
+        &interner.resolve(core_callsite.stable_key),
+    );
     index.callsite_node(&node_key)
 }
 
@@ -794,6 +798,7 @@ fn callsite_constraint_node_indexed(
 /// 3. choose the deterministic minimum by `stable_key` (totally ordered, byte-stable),
 ///    never a first-match that depends on storage order.
 fn select_constraint_callsite<'a>(
+    interner: &crate::core::StableKeyInterner,
     candidates: &[&'a crate::analysis::calls::facts::CallSiteFact],
     caller: Option<crate::core::FunctionId>,
 ) -> Option<&'a crate::analysis::calls::facts::CallSiteFact> {
@@ -831,10 +836,11 @@ fn select_constraint_callsite<'a>(
     };
 
     // 3. Deterministic minimum by stable key (never first-match on storage order).
-    final_set
-        .iter()
-        .copied()
-        .min_by(|left, right| left.stable_key.cmp(&right.stable_key))
+    final_set.iter().copied().min_by(|left, right| {
+        interner
+            .resolve(left.stable_key)
+            .cmp(&interner.resolve(right.stable_key))
+    })
 }
 
 /// Reproduces `semantic_graph::build::node_key_from_identity` (node-kind label +
@@ -1186,6 +1192,7 @@ mod tests {
     }
 
     fn call_site(
+        interner: &crate::core::StableKeyInterner,
         id: u64,
         caller: FunctionId,
         start: u32,
@@ -1214,7 +1221,7 @@ mod tests {
             result: None,
             status,
             precision: CallPrecision::Conservative,
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key.to_string()),
         }
     }
 
@@ -1227,11 +1234,13 @@ mod tests {
         use crate::analysis::calls::facts::CallTargetStatus;
         let caller_a = FunctionId(10);
         let caller_b = FunctionId(20);
+        let interner = crate::core::StableKeyInterner::default();
 
         // All four share the SAME span (a method chain at one outer span). Among caller_a's
         // sites: one resolved-static receiver call + one dynamic invoke. caller_b also has a
         // dynamic site at the same span (a different function's sibling call).
         let static_a = call_site(
+            &interner,
             1,
             caller_a,
             100,
@@ -1240,6 +1249,7 @@ mod tests {
             "cs|a-static",
         );
         let dynamic_a = call_site(
+            &interner,
             2,
             caller_a,
             100,
@@ -1248,6 +1258,7 @@ mod tests {
             "cs|a-dynamic",
         );
         let dynamic_b = call_site(
+            &interner,
             3,
             caller_b,
             100,
@@ -1259,13 +1270,13 @@ mod tests {
 
         // The dynamic callsite belongs to caller_a → bind to caller_a's DYNAMIC site, not
         // its static sibling and not caller_b's same-span site.
-        let chosen = select_constraint_callsite(&candidates, Some(caller_a))
+        let chosen = select_constraint_callsite(&interner, &candidates, Some(caller_a))
             .expect("a caller-matched dynamic site must be selected");
         assert_eq!(chosen.id.0, 2, "must select caller_a's dynamic site");
-        assert_eq!(chosen.stable_key, "cs|a-dynamic");
+        assert_eq!(interner.resolve(chosen.stable_key).as_ref(), "cs|a-dynamic");
 
         // For caller_b, only its own same-span dynamic site is eligible.
-        let chosen_b = select_constraint_callsite(&candidates, Some(caller_b))
+        let chosen_b = select_constraint_callsite(&interner, &candidates, Some(caller_b))
             .expect("caller_b's site must be selected");
         assert_eq!(chosen_b.id.0, 3);
     }
@@ -1279,12 +1290,30 @@ mod tests {
         use crate::analysis::calls::facts::CallTargetStatus;
         let caller_a = FunctionId(10);
         let caller_b = FunctionId(20);
+        let interner = crate::core::StableKeyInterner::default();
 
         // Two dynamic sites at one span for DIFFERENT callers, plus a static one. Caller
         // unknown: prefer dynamic, deterministic minimum by stable key ("cs|x" < "cs|y").
-        let dyn_y = call_site(3, caller_b, 100, 110, CallTargetStatus::Unresolved, "cs|y");
-        let dyn_x = call_site(2, caller_a, 100, 110, CallTargetStatus::Unresolved, "cs|x");
+        let dyn_y = call_site(
+            &interner,
+            3,
+            caller_b,
+            100,
+            110,
+            CallTargetStatus::Unresolved,
+            "cs|y",
+        );
+        let dyn_x = call_site(
+            &interner,
+            2,
+            caller_a,
+            100,
+            110,
+            CallTargetStatus::Unresolved,
+            "cs|x",
+        );
         let static_z = call_site(
+            &interner,
             1,
             caller_a,
             100,
@@ -1293,16 +1322,18 @@ mod tests {
             "cs|z-static",
         );
         let candidates = [&dyn_y, &dyn_x, &static_z];
-        let chosen = select_constraint_callsite(&candidates, None)
+        let chosen = select_constraint_callsite(&interner, &candidates, None)
             .expect("a dynamic site is selected when caller is unknown");
         assert_eq!(
-            chosen.stable_key, "cs|x",
+            interner.resolve(chosen.stable_key).as_ref(),
+            "cs|x",
             "deterministic minimum dynamic site, not first-scanned"
         );
 
         // Caller matches a site that has NO dynamic variant: fall back to that caller's
         // (static) site rather than another caller's dynamic one.
         let only_static_a = call_site(
+            &interner,
             5,
             caller_a,
             100,
@@ -1311,6 +1342,7 @@ mod tests {
             "cs|a-only-static",
         );
         let other_dynamic = call_site(
+            &interner,
             6,
             caller_b,
             100,
@@ -1319,7 +1351,7 @@ mod tests {
             "cs|b-dyn",
         );
         let candidates2 = [&only_static_a, &other_dynamic];
-        let chosen2 = select_constraint_callsite(&candidates2, Some(caller_a))
+        let chosen2 = select_constraint_callsite(&interner, &candidates2, Some(caller_a))
             .expect("caller_a's only site is selected");
         assert_eq!(
             chosen2.id.0, 5,

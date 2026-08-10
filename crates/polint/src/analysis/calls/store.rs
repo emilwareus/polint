@@ -5,7 +5,7 @@ use crate::analysis::calls::facts::{
 };
 use crate::analysis::error::AnalysisError;
 use crate::analysis::ids::CallSiteId;
-use crate::core::{FunctionId, SymbolId};
+use crate::core::{FunctionId, StableKeyInterner, SymbolId};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct CallOutput {
@@ -19,14 +19,15 @@ impl CallOutput {
         Self::default()
     }
 
-    pub(crate) fn normalized(mut self) -> Self {
+    pub(crate) fn normalized(mut self, interner: &StableKeyInterner) -> Self {
         self.sites.sort_by(|left, right| {
-            (left.stable_key.as_str(), left.id).cmp(&(right.stable_key.as_str(), right.id))
+            (interner.resolve(left.stable_key), left.id)
+                .cmp(&(interner.resolve(right.stable_key), right.id))
         });
         self.targets.sort_by(|left, right| {
-            (left.site, left.stable_key.as_str(), left.id).cmp(&(
+            (left.site, interner.resolve(left.stable_key), left.id).cmp(&(
                 right.site,
-                right.stable_key.as_str(),
+                interner.resolve(right.stable_key),
                 right.id,
             ))
         });
@@ -35,13 +36,13 @@ impl CallOutput {
                 left.site,
                 left.reason,
                 left.status,
-                left.stable_key.as_str(),
+                interner.resolve(left.stable_key),
             )
                 .cmp(&(
                     right.site,
                     right.reason,
                     right.status,
-                    right.stable_key.as_str(),
+                    interner.resolve(right.stable_key),
                 ))
         });
         self
@@ -62,8 +63,11 @@ pub(crate) struct CallStore {
 }
 
 impl CallStore {
-    pub(crate) fn from_output(output: CallOutput) -> Result<Self, AnalysisError> {
-        let output = output.normalized();
+    pub(crate) fn from_output(
+        output: CallOutput,
+        interner: &StableKeyInterner,
+    ) -> Result<Self, AnalysisError> {
+        let output = output.normalized(interner);
         let mut site_ids = BTreeSet::new();
         let mut site_owner_by_id = BTreeMap::new();
 
@@ -80,7 +84,8 @@ impl CallStore {
                     provider: "polint.calls",
                     reason: format!(
                         "dangling call site {:?} for target `{}`",
-                        target.site, target.stable_key
+                        target.site,
+                        interner.resolve(target.stable_key)
                     ),
                 });
             }
@@ -92,7 +97,8 @@ impl CallStore {
                     provider: "polint.calls",
                     reason: format!(
                         "dangling call site {:?} for unresolved call `{}`",
-                        unresolved.site, unresolved.stable_key
+                        unresolved.site,
+                        interner.resolve(unresolved.stable_key)
                     ),
                 });
             }
@@ -247,13 +253,15 @@ mod tests {
         CallSyntaxKind, CallTargetFact, CallTargetStatus, UnresolvedCallFact, UnresolvedCallReason,
     };
     use crate::analysis::ids::{CallSiteId, CallTargetId, MirBodyId, MirOpId};
-    use crate::core::{FileId, FunctionId, Language, Span, SymbolId};
+    use crate::core::{
+        AnalysisDb, FileId, FunctionId, Language, Span, StableKeyInterner, SymbolId,
+    };
 
     fn span() -> Span {
         Span::point(FileId(1), 1, 1)
     }
 
-    fn site(id: u64, caller: u64, stable_key: &str) -> CallSiteFact {
+    fn site(interner: &StableKeyInterner, id: u64, caller: u64, stable_key: &str) -> CallSiteFact {
         CallSiteFact {
             in_throw: false,
             id: CallSiteId(id),
@@ -274,11 +282,17 @@ mod tests {
             result: None,
             status: CallTargetStatus::Resolved,
             precision: CallPrecision::Exact,
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key.to_string()),
         }
     }
 
-    fn target(id: u64, site: u64, caller: u64, stable_key: &str) -> CallTargetFact {
+    fn target(
+        interner: &StableKeyInterner,
+        id: u64,
+        site: u64,
+        caller: u64,
+        stable_key: &str,
+    ) -> CallTargetFact {
         CallTargetFact {
             id: CallTargetId(id),
             site: CallSiteId(site),
@@ -291,11 +305,12 @@ mod tests {
             reason: None,
             provenance: CallProvenance::Native,
             precision: CallPrecision::Exact,
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key.to_string()),
         }
     }
 
     fn unresolved(
+        interner: &StableKeyInterner,
         site: u64,
         caller: u64,
         reason: UnresolvedCallReason,
@@ -309,27 +324,48 @@ mod tests {
             algorithm: CallAlgorithm::SyntaxOnly,
             provenance: CallProvenance::MirShape,
             precision: CallPrecision::Unknown,
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key.to_string()),
         }
     }
 
     #[test]
     fn normalized_sorts_call_rows_without_dropping_duplicates() {
+        let db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
         let output = CallOutput {
-            sites: vec![site(2, 1, "b"), site(1, 1, "a"), site(3, 1, "a")],
-            targets: vec![target(2, 2, 1, "target-b"), target(1, 1, 1, "target-a")],
+            sites: vec![
+                site(&interner, 2, 1, "b"),
+                site(&interner, 1, 1, "a"),
+                site(&interner, 3, 1, "a"),
+            ],
+            targets: vec![
+                target(&interner, 2, 2, 1, "target-b"),
+                target(&interner, 1, 1, 1, "target-a"),
+            ],
             unresolved: vec![
-                unresolved(2, 1, UnresolvedCallReason::DynamicProperty, "unresolved-b"),
-                unresolved(1, 1, UnresolvedCallReason::FunctionValue, "unresolved-a"),
+                unresolved(
+                    &interner,
+                    2,
+                    1,
+                    UnresolvedCallReason::DynamicProperty,
+                    "unresolved-b",
+                ),
+                unresolved(
+                    &interner,
+                    1,
+                    1,
+                    UnresolvedCallReason::FunctionValue,
+                    "unresolved-a",
+                ),
             ],
         }
-        .normalized();
+        .normalized(&interner);
 
         assert_eq!(
             output
                 .sites
                 .iter()
-                .map(|fact| fact.stable_key.as_str())
+                .map(|fact| interner.resolve(fact.stable_key).to_string())
                 .collect::<Vec<_>>(),
             vec!["a", "a", "b"]
         );
@@ -337,7 +373,7 @@ mod tests {
             output
                 .targets
                 .iter()
-                .map(|fact| fact.stable_key.as_str())
+                .map(|fact| interner.resolve(fact.stable_key).to_string())
                 .collect::<Vec<_>>(),
             vec!["target-a", "target-b"]
         );
@@ -345,7 +381,7 @@ mod tests {
             output
                 .unresolved
                 .iter()
-                .map(|fact| fact.stable_key.as_str())
+                .map(|fact| interner.resolve(fact.stable_key).to_string())
                 .collect::<Vec<_>>(),
             vec!["unresolved-a", "unresolved-b"]
         );
@@ -353,16 +389,28 @@ mod tests {
 
     #[test]
     fn from_output_builds_deterministic_call_indexes() {
-        let store = CallStore::from_output(CallOutput {
-            sites: vec![site(2, 1, "site-b"), site(1, 1, "site-a")],
-            targets: vec![target(2, 2, 1, "target-b"), target(1, 1, 1, "target-a")],
-            unresolved: vec![unresolved(
-                2,
-                1,
-                UnresolvedCallReason::DynamicProperty,
-                "unresolved-b",
-            )],
-        })
+        let db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
+        let store = CallStore::from_output(
+            CallOutput {
+                sites: vec![
+                    site(&interner, 2, 1, "site-b"),
+                    site(&interner, 1, 1, "site-a"),
+                ],
+                targets: vec![
+                    target(&interner, 2, 2, 1, "target-b"),
+                    target(&interner, 1, 1, 1, "target-a"),
+                ],
+                unresolved: vec![unresolved(
+                    &interner,
+                    2,
+                    1,
+                    UnresolvedCallReason::DynamicProperty,
+                    "unresolved-b",
+                )],
+            },
+            &interner,
+        )
         .expect("call output should be valid");
 
         assert_eq!(store.sites().len(), 2);
@@ -370,36 +418,53 @@ mod tests {
         assert_eq!(store.unresolved().len(), 1);
         assert_eq!(store.sites_by_caller(FunctionId(1)).len(), 2);
         assert_eq!(
-            store.targets_by_site(CallSiteId(1))[0].stable_key,
+            interner
+                .resolve(store.targets_by_site(CallSiteId(1))[0].stable_key)
+                .as_ref(),
             "target-a"
         );
         assert_eq!(store.outgoing_by_function(FunctionId(1)).len(), 2);
         assert_eq!(store.outgoing_by_symbol(SymbolId(101)).len(), 2);
         assert_eq!(
-            store.incoming_by_symbol(SymbolId(21))[0].stable_key,
+            interner
+                .resolve(store.incoming_by_symbol(SymbolId(21))[0].stable_key)
+                .as_ref(),
             "target-a"
         );
         assert_eq!(
-            store.incoming_by_function(FunctionId(11))[0].stable_key,
+            interner
+                .resolve(store.incoming_by_function(FunctionId(11))[0].stable_key)
+                .as_ref(),
             "target-a"
         );
         assert_eq!(
-            store.unresolved_by_reason(UnresolvedCallReason::DynamicProperty)[0].stable_key,
+            interner
+                .resolve(
+                    store.unresolved_by_reason(UnresolvedCallReason::DynamicProperty)[0].stable_key
+                )
+                .as_ref(),
             "unresolved-b"
         );
         assert_eq!(
-            store.unresolved_by_status(CallTargetStatus::Unresolved)[0].stable_key,
+            interner
+                .resolve(store.unresolved_by_status(CallTargetStatus::Unresolved)[0].stable_key)
+                .as_ref(),
             "unresolved-b"
         );
     }
 
     #[test]
     fn from_output_rejects_targets_without_matching_sites() {
-        let error = CallStore::from_output(CallOutput {
-            sites: vec![site(1, 1, "site-a")],
-            targets: vec![target(2, 99, 1, "dangling-target")],
-            unresolved: Vec::new(),
-        })
+        let db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
+        let error = CallStore::from_output(
+            CallOutput {
+                sites: vec![site(&interner, 1, 1, "site-a")],
+                targets: vec![target(&interner, 2, 99, 1, "dangling-target")],
+                unresolved: Vec::new(),
+            },
+            &interner,
+        )
         .unwrap_err();
 
         assert!(
@@ -411,7 +476,10 @@ mod tests {
 
     #[test]
     fn empty_output_builds_empty_store() {
-        let store = CallStore::from_output(CallOutput::empty()).expect("empty output is valid");
+        let db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
+        let store =
+            CallStore::from_output(CallOutput::empty(), &interner).expect("empty output is valid");
 
         assert!(store.sites().is_empty());
         assert!(store.targets().is_empty());

@@ -1289,7 +1289,7 @@ mod tests {
                 status: CallTargetStatus::Resolved,
                 precision: CallPrecision::Exact,
                 in_throw: false,
-                stable_key: "call:caller:callee".to_string(),
+                stable_key: crate::core::StableKeyId(0),
             }
         }
 

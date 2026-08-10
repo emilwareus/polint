@@ -501,7 +501,8 @@ impl GraphBuilder {
             self.intern_node(NodeKind::Scope(scope.id), key);
         }
         for site in db.call_sites() {
-            let key = node_key_from_identity(interner, "callsite", &site.stable_key);
+            let key =
+                node_key_from_identity(interner, "callsite", &interner.resolve(site.stable_key));
             self.intern_node(NodeKind::Callsite(site.id), key);
         }
     }
@@ -533,7 +534,8 @@ impl GraphBuilder {
             .collect();
 
         for site in db.call_sites() {
-            let site_key = node_key_from_identity(interner, "callsite", &site.stable_key);
+            let site_key =
+                node_key_from_identity(interner, "callsite", &interner.resolve(site.stable_key));
             let Some(&callsite_node) = self.node_by_key.get(&site_key) else {
                 continue;
             };
@@ -548,7 +550,7 @@ impl GraphBuilder {
                 ConstraintKind::CallConstraint {
                     callsite: callsite_node,
                 },
-                &site.stable_key,
+                &interner.resolve(site.stable_key),
             );
         }
     }
@@ -793,7 +795,11 @@ impl GraphBuilder {
             let Some(core_callsite) = matching_core_callsite(db, callsite) else {
                 continue;
             };
-            let site_key = node_key_from_identity(interner, "callsite", &core_callsite.stable_key);
+            let site_key = node_key_from_identity(
+                interner,
+                "callsite",
+                &interner.resolve(core_callsite.stable_key),
+            );
             let Some(&callsite_node) = self.node_by_key.get(&site_key) else {
                 continue;
             };
@@ -1626,7 +1632,11 @@ impl<'a> TsDirectBindingNodeContext<'a> {
             .call_sites()
             .iter()
             .filter_map(|site| {
-                let key = node_key_from_identity(interner, "callsite", &site.stable_key);
+                let key = node_key_from_identity(
+                    interner,
+                    "callsite",
+                    &interner.resolve(site.stable_key),
+                );
                 let node = builder.node_by_key.get(&key).copied()?;
                 Some(((site.file, site.span.start_byte, site.span.end_byte), node))
             })
@@ -2189,7 +2199,9 @@ mod tests {
             result: None,
             status: CallTargetStatus::Resolved,
             precision: CallPrecision::SetupAware,
-            stable_key: "call-site:main:run".to_string(),
+            stable_key: db
+                .stable_key_interner()
+                .intern("call-site:main:run".to_string()),
         };
         db.replace_call_facts(CallOutput {
             sites: vec![site],
@@ -2275,7 +2287,9 @@ mod tests {
                 result: None,
                 status: CallTargetStatus::Resolved,
                 precision: CallPrecision::SetupAware,
-                stable_key: format!("ts-callsite:{}", callsite.stable_key),
+                stable_key: db
+                    .stable_key_interner()
+                    .intern(format!("ts-callsite:{}", callsite.stable_key)),
             }],
             targets: Vec::new(),
             unresolved: Vec::new(),
@@ -3054,7 +3068,9 @@ function run() {
                     result: None,
                     status: CallTargetStatus::Resolved,
                     precision: CallPrecision::SetupAware,
-                    stable_key: "go-core-callsite:run".to_string(),
+                    stable_key: db
+                        .stable_key_interner()
+                        .intern("go-core-callsite:run".to_string()),
                 }],
                 targets: Vec::new(),
                 unresolved: Vec::new(),

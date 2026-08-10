@@ -486,7 +486,7 @@ mod scc_closure_provider {
             result: None,
             status: CallTargetStatus::Resolved,
             precision: CallPrecision::Exact,
-            stable_key: format!("site:{id}"),
+            stable_key: crate::core::StableKeyId(id as u32),
         }
     }
 
@@ -503,7 +503,7 @@ mod scc_closure_provider {
             reason: None,
             provenance: CallProvenance::Native,
             precision: CallPrecision::Exact,
-            stable_key: format!("target:{id}"),
+            stable_key: crate::core::StableKeyId(id as u32),
         }
     }
 
