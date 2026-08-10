@@ -940,7 +940,7 @@
   },
   "integration_branch": "static-analysis-architecture-review",
   "never_merge_to_main": true,
-  "integration_head": "67084027",
+  "integration_head": "1a2d6238",
   "m0_gate": {
     "status": "PASS",
     "completed_at": "2026-08-08T11:52:00+02:00",
@@ -1039,7 +1039,9 @@
     "2026-08-10T23:38:15+02:00: T-INTERN-B rest-solver-summaries landed @0c6dc64d; fact_family lock released; T-INTERN-B remains open",
     "2026-08-10T23:38:35+02:00: T-INTERN-B rest-solver-summaries landed @1a2d6238; fact_family lock released; T-INTERN-B remains open",
     "2026-08-10T23:38:46+02:00: integration_head -> 99c8cbcd after rest-solver-summaries land notes",
-    "2026-08-10T23:38:51+02:00: integration_head synced to tip 67084027"
+    "2026-08-10T23:38:51+02:00: integration_head synced to tip 67084027",
+    "2026-08-10T23:39:00+02:00: integration_head -> 751d6e9a",
+    "2026-08-10T23:39:20+02:00: integration_head set to rest-solver-summaries feat 1a2d6238 (T-INTERN-B remains open)"
   ],
   "events": [
     "2026-08-08T15:10:20+02:00: W2.2d+e landed FF @271ccd15; core/mod.rs 8739 LOC; capability+rule extracted; main untouched",
