@@ -34,7 +34,7 @@ pub struct Capabilities {
     pub control_flow: bool,
     /// Reserved for future control-flow graph facts. Branch obligations are available through [`Capabilities::branch_obligations`].
     pub cfg: bool,
-    /// Reserved for future call graph facts. Direct syntactic calls are available on [`FunctionFact::calls`].
+    /// Reserved for future call graph facts. Direct syntactic calls are available on function facts.
     pub call_graph: bool,
     /// Preview policy-level data-flow queries. Bounded source/sink/barrier checks are provider-backed.
     pub dataflow: bool,
@@ -44,7 +44,7 @@ pub struct Capabilities {
     pub branch_obligations: bool,
     /// Reserved for future external coverage imports.
     pub coverage_facts: bool,
-    /// Needs aggregate-like Go test metrics currently stored on [`TestFact`].
+    /// Needs aggregate-like Go test metrics currently stored on Go test facts.
     pub test_suite_metrics: bool,
     /// Needs derived source-file size and aggregate function metrics.
     pub file_metrics: bool,
