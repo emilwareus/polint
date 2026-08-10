@@ -827,18 +827,20 @@
         "T-INTERN-A"
       ],
       "created_at": "2026-08-10T10:04:15+02:00",
-      "branch": "swarm/T-INTERN-B-calls / swarm/T-INTERN-B-cfg",
-      "dispatched_at": "2026-08-10T15:00:54+02:00",
+      "branch": "swarm/T-INTERN-B-rest-semantic / swarm/T-INTERN-B-rest-frontends",
+      "dispatched_at": "2026-08-10T15:49:42+02:00",
       "attempts": 1,
-      "slice": "calls",
+      "slice": "rest-semantic+frontends",
       "fact_family_locks": [
-        "calls"
+        "semantic",
+        "frontends"
       ],
-      "note": "CFG MERGED@38d30482; calls still in flight \u2014 rebase onto tip after DONE",
+      "note": "calls MERGED@a465e5c2; dispatching rest semantic + go/ts frontends",
       "slices_done": [
         "symbols",
         "mir",
-        "cfg"
+        "cfg",
+        "calls"
       ],
       "updated_at": "2026-08-10T15:29:26+02:00"
     },
@@ -874,9 +876,13 @@
   "locks": {
     "golden": null,
     "fact_family": {},
-    "fact_family:calls": {
+    "fact_family:semantic": {
       "holder": "T-INTERN-B",
-      "at": "2026-08-10T15:00:54+02:00"
+      "at": "2026-08-10T15:49:42+02:00"
+    },
+    "fact_family:frontends": {
+      "holder": "T-INTERN-B",
+      "at": "2026-08-10T15:49:42+02:00"
     }
   },
   "milestone": "PRE-SHIP",
@@ -929,7 +935,7 @@
   },
   "integration_branch": "static-analysis-architecture-review",
   "never_merge_to_main": true,
-  "integration_head": "38d30482",
+  "integration_head": "59b89182",
   "m0_gate": {
     "status": "PASS",
     "completed_at": "2026-08-08T11:52:00+02:00",
@@ -1056,6 +1062,11 @@
       "at": "2026-08-10T15:29:26+02:00",
       "event": "T-INTERN-B cfg MERGED",
       "commit": "38d30482"
+    },
+    {
+      "at": "2026-08-10T15:49:42+02:00",
+      "event": "T-INTERN-B calls MERGED",
+      "commit": "a465e5c2"
     }
   ],
   "ready": [],
