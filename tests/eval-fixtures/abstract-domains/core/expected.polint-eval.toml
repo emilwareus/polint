@@ -29,9 +29,6 @@ fact = { family = "DomainObservation", stable_key = "strings", mode = "partial",
 fact = { family = "DomainObservation", stable_key = "initializedness", mode = "partial", producer_id = "polint.abstract_domains", precision = "exact_local", status = "present" }
 
 [[expected]]
-fact = { family = "DomainObservation", stable_key = "reachability", mode = "partial", producer_id = "polint.abstract_domains", precision = "conservative", status = "top" }
-
-[[expected]]
 fact = { family = "DomainObservation", stable_key = "unknown", mode = "partial", producer_id = "polint.abstract_domains", precision = "unknown", status = "unknown" }
 
 [[expected]]

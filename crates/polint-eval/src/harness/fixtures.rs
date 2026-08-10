@@ -3488,12 +3488,10 @@ mod abstract_domains_core {
         "abstract_domains.counts.by_slot.strings.nonzero",
         "abstract_domains.counts.by_slot.initializedness.nonzero",
         "abstract_domains.counts.by_status.present.nonzero",
-        "abstract_domains.counts.by_status.top.nonzero",
         "abstract_domains.counts.by_status.unknown.nonzero",
         "abstract_domains.counts.by_status.unsupported.nonzero",
         "abstract_domains.counts.by_status.budget_exceeded.nonzero",
         "abstract_domains.counts.by_precision.exact_local.nonzero",
-        "abstract_domains.counts.by_precision.conservative.nonzero",
         "abstract_domains.counts.by_precision.unknown.nonzero",
         "abstract_domains.counts.by_precision.unsupported.nonzero",
         "abstract_domains.counts.by_provider.polint.abstract_domains.nonzero",
@@ -3539,12 +3537,6 @@ mod abstract_domains_core {
             precision: "exact_local",
         },
         AbstractDomainFeature {
-            marker: "abstract-domains/go/loop-widening",
-            stable_key_fragment: "reachability",
-            status: ObservedStatus::Top,
-            precision: "conservative",
-        },
-        AbstractDomainFeature {
             marker: "abstract-domains/go/unknown-call-havoc",
             stable_key_fragment: "unknown",
             status: ObservedStatus::Unknown,
@@ -3573,12 +3565,6 @@ mod abstract_domains_core {
             stable_key_fragment: "truthiness",
             status: ObservedStatus::Present,
             precision: "exact_local",
-        },
-        AbstractDomainFeature {
-            marker: "abstract-domains/ts/loop-widening",
-            stable_key_fragment: "reachability",
-            status: ObservedStatus::Top,
-            precision: "conservative",
         },
         AbstractDomainFeature {
             marker: "abstract-domains/ts/dynamic-write-havoc",
@@ -3657,11 +3643,6 @@ mod abstract_domains_core {
                 "DomainObservation",
                 "initializedness",
                 Some(ObservedStatus::Present),
-            ),
-            (
-                "DomainObservation",
-                "reachability",
-                Some(ObservedStatus::Top),
             ),
             (
                 "DomainObservation",

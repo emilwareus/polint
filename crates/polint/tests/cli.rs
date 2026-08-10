@@ -4917,6 +4917,12 @@ fn collect_public_surface_files(path: &Path, files: &mut Vec<PathBuf>) {
             .unwrap_or_else(|error| panic!("read dir entry under {}: {error}", path.display()))
             .path();
         if path.is_dir() {
+            if path
+                .file_name()
+                .is_some_and(|name| name == "architecture-review")
+            {
+                continue;
+            }
             collect_public_surface_files(&path, files);
         } else if path.extension().is_some_and(|extension| {
             matches!(

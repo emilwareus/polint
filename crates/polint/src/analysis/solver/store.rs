@@ -54,7 +54,7 @@ impl SolverOutput {
 /// Typed solver store with the deterministic read index consumers use: derived
 /// edges indexed by their producing `ConstraintKind` tag (the provenance's
 /// `constraint_kind` snake_case label). Built after [`SolverOutput::normalized`].
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub(crate) struct SolverStore {
     derived_edges: Vec<DerivedEdgeFact>,
     budget_status: BudgetStatus,
@@ -62,6 +62,17 @@ pub(crate) struct SolverStore {
     /// Derived edges indexed by their producing constraint-kind tag (the owned
     /// `provenance.constraint_kind` snake_case label).
     edges_by_constraint_kind: BTreeMap<String, Vec<usize>>,
+}
+
+impl Default for SolverStore {
+    fn default() -> Self {
+        Self {
+            derived_edges: Vec::new(),
+            budget_status: BudgetStatus::NotRun,
+            budget_reasons: BTreeSet::new(),
+            edges_by_constraint_kind: BTreeMap::new(),
+        }
+    }
 }
 
 impl SolverStore {
