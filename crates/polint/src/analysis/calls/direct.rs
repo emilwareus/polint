@@ -18,6 +18,8 @@ pub(crate) fn resolve_direct_call_targets(
     db: &AnalysisDb,
     sites: &[CallSiteFact],
 ) -> Vec<CallTargetFact> {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let index = DirectIndex::new(db);
     let mut rows = Vec::new();
 
@@ -59,7 +61,7 @@ pub(crate) fn resolve_direct_call_targets(
                     reason: None,
                     provenance: CallProvenance::MirShape,
                     precision: CallPrecision::Heuristic,
-                    stable_key: lexical_target_stable_key(site, target_function),
+                    stable_key: lexical_target_stable_key(interner, site, target_function),
                 });
             }
             continue;
@@ -105,7 +107,7 @@ pub(crate) fn resolve_direct_call_targets(
             reason: None,
             provenance: CallProvenance::NativeDirect,
             precision: CallPrecision::SetupAware,
-            stable_key: target_stable_key(site, algorithm, symbol),
+            stable_key: target_stable_key(interner, site, algorithm, symbol),
         });
     }
 
@@ -415,8 +417,14 @@ fn spans_overlap_or_touch(left: &Span, right: &Span) -> bool {
         && right.start_byte <= left.end_byte
 }
 
-fn target_stable_key(site: &CallSiteFact, algorithm: CallAlgorithm, symbol: &SymbolFact) -> String {
+fn target_stable_key(
+    interner: &crate::core::StableKeyInterner,
+    site: &CallSiteFact,
+    algorithm: CallAlgorithm,
+    symbol: &SymbolFact,
+) -> String {
     semantic_stable_key(
+        interner,
         FactFamily::CallTarget,
         &[
             ("site", site.stable_key.clone()),
@@ -430,8 +438,13 @@ fn target_stable_key(site: &CallSiteFact, algorithm: CallAlgorithm, symbol: &Sym
     .into_string()
 }
 
-fn lexical_target_stable_key(site: &CallSiteFact, function: &FunctionFact) -> String {
+fn lexical_target_stable_key(
+    interner: &crate::core::StableKeyInterner,
+    site: &CallSiteFact,
+    function: &FunctionFact,
+) -> String {
     semantic_stable_key(
+        interner,
         FactFamily::CallTarget,
         &[
             ("site", site.stable_key.clone()),

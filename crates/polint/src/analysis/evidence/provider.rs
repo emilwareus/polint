@@ -20,7 +20,7 @@ use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
     CacheStats, Digest, DigestKind, InputComponent, InputSnapshot,
 };
-use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
+use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
 use crate::core::AnalysisDb;
 use crate::diagnostics::Diagnostic;
 
@@ -85,13 +85,15 @@ pub(crate) fn derive_evidence_with_cache_stats(
 }
 
 fn derive_data_flow_evidence(db: &AnalysisDb, output: &mut EvidenceOutput) {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let mut node_map = std::collections::BTreeMap::new();
     for node in db.data_flow_nodes() {
         let evidence_id = EvidenceNodeId(output.nodes.len() as u64);
         node_map.insert(node.id, evidence_id);
         output
             .nodes
-            .push(evidence_node_from_data_flow(node, evidence_id));
+            .push(evidence_node_from_data_flow(interner, node, evidence_id));
     }
 
     for edge in db.data_flow_edges() {
@@ -99,6 +101,7 @@ fn derive_data_flow_evidence(db: &AnalysisDb, output: &mut EvidenceOutput) {
             continue;
         };
         output.edges.push(evidence_edge_from_data_flow(
+            interner,
             edge,
             EvidenceEdgeId(output.edges.len() as u64),
             *from,
@@ -107,7 +110,11 @@ fn derive_data_flow_evidence(db: &AnalysisDb, output: &mut EvidenceOutput) {
     }
 }
 
-fn evidence_node_from_data_flow(node: &DataFlowNodeFact, id: EvidenceNodeId) -> EvidenceNodeFact {
+fn evidence_node_from_data_flow(
+    interner: &crate::core::StableKeyInterner,
+    node: &DataFlowNodeFact,
+    id: EvidenceNodeId,
+) -> EvidenceNodeFact {
     EvidenceNodeFact {
         id,
         kind: data_flow_node_kind(node),
@@ -129,7 +136,8 @@ fn evidence_node_from_data_flow(node: &DataFlowNodeFact, id: EvidenceNodeId) -> 
         confidence: EvidenceConfidence::High,
         compact_label: Some(format!("{:?}", node.kind)),
         source_fact_stable_keys: vec![node.stable_key.clone()],
-        stable_key: stable_key_from_parts(
+        stable_key: stable_key_text_from_parts(
+            interner,
             FactFamily::EvidenceNode,
             &[("data_flow_node", node.stable_key.clone())],
         ),
@@ -137,6 +145,7 @@ fn evidence_node_from_data_flow(node: &DataFlowNodeFact, id: EvidenceNodeId) -> 
 }
 
 fn evidence_edge_from_data_flow(
+    interner: &crate::core::StableKeyInterner,
     edge: &DataFlowEdgeFact,
     id: EvidenceEdgeId,
     from: EvidenceNodeId,
@@ -161,7 +170,8 @@ fn evidence_edge_from_data_flow(
         source_fact_stable_keys: std::iter::once(edge.stable_key.clone())
             .chain(edge.input_stable_keys.iter().cloned())
             .collect(),
-        stable_key: stable_key_from_parts(
+        stable_key: stable_key_text_from_parts(
+            interner,
             FactFamily::EvidenceEdge,
             &[("data_flow_edge", edge.stable_key.clone())],
         ),
@@ -169,6 +179,8 @@ fn evidence_edge_from_data_flow(
 }
 
 fn derive_control_dependence_evidence(db: &AnalysisDb, output: &mut EvidenceOutput) {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     for dependence in db.cfg_control_dependence() {
         let Some(controlling_edge) = db
             .cfg_edges()
@@ -220,7 +232,8 @@ fn derive_control_dependence_evidence(db: &AnalysisDb, output: &mut EvidenceOutp
                 dependence.stable_key.clone(),
                 controlling_edge.stable_key.clone(),
             ],
-            stable_key: stable_key_from_parts(
+            stable_key: stable_key_text_from_parts(
+                interner,
                 FactFamily::EvidenceNode,
                 &[
                     ("control_dependence", dependence.stable_key.clone()),
@@ -250,7 +263,8 @@ fn derive_control_dependence_evidence(db: &AnalysisDb, output: &mut EvidenceOutp
             confidence: EvidenceConfidence::High,
             compact_label: Some("controlled_block".to_string()),
             source_fact_stable_keys: vec![dependence.stable_key.clone()],
-            stable_key: stable_key_from_parts(
+            stable_key: stable_key_text_from_parts(
+                interner,
                 FactFamily::EvidenceNode,
                 &[
                     ("control_dependence", dependence.stable_key.clone()),
@@ -277,7 +291,8 @@ fn derive_control_dependence_evidence(db: &AnalysisDb, output: &mut EvidenceOutp
                 dependence.stable_key.clone(),
                 controlling_edge.stable_key.clone(),
             ],
-            stable_key: stable_key_from_parts(
+            stable_key: stable_key_text_from_parts(
+                interner,
                 FactFamily::EvidenceEdge,
                 &[("control_dependence", dependence.stable_key.clone())],
             ),

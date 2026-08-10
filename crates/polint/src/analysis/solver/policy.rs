@@ -80,7 +80,11 @@ pub(crate) trait SolverPolicy {
 
     /// Drive the policy to its single fixpoint over the closed snapshot, bounded
     /// by `budget`. Returns the derived outcome + budget status.
-    fn solve(&self, budget: &SolverBudget) -> PolicyOutcome;
+    fn solve(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        budget: &SolverBudget,
+    ) -> PolicyOutcome;
 }
 
 /// The points-to policy folds in the points-to sub-domain by
@@ -101,11 +105,15 @@ impl SolverPolicy for PointsToPolicy {
         "points_to"
     }
 
-    fn solve(&self, budget: &SolverBudget) -> PolicyOutcome {
+    fn solve(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        budget: &SolverBudget,
+    ) -> PolicyOutcome {
         // Composition, not rewrite (D-03): invoke the existing engine in place via
         // the projected points-to budget. The result is byte-identical to calling
         // `solve_points_to` directly.
-        let result = solve_points_to(&self.constraints, budget.points_to_budget());
+        let result = solve_points_to(interner, &self.constraints, budget.points_to_budget());
         let budget_status = BudgetStatus::from_points_to(result.budget_status);
         let budget_reasons = result.budget_reasons.clone();
         PolicyOutcome {
@@ -140,10 +148,14 @@ impl SolverPolicy for GoRtaPolicy {
         "go_rta"
     }
 
-    fn solve(&self, budget: &SolverBudget) -> PolicyOutcome {
+    fn solve(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        budget: &SolverBudget,
+    ) -> PolicyOutcome {
         // Run the RTA fixpoint over the closed snapshot (composition over the engine
         // worklist, mirroring PointsToPolicy's fold). The output is already normalized.
-        let output = solve_go_rta(&self.inputs, budget);
+        let output = solve_go_rta(interner, &self.inputs, budget);
         PolicyOutcome {
             points_to: None,
             derived_edges: output.derived_edges,
@@ -171,8 +183,12 @@ impl SolverPolicy for TsPointsToPolicy {
         "ts_points_to"
     }
 
-    fn solve(&self, budget: &SolverBudget) -> PolicyOutcome {
-        let output = solve_ts_points_to(&self.inputs, budget);
+    fn solve(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        budget: &SolverBudget,
+    ) -> PolicyOutcome {
+        let output = solve_ts_points_to(interner, &self.inputs, budget);
         PolicyOutcome {
             points_to: None,
             derived_edges: output.derived_edges,
@@ -198,7 +214,7 @@ mod ts_points_to {
     use crate::analysis::solver::budget::{BudgetStatus, SolverBudget};
     use crate::analysis::solver::facts::DerivedEdgeFact;
     use crate::analysis::solver::provenance::{ContributingFact, DerivedEdgeProvenance};
-    use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
+    use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
     use crate::core::AnalysisDb;
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -294,11 +310,12 @@ mod ts_points_to {
     }
 
     pub(crate) fn solve_ts_points_to(
+        interner: &crate::core::StableKeyInterner,
         inputs: &TsPointsToInputs,
         budget: &SolverBudget,
     ) -> TsPointsToSolveResult {
-        let constraints = project_constraints(inputs);
-        let points_to = solve_points_to(&constraints, budget.points_to_budget());
+        let constraints = project_constraints(interner, inputs);
+        let points_to = solve_points_to(interner, &constraints, budget.points_to_budget());
         let sets = points_to
             .sets
             .iter()
@@ -337,7 +354,8 @@ mod ts_points_to {
                     },
                     0,
                 );
-                let stable_key = stable_key_from_parts(
+                let stable_key = stable_key_text_from_parts(
+                    interner,
                     FactFamily::SolverDerivedEdge,
                     &[
                         ("source", callsite.caller_node.0.to_string()),
@@ -363,7 +381,10 @@ mod ts_points_to {
         }
     }
 
-    fn project_constraints(inputs: &TsPointsToInputs) -> Vec<PointsToConstraintFact> {
+    fn project_constraints(
+        interner: &crate::core::StableKeyInterner,
+        inputs: &TsPointsToInputs,
+    ) -> Vec<PointsToConstraintFact> {
         let mut kinds = BTreeSet::new();
         let callsite_by_source_key = inputs
             .constraints
@@ -437,7 +458,8 @@ mod ts_points_to {
             .enumerate()
             .map(|(index, kind)| PointsToConstraintFact {
                 id: PointsToConstraintId(index as u64),
-                stable_key: stable_key_from_parts(
+                stable_key: stable_key_text_from_parts(
+                    interner,
                     FactFamily::PointsToConstraint,
                     &[("kind", format!("{kind:?}"))],
                 ),
@@ -473,7 +495,10 @@ mod tests {
     fn ts_policy_id_is_stable() {
         let budget = SolverBudget::default();
         let ts = TsPointsToPolicy::new(TsPointsToInputs::default());
-        let ts_outcome = ts.solve(&budget);
+        let ts_outcome = ts.solve(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &budget,
+        );
         assert_eq!(ts.id(), "ts_points_to");
         assert!(ts_outcome.points_to.is_none());
         assert!(ts_outcome.derived_edges.is_empty());
@@ -538,7 +563,10 @@ mod tests {
 
         let policy = GoRtaPolicy::new(inputs);
         assert_eq!(policy.id(), "go_rta");
-        let outcome = policy.solve(&SolverBudget::default());
+        let outcome = policy.solve(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &SolverBudget::default(),
+        );
         assert!(outcome.points_to.is_none());
         assert!(
             !outcome.derived_edges.is_empty(),

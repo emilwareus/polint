@@ -13,12 +13,14 @@ use crate::analysis::mir::op::{
     AssignMode, ConservativeAction, MirOperation, MirOperationKind, MirValue,
 };
 use crate::analysis::places::{PlaceFact, PlaceProjection};
-use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
+use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
 use crate::core::{AnalysisDb, FunctionId, Language};
 
 pub(crate) fn derive_local_value_flow(db: &AnalysisDb, output: &mut DataFlowOutput) {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let mut builder = LocalFlowBuilder::new(db, output);
-    builder.derive();
+    builder.derive(interner);
 }
 
 struct LocalFlowBuilder<'a, 'b> {
@@ -52,11 +54,12 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
         }
     }
 
-    fn derive(&mut self) {
+    fn derive(&mut self, interner: &crate::core::StableKeyInterner) {
         for operation in self.db.mir_operations() {
             match &operation.kind {
                 MirOperationKind::Bind { place, value } => {
                     self.edge_from_value(
+                        interner,
                         operation,
                         value,
                         *place,
@@ -75,6 +78,7 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
                         }
                     };
                     self.edge_from_value(
+                        interner,
                         operation,
                         value,
                         *place,
@@ -84,6 +88,7 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
                 }
                 MirOperationKind::Write { place, value } => {
                     self.edge_from_value(
+                        interner,
                         operation,
                         value,
                         *place,
@@ -94,48 +99,56 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
                 MirOperationKind::Read { place } => {
                     if let Some(from) = self.node_for_place(*place) {
                         let to = self.operation_node(
+                            interner,
                             operation,
                             DataFlowNodeKind::Value,
                             format!("read:{}", operation.stable_key),
                         );
-                        self.push_edge(EdgeDraft {
-                            operation,
-                            from,
-                            to,
-                            kind: DataFlowEdgeKind::LocalRead,
-                            status: DataFlowStatus::Present,
-                            precision: DataFlowPrecision::Syntax,
-                            validation: DataFlowValidation::Native,
-                            provenance: DataFlowProvenance::Native,
-                            budget: None,
-                            evidence: vec!["read".to_string()],
-                            input_stable_keys: vec![
-                                self.place_key(*place),
-                                operation.stable_key.clone(),
-                            ],
-                        });
+                        self.push_edge(
+                            interner,
+                            EdgeDraft {
+                                operation,
+                                from,
+                                to,
+                                kind: DataFlowEdgeKind::LocalRead,
+                                status: DataFlowStatus::Present,
+                                precision: DataFlowPrecision::Syntax,
+                                validation: DataFlowValidation::Native,
+                                provenance: DataFlowProvenance::Native,
+                                budget: None,
+                                evidence: vec!["read".to_string()],
+                                input_stable_keys: vec![
+                                    self.place_key(*place),
+                                    operation.stable_key.clone(),
+                                ],
+                            },
+                        );
                     }
                 }
                 MirOperationKind::Return { value: Some(value) } => {
-                    if let Some(from) = self.node_for_value(operation, value) {
+                    if let Some(from) = self.node_for_value(interner, operation, value) {
                         let to = self.operation_node(
+                            interner,
                             operation,
                             DataFlowNodeKind::SummaryOutput,
                             format!("return:{}", operation.stable_key),
                         );
-                        self.push_edge(EdgeDraft {
-                            operation,
-                            from,
-                            to,
-                            kind: DataFlowEdgeKind::ReturnValue,
-                            status: DataFlowStatus::Present,
-                            precision: DataFlowPrecision::Syntax,
-                            validation: DataFlowValidation::Native,
-                            provenance: DataFlowProvenance::Native,
-                            budget: None,
-                            evidence: vec!["return_value".to_string()],
-                            input_stable_keys: vec![operation.stable_key.clone()],
-                        });
+                        self.push_edge(
+                            interner,
+                            EdgeDraft {
+                                operation,
+                                from,
+                                to,
+                                kind: DataFlowEdgeKind::ReturnValue,
+                                status: DataFlowStatus::Present,
+                                precision: DataFlowPrecision::Syntax,
+                                validation: DataFlowValidation::Native,
+                                provenance: DataFlowProvenance::Native,
+                                budget: None,
+                                evidence: vec!["return_value".to_string()],
+                                input_stable_keys: vec![operation.stable_key.clone()],
+                            },
+                        );
                     }
                 }
                 MirOperationKind::Call {
@@ -148,28 +161,31 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
                         if let (Some(from), Some(to)) =
                             (self.node_for_place(*argument), return_node)
                         {
-                            self.push_edge(EdgeDraft {
-                                operation,
-                                from,
-                                to,
-                                kind: DataFlowEdgeKind::CallArgumentToReturn,
-                                status: DataFlowStatus::Present,
-                                precision: DataFlowPrecision::Conservative,
-                                validation: DataFlowValidation::ReferentiallyValidated,
-                                provenance: DataFlowProvenance::Native,
-                                budget: None,
-                                evidence: vec![format!("local_call_argument_index={index}")],
-                                input_stable_keys: vec![
-                                    self.place_key(*argument),
-                                    self.place_key(*return_place),
-                                    operation.stable_key.clone(),
-                                ],
-                            });
+                            self.push_edge(
+                                interner,
+                                EdgeDraft {
+                                    operation,
+                                    from,
+                                    to,
+                                    kind: DataFlowEdgeKind::CallArgumentToReturn,
+                                    status: DataFlowStatus::Present,
+                                    precision: DataFlowPrecision::Conservative,
+                                    validation: DataFlowValidation::ReferentiallyValidated,
+                                    provenance: DataFlowProvenance::Native,
+                                    budget: None,
+                                    evidence: vec![format!("local_call_argument_index={index}")],
+                                    input_stable_keys: vec![
+                                        self.place_key(*argument),
+                                        self.place_key(*return_place),
+                                        operation.stable_key.clone(),
+                                    ],
+                                },
+                            );
                         }
                     }
                 }
                 MirOperationKind::Unsupported { unsupported } => {
-                    self.emit_unsupported_operation(operation, *unsupported);
+                    self.emit_unsupported_operation(interner, operation, *unsupported);
                 }
                 MirOperationKind::StorageLive { .. }
                 | MirOperationKind::Branch { .. }
@@ -180,6 +196,7 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
 
     fn edge_from_value(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         operation: &MirOperation,
         value: &MirValue,
         target: PlaceId,
@@ -201,34 +218,41 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
             } else {
                 DataFlowStatus::Present
             };
-        let from = self.node_for_value(operation, value).unwrap_or_else(|| {
-            self.operation_node(
+        let from = self
+            .node_for_value(interner, operation, value)
+            .unwrap_or_else(|| {
+                self.operation_node(
+                    interner,
+                    operation,
+                    DataFlowNodeKind::Synthetic,
+                    format!("unknown-source:{}", operation.stable_key),
+                )
+            });
+        self.push_edge(
+            interner,
+            EdgeDraft {
                 operation,
-                DataFlowNodeKind::Synthetic,
-                format!("unknown-source:{}", operation.stable_key),
-            )
-        });
-        self.push_edge(EdgeDraft {
-            operation,
-            from,
-            to,
-            kind,
-            status,
-            precision: if status == DataFlowStatus::Present {
-                DataFlowPrecision::Syntax
-            } else {
-                DataFlowPrecision::Unknown
+                from,
+                to,
+                kind,
+                status,
+                precision: if status == DataFlowStatus::Present {
+                    DataFlowPrecision::Syntax
+                } else {
+                    DataFlowPrecision::Unknown
+                },
+                validation: DataFlowValidation::Native,
+                provenance: DataFlowProvenance::Native,
+                budget: None,
+                evidence: vec![evidence.to_string(), value_evidence(value)],
+                input_stable_keys: vec![self.place_key(target), operation.stable_key.clone()],
             },
-            validation: DataFlowValidation::Native,
-            provenance: DataFlowProvenance::Native,
-            budget: None,
-            evidence: vec![evidence.to_string(), value_evidence(value)],
-            input_stable_keys: vec![self.place_key(target), operation.stable_key.clone()],
-        });
+        );
     }
 
     fn emit_unsupported_operation(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         operation: &MirOperation,
         unsupported: crate::analysis::ids::UnsupportedId,
     ) {
@@ -248,30 +272,34 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
             let Some(node) = self.node_for_place(*place) else {
                 continue;
             };
-            self.push_edge(EdgeDraft {
-                operation,
-                from: node,
-                to: node,
-                kind: match action {
-                    ConservativeAction::HavocAffectedPlaces | ConservativeAction::StopLowering => {
-                        DataFlowEdgeKind::HavocFlow
-                    }
-                    ConservativeAction::SkipOperation
-                    | ConservativeAction::PreserveWithUnknownValue => DataFlowEdgeKind::UnknownFlow,
+            self.push_edge(
+                interner,
+                EdgeDraft {
+                    operation,
+                    from: node,
+                    to: node,
+                    kind: match action {
+                        ConservativeAction::HavocAffectedPlaces
+                        | ConservativeAction::StopLowering => DataFlowEdgeKind::HavocFlow,
+                        ConservativeAction::SkipOperation
+                        | ConservativeAction::PreserveWithUnknownValue => {
+                            DataFlowEdgeKind::UnknownFlow
+                        }
+                    },
+                    status: DataFlowStatus::Unsupported,
+                    precision: DataFlowPrecision::Unknown,
+                    validation: DataFlowValidation::Native,
+                    provenance: DataFlowProvenance::Native,
+                    budget: None,
+                    evidence: vec![
+                        "unsupported_semantic".to_string(),
+                        unsupported_fact
+                            .map(|fact| fact.construct.clone())
+                            .unwrap_or_else(|| "missing_unsupported_fact".to_string()),
+                    ],
+                    input_stable_keys: vec![self.place_key(*place), operation.stable_key.clone()],
                 },
-                status: DataFlowStatus::Unsupported,
-                precision: DataFlowPrecision::Unknown,
-                validation: DataFlowValidation::Native,
-                provenance: DataFlowProvenance::Native,
-                budget: None,
-                evidence: vec![
-                    "unsupported_semantic".to_string(),
-                    unsupported_fact
-                        .map(|fact| fact.construct.clone())
-                        .unwrap_or_else(|| "missing_unsupported_fact".to_string()),
-                ],
-                input_stable_keys: vec![self.place_key(*place), operation.stable_key.clone()],
-            });
+            );
         }
     }
 
@@ -332,37 +360,44 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
 
     fn node_for_value(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         operation: &MirOperation,
         value: &MirValue,
     ) -> Option<DataFlowNodeId> {
         match value {
             MirValue::Place(place) => self.node_for_place(*place),
             MirValue::CallReturn(site) => Some(self.operation_node(
+                interner,
                 operation,
                 DataFlowNodeKind::CallReturn,
                 format!("call-return:{}", site.0),
             )),
             MirValue::Temporary(value_id) => Some(self.operation_node(
+                interner,
                 operation,
                 DataFlowNodeKind::Value,
                 format!("temporary:{}", value_id.0),
             )),
             MirValue::Unknown { evidence } => Some(self.operation_node(
+                interner,
                 operation,
                 DataFlowNodeKind::Synthetic,
                 format!("unknown:{evidence}:{}", operation.stable_key),
             )),
             MirValue::BinOp { op, .. } => Some(self.operation_node(
+                interner,
                 operation,
                 DataFlowNodeKind::Value,
                 format!("binop:{op}:{}", operation.stable_key),
             )),
             MirValue::Aggregate { kind, .. } => Some(self.operation_node(
+                interner,
                 operation,
                 DataFlowNodeKind::Value,
                 format!("aggregate:{kind:?}:{}", operation.stable_key),
             )),
             MirValue::Closure { body, .. } => Some(self.operation_node(
+                interner,
                 operation,
                 DataFlowNodeKind::Value,
                 format!("closure:{}:{}", body.0, operation.stable_key),
@@ -377,11 +412,13 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
 
     fn operation_node(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         operation: &MirOperation,
         kind: DataFlowNodeKind,
         suffix: String,
     ) -> DataFlowNodeId {
-        let stable_key = stable_key_from_parts(
+        let stable_key = stable_key_text_from_parts(
+            interner,
             FactFamily::DataFlowNode,
             &[
                 ("operation", operation.stable_key.clone()),
@@ -420,7 +457,7 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
         id
     }
 
-    fn push_edge(&mut self, draft: EdgeDraft<'_>) {
+    fn push_edge(&mut self, interner: &crate::core::StableKeyInterner, draft: EdgeDraft<'_>) {
         let call_site = match &draft.operation.kind {
             MirOperationKind::Call { site, .. }
                 if draft.kind == DataFlowEdgeKind::CallArgumentToReturn =>
@@ -429,7 +466,8 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
             }
             _ => None,
         };
-        let stable_key = stable_key_from_parts(
+        let stable_key = stable_key_text_from_parts(
+            interner,
             FactFamily::DataFlowEdge,
             &[
                 ("kind", format!("{:?}", draft.kind)),
@@ -520,13 +558,15 @@ struct EdgeDraft<'a> {
 }
 
 pub(crate) fn budget_fact(
+    interner: &crate::core::StableKeyInterner,
     reason: DataFlowBudgetReason,
     limit: u64,
     observed: u64,
     context: &str,
     output: &mut DataFlowOutput,
 ) -> DataFlowBudgetId {
-    let stable_key = stable_key_from_parts(
+    let stable_key = stable_key_text_from_parts(
+        interner,
         FactFamily::DataFlowBudget,
         &[
             ("reason", format!("{reason:?}")),
@@ -575,6 +615,8 @@ pub(crate) fn node_from_place(
     place: &PlaceFact,
     db: &AnalysisDb,
 ) -> DataFlowNodeFact {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     DataFlowNodeFact {
         id: next_data_flow_node_id(&output.nodes),
         kind: DataFlowNodeKind::Place,
@@ -596,13 +638,15 @@ pub(crate) fn node_from_place(
                 place.id.0,
             ))
             .map(|metadata| {
-                stable_key_from_parts(
+                stable_key_text_from_parts(
+                    interner,
                     FactFamily::DataFlowNode,
                     &[("place", metadata.stable_key.clone())],
                 )
             })
             .unwrap_or_else(|| {
-                stable_key_from_parts(
+                stable_key_text_from_parts(
+                    interner,
                     FactFamily::DataFlowNode,
                     &[("place_id", place.id.0.to_string())],
                 )

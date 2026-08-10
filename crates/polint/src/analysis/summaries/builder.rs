@@ -16,7 +16,7 @@ use crate::analysis::ids::{MirBodyId, PlaceId, SummaryEventId, SummaryId};
 use crate::analysis::mir::body::MirBody;
 use crate::analysis::mir::op::{AssignMode, MirOperationKind, MirValue};
 use crate::analysis::places::PlaceRoot;
-use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
+use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
 use crate::core::{AnalysisDb, FunctionId};
 
 /// Computes direct (local, single-function) summaries from AnalysisDb facts.
@@ -26,7 +26,10 @@ use crate::core::{AnalysisDb, FunctionId};
 pub(crate) struct DirectSummaryBuilder;
 
 impl DirectSummaryBuilder {
-    pub(crate) fn build(db: &AnalysisDb) -> SummaryOutput {
+    pub(crate) fn build(
+        interner: &crate::core::StableKeyInterner,
+        db: &AnalysisDb,
+    ) -> SummaryOutput {
         let bodies = db.mir_bodies();
         if bodies.is_empty() {
             return SummaryOutput::empty();
@@ -155,7 +158,8 @@ impl DirectSummaryBuilder {
                 provenance: control_provenance,
                 payload_digest: control_digest,
                 tito_flows: Vec::new(),
-                stable_key: stable_key_from_parts(
+                stable_key: stable_key_text_from_parts(
+                    interner,
                     FactFamily::SummaryControl,
                     &[
                         ("callable", callable_key.clone()),
@@ -174,7 +178,8 @@ impl DirectSummaryBuilder {
                     reason: "unresolved_calls".to_string(),
                     status: SummaryStatus::Unknown,
                     precision: SummaryPrecision::UnknownTop,
-                    stable_key: stable_key_from_parts(
+                    stable_key: stable_key_text_from_parts(
+                        interner,
                         FactFamily::SummaryEvent,
                         &[
                             ("callable", callable_key.clone()),
@@ -203,7 +208,8 @@ impl DirectSummaryBuilder {
                 provenance: call_provenance,
                 payload_digest: call_digest,
                 tito_flows: Vec::new(),
-                stable_key: stable_key_from_parts(
+                stable_key: stable_key_text_from_parts(
+                    interner,
                     FactFamily::SummaryCall,
                     &[
                         ("callable", callable_key.clone()),
@@ -222,7 +228,8 @@ impl DirectSummaryBuilder {
                     reason: format!("{} unresolved calls", function_unresolved.len()),
                     status: SummaryStatus::Unknown,
                     precision: SummaryPrecision::UnknownTop,
-                    stable_key: stable_key_from_parts(
+                    stable_key: stable_key_text_from_parts(
+                        interner,
                         FactFamily::SummaryEvent,
                         &[
                             ("callable", callable_key.clone()),
@@ -249,7 +256,8 @@ impl DirectSummaryBuilder {
                 provenance: mem_provenance,
                 payload_digest: mem_digest,
                 tito_flows: Vec::new(),
-                stable_key: stable_key_from_parts(
+                stable_key: stable_key_text_from_parts(
+                    interner,
                     FactFamily::SummaryMemory,
                     &[
                         ("callable", callable_key.clone()),
@@ -276,7 +284,8 @@ impl DirectSummaryBuilder {
                     reason: "unresolved_calls".to_string(),
                     status: SummaryStatus::Unknown,
                     precision: SummaryPrecision::UnknownTop,
-                    stable_key: stable_key_from_parts(
+                    stable_key: stable_key_text_from_parts(
+                        interner,
                         FactFamily::SummaryEvent,
                         &[
                             ("callable", callable_key.clone()),
@@ -304,7 +313,8 @@ impl DirectSummaryBuilder {
                 provenance: tito_provenance,
                 payload_digest: tito_digest,
                 tito_flows,
-                stable_key: stable_key_from_parts(
+                stable_key: stable_key_text_from_parts(
+                    interner,
                     FactFamily::SummaryTito,
                     &[
                         ("callable", callable_key.clone()),
@@ -323,7 +333,8 @@ impl DirectSummaryBuilder {
                     reason: "unresolved_calls".to_string(),
                     status: SummaryStatus::Unknown,
                     precision: SummaryPrecision::UnknownTop,
-                    stable_key: stable_key_from_parts(
+                    stable_key: stable_key_text_from_parts(
+                        interner,
                         FactFamily::SummaryEvent,
                         &[
                             ("callable", callable_key),
@@ -965,7 +976,8 @@ mod tests {
     #[test]
     fn empty_db_produces_empty_output() {
         let db = AnalysisDb::new();
-        let output = DirectSummaryBuilder::build(&db);
+        let output =
+            DirectSummaryBuilder::build(&crate::core::AnalysisDb::new().stable_key_interner(), &db);
 
         assert!(output.summaries.is_empty());
         assert!(output.events.is_empty());
@@ -1045,7 +1057,8 @@ mod tests {
         })
         .expect("MIR should store");
 
-        let output = DirectSummaryBuilder::build(&db);
+        let output =
+            DirectSummaryBuilder::build(&crate::core::AnalysisDb::new().stable_key_interner(), &db);
 
         assert_eq!(output.summaries.len(), 4, "expected 4 domain summaries");
 
@@ -1123,7 +1136,8 @@ mod tests {
             }],
         });
 
-        let output = DirectSummaryBuilder::build(&db);
+        let output =
+            DirectSummaryBuilder::build(&crate::core::AnalysisDb::new().stable_key_interner(), &db);
 
         assert!(
             !output.events.is_empty(),
@@ -1236,7 +1250,8 @@ mod tests {
     #[test]
     fn memory_effects_tracks_receiver_and_param_access() {
         let db = db_with_param_and_local_ops();
-        let output = DirectSummaryBuilder::build(&db);
+        let output =
+            DirectSummaryBuilder::build(&crate::core::AnalysisDb::new().stable_key_interner(), &db);
 
         let mem_summary = output
             .summaries
@@ -1311,7 +1326,8 @@ mod tests {
         })
         .expect("MIR should store");
 
-        let output = DirectSummaryBuilder::build(&db);
+        let output =
+            DirectSummaryBuilder::build(&crate::core::AnalysisDb::new().stable_key_interner(), &db);
 
         let tito_summary = output
             .summaries
@@ -1441,7 +1457,8 @@ mod tests {
         })
         .expect("MIR should store");
 
-        let output = DirectSummaryBuilder::build(&db);
+        let output =
+            DirectSummaryBuilder::build(&crate::core::AnalysisDb::new().stable_key_interner(), &db);
         let tito_summary = output
             .summaries
             .iter()
@@ -1547,7 +1564,8 @@ mod tests {
         })
         .expect("MIR should store");
 
-        let output = DirectSummaryBuilder::build(&db);
+        let output =
+            DirectSummaryBuilder::build(&crate::core::AnalysisDb::new().stable_key_interner(), &db);
         let tito_summary = output
             .summaries
             .iter()
@@ -1660,7 +1678,8 @@ mod tests {
         })
         .expect("MIR should store");
 
-        let output = DirectSummaryBuilder::build(&db);
+        let output =
+            DirectSummaryBuilder::build(&crate::core::AnalysisDb::new().stable_key_interner(), &db);
         let tito_summary = output
             .summaries
             .iter()
@@ -1744,7 +1763,8 @@ mod tests {
             }],
         });
 
-        let output = DirectSummaryBuilder::build(&db);
+        let output =
+            DirectSummaryBuilder::build(&crate::core::AnalysisDb::new().stable_key_interner(), &db);
 
         let mem_summary = output
             .summaries

@@ -95,7 +95,8 @@ fn solver_budget_for_fixture(fixture_dir: &Path) -> SolverBudget {
 /// fold here would re-run a discarded solve whose budget status would pollute the run.
 fn solver_output_for_db(db: &AnalysisDb, budget: SolverBudget) -> SolverOutput {
     let constraints = db.semantic_constraints().to_vec();
-    let go_rta_inputs = GoRtaInputs::from_db(db);
+    let go_rta_inputs =
+        GoRtaInputs::from_db(&crate::core::AnalysisDb::new().stable_key_interner(), db);
     let ts_points_to_inputs = TsPointsToInputs::from_db(db);
     let engine = SolverEngine::new(
         vec![
@@ -104,14 +105,17 @@ fn solver_output_for_db(db: &AnalysisDb, budget: SolverBudget) -> SolverOutput {
         ],
         budget,
     );
-    engine.run_to_solver_output(&constraints)
+    engine.run_to_solver_output(
+        &crate::core::AnalysisDb::new().stable_key_interner(),
+        &constraints,
+    )
 }
 
 /// `qualified -> SemanticNodeId` for the fixture's Go functions, so the gate can
 /// assert WHICH concrete method an interface invoke resolved to (e.g. `(…Dog).Speak`
 /// vs `(…Cat).Speak`, which share the bare name `Speak`).
 fn function_nodes(db: &AnalysisDb) -> BTreeMap<String, SemanticNodeId> {
-    GoRtaInputs::from_db(db).function_node
+    GoRtaInputs::from_db(&crate::core::AnalysisDb::new().stable_key_interner(), db).function_node
 }
 
 /// Two engine runs over the same fixture-built db produce byte-identical serialized
@@ -473,7 +477,10 @@ fn refined_calls_direct_vs_refined_fixture_projects_persisted_rta_edge() {
     let dir = refined_calls_fixture_dir("direct-vs-refined");
     let output = run_fixture_kernel(&dir);
     let budget = solver_budget_for_fixture(&dir);
-    let inputs = GoRtaInputs::from_db(&output.db);
+    let inputs = GoRtaInputs::from_db(
+        &crate::core::AnalysisDb::new().stable_key_interner(),
+        &output.db,
+    );
     let solver_output = solver_output_for_db(&output.db, budget);
 
     assert!(
@@ -574,21 +581,26 @@ fn address_taken_fixture_resolves_func_value_by_signature() {
     // `noise` IS in the address-taken set (so the exclusion is a real signature-filter
     // decision, not merely an absent candidate).
     assert!(
-        GoRtaInputs::from_db(&output.db)
-            .address_taken
-            .iter()
-            .any(|qualified| qualified.ends_with(".noise")),
+        GoRtaInputs::from_db(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &output.db
+        )
+        .address_taken
+        .iter()
+        .any(|qualified| qualified.ends_with(".noise")),
         "noise must be genuinely address-taken (a candidate the signature filter excludes)"
     );
 
     // Honest func-value resolution (no flooding): every RTA-resolved (call_constraint)
     // edge targets an ADDRESS-TAKEN function — never an arbitrary function.
-    let address_taken_nodes: std::collections::BTreeSet<SemanticNodeId> =
-        GoRtaInputs::from_db(&output.db)
-            .address_taken
-            .iter()
-            .filter_map(|qualified| nodes.get(qualified).copied())
-            .collect();
+    let address_taken_nodes: std::collections::BTreeSet<SemanticNodeId> = GoRtaInputs::from_db(
+        &crate::core::AnalysisDb::new().stable_key_interner(),
+        &output.db,
+    )
+    .address_taken
+    .iter()
+    .filter_map(|qualified| nodes.get(qualified).copied())
+    .collect();
     for edge in solver_output
         .derived_edges
         .iter()

@@ -203,6 +203,7 @@ mod tests {
         DerivedEdgeProvenance::new(
             constraints.iter().map(|c| {
                 ContributingFact::from_parts(
+                    &crate::core::AnalysisDb::new().stable_key_interner(),
                     FactFamily::PointsToConstraint,
                     &[("constraint", (*c).to_string())],
                 )

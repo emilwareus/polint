@@ -811,6 +811,7 @@ fn abstract_domain_observed_with_policy(
         .collect();
     db.replace_abstract_domain_facts(
         crate::analysis::domains::store::DomainOutput::from_results_with_place_keys(
+            &db.stable_key_interner(),
             result.results(),
             &place_stable_keys,
         ),

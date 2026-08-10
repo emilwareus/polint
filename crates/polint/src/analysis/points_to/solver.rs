@@ -8,7 +8,7 @@ use super::store::PointsToOutput;
 use super::vars;
 use crate::analysis::ids::{ObjectTokenId, PointsToSetId, PtVarId};
 use crate::analysis::solver::budget::BudgetReason;
-use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
+use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PointsToBudget {
@@ -35,11 +35,12 @@ pub(crate) struct PointsToSolveResult {
 }
 
 pub(crate) fn solve_points_to(
+    interner: &crate::core::StableKeyInterner,
     constraints: &[PointsToConstraintFact],
     budget: PointsToBudget,
 ) -> PointsToSolveResult {
     let mut solver = Solver::new(constraints, budget);
-    solver.solve()
+    solver.solve(interner)
 }
 
 struct Solver<'a> {
@@ -79,7 +80,7 @@ impl<'a> Solver<'a> {
         }
     }
 
-    fn solve(&mut self) -> PointsToSolveResult {
+    fn solve(&mut self, interner: &crate::core::StableKeyInterner) -> PointsToSolveResult {
         self.initialize();
         while let Some((var, delta)) = self.queue.pop_front() {
             if !self.step_budget_ok() {
@@ -91,7 +92,7 @@ impl<'a> Solver<'a> {
             self.propagate_field_load(var, &delta);
             self.propagate_field_store(var, &delta);
         }
-        self.to_result()
+        self.to_result(interner)
     }
 
     fn initialize(&mut self) {
@@ -261,7 +262,7 @@ impl<'a> Solver<'a> {
         true
     }
 
-    fn to_result(&self) -> PointsToSolveResult {
+    fn to_result(&self, interner: &crate::core::StableKeyInterner) -> PointsToSolveResult {
         let budget_status = if self.budget_exceeded {
             PointsToBudgetStatus::BudgetExceeded
         } else {
@@ -287,7 +288,8 @@ impl<'a> Solver<'a> {
                 status,
                 precision,
                 budget: budget_status,
-                stable_key: stable_key_from_parts(
+                stable_key: stable_key_text_from_parts(
+                    interner,
                     FactFamily::PointsToSet,
                     &[
                         ("variable", variable.0.to_string()),
@@ -305,10 +307,11 @@ impl<'a> Solver<'a> {
 }
 
 pub(crate) fn output_with_solved_sets(
+    interner: &crate::core::StableKeyInterner,
     constraints: Vec<PointsToConstraintFact>,
     budget: PointsToBudget,
 ) -> PointsToOutput {
-    let solve = solve_points_to(&constraints, budget);
+    let solve = solve_points_to(interner, &constraints, budget);
     PointsToOutput {
         constraints,
         sets: solve.sets,
@@ -400,8 +403,16 @@ mod tests {
                 },
             ),
         ];
-        let first = solve_points_to(&constraints, PointsToBudget::default());
-        let second = solve_points_to(&constraints, PointsToBudget::default());
+        let first = solve_points_to(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &constraints,
+            PointsToBudget::default(),
+        );
+        let second = solve_points_to(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &constraints,
+            PointsToBudget::default(),
+        );
 
         assert_eq!(first, second);
         assert_eq!(first.budget_status, PointsToBudgetStatus::WithinBudget);
@@ -437,6 +448,7 @@ mod tests {
             ),
         ];
         let result = solve_points_to(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
             &constraints,
             PointsToBudget {
                 max_objects_per_var: 1,
@@ -476,6 +488,7 @@ mod tests {
             ),
         ];
         let result = solve_points_to(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
             &constraints,
             PointsToBudget {
                 max_dynamic_vars: 0,
@@ -500,6 +513,7 @@ mod tests {
             },
         )];
         let result = solve_points_to(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
             &constraints,
             PointsToBudget {
                 max_steps: 0,

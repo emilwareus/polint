@@ -22,7 +22,8 @@ use crate::analysis::mir::body::MirStatus;
 use crate::analysis::places::PlaceStatus;
 use crate::analysis::summaries::facts::{SummaryEventFact, SummaryFact};
 use crate::analysis_kernel::{
-    FactConfidence, FactFamily, FactMeta, FactPrecision, ValidationStatus, stable_key_from_parts,
+    FactConfidence, FactFamily, FactMeta, FactPrecision, ValidationStatus,
+    stable_key_text_from_parts,
 };
 use crate::module_graph::topology::TopologyPrecision;
 use crate::symbol_graph::semantic::{
@@ -32,75 +33,98 @@ use crate::symbol_graph::semantic::{
 use std::borrow::Cow;
 use std::cmp::Ordering;
 
-pub(super) fn normalize_scope_facts(facts: &mut [ScopeFact]) {
+pub(super) fn normalize_scope_facts(
+    interner: &crate::core::StableKeyInterner,
+    facts: &mut [ScopeFact],
+) {
     for fact in facts.iter_mut() {
         if fact.stable_key.is_empty() {
-            fact.stable_key = fact.computed_stable_key();
+            fact.stable_key = fact.computed_stable_key(interner);
         }
     }
     facts.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
 }
 
-pub(super) fn normalize_semantic_import_facts(facts: &mut [SemanticImportFact]) {
+pub(super) fn normalize_semantic_import_facts(
+    interner: &crate::core::StableKeyInterner,
+    facts: &mut [SemanticImportFact],
+) {
     for fact in facts.iter_mut() {
         if fact.stable_key.is_empty() {
-            fact.stable_key = fact.computed_stable_key();
+            fact.stable_key = fact.computed_stable_key(interner);
         }
     }
     facts.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
 }
 
-pub(super) fn normalize_export_facts(facts: &mut [ExportFact]) {
+pub(super) fn normalize_export_facts(
+    interner: &crate::core::StableKeyInterner,
+    facts: &mut [ExportFact],
+) {
     for fact in facts.iter_mut() {
         if fact.stable_key.is_empty() {
-            fact.stable_key = fact.computed_stable_key();
+            fact.stable_key = fact.computed_stable_key(interner);
         }
     }
     facts.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
 }
 
-pub(super) fn normalize_alias_facts(facts: &mut [AliasFact]) {
+pub(super) fn normalize_alias_facts(
+    interner: &crate::core::StableKeyInterner,
+    facts: &mut [AliasFact],
+) {
     for fact in facts.iter_mut() {
         if fact.stable_key.is_empty() {
-            fact.stable_key = fact.computed_stable_key();
+            fact.stable_key = fact.computed_stable_key(interner);
         }
     }
     facts.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
 }
 
-pub(super) fn normalize_resolution_facts(facts: &mut [ResolutionFact]) {
+pub(super) fn normalize_resolution_facts(
+    interner: &crate::core::StableKeyInterner,
+    facts: &mut [ResolutionFact],
+) {
     for fact in facts.iter_mut() {
         if fact.stable_key.is_empty() {
-            fact.stable_key = fact.computed_stable_key();
+            fact.stable_key = fact.computed_stable_key(interner);
         }
     }
     facts.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
 }
 
-pub(super) fn normalize_generated_symbol_facts(facts: &mut [GeneratedSymbolFact]) {
+pub(super) fn normalize_generated_symbol_facts(
+    interner: &crate::core::StableKeyInterner,
+    facts: &mut [GeneratedSymbolFact],
+) {
     for fact in facts.iter_mut() {
         if fact.stable_key.is_empty() {
-            fact.stable_key = fact.computed_stable_key();
+            fact.stable_key = fact.computed_stable_key(interner);
         }
     }
     facts.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
 }
 
-pub(super) fn normalize_stable_export_identities(facts: &mut [StableExportIdentity]) {
+pub(super) fn normalize_stable_export_identities(
+    interner: &crate::core::StableKeyInterner,
+    facts: &mut [StableExportIdentity],
+) {
     for fact in facts.iter_mut() {
         if fact.stable_key.is_empty() {
-            fact.stable_key = fact.computed_stable_key();
+            fact.stable_key = fact.computed_stable_key(interner);
         }
     }
     facts.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
 }
 
 pub(super) fn source_file_metadata(
+    interner: &crate::core::StableKeyInterner,
     relative_path: &str,
     language: Language,
     content_hash: &str,
 ) -> FactMeta {
     fact_meta_from_parts(
+        interner,
         FactFamily::SourceFile,
         SOURCE_PROVIDER_ID,
         FactPrecision::Exact,
@@ -198,6 +222,7 @@ pub(super) fn extension_confidence_metadata(confidence: ExtensionFactConfidence)
 }
 
 pub(super) fn fact_meta_from_parts<const STABLE: usize, const EXTRA: usize>(
+    interner: &crate::core::StableKeyInterner,
     family: FactFamily,
     producer_id: &'static str,
     precision: FactPrecision,
@@ -205,7 +230,7 @@ pub(super) fn fact_meta_from_parts<const STABLE: usize, const EXTRA: usize>(
     stable_parts: [(&'static str, String); STABLE],
     payload_extra_parts: [(&'static str, String); EXTRA],
 ) -> FactMeta {
-    let stable_key = stable_key_from_parts(family, &stable_parts);
+    let stable_key = stable_key_text_from_parts(interner, family, &stable_parts);
     let mut payload_parts = stable_parts.to_vec();
     payload_parts.extend(payload_extra_parts);
     let payload_digest = metadata_payload_digest(&stable_key, &payload_parts);

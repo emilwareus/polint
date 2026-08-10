@@ -18,14 +18,20 @@ pub(crate) fn derive_trust_boundaries(
     db: &AnalysisDb,
     entrypoints: &[EntrypointFact],
 ) -> Vec<TrustBoundaryFact> {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let mut boundaries = Vec::new();
 
     for entrypoint in entrypoints {
         let source_kinds = source_kinds_for_entrypoint(entrypoint);
 
         for source_kind in source_kinds {
-            let stable_key =
-                trust_boundary_stable_key(&entrypoint.stable_key, source_kind, entrypoint.language);
+            let stable_key = trust_boundary_stable_key(
+                interner,
+                &entrypoint.stable_key,
+                source_kind,
+                entrypoint.language,
+            );
 
             boundaries.push(TrustBoundaryFact {
                 id: TrustBoundaryId(0), // Reassigned during normalization
@@ -266,11 +272,13 @@ fn protocol_for_kind(kind: EntrypointKind) -> Option<String> {
 /// Per D-21: uses the entrypoint's provider_id. Generate stable keys using
 /// semantic_stable_key(FactFamily::TrustBoundary, ...).
 fn trust_boundary_stable_key(
+    interner: &crate::core::StableKeyInterner,
     entrypoint_key: &str,
     source_kind: TrustBoundarySourceKind,
     language: crate::core::Language,
 ) -> String {
     semantic_stable_key(
+        interner,
         FactFamily::TrustBoundary,
         &[
             ("entrypoint_key", entrypoint_key.to_string()),

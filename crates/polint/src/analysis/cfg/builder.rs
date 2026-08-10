@@ -66,6 +66,7 @@ impl CfgBuilder {
 
     pub(crate) fn start_function(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         body: &MirBody,
         include_exceptional_exit: bool,
     ) -> CfgFunctionId {
@@ -85,6 +86,7 @@ impl CfgBuilder {
             generated: true,
             operation_ordinal: 0,
             stable_key: stable_key(
+                interner,
                 FactFamily::CfgNode,
                 &[
                     ("body", body.stable_key.clone()),
@@ -99,6 +101,7 @@ impl CfgBuilder {
             Some(entry_node),
             0,
             stable_key(
+                interner,
                 FactFamily::BasicBlock,
                 &[
                     ("body", body.stable_key.clone()),
@@ -116,6 +119,7 @@ impl CfgBuilder {
             generated: true,
             operation_ordinal: u32::MAX - 1,
             stable_key: stable_key(
+                interner,
                 FactFamily::CfgNode,
                 &[
                     ("body", body.stable_key.clone()),
@@ -130,6 +134,7 @@ impl CfgBuilder {
             Some(normal_exit_node),
             u32::MAX - 1,
             stable_key(
+                interner,
                 FactFamily::BasicBlock,
                 &[
                     ("body", body.stable_key.clone()),
@@ -150,6 +155,7 @@ impl CfgBuilder {
                 generated: true,
                 operation_ordinal: u32::MAX,
                 stable_key: stable_key(
+                    interner,
                     FactFamily::CfgNode,
                     &[
                         ("body", body.stable_key.clone()),
@@ -166,6 +172,7 @@ impl CfgBuilder {
                 Some(node),
                 u32::MAX,
                 stable_key(
+                    interner,
                     FactFamily::BasicBlock,
                     &[
                         ("body", body.stable_key.clone()),
@@ -188,6 +195,7 @@ impl CfgBuilder {
             normal_exit_node,
             exceptional_exit_node,
             stable_key: stable_key(
+                interner,
                 FactFamily::CfgFunction,
                 &[
                     ("body", body.stable_key.clone()),
@@ -221,7 +229,11 @@ impl CfgBuilder {
             .copied()
     }
 
-    pub(crate) fn start_block(&mut self, kind: BasicBlockKind) -> BasicBlockId {
+    pub(crate) fn start_block(
+        &mut self,
+        interner: &crate::core::StableKeyInterner,
+        kind: BasicBlockKind,
+    ) -> BasicBlockId {
         let function = self.expect_function();
         let ordinal = self.next_body_block_ordinal;
         self.next_body_block_ordinal += 1;
@@ -233,6 +245,7 @@ impl CfgBuilder {
             None,
             ordinal,
             stable_key(
+                interner,
                 FactFamily::BasicBlock,
                 &[
                     ("body", body_key),
@@ -247,6 +260,7 @@ impl CfgBuilder {
 
     pub(crate) fn append_operation_node(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         operation: Option<&MirOperation>,
         kind: CfgNodeKind,
         span: Option<Span>,
@@ -277,6 +291,7 @@ impl CfgBuilder {
             generated: false,
             operation_ordinal,
             stable_key: stable_key(
+                interner,
                 FactFamily::CfgNode,
                 &[
                     ("body", body_key),
@@ -298,13 +313,21 @@ impl CfgBuilder {
         }
 
         if let Some(previous) = previous_last {
-            self.add_node_edge(previous, node_id, block, block, CfgEdgeKind::Normal);
+            self.add_node_edge(
+                interner,
+                previous,
+                node_id,
+                block,
+                block,
+                CfgEdgeKind::Normal,
+            );
         }
         node_id
     }
 
     pub(crate) fn add_edge(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         from_block: BasicBlockId,
         to_block: BasicBlockId,
         kind: CfgEdgeKind,
@@ -317,7 +340,7 @@ impl CfgBuilder {
             .block(to_block)
             .first_node
             .expect("target block must have at least one node before adding an edge");
-        self.add_node_edge(from_node, to_node, from_block, to_block, kind)
+        self.add_node_edge(interner, from_node, to_node, from_block, to_block, kind)
     }
 
     pub(crate) fn mark_unreachable(&mut self, block: BasicBlockId) {
@@ -402,6 +425,7 @@ impl CfgBuilder {
 
     fn add_node_edge(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         from: CfgNodeId,
         to: CfgNodeId,
         from_block: BasicBlockId,
@@ -426,6 +450,7 @@ impl CfgBuilder {
             kind,
             label: None,
             stable_key: stable_key(
+                interner,
                 FactFamily::CfgEdge,
                 &[
                     ("body", body_key),
@@ -571,8 +596,12 @@ impl CfgBuilder {
     }
 }
 
-fn stable_key(family: FactFamily, parts: &[(&str, String)]) -> String {
-    semantic_stable_key(family, parts).into_string()
+fn stable_key(
+    interner: &crate::core::StableKeyInterner,
+    family: FactFamily,
+    parts: &[(&str, String)],
+) -> String {
+    semantic_stable_key(interner, family, parts).into_string()
 }
 
 #[cfg(test)]
@@ -629,7 +658,11 @@ mod tests {
     #[test]
     fn builder_creates_virtual_entry_and_exit_per_function() {
         let mut builder = CfgBuilder::new();
-        let function = builder.start_function(&body(), true);
+        let function = builder.start_function(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &body(),
+            true,
+        );
         builder.finish_function();
         let output = builder.finish();
 
@@ -656,13 +689,22 @@ mod tests {
     #[test]
     fn builder_recomputes_reachability_before_finish() {
         let mut builder = CfgBuilder::new();
-        builder.start_function(&body(), true);
+        builder.start_function(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &body(),
+            true,
+        );
         let entry = builder.current_block();
         let normal_exit = builder.normal_exit_block();
         let exceptional_exit = builder
             .exceptional_exit_block()
             .expect("exceptional exit block");
-        builder.add_edge(entry, normal_exit, CfgEdgeKind::Normal);
+        builder.add_edge(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            entry,
+            normal_exit,
+            CfgEdgeKind::Normal,
+        );
         builder.finish_function();
         let output = builder.finish();
 
@@ -691,9 +733,23 @@ mod tests {
     fn builder_assigns_deterministic_ids_for_straight_line_graphs() {
         fn build_keys() -> Vec<String> {
             let mut builder = CfgBuilder::new();
-            builder.start_function(&body(), false);
-            builder.append_operation_node(Some(&op(1, 1)), CfgNodeKind::Operation, Some(span()));
-            builder.append_operation_node(Some(&op(2, 2)), CfgNodeKind::Operation, Some(span()));
+            builder.start_function(
+                &crate::core::AnalysisDb::new().stable_key_interner(),
+                &body(),
+                false,
+            );
+            builder.append_operation_node(
+                &crate::core::AnalysisDb::new().stable_key_interner(),
+                Some(&op(1, 1)),
+                CfgNodeKind::Operation,
+                Some(span()),
+            );
+            builder.append_operation_node(
+                &crate::core::AnalysisDb::new().stable_key_interner(),
+                Some(&op(2, 2)),
+                CfgNodeKind::Operation,
+                Some(span()),
+            );
             builder.finish_function();
             builder
                 .finish()
@@ -709,29 +765,116 @@ mod tests {
     #[test]
     fn builder_models_if_else_join_loop_return_unreachable_and_short_circuit_edges() {
         let mut builder = CfgBuilder::new();
-        builder.start_function(&body(), false);
+        builder.start_function(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &body(),
+            false,
+        );
         let entry = builder.current_block();
-        let condition = builder.start_block(BasicBlockKind::Branch);
-        builder.append_operation_node(Some(&op(1, 1)), CfgNodeKind::Condition, Some(span()));
-        let then_block = builder.start_block(BasicBlockKind::StraightLine);
-        builder.append_operation_node(Some(&op(2, 2)), CfgNodeKind::Operation, Some(span()));
-        let else_block = builder.start_block(BasicBlockKind::StraightLine);
-        builder.append_operation_node(Some(&op(3, 3)), CfgNodeKind::Operation, Some(span()));
-        let loop_header = builder.start_block(BasicBlockKind::LoopHeader);
-        builder.append_operation_node(Some(&op(4, 4)), CfgNodeKind::Condition, Some(span()));
-        let return_block = builder.start_block(BasicBlockKind::StraightLine);
-        builder.append_operation_node(Some(&op(5, 5)), CfgNodeKind::Return, Some(span()));
-        let unreachable = builder.start_block(BasicBlockKind::Unreachable);
-        builder.append_operation_node(Some(&op(6, 6)), CfgNodeKind::Operation, Some(span()));
+        let condition = builder.start_block(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            BasicBlockKind::Branch,
+        );
+        builder.append_operation_node(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            Some(&op(1, 1)),
+            CfgNodeKind::Condition,
+            Some(span()),
+        );
+        let then_block = builder.start_block(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            BasicBlockKind::StraightLine,
+        );
+        builder.append_operation_node(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            Some(&op(2, 2)),
+            CfgNodeKind::Operation,
+            Some(span()),
+        );
+        let else_block = builder.start_block(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            BasicBlockKind::StraightLine,
+        );
+        builder.append_operation_node(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            Some(&op(3, 3)),
+            CfgNodeKind::Operation,
+            Some(span()),
+        );
+        let loop_header = builder.start_block(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            BasicBlockKind::LoopHeader,
+        );
+        builder.append_operation_node(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            Some(&op(4, 4)),
+            CfgNodeKind::Condition,
+            Some(span()),
+        );
+        let return_block = builder.start_block(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            BasicBlockKind::StraightLine,
+        );
+        builder.append_operation_node(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            Some(&op(5, 5)),
+            CfgNodeKind::Return,
+            Some(span()),
+        );
+        let unreachable = builder.start_block(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            BasicBlockKind::Unreachable,
+        );
+        builder.append_operation_node(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            Some(&op(6, 6)),
+            CfgNodeKind::Operation,
+            Some(span()),
+        );
         builder.mark_unreachable(unreachable);
 
-        builder.add_edge(entry, condition, CfgEdgeKind::Normal);
-        builder.add_edge(condition, then_block, CfgEdgeKind::True);
-        builder.add_edge(condition, else_block, CfgEdgeKind::False);
-        builder.add_edge(then_block, loop_header, CfgEdgeKind::ShortCircuit);
-        builder.add_edge(else_block, loop_header, CfgEdgeKind::Normal);
-        builder.add_edge(loop_header, loop_header, CfgEdgeKind::LoopBack);
-        builder.add_edge(loop_header, return_block, CfgEdgeKind::LoopExit);
+        builder.add_edge(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            entry,
+            condition,
+            CfgEdgeKind::Normal,
+        );
+        builder.add_edge(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            condition,
+            then_block,
+            CfgEdgeKind::True,
+        );
+        builder.add_edge(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            condition,
+            else_block,
+            CfgEdgeKind::False,
+        );
+        builder.add_edge(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            then_block,
+            loop_header,
+            CfgEdgeKind::ShortCircuit,
+        );
+        builder.add_edge(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            else_block,
+            loop_header,
+            CfgEdgeKind::Normal,
+        );
+        builder.add_edge(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            loop_header,
+            loop_header,
+            CfgEdgeKind::LoopBack,
+        );
+        builder.add_edge(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            loop_header,
+            return_block,
+            CfgEdgeKind::LoopExit,
+        );
         builder.finish_function();
         let output = builder.finish();
 

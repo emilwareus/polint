@@ -4,7 +4,7 @@ use serde::Deserialize;
 use thiserror::Error;
 
 use crate::analysis::adaptation::facts::{LoadedModelFact, ModelConfidence, ModelLanguage};
-use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
+use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub(crate) enum ModelLoadError {
@@ -36,6 +36,7 @@ struct ModelFactToml {
 }
 
 pub(crate) fn load_model_file(
+    interner: &crate::core::StableKeyInterner,
     model_path: impl AsRef<Path>,
     contents: &str,
 ) -> Result<Vec<LoadedModelFact>, ModelLoadError> {
@@ -77,13 +78,13 @@ pub(crate) fn load_model_file(
         evidence.dedup();
 
         let stable_key = model_stable_key(
+            interner,
             &model_path,
             &source_pattern,
             &target_pattern,
             confidence,
             language,
-            &scope,
-            &evidence,
+            (&scope, &evidence),
         );
         facts.push(LoadedModelFact {
             model_path: model_path.clone(),
@@ -127,14 +128,15 @@ fn normalize_model_path(path: &Path) -> Result<String, ModelLoadError> {
 }
 
 fn model_stable_key(
+    interner: &crate::core::StableKeyInterner,
     model_path: &str,
     source_pattern: &str,
     target_pattern: &str,
     confidence: ModelConfidence,
     language: ModelLanguage,
-    scope: &str,
-    evidence: &[String],
+    pair: (&str, &[String]),
 ) -> String {
+    let (scope, evidence) = pair;
     let language = language.as_str().to_string();
     let confidence = confidence.as_str().to_string();
     let mut parts = vec![
@@ -146,7 +148,7 @@ fn model_stable_key(
         ("scope", scope.to_string()),
     ];
     parts.extend(evidence.iter().map(|item| ("evidence", item.clone())));
-    stable_key_from_parts(FactFamily::AdaptationModel, &parts)
+    stable_key_text_from_parts(interner, FactFamily::AdaptationModel, &parts)
 }
 
 #[cfg(test)]
@@ -165,7 +167,12 @@ evidence = ["src/app.ts:10", " src/app.ts:10 "]
 
     #[test]
     fn loader_parses_and_normalizes_model_facts() {
-        let facts = load_model_file(".polint/models/framework.toml", VALID).unwrap();
+        let facts = load_model_file(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            ".polint/models/framework.toml",
+            VALID,
+        )
+        .unwrap();
         assert_eq!(facts.len(), 1);
         assert_eq!(facts[0].model_path, ".polint/models/framework.toml");
         assert_eq!(facts[0].confidence, ModelConfidence::Heuristic);
@@ -177,22 +184,22 @@ evidence = ["src/app.ts:10", " src/app.ts:10 "]
     #[test]
     fn loader_stable_keys_keep_evidence_boundaries() {
         let first = model_stable_key(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
             ".polint/models/framework.toml",
             "call:src/app.ts:10:register",
             "function:src/app.ts:1:onRegister",
             ModelConfidence::Heuristic,
             ModelLanguage::TypeScript,
-            "src/app.ts",
-            &["a,b".to_string(), "c".to_string()],
+            ("src/app.ts", &["a,b".to_string(), "c".to_string()]),
         );
         let second = model_stable_key(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
             ".polint/models/framework.toml",
             "call:src/app.ts:10:register",
             "function:src/app.ts:1:onRegister",
             ModelConfidence::Heuristic,
             ModelLanguage::TypeScript,
-            "src/app.ts",
-            &["a".to_string(), "b,c".to_string()],
+            ("src/app.ts", &["a".to_string(), "b,c".to_string()]),
         );
 
         assert_ne!(first, second);
@@ -201,11 +208,19 @@ evidence = ["src/app.ts:10", " src/app.ts:10 "]
     #[test]
     fn loader_rejects_absolute_and_parent_paths() {
         assert!(matches!(
-            load_model_file("/tmp/model.toml", VALID),
+            load_model_file(
+                &crate::core::AnalysisDb::new().stable_key_interner(),
+                "/tmp/model.toml",
+                VALID
+            ),
             Err(ModelLoadError::InvalidPath(_))
         ));
         assert!(matches!(
-            load_model_file("../model.toml", VALID),
+            load_model_file(
+                &crate::core::AnalysisDb::new().stable_key_interner(),
+                "../model.toml",
+                VALID
+            ),
             Err(ModelLoadError::InvalidPath(_))
         ));
     }
@@ -213,6 +228,7 @@ evidence = ["src/app.ts:10", " src/app.ts:10 "]
     #[test]
     fn loader_requires_all_schema_fields() {
         let err = load_model_file(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
             ".polint/models/framework.toml",
             r#"
 [[facts]]

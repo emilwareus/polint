@@ -13,7 +13,7 @@ use crate::analysis_kernel::incremental::{
     module_graph_topology_input_digest_rows, module_graph_topology_input_digests,
     relative_manifest_dependency_source, semantic_provider_parameter_digest,
 };
-use crate::analysis_kernel::{FactFamily, ProviderManifest, stable_key_from_parts};
+use crate::analysis_kernel::{FactFamily, ProviderManifest, stable_key_text_from_parts};
 use crate::analysis_plan::AnalysisPlan;
 use crate::cache::Cache;
 use crate::config::LoadedConfig;
@@ -497,6 +497,8 @@ pub(crate) fn derive_requested_module_graph(
 }
 
 pub(crate) fn derive_import_to_package_edges(db: &AnalysisDb) -> Vec<ImportToPackageFact> {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let resolved_by_import = db
         .resolved_imports()
         .iter()
@@ -560,7 +562,8 @@ pub(crate) fn derive_import_to_package_edges(db: &AnalysisDb) -> Vec<ImportToPac
             let from_package_stable_key = from_package.map(|package| package.stable_key.clone());
             let to_package_stable_key = to_package.map(|package| package.stable_key.clone());
             let source_set_stable_key = source_set.map(|set| set.stable_key.clone());
-            let stable_key = stable_key_from_parts(
+            let stable_key = stable_key_text_from_parts(
+                interner,
                 FactFamily::ImportToPackage,
                 &[
                     ("import_id", import.id.0.to_string()),

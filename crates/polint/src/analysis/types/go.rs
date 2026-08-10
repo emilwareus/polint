@@ -28,6 +28,8 @@ use crate::core::{AnalysisDb, FileId, FunctionId, Language};
 type RootPlaceKey = (PlaceRoot, Option<FileId>, Option<FunctionId>);
 
 pub(crate) fn derive_go_type_value_alias(db: &AnalysisDb) -> TypeValueAliasOutput {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let body_by_id = db
         .mir_bodies()
         .iter()
@@ -60,12 +62,14 @@ pub(crate) fn derive_go_type_value_alias(db: &AnalysisDb) -> TypeValueAliasOutpu
             .body()
             .and_then(|body| body_by_id.get(&body).copied());
         types.push(type_fact_for_place(
+            interner,
             types.len() as u64,
             place,
             body,
             place_types.get(&place.id).copied(),
         ));
         access_paths.push(access_path_for_place(
+            interner,
             access_paths.len() as u64,
             place,
             &root_place_by_key,
@@ -77,7 +81,13 @@ pub(crate) fn derive_go_type_value_alias(db: &AnalysisDb) -> TypeValueAliasOutpu
             .get(&operation.body)
             .is_some_and(|body| body.language == Language::Go)
     }) {
-        collect_values_for_operation(operation, &place_by_id, &mut values, &mut allocations);
+        collect_values_for_operation(
+            interner,
+            operation,
+            &place_by_id,
+            &mut values,
+            &mut allocations,
+        );
     }
 
     for unsupported in db
@@ -90,6 +100,7 @@ pub(crate) fn derive_go_type_value_alias(db: &AnalysisDb) -> TypeValueAliasOutpu
             .and_then(|body| body_by_id.get(&body).copied());
         if unsupported.affected_places.is_empty() {
             types.push(unsupported_type_fact(
+                interner,
                 types.len() as u64,
                 TypeSubject::Unknown(unsupported.construct.clone()),
                 unsupported,
@@ -99,6 +110,7 @@ pub(crate) fn derive_go_type_value_alias(db: &AnalysisDb) -> TypeValueAliasOutpu
         } else {
             for place in &unsupported.affected_places {
                 types.push(unsupported_type_fact(
+                    interner,
                     types.len() as u64,
                     TypeSubject::Place(*place),
                     unsupported,
@@ -125,6 +137,7 @@ pub(crate) fn derive_go_type_value_alias(db: &AnalysisDb) -> TypeValueAliasOutpu
 }
 
 fn type_fact_for_place(
+    interner: &crate::core::StableKeyInterner,
     id: u64,
     place: &PlaceFact,
     body: Option<&crate::analysis::mir::body::MirBody>,
@@ -183,6 +196,7 @@ fn type_fact_for_place(
         status,
         provenance: TypeProvenance::Native,
         stable_key: stable_key(
+            interner,
             FactFamily::Type,
             [
                 ("language", "go".to_string()),
@@ -226,6 +240,7 @@ fn type_shape_for_place(place: &PlaceFact, ty: Option<&TypeShape>) -> TypeShape 
 }
 
 fn access_path_for_place(
+    interner: &crate::core::StableKeyInterner,
     id: u64,
     place: &PlaceFact,
     root_place_by_key: &BTreeMap<RootPlaceKey, PlaceId>,
@@ -252,6 +267,7 @@ fn access_path_for_place(
         body: place.root.body(),
         status,
         stable_key: stable_key(
+            interner,
             FactFamily::AccessPath,
             [
                 ("language", "go".to_string()),
@@ -302,6 +318,7 @@ fn access_path_projection(projection: &PlaceProjection) -> AccessPathProjection 
 }
 
 fn collect_values_for_operation(
+    interner: &crate::core::StableKeyInterner,
     operation: &MirOperation,
     place_by_id: &BTreeMap<crate::analysis::ids::PlaceId, &PlaceFact>,
     values: &mut Vec<ValueFact>,
@@ -311,14 +328,21 @@ fn collect_values_for_operation(
         MirOperationKind::Bind { place, value }
         | MirOperationKind::Assign { place, value, .. }
         | MirOperationKind::Write { place, value } => {
-            push_value_for_mir_value(operation, Some(*place), value, values, allocations);
+            push_value_for_mir_value(
+                interner,
+                operation,
+                Some(*place),
+                value,
+                values,
+                allocations,
+            );
         }
         MirOperationKind::Call {
             callee,
             return_place,
             ..
         } => {
-            push_function_value(operation, callee, values);
+            push_function_value(interner, operation, callee, values);
             values.push(ValueFact {
                 id: ValueFactId(values.len() as u64),
                 subject: ValueSubject::Place(*return_place),
@@ -334,6 +358,7 @@ fn collect_values_for_operation(
                 status: ValueStatus::Unknown,
                 provenance: ValueProvenance::Native,
                 stable_key: stable_key(
+                    interner,
                     FactFamily::Value,
                     [
                         ("language", "go".to_string()),
@@ -348,6 +373,7 @@ fn collect_values_for_operation(
 }
 
 fn push_value_for_mir_value(
+    interner: &crate::core::StableKeyInterner,
     operation: &MirOperation,
     place: Option<crate::analysis::ids::PlaceId>,
     value: &MirValue,
@@ -355,7 +381,7 @@ fn push_value_for_mir_value(
     allocations: &mut Vec<AllocationTokenFact>,
 ) {
     let (kind, status, precision) = match value {
-        MirValue::Literal { value } => literal_value_kind(value, operation, allocations),
+        MirValue::Literal { value } => literal_value_kind(interner, value, operation, allocations),
         MirValue::Place(place) => (
             ValueKind::PlaceRef(*place),
             ValueStatus::Present,
@@ -390,7 +416,7 @@ fn push_value_for_mir_value(
                     (AllocationKind::CompositeLiteral, "composite_literal")
                 }
             };
-            let token = push_allocation(operation, allocation_kind, label, allocations);
+            let token = push_allocation(interner, operation, allocation_kind, label, allocations);
             (
                 ValueKind::CompositeLiteral(token),
                 ValueStatus::Present,
@@ -398,7 +424,13 @@ fn push_value_for_mir_value(
             )
         }
         MirValue::Closure { .. } => {
-            let _ = push_allocation(operation, AllocationKind::Closure, "closure", allocations);
+            let _ = push_allocation(
+                interner,
+                operation,
+                AllocationKind::Closure,
+                "closure",
+                allocations,
+            );
             (
                 ValueKind::FunctionObject,
                 ValueStatus::Present,
@@ -428,6 +460,7 @@ fn push_value_for_mir_value(
         status,
         provenance: ValueProvenance::Native,
         stable_key: stable_key(
+            interner,
             FactFamily::Value,
             [
                 ("language", "go".to_string()),
@@ -439,6 +472,7 @@ fn push_value_for_mir_value(
 }
 
 fn literal_value_kind(
+    interner: &crate::core::StableKeyInterner,
     value: &str,
     operation: &MirOperation,
     allocations: &mut Vec<AllocationTokenFact>,
@@ -467,6 +501,7 @@ fn literal_value_kind(
     }
     if trimmed.starts_with("func") {
         let _ = push_allocation(
+            interner,
             operation,
             AllocationKind::FunctionObject,
             "function_object",
@@ -480,6 +515,7 @@ fn literal_value_kind(
     }
     if trimmed.contains('{') && trimmed.ends_with('}') {
         let token = push_allocation(
+            interner,
             operation,
             AllocationKind::CompositeLiteral,
             "composite_literal",
@@ -505,7 +541,12 @@ fn literal_value_kind(
     )
 }
 
-fn push_function_value(operation: &MirOperation, callee: &MirValue, values: &mut Vec<ValueFact>) {
+fn push_function_value(
+    interner: &crate::core::StableKeyInterner,
+    operation: &MirOperation,
+    callee: &MirValue,
+    values: &mut Vec<ValueFact>,
+) {
     if !matches!(callee, MirValue::Unknown { .. }) {
         return;
     }
@@ -522,6 +563,7 @@ fn push_function_value(operation: &MirOperation, callee: &MirValue, values: &mut
         status: ValueStatus::Present,
         provenance: ValueProvenance::Native,
         stable_key: stable_key(
+            interner,
             FactFamily::Value,
             [
                 ("language", "go".to_string()),
@@ -533,6 +575,7 @@ fn push_function_value(operation: &MirOperation, callee: &MirValue, values: &mut
 }
 
 fn push_allocation(
+    interner: &crate::core::StableKeyInterner,
     operation: &MirOperation,
     kind: AllocationKind,
     label: &str,
@@ -551,6 +594,7 @@ fn push_allocation(
         span: Some(operation.span.clone()),
         provenance: ValueProvenance::Native,
         stable_key: stable_key(
+            interner,
             FactFamily::AllocationToken,
             [
                 ("language", "go".to_string()),
@@ -563,6 +607,7 @@ fn push_allocation(
 }
 
 fn unsupported_type_fact(
+    interner: &crate::core::StableKeyInterner,
     id: u64,
     subject: TypeSubject,
     unsupported: &crate::analysis::mir::op::UnsupportedSemanticFact,
@@ -605,6 +650,7 @@ fn unsupported_type_fact(
         status,
         provenance: TypeProvenance::Native,
         stable_key: stable_key(
+            interner,
             FactFamily::Type,
             [
                 ("language", "go".to_string()),
@@ -615,8 +661,12 @@ fn unsupported_type_fact(
     }
 }
 
-fn stable_key<const N: usize>(family: FactFamily, parts: [(&'static str, String); N]) -> String {
-    semantic_stable_key(family, &parts).into_string()
+fn stable_key<const N: usize>(
+    interner: &crate::core::StableKeyInterner,
+    family: FactFamily,
+    parts: [(&'static str, String); N],
+) -> String {
+    semantic_stable_key(interner, family, &parts).into_string()
 }
 
 trait PlaceRootBody {

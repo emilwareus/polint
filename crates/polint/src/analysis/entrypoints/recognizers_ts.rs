@@ -91,6 +91,8 @@ fn is_unrecognized_framework_import(path: &str) -> bool {
 // ---------------------------------------------------------------------------
 
 pub(crate) fn recognize_ts_entrypoints(db: &AnalysisDb) -> TsRecognizerOutput {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let _files_by_id: BTreeMap<FileId, &crate::core::SourceFile> =
         db.files().iter().map(|file| (file.id, file)).collect();
     let functions_by_id: BTreeMap<FunctionId, &FunctionFact> =
@@ -137,7 +139,13 @@ pub(crate) fn recognize_ts_entrypoints(db: &AnalysisDb) -> TsRecognizerOutput {
     );
 
     // 3. Detect test framework entrypoints (jest, vitest, mocha)
-    recognize_test_entrypoints(db, &functions_by_id, &file_frameworks, &mut entrypoints);
+    recognize_test_entrypoints(
+        interner,
+        db,
+        &functions_by_id,
+        &file_frameworks,
+        &mut entrypoints,
+    );
 
     // 4. Detect CLI framework entrypoints (commander, yargs)
     recognize_cli_entrypoints(
@@ -156,6 +164,7 @@ pub(crate) fn recognize_ts_entrypoints(db: &AnalysisDb) -> TsRecognizerOutput {
     for (file, import_path, span) in &unrecognized_imports {
         let file_key = file_stable_key(db, *file);
         let stable_key = semantic_stable_key(
+            interner,
             FactFamily::UnresolvedFramework,
             &[
                 ("language", "TypeScript".to_string()),
@@ -181,13 +190,20 @@ pub(crate) fn recognize_ts_entrypoints(db: &AnalysisDb) -> TsRecognizerOutput {
     }
 
     // 7. Check for framework imports without matching patterns (D-10)
-    emit_unresolved_for_unused_frameworks(db, &file_frameworks, &entrypoints, &mut unresolved);
+    emit_unresolved_for_unused_frameworks(
+        interner,
+        db,
+        &file_frameworks,
+        &entrypoints,
+        &mut unresolved,
+    );
 
     // Sort output by stable key
     entrypoints.sort_by(|a, b| a.stable_key.cmp(&b.stable_key));
     let mut seen_entrypoints = BTreeSet::new();
-    entrypoints
-        .retain(|entrypoint| seen_entrypoints.insert(entrypoint_semantic_identity(entrypoint)));
+    entrypoints.retain(|entrypoint| {
+        seen_entrypoints.insert(entrypoint_semantic_identity(interner, entrypoint))
+    });
     unresolved.sort_by(|a, b| a.stable_key.cmp(&b.stable_key));
 
     TsRecognizerOutput {
@@ -210,6 +226,8 @@ fn recognize_express_entrypoints(
     entrypoints: &mut Vec<EntrypointFact>,
     _unresolved: &mut Vec<UnresolvedFrameworkFact>,
 ) {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     for site in db.call_sites() {
         if !matches!(site.language, Language::TypeScript | Language::JavaScript) {
             continue;
@@ -243,6 +261,7 @@ fn recognize_express_entrypoints(
 
                 if let Some(target_function) = handler_function {
                     let stable_key = entrypoint_stable_key(
+                        interner,
                         "TypeScript",
                         &file_key,
                         "ts.express",
@@ -291,6 +310,7 @@ fn recognize_express_entrypoints(
 
                 if let Some(target_function) = handler_function {
                     let stable_key = entrypoint_stable_key(
+                        interner,
                         "TypeScript",
                         &file_key,
                         "ts.express",
@@ -343,6 +363,8 @@ fn recognize_mcp_entrypoints(
     entrypoints: &mut Vec<EntrypointFact>,
     _unresolved: &mut Vec<UnresolvedFrameworkFact>,
 ) {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     for site in db.call_sites() {
         if !matches!(site.language, Language::TypeScript | Language::JavaScript) {
             continue;
@@ -379,6 +401,7 @@ fn recognize_mcp_entrypoints(
 
                 if let Some(target_function) = handler_function {
                     let stable_key = entrypoint_stable_key(
+                        interner,
                         "TypeScript",
                         &file_key,
                         "ts.mcp_sdk",
@@ -441,6 +464,7 @@ fn framework_id_for_test(fw: TsFramework) -> &'static str {
 }
 
 fn recognize_test_entrypoints(
+    interner: &crate::core::StableKeyInterner,
     db: &AnalysisDb,
     _functions_by_id: &BTreeMap<FunctionId, &FunctionFact>,
     file_frameworks: &BTreeMap<FileId, Vec<(&str, TsFramework, Span)>>,
@@ -486,6 +510,7 @@ fn recognize_test_entrypoints(
         };
 
         let stable_key = entrypoint_stable_key(
+            interner,
             "TypeScript",
             &file_key,
             fw_id,
@@ -532,6 +557,8 @@ fn recognize_cli_entrypoints(
     entrypoints: &mut Vec<EntrypointFact>,
     _unresolved: &mut Vec<UnresolvedFrameworkFact>,
 ) {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     for site in db.call_sites() {
         if !matches!(site.language, Language::TypeScript | Language::JavaScript) {
             continue;
@@ -569,6 +596,7 @@ fn recognize_cli_entrypoints(
 
                 if let Some(target_function) = handler_function {
                     let stable_key = entrypoint_stable_key(
+                        interner,
                         "TypeScript",
                         &file_key,
                         "ts.commander",
@@ -619,6 +647,7 @@ fn recognize_cli_entrypoints(
 
                 if let Some(target_function) = handler_function {
                     let stable_key = entrypoint_stable_key(
+                        interner,
                         "TypeScript",
                         &file_key,
                         "ts.yargs",
@@ -663,8 +692,12 @@ fn recognize_cli_entrypoints(
 // Source-level fallback recognizer
 // ---------------------------------------------------------------------------
 
-fn entrypoint_semantic_identity(entrypoint: &EntrypointFact) -> String {
+fn entrypoint_semantic_identity(
+    interner: &crate::core::StableKeyInterner,
+    entrypoint: &EntrypointFact,
+) -> String {
     semantic_stable_key(
+        interner,
         FactFamily::Entrypoint,
         &[
             (
@@ -732,6 +765,8 @@ fn recognize_source_level_entrypoints(
     file_frameworks: &BTreeMap<FileId, Vec<(&str, TsFramework, Span)>>,
     entrypoints: &mut Vec<EntrypointFact>,
 ) {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let functions_by_file = functions_by_id.values().copied().fold(
         BTreeMap::<FileId, Vec<&FunctionFact>>::new(),
         |mut map, function| {
@@ -753,18 +788,19 @@ fn recognize_source_level_entrypoints(
             .iter()
             .any(|(_, framework, _)| *framework == TsFramework::Express)
         {
-            recognize_source_express_calls(file, functions, entrypoints);
+            recognize_source_express_calls(interner, file, functions, entrypoints);
         }
         if frameworks
             .iter()
             .any(|(_, framework, _)| *framework == TsFramework::McpSdk)
         {
-            recognize_source_mcp_calls(file, functions, entrypoints);
+            recognize_source_mcp_calls(interner, file, functions, entrypoints);
         }
     }
 }
 
 fn recognize_source_express_calls(
+    interner: &crate::core::StableKeyInterner,
     file: &crate::core::SourceFile,
     functions: &[&FunctionFact],
     entrypoints: &mut Vec<EntrypointFact>,
@@ -783,6 +819,7 @@ fn recognize_source_express_calls(
             let method_label = method.to_uppercase();
             let path = args.first().and_then(|argument| unquote_literal(argument));
             push_source_entrypoint(
+                interner,
                 file,
                 handler,
                 call.start,
@@ -808,6 +845,7 @@ fn recognize_source_express_calls(
             continue;
         };
         push_source_entrypoint(
+            interner,
             file,
             handler,
             call.start,
@@ -832,6 +870,7 @@ fn recognize_source_express_calls(
             continue;
         };
         push_source_entrypoint(
+            interner,
             file,
             handler,
             call.start,
@@ -846,6 +885,7 @@ fn recognize_source_express_calls(
 }
 
 fn recognize_source_mcp_calls(
+    interner: &crate::core::StableKeyInterner,
     file: &crate::core::SourceFile,
     functions: &[&FunctionFact],
     entrypoints: &mut Vec<EntrypointFact>,
@@ -863,6 +903,7 @@ fn recognize_source_mcp_calls(
             };
             let tool_name = args.first().and_then(|argument| unquote_literal(argument));
             push_source_entrypoint(
+                interner,
                 file,
                 handler,
                 call.start,
@@ -1199,6 +1240,7 @@ fn resolve_source_handler(functions: &[&FunctionFact], args: &[&str]) -> Option<
 
 #[allow(clippy::too_many_arguments)]
 fn push_source_entrypoint(
+    interner: &crate::core::StableKeyInterner,
     file: &crate::core::SourceFile,
     handler: FunctionId,
     start_byte: u32,
@@ -1218,6 +1260,7 @@ fn push_source_entrypoint(
     );
     let kind_label = format!("{kind:?}");
     let stable_key = entrypoint_stable_key(
+        interner,
         language_label_for_stable_key(file.language),
         &file_key,
         framework_id,
@@ -1254,6 +1297,7 @@ fn push_source_entrypoint(
 /// recognized from that file, emit an UnresolvedFrameworkFact. This catches
 /// cases where the framework is used in an unrecognized pattern.
 fn emit_unresolved_for_unused_frameworks(
+    interner: &crate::core::StableKeyInterner,
     db: &AnalysisDb,
     file_frameworks: &BTreeMap<FileId, Vec<(&str, TsFramework, Span)>>,
     entrypoints: &[EntrypointFact],
@@ -1277,6 +1321,7 @@ fn emit_unresolved_for_unused_frameworks(
             if !files_with_entrypoints.contains(&(*file_id, framework_id)) {
                 let file_key = file_stable_key(db, *file_id);
                 let stable_key = semantic_stable_key(
+                    interner,
                     FactFamily::UnresolvedFramework,
                     &[
                         ("language", "TypeScript".to_string()),
@@ -1591,6 +1636,7 @@ fn span_key(span: &Span) -> String {
 }
 
 fn entrypoint_stable_key(
+    interner: &crate::core::StableKeyInterner,
     language: &str,
     file_key: &str,
     framework_id: &str,
@@ -1599,6 +1645,7 @@ fn entrypoint_stable_key(
     registration_span: &str,
 ) -> String {
     semantic_stable_key(
+        interner,
         FactFamily::Entrypoint,
         &[
             ("language", language.to_string()),

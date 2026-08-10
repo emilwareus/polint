@@ -134,6 +134,7 @@ impl PlaceTableBuilder {
         status: PlaceStatus,
     ) -> String {
         self.insert_with_context(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
             &PlaceStableContext::for_test(),
             PlaceInsert {
                 language,
@@ -148,19 +149,27 @@ impl PlaceTableBuilder {
 
     pub(crate) fn insert_with_context(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         context: &PlaceStableContext,
         place: PlaceInsert,
     ) -> String {
-        self.insert_typed_with_context(context, place, None)
+        self.insert_typed_with_context(interner, context, place, None)
     }
 
     pub(crate) fn insert_typed_with_context(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         context: &PlaceStableContext,
         place: PlaceInsert,
         ty: Option<TypeShape>,
     ) -> String {
-        let stable_key = stable_key_for(place.language, context, &place.root, &place.projections);
+        let stable_key = stable_key_for(
+            interner,
+            place.language,
+            context,
+            &place.root,
+            &place.projections,
+        );
         let draft = self
             .places
             .entry(stable_key.clone())
@@ -222,6 +231,7 @@ struct PlaceDraft {
 }
 
 fn stable_key_for(
+    interner: &crate::core::StableKeyInterner,
     language: Language,
     context: &PlaceStableContext,
     root: &PlaceRoot,
@@ -244,7 +254,7 @@ fn stable_key_for(
         .iter()
         .map(|(label, value)| (label.as_str(), value.clone()))
         .collect::<Vec<_>>();
-    let stable_key = semantic_stable_key(FactFamily::Place, &borrowed_parts);
+    let stable_key = semantic_stable_key(interner, FactFamily::Place, &borrowed_parts);
     stable_key.into_string()
 }
 
@@ -451,6 +461,7 @@ mod tests {
         );
         let mut first = PlaceTableBuilder::default();
         let first_key = first.insert_with_context(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
             &context,
             PlaceInsert {
                 language: Language::Go,
@@ -466,6 +477,7 @@ mod tests {
         );
         let mut second = PlaceTableBuilder::default();
         let second_key = second.insert_with_context(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
             &context,
             PlaceInsert {
                 language: Language::Go,

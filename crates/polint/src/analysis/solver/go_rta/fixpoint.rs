@@ -76,7 +76,11 @@ use super::inputs::GoRtaInputs;
 
 /// Run the RTA fixpoint over the closed snapshot, returning a normalized
 /// [`SolverOutput`] (D-06/D-07/D-13). See the module docs for the model + budget.
-pub(crate) fn solve_go_rta(inputs: &GoRtaInputs, budget: &SolverBudget) -> SolverOutput {
+pub(crate) fn solve_go_rta(
+    interner: &crate::core::StableKeyInterner,
+    inputs: &GoRtaInputs,
+    budget: &SolverBudget,
+) -> SolverOutput {
     // Index callsites by caller for deterministic, efficient per-round scanning.
     let mut callsites_by_caller: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
     for (index, callsite) in inputs.callsites.iter().enumerate() {
@@ -214,6 +218,7 @@ pub(crate) fn solve_go_rta(inputs: &GoRtaInputs, budget: &SolverBudget) -> Solve
                         .insert(BudgetReason::GoAddressTakenThreshold.as_str().to_string());
                 }
                 let resolution = resolve_callsite(
+                    interner,
                     callsite,
                     inputs,
                     address_taken,
@@ -363,7 +368,11 @@ mod tests {
         // pkg.File is instantiated → exactly the pkg.File.Read edge is derived; pkg.Buf
         // is NOT instantiated → no Buf.Read edge (the RTA filter, D-06).
         let inputs = interface_scenario(&["pkg.File"]);
-        let output = solve_go_rta(&inputs, &SolverBudget::default());
+        let output = solve_go_rta(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &inputs,
+            &SolverBudget::default(),
+        );
 
         assert_eq!(output.budget_status, BudgetStatus::WithinBudget);
         // main(1) -> File.Read(3) resolved; main -> Buf.Read(4) NOT resolved.
@@ -454,7 +463,11 @@ mod tests {
         }
         .finalize_indexes();
 
-        let output = solve_go_rta(&inputs, &SolverBudget::default());
+        let output = solve_go_rta(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &inputs,
+            &SolverBudget::default(),
+        );
         assert_eq!(output.budget_status, BudgetStatus::WithinBudget);
         // run(7) -> File.Read(3): the dispatch in the statically-reached helper resolves.
         assert!(
@@ -557,7 +570,11 @@ mod tests {
 
         // THE DEFAULT BUDGET — no inflated `max_rta_rounds`. The default `max_rta_rounds`
         // (32) is far below the chain depth (200); the fix is what lets this converge.
-        let output = solve_go_rta(&inputs, &SolverBudget::default());
+        let output = solve_go_rta(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &inputs,
+            &SolverBudget::default(),
+        );
 
         // (a) The deep dispatch edge resolves: s200 -> (pkg.File).Read.
         assert!(
@@ -615,7 +632,11 @@ mod tests {
         }
         .finalize_indexes();
 
-        let output = solve_go_rta(&inputs, &SolverBudget::default());
+        let output = solve_go_rta(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &inputs,
+            &SolverBudget::default(),
+        );
         assert_eq!(
             output.budget_status,
             BudgetStatus::WithinBudget,
@@ -630,7 +651,11 @@ mod tests {
         // No type instantiated at all → the interface invoke resolves to nothing
         // (honest unresolved, not a fabricated edge — D-08).
         let inputs = interface_scenario(&[]);
-        let output = solve_go_rta(&inputs, &SolverBudget::default());
+        let output = solve_go_rta(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &inputs,
+            &SolverBudget::default(),
+        );
         assert!(output.derived_edges.is_empty());
         assert_eq!(output.budget_status, BudgetStatus::WithinBudget);
     }
@@ -674,7 +699,11 @@ mod tests {
         }
         .finalize_indexes();
 
-        let output = solve_go_rta(&inputs, &SolverBudget::default());
+        let output = solve_go_rta(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &inputs,
+            &SolverBudget::default(),
+        );
         assert!(
             output
                 .derived_edges
@@ -698,7 +727,11 @@ mod tests {
         let mut inputs = interface_scenario(&["pkg.File"]);
         // The callsite invokes a method nobody declares.
         inputs.callsites[0].interface_method = Some("Frobnicate".to_string());
-        let output = solve_go_rta(&inputs, &SolverBudget::default());
+        let output = solve_go_rta(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &inputs,
+            &SolverBudget::default(),
+        );
         assert!(output.derived_edges.is_empty());
     }
 
@@ -707,7 +740,11 @@ mod tests {
         // D-09 for RTA: the resolved edge depends on its contributing instantiated-type
         // / method-set / callsite / dispatch facts. Removing the instantiated-type fact
         // (i.e. the type is no longer instantiated) does NOT reproduce the SAME edge.
-        let baseline = solve_go_rta(&interface_scenario(&["pkg.File"]), &SolverBudget::default());
+        let baseline = solve_go_rta(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &interface_scenario(&["pkg.File"]),
+            &SolverBudget::default(),
+        );
         let edge = baseline
             .derived_edges
             .iter()
@@ -716,7 +753,11 @@ mod tests {
         let baseline_key = edge.stable_key.clone();
 
         // Remove pkg.File from the instantiated set (delete the contributing fact).
-        let without_instantiated = solve_go_rta(&interface_scenario(&[]), &SolverBudget::default());
+        let without_instantiated = solve_go_rta(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &interface_scenario(&[]),
+            &SolverBudget::default(),
+        );
         assert!(
             !without_instantiated
                 .derived_edges
@@ -735,7 +776,11 @@ mod tests {
             .unwrap()
             .remove("Read");
         let no_method_set = no_method_set.finalize_indexes();
-        let rerun = solve_go_rta(&no_method_set, &SolverBudget::default());
+        let rerun = solve_go_rta(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &no_method_set,
+            &SolverBudget::default(),
+        );
         assert!(
             !rerun
                 .derived_edges
@@ -751,10 +796,12 @@ mod tests {
         // same scenario via two different instantiated-type insertion orders and assert
         // byte-identical normalized output.
         let forward = solve_go_rta(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
             &interface_scenario(&["pkg.File", "pkg.Buf"]),
             &SolverBudget::default(),
         );
         let reversed = solve_go_rta(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
             &interface_scenario(&["pkg.Buf", "pkg.File"]),
             &SolverBudget::default(),
         );
@@ -840,7 +887,11 @@ mod tests {
 
         let mut budget = SolverBudget::default();
         budget.go.max_rta_rounds = 1;
-        let output = solve_go_rta(&inputs, &budget);
+        let output = solve_go_rta(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &inputs,
+            &budget,
+        );
         // The cap is hit before the second round resolves A.Step's callsite, so the
         // run latches BudgetExceeded honestly rather than looping.
         assert_eq!(output.budget_status, BudgetStatus::BudgetExceeded);
@@ -928,7 +979,11 @@ mod tests {
 
         let mut budget = SolverBudget::default();
         budget.go.address_taken_threshold = 1;
-        let output = solve_go_rta(&inputs, &budget);
+        let output = solve_go_rta(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &inputs,
+            &budget,
+        );
 
         // Interface dispatch still resolves despite the large address-taken set.
         assert!(
@@ -980,7 +1035,11 @@ mod tests {
 
         let mut budget = SolverBudget::default();
         budget.go.address_taken_threshold = 1;
-        let output = solve_go_rta(&inputs, &budget);
+        let output = solve_go_rta(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &inputs,
+            &budget,
+        );
 
         // Interface dispatch still resolves: main(1) -> (pkg.File).Read(3).
         assert!(
@@ -1038,7 +1097,11 @@ mod tests {
 
         let mut budget = SolverBudget::default();
         budget.go.address_taken_threshold = 1;
-        let output = solve_go_rta(&inputs.finalize_indexes(), &budget);
+        let output = solve_go_rta(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &inputs.finalize_indexes(),
+            &budget,
+        );
 
         assert!(
             output
@@ -1124,7 +1187,11 @@ mod tests {
 
         let mut budget = SolverBudget::default();
         budget.go.max_rta_rounds = 1;
-        let output = solve_go_rta(&inputs, &budget);
+        let output = solve_go_rta(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &inputs,
+            &budget,
+        );
         // The single resolvable edge is derived AND the run is WithinBudget (converged at
         // the boundary, no pending work the cap prevented).
         assert!(
@@ -1194,7 +1261,11 @@ mod tests {
         let mut budget = SolverBudget::default();
         budget.go.max_rta_rounds = 1;
 
-        let output = solve_go_rta(&inputs, &budget);
+        let output = solve_go_rta(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &inputs,
+            &budget,
+        );
 
         assert!(
             output
@@ -1308,7 +1379,11 @@ mod tests {
             budget.max_outer_iterations
         );
 
-        let output = solve_go_rta(&inputs, &budget);
+        let output = solve_go_rta(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &inputs,
+            &budget,
+        );
 
         // The fixpoint converges honestly — NOT a spurious BudgetExceeded.
         assert_eq!(
@@ -1412,7 +1487,11 @@ mod tests {
         // chain truncates and the run latches BudgetExceeded honestly.
         let mut budget = SolverBudget::default();
         budget.go.max_worklist_steps = 1;
-        let output = solve_go_rta(&inputs, &budget);
+        let output = solve_go_rta(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &inputs,
+            &budget,
+        );
         assert_eq!(output.budget_status, BudgetStatus::BudgetExceeded);
     }
 }

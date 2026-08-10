@@ -11,7 +11,7 @@ use crate::analysis::extensions::sinks::{
 };
 use crate::analysis::extensions::store::AcceptedExtensionFact;
 use crate::analysis::ids::{CallSiteId, RefinedCallEdgeId};
-use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
+use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
 use crate::core::{AnalysisDb, FunctionId, SymbolId};
 
 pub(crate) fn derive_extension_refinements(db: &AnalysisDb) -> RefinedCallOutput {
@@ -33,6 +33,8 @@ fn edge_from_extension_fact(
     fact: &AcceptedExtensionFact,
     index: usize,
 ) -> Option<RefinedCallEdgeFact> {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let site = resolve_site(db, payload(fact, "site=")?)?;
     let target_function = payload(fact, "target_function=").and_then(|value| {
         parse_function_ref(value)
@@ -75,7 +77,8 @@ fn edge_from_extension_fact(
         confidence: extension_confidence(fact.confidence),
         evidence: extension_evidence(fact),
         input_stable_keys: vec![fact.stable_key.clone()],
-        stable_key: stable_key_from_parts(
+        stable_key: stable_key_text_from_parts(
+            interner,
             FactFamily::RefinedCallEdge,
             &[
                 ("tier", "extension_model".to_string()),

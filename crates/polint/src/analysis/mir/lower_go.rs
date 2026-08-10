@@ -23,6 +23,8 @@ use crate::analysis_kernel::FactFamily;
 use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, SourceFile, Span};
 
 pub(crate) fn lower_go_mir(db: &AnalysisDb) -> MirOutput {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let mut lowering = GoMirLowering::default();
     let mut files = db
         .files()
@@ -32,7 +34,7 @@ pub(crate) fn lower_go_mir(db: &AnalysisDb) -> MirOutput {
     files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
 
     for file in files {
-        lowering.lower_file(db, file);
+        lowering.lower_file(interner, db, file);
     }
 
     let (places, place_types) = lowering.places.clone().finish_with_types();
@@ -41,7 +43,7 @@ pub(crate) fn lower_go_mir(db: &AnalysisDb) -> MirOutput {
         .map(|place| (place.stable_key.clone(), place.id))
         .collect::<BTreeMap<_, _>>();
     let operations = lowering.finish_operations(&place_ids);
-    let unsupported = lowering.finish_unsupported(&place_ids);
+    let unsupported = lowering.finish_unsupported(interner, &place_ids);
     let control_effects = lowering
         .operations
         .iter()
@@ -111,7 +113,10 @@ fn lower_control_flow(
             .chain(body_effects.keys())
             .copied()
             .collect::<BTreeSet<_>>();
-        let mut drafts = vec![BlockDraft::new(MirBlockId(blocks.len() as u64), body.id, 0)];
+        let mut drafts = vec![BlockDraft::new(
+            MirBlockId(blocks.len() as u64),
+            (body.id, 0),
+        )];
         let mut current = push_block_draft(&mut drafts, blocks.len(), body.id);
         drafts[0].terminator = Some(MirTerminatorKind::Goto {
             target: drafts[current].id,
@@ -288,7 +293,8 @@ struct BlockDraft {
 }
 
 impl BlockDraft {
-    fn new(id: MirBlockId, body: MirBodyId, ordinal: u32) -> Self {
+    fn new(id: MirBlockId, pair: (MirBodyId, u32)) -> Self {
+        let (body, ordinal) = pair;
         Self {
             id,
             body,
@@ -303,8 +309,7 @@ fn push_block_draft(drafts: &mut Vec<BlockDraft>, base: usize, body: MirBodyId) 
     let index = drafts.len();
     drafts.push(BlockDraft::new(
         MirBlockId((base + index) as u64),
-        body,
-        index as u32,
+        (body, index as u32),
     ));
     index
 }
@@ -325,7 +330,12 @@ struct GoMirLowering {
 }
 
 impl GoMirLowering {
-    fn lower_file(&mut self, db: &AnalysisDb, file: &SourceFile) {
+    fn lower_file(
+        &mut self,
+        interner: &crate::core::StableKeyInterner,
+        db: &AnalysisDb,
+        file: &SourceFile,
+    ) {
         let mut parser = Parser::new();
         if parser
             .set_language(&tree_sitter_go::LANGUAGE.into())
@@ -369,7 +379,7 @@ impl GoMirLowering {
             let Some(function) = matching_function(db, file.id, &name, &span) else {
                 continue;
             };
-            let body = self.push_body(db, file, function, span);
+            let body = self.push_body(interner, db, file, function, span);
             let mut literals = Vec::new();
             visit_named_descendants(body_node, &mut |node| {
                 if node.kind() == "func_literal" {
@@ -381,6 +391,7 @@ impl GoMirLowering {
                 .iter()
                 .map(|node| {
                     let closure_body = self.push_body(
+                        interner,
                         db,
                         file,
                         function,
@@ -410,8 +421,9 @@ impl GoMirLowering {
                 closure_body_ids.clone(),
                 closure_capture_names.clone(),
             );
-            function_lowering.lower_parameters(node, &mut self.places);
+            function_lowering.lower_parameters(interner, node, &mut self.places);
             function_lowering.lower_body(
+                interner,
                 body_node,
                 &mut self.places,
                 &mut self.operations,
@@ -434,28 +446,31 @@ impl GoMirLowering {
                     closure_body_ids.clone(),
                     closure_capture_names.clone(),
                 );
-                closure_lowering.lower_parameters(literal, &mut self.places);
+                closure_lowering.lower_parameters(interner, literal, &mut self.places);
                 closure_lowering.lower_body(
+                    interner,
                     closure_block,
                     &mut self.places,
                     &mut self.operations,
                     &mut self.unsupported,
                 );
             }
-            self.lower_parser_errors(file, body.id, &body.stable_key, body_node);
+            self.lower_parser_errors(interner, file, body.id, &body.stable_key, body_node);
         }
     }
 
     fn push_body(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         db: &AnalysisDb,
         file: &SourceFile,
         function: &FunctionFact,
         span: Span,
     ) -> MirBody {
         let id = MirBodyId(self.bodies.len() as u64);
-        let owner_stable_key = owner_stable_key(file, function);
+        let owner_stable_key = owner_stable_key(interner, file, function);
         let stable_key = semantic_stable_key(
+            interner,
             FactFamily::MirBody,
             &[
                 ("language", "go".to_string()),
@@ -494,6 +509,7 @@ impl GoMirLowering {
 
     fn lower_parser_errors(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         file: &SourceFile,
         body: MirBodyId,
         body_stable_key: &str,
@@ -519,13 +535,16 @@ impl GoMirLowering {
                         conservative_action: ConservativeAction::StopLowering,
                     }));
                 self.operations.push(OperationDraft::new(
+                    interner,
                     operation_id,
                     body,
                     body_stable_key,
                     operation_id.0 as u32,
                     span,
-                    OperationKindDraft::Unsupported { unsupported_id },
-                    MirStatus::Unsupported,
+                    (
+                        OperationKindDraft::Unsupported { unsupported_id },
+                        MirStatus::Unsupported,
+                    ),
                 ));
             }
         });
@@ -540,11 +559,12 @@ impl GoMirLowering {
 
     fn finish_unsupported(
         &self,
+        interner: &crate::core::StableKeyInterner,
         place_ids: &BTreeMap<String, PlaceId>,
     ) -> Vec<UnsupportedSemanticFact> {
         self.unsupported
             .iter()
-            .map(|draft| draft.to_fact(place_ids))
+            .map(|draft| draft.to_fact(interner, place_ids))
             .collect()
     }
 }
@@ -634,7 +654,12 @@ impl<'source> FunctionLowering<'source> {
         }
     }
 
-    fn lower_parameters(&mut self, node: Node<'_>, places: &mut PlaceTableBuilder) {
+    fn lower_parameters(
+        &mut self,
+        interner: &crate::core::StableKeyInterner,
+        node: Node<'_>,
+        places: &mut PlaceTableBuilder,
+    ) {
         let mut index = 0_u32;
         if let Some(receiver) = node.child_by_field_name("receiver") {
             let name = parameter_names(self.source, receiver).into_iter().next();
@@ -646,7 +671,7 @@ impl<'source> FunctionLowering<'source> {
             if let Some(name) = name {
                 self.parameters.insert(name, root.clone());
             }
-            self.insert_place(places, root, Vec::new(), PlaceStatus::Resolved);
+            self.insert_place(interner, places, root, Vec::new(), PlaceStatus::Resolved);
             index += 1;
         }
 
@@ -658,7 +683,7 @@ impl<'source> FunctionLowering<'source> {
                     name: Some(name.clone()),
                 };
                 self.parameters.insert(name, root.clone());
-                self.insert_place(places, root, Vec::new(), PlaceStatus::Resolved);
+                self.insert_place(interner, places, root, Vec::new(), PlaceStatus::Resolved);
                 index += 1;
             }
         }
@@ -666,6 +691,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_body(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         body: Node<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -675,33 +701,38 @@ impl<'source> FunctionLowering<'source> {
             let Some(statement) = body.named_child(index) else {
                 continue;
             };
-            self.lower_statement(statement, places, operations, unsupported);
+            self.lower_statement(interner, statement, places, operations, unsupported);
         }
     }
 
     fn lower_statement(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         statement: Node<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
         unsupported: &mut Vec<UnsupportedDraft>,
     ) {
-        self.lower_unsupported(statement, operations, unsupported);
+        self.lower_unsupported(interner, statement, operations, unsupported);
         match statement.kind() {
             "short_var_declaration" => {
                 let right = statement.child_by_field_name("right");
                 let value = right
-                    .and_then(|right| self.lower_value(right, places, operations, unsupported))
+                    .and_then(|right| {
+                        self.lower_value(interner, right, places, operations, unsupported)
+                    })
                     .unwrap_or_else(|| ValueDraft::Unknown {
                         evidence: "short declaration initializer".to_string(),
                     });
                 for name in assignment_left_names(self.source, statement) {
                     let key = self.insert_local_typed(
+                        interner,
                         places,
                         &name,
                         right.map(type_shape_for_go_expression),
                     );
                     self.push_assign(
+                        interner,
                         operations,
                         statement,
                         key,
@@ -718,8 +749,9 @@ impl<'source> FunctionLowering<'source> {
                     }
                 });
                 for name in names {
-                    let key = self.insert_local(places, &name);
+                    let key = self.insert_local(interner, places, &name);
                     self.push_assign(
+                        interner,
                         operations,
                         statement,
                         key,
@@ -731,10 +763,12 @@ impl<'source> FunctionLowering<'source> {
                 }
             }
             "assignment_statement" => {
-                let left_places = self.assignment_left_places(statement, places);
+                let left_places = self.assignment_left_places(interner, statement, places);
                 let value = statement
                     .child_by_field_name("right")
-                    .and_then(|right| self.lower_value(right, places, operations, unsupported))
+                    .and_then(|right| {
+                        self.lower_value(interner, right, places, operations, unsupported)
+                    })
                     .unwrap_or_else(|| ValueDraft::Unknown {
                         evidence: "assignment value".to_string(),
                     });
@@ -751,7 +785,14 @@ impl<'source> FunctionLowering<'source> {
                     } else {
                         AssignMode::Overwrite
                     };
-                    self.push_assign(operations, statement, place.key, value.clone(), mode);
+                    self.push_assign(
+                        interner,
+                        operations,
+                        statement,
+                        place.key,
+                        value.clone(),
+                        mode,
+                    );
                 }
             }
             "if_statement"
@@ -759,19 +800,20 @@ impl<'source> FunctionLowering<'source> {
             | "expression_switch_statement"
             | "type_switch_statement"
             | "switch_statement" => {
-                self.push_branch(operations, statement);
+                self.push_branch(interner, operations, statement);
                 for index in 0..statement.named_child_count() as u32 {
                     let Some(child) = statement.named_child(index) else {
                         continue;
                     };
-                    self.lower_statement(child, places, operations, unsupported);
+                    self.lower_statement(interner, child, places, operations, unsupported);
                 }
             }
             "return_statement" => {
-                let value = statement
-                    .named_child(0)
-                    .and_then(|child| self.lower_value(child, places, operations, unsupported));
+                let value = statement.named_child(0).and_then(|child| {
+                    self.lower_value(interner, child, places, operations, unsupported)
+                });
                 self.push_operation(
+                    interner,
                     operations,
                     statement,
                     OperationKindDraft::Return { value },
@@ -779,16 +821,17 @@ impl<'source> FunctionLowering<'source> {
                 );
             }
             "call_expression" => {
-                self.lower_call(statement, places, operations, unsupported);
+                self.lower_call(interner, statement, places, operations, unsupported);
             }
             "unary_expression"
                 if node_text(self.source, statement)
                     .is_some_and(|text| text.trim_start().starts_with("<-")) =>
             {
-                self.lower_expression(statement, places, operations, unsupported, false);
+                self.lower_expression(interner, statement, places, operations, unsupported, false);
             }
             "send_statement" => {
                 let value = self.lower_expression_children(
+                    interner,
                     statement,
                     places,
                     operations,
@@ -796,6 +839,7 @@ impl<'source> FunctionLowering<'source> {
                     false,
                 );
                 self.push_operation(
+                    interner,
                     operations,
                     statement,
                     OperationKindDraft::Suspend {
@@ -806,10 +850,16 @@ impl<'source> FunctionLowering<'source> {
                 );
             }
             "identifier" | "selector_expression" | "index_expression" | "binary_expression" => {
-                if let Some(shape) =
-                    self.lower_expression(statement, places, operations, unsupported, false)
-                {
+                if let Some(shape) = self.lower_expression(
+                    interner,
+                    statement,
+                    places,
+                    operations,
+                    unsupported,
+                    false,
+                ) {
                     self.push_operation(
+                        interner,
                         operations,
                         statement,
                         OperationKindDraft::Read {
@@ -824,7 +874,7 @@ impl<'source> FunctionLowering<'source> {
                     let Some(child) = statement.named_child(index) else {
                         continue;
                     };
-                    self.lower_statement(child, places, operations, unsupported);
+                    self.lower_statement(interner, child, places, operations, unsupported);
                 }
             }
         }
@@ -832,6 +882,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn assignment_left_places(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         statement: Node<'_>,
         places: &mut PlaceTableBuilder,
     ) -> Vec<PlaceShape> {
@@ -839,8 +890,14 @@ impl<'source> FunctionLowering<'source> {
             let mut shapes = Vec::new();
             for index in 0..left.named_child_count() as u32 {
                 if let Some(child) = left.named_child(index)
-                    && let Some(shape) =
-                        self.lower_expression(child, places, &mut Vec::new(), &mut Vec::new(), true)
+                    && let Some(shape) = self.lower_expression(
+                        interner,
+                        child,
+                        places,
+                        &mut Vec::new(),
+                        &mut Vec::new(),
+                        true,
+                    )
                 {
                     shapes.push(shape);
                 }
@@ -863,6 +920,7 @@ impl<'source> FunctionLowering<'source> {
                         projections: Vec::new(),
                         status: PlaceStatus::Resolved,
                         key: self.insert_place(
+                            interner,
                             places,
                             root.clone(),
                             Vec::new(),
@@ -871,8 +929,13 @@ impl<'source> FunctionLowering<'source> {
                     }
                 } else {
                     let root = PlaceRoot::Global { symbol: None, name };
-                    let key =
-                        self.insert_place(places, root.clone(), Vec::new(), PlaceStatus::Partial);
+                    let key = self.insert_place(
+                        interner,
+                        places,
+                        root.clone(),
+                        Vec::new(),
+                        PlaceStatus::Partial,
+                    );
                     PlaceShape {
                         root,
                         projections: Vec::new(),
@@ -884,12 +947,18 @@ impl<'source> FunctionLowering<'source> {
             .collect()
     }
 
-    fn insert_local(&mut self, places: &mut PlaceTableBuilder, name: &str) -> String {
-        self.insert_local_typed(places, name, None)
+    fn insert_local(
+        &mut self,
+        interner: &crate::core::StableKeyInterner,
+        places: &mut PlaceTableBuilder,
+        name: &str,
+    ) -> String {
+        self.insert_local_typed(interner, places, name, None)
     }
 
     fn insert_local_typed(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         name: &str,
         ty: Option<TypeShape>,
@@ -899,20 +968,32 @@ impl<'source> FunctionLowering<'source> {
             name: name.to_string(),
         };
         self.locals.insert(name.to_string(), root.clone());
-        self.insert_typed_place(places, root, Vec::new(), ty, PlaceStatus::Resolved)
+        self.insert_typed_place(
+            interner,
+            places,
+            root,
+            Vec::new(),
+            ty,
+            PlaceStatus::Resolved,
+        )
     }
 
     fn lower_value(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         node: Node<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
         unsupported: &mut Vec<UnsupportedDraft>,
     ) -> Option<ValueDraft> {
         match node.kind() {
-            "expression_list" if node.named_child_count() == 1 => {
-                self.lower_value(node.named_child(0)?, places, operations, unsupported)
-            }
+            "expression_list" if node.named_child_count() == 1 => self.lower_value(
+                interner,
+                node.named_child(0)?,
+                places,
+                operations,
+                unsupported,
+            ),
             "interpreted_string_literal"
             | "raw_string_literal"
             | "int_literal"
@@ -933,13 +1014,13 @@ impl<'source> FunctionLowering<'source> {
                 Some(ValueDraft::BinOp {
                     op: go_binary_operator_text(self.source, left, right),
                     lhs: Box::new(
-                        self.lower_value(left, places, operations, unsupported)
+                        self.lower_value(interner, left, places, operations, unsupported)
                             .unwrap_or_else(|| ValueDraft::Unknown {
                                 evidence: "binary left operand".to_string(),
                             }),
                     ),
                     rhs: Box::new(
-                        self.lower_value(right, places, operations, unsupported)
+                        self.lower_value(interner, right, places, operations, unsupported)
                             .unwrap_or_else(|| ValueDraft::Unknown {
                                 evidence: "binary right operand".to_string(),
                             }),
@@ -973,7 +1054,9 @@ impl<'source> FunctionLowering<'source> {
                         (None, Some(element))
                     };
                     let value = value_node
-                        .and_then(|value| self.lower_value(value, places, operations, unsupported))
+                        .and_then(|value| {
+                            self.lower_value(interner, value, places, operations, unsupported)
+                        })
                         .unwrap_or_else(|| ValueDraft::Unknown {
                             evidence: "composite element value".to_string(),
                         });
@@ -984,17 +1067,22 @@ impl<'source> FunctionLowering<'source> {
                     fields,
                 })
             }
-            "func_literal" => self.closure_value(node, places),
+            "func_literal" => self.closure_value(interner, node, places),
             "call_expression" => self
-                .lower_call(node, places, operations, unsupported)
+                .lower_call(interner, node, places, operations, unsupported)
                 .map(ValueDraft::PlaceKey),
             _ => self
-                .lower_expression(node, places, operations, unsupported, false)
+                .lower_expression(interner, node, places, operations, unsupported, false)
                 .map(|shape| ValueDraft::PlaceKey(shape.key)),
         }
     }
 
-    fn closure_value(&self, node: Node<'_>, places: &mut PlaceTableBuilder) -> Option<ValueDraft> {
+    fn closure_value(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        node: Node<'_>,
+        places: &mut PlaceTableBuilder,
+    ) -> Option<ValueDraft> {
         let span = (node.start_byte() as u32, node.end_byte() as u32);
         let body = *self.closure_bodies.get(&span)?;
         let capture_keys = self
@@ -1007,7 +1095,13 @@ impl<'source> FunctionLowering<'source> {
                     .get(name)
                     .or_else(|| self.parameters.get(name))
                     .map(|root| {
-                        self.insert_place(places, root.clone(), Vec::new(), PlaceStatus::Resolved)
+                        self.insert_place(
+                            interner,
+                            places,
+                            root.clone(),
+                            Vec::new(),
+                            PlaceStatus::Resolved,
+                        )
                     })
             })
             .collect();
@@ -1016,6 +1110,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_expression(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         node: Node<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -1028,9 +1123,16 @@ impl<'source> FunctionLowering<'source> {
                 .and_then(|operator| node_text(self.source, operator))
                 == Some("<-")
         {
-            let value =
-                self.lower_expression_children(node, places, operations, unsupported, false);
+            let value = self.lower_expression_children(
+                interner,
+                node,
+                places,
+                operations,
+                unsupported,
+                false,
+            );
             self.push_operation(
+                interner,
                 operations,
                 node,
                 OperationKindDraft::Suspend {
@@ -1043,10 +1145,11 @@ impl<'source> FunctionLowering<'source> {
             );
             return value;
         }
-        self.lower_unsupported(node, operations, unsupported);
+        self.lower_unsupported(interner, node, operations, unsupported);
         match node.kind() {
-            "identifier" => self.lower_identifier(node, places, assignment_destination),
+            "identifier" => self.lower_identifier(interner, node, places, assignment_destination),
             "selector_expression" => self.lower_selector(
+                interner,
                 node,
                 places,
                 operations,
@@ -1054,26 +1157,27 @@ impl<'source> FunctionLowering<'source> {
                 assignment_destination,
             ),
             "index_expression" => self.lower_index(
+                interner,
                 node,
                 places,
                 operations,
                 unsupported,
                 assignment_destination,
             ),
-            "call_expression" => {
-                self.lower_call(node, places, operations, unsupported)
-                    .map(|key| PlaceShape {
-                        root: PlaceRoot::CallReturn {
-                            call: self.call_site_for(node),
-                        },
-                        projections: Vec::new(),
-                        status: PlaceStatus::Partial,
-                        key,
-                    })
-            }
+            "call_expression" => self
+                .lower_call(interner, node, places, operations, unsupported)
+                .map(|key| PlaceShape {
+                    root: PlaceRoot::CallReturn {
+                        call: self.call_site_for(node),
+                    },
+                    projections: Vec::new(),
+                    status: PlaceStatus::Partial,
+                    key,
+                }),
             "func_literal" => {
-                let value = self.closure_value(node, places)?;
+                let value = self.closure_value(interner, node, places)?;
                 let key = self.insert_temporary_typed(
+                    interner,
                     places,
                     node,
                     PlaceStatus::Partial,
@@ -1081,7 +1185,14 @@ impl<'source> FunctionLowering<'source> {
                         signature: "closure".to_string(),
                     },
                 );
-                self.push_assign(operations, node, key.clone(), value, AssignMode::Overwrite);
+                self.push_assign(
+                    interner,
+                    operations,
+                    node,
+                    key.clone(),
+                    value,
+                    AssignMode::Overwrite,
+                );
                 Some(PlaceShape {
                     root: PlaceRoot::Temporary {
                         body: self.body,
@@ -1098,6 +1209,7 @@ impl<'source> FunctionLowering<'source> {
             | "float_literal"
             | "rune_literal" => None,
             _ => self.lower_expression_children(
+                interner,
                 node,
                 places,
                 operations,
@@ -1109,6 +1221,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_expression_children(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         node: Node<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -1122,6 +1235,7 @@ impl<'source> FunctionLowering<'source> {
             };
             last = self
                 .lower_expression(
+                    interner,
                     child,
                     places,
                     operations,
@@ -1135,6 +1249,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_identifier(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         node: Node<'_>,
         places: &mut PlaceTableBuilder,
         assignment_destination: bool,
@@ -1161,13 +1276,14 @@ impl<'source> FunctionLowering<'source> {
             status,
             key: String::new(),
         };
-        let key = self.insert_shape(places, &shape);
+        let key = self.insert_shape(interner, places, &shape);
         let shape = PlaceShape { key, ..shape };
         Some(shape)
     }
 
     fn lower_selector(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         node: Node<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -1182,6 +1298,7 @@ impl<'source> FunctionLowering<'source> {
             .or_else(|| node.named_child(1))
             .and_then(|field| node_text(self.source, field))?;
         let mut shape = self.lower_expression(
+            interner,
             operand,
             places,
             operations,
@@ -1191,13 +1308,14 @@ impl<'source> FunctionLowering<'source> {
         shape
             .projections
             .push(PlaceProjection::Field(field.to_string()));
-        shape.key = self.insert_shape(places, &shape);
-        self.insert_temporary(places, node, PlaceStatus::Partial);
+        shape.key = self.insert_shape(interner, places, &shape);
+        self.insert_temporary(interner, places, node, PlaceStatus::Partial);
         Some(shape)
     }
 
     fn lower_index(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         node: Node<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -1211,6 +1329,7 @@ impl<'source> FunctionLowering<'source> {
             .child_by_field_name("index")
             .or_else(|| node.named_child(1))?;
         let mut shape = self.lower_expression(
+            interner,
             operand,
             places,
             operations,
@@ -1218,13 +1337,14 @@ impl<'source> FunctionLowering<'source> {
             assignment_destination,
         )?;
         shape.projections.push(index_projection(self.source, index));
-        shape.key = self.insert_shape(places, &shape);
-        self.insert_temporary(places, node, PlaceStatus::Partial);
+        shape.key = self.insert_shape(interner, places, &shape);
+        self.insert_temporary(interner, places, node, PlaceStatus::Partial);
         Some(shape)
     }
 
     fn lower_call(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         node: Node<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -1233,6 +1353,7 @@ impl<'source> FunctionLowering<'source> {
         self.lower_unsupported_call(node, unsupported);
         let site = self.call_site_for(node);
         let return_key = self.insert_place(
+            interner,
             places,
             PlaceRoot::CallReturn { call: site },
             Vec::new(),
@@ -1258,14 +1379,20 @@ impl<'source> FunctionLowering<'source> {
                 let Some(argument) = argument_list.named_child(index) else {
                     continue;
                 };
-                if let Some(shape) =
-                    self.lower_expression(argument, places, operations, unsupported, false)
-                {
+                if let Some(shape) = self.lower_expression(
+                    interner,
+                    argument,
+                    places,
+                    operations,
+                    unsupported,
+                    false,
+                ) {
                     arguments.push(shape.key);
                 }
             }
         }
         self.push_operation(
+            interner,
             operations,
             node,
             OperationKindDraft::Call {
@@ -1282,6 +1409,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_unsupported(
         &self,
+        interner: &crate::core::StableKeyInterner,
         node: Node<'_>,
         operations: &mut Vec<OperationDraft>,
         unsupported: &mut Vec<UnsupportedDraft>,
@@ -1297,16 +1425,19 @@ impl<'source> FunctionLowering<'source> {
             return;
         };
         self.push_unsupported(
+            interner,
             operations,
             unsupported,
             node,
             construct,
-            unsupported_domains_for(construct),
-            if construct == "ERROR" {
-                ConservativeAction::StopLowering
-            } else {
-                ConservativeAction::HavocAffectedPlaces
-            },
+            (
+                unsupported_domains_for(construct),
+                if construct == "ERROR" {
+                    ConservativeAction::StopLowering
+                } else {
+                    ConservativeAction::HavocAffectedPlaces
+                },
+            ),
         );
     }
 
@@ -1341,13 +1472,14 @@ impl<'source> FunctionLowering<'source> {
 
     fn push_unsupported(
         &self,
+        interner: &crate::core::StableKeyInterner,
         operations: &mut Vec<OperationDraft>,
         unsupported: &mut Vec<UnsupportedDraft>,
         node: Node<'_>,
         construct: &str,
-        domains: Vec<UnsupportedDomain>,
-        action: ConservativeAction,
+        pair: (Vec<UnsupportedDomain>, ConservativeAction),
     ) {
+        let (domains, action) = pair;
         let unsupported_id = UnsupportedId(unsupported.len() as u64);
         let operation_id = MirOpId(operations.len() as u64);
         let span = node_span(self.file, self.source, node);
@@ -1364,18 +1496,22 @@ impl<'source> FunctionLowering<'source> {
             conservative_action: action,
         }));
         operations.push(OperationDraft::new(
+            interner,
             operation_id,
             self.body,
             self.stable_context.body_key(),
             self.ordinal_for(node),
             span,
-            OperationKindDraft::Unsupported { unsupported_id },
-            MirStatus::Unsupported,
+            (
+                OperationKindDraft::Unsupported { unsupported_id },
+                MirStatus::Unsupported,
+            ),
         ));
     }
 
     fn push_assign(
         &self,
+        interner: &crate::core::StableKeyInterner,
         operations: &mut Vec<OperationDraft>,
         node: Node<'_>,
         place_key: String,
@@ -1383,6 +1519,7 @@ impl<'source> FunctionLowering<'source> {
         mode: AssignMode,
     ) {
         self.push_operation(
+            interner,
             operations,
             node,
             OperationKindDraft::Assign {
@@ -1394,7 +1531,12 @@ impl<'source> FunctionLowering<'source> {
         );
     }
 
-    fn push_branch(&self, operations: &mut Vec<OperationDraft>, node: Node<'_>) {
+    fn push_branch(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        operations: &mut Vec<OperationDraft>,
+        node: Node<'_>,
+    ) {
         let shape = match node.kind() {
             "for_statement" => ControlShape::Loop,
             "expression_switch_statement" | "type_switch_statement" | "switch_statement" => {
@@ -1403,6 +1545,7 @@ impl<'source> FunctionLowering<'source> {
             _ => ControlShape::Conditional,
         };
         self.push_operation(
+            interner,
             operations,
             node,
             OperationKindDraft::Branch {
@@ -1416,6 +1559,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn push_operation(
         &self,
+        interner: &crate::core::StableKeyInterner,
         operations: &mut Vec<OperationDraft>,
         node: Node<'_>,
         kind: OperationKindDraft,
@@ -1423,13 +1567,13 @@ impl<'source> FunctionLowering<'source> {
     ) {
         let id = MirOpId(operations.len() as u64);
         operations.push(OperationDraft::new(
+            interner,
             id,
             self.body,
             self.stable_context.body_key(),
             self.ordinal_for(node),
             node_span(self.file, self.source, node),
-            kind,
-            status,
+            (kind, status),
         ));
     }
 
@@ -1443,11 +1587,13 @@ impl<'source> FunctionLowering<'source> {
 
     fn insert_temporary(
         &self,
+        interner: &crate::core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         node: Node<'_>,
         status: PlaceStatus,
     ) -> String {
         self.insert_temporary_typed(
+            interner,
             places,
             node,
             status,
@@ -1459,12 +1605,14 @@ impl<'source> FunctionLowering<'source> {
 
     fn insert_temporary_typed(
         &self,
+        interner: &crate::core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         node: Node<'_>,
         status: PlaceStatus,
         ty: TypeShape,
     ) -> String {
         self.insert_typed_place(
+            interner,
             places,
             PlaceRoot::Temporary {
                 body: self.body,
@@ -1476,8 +1624,14 @@ impl<'source> FunctionLowering<'source> {
         )
     }
 
-    fn insert_shape(&self, places: &mut PlaceTableBuilder, shape: &PlaceShape) -> String {
+    fn insert_shape(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        places: &mut PlaceTableBuilder,
+        shape: &PlaceShape,
+    ) -> String {
         self.insert_place(
+            interner,
             places,
             shape.root.clone(),
             shape.projections.clone(),
@@ -1487,16 +1641,18 @@ impl<'source> FunctionLowering<'source> {
 
     fn insert_place(
         &self,
+        interner: &crate::core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         root: PlaceRoot,
         projections: Vec<PlaceProjection>,
         status: PlaceStatus,
     ) -> String {
-        self.insert_typed_place(places, root, projections, None, status)
+        self.insert_typed_place(interner, places, root, projections, None, status)
     }
 
     fn insert_typed_place(
         &self,
+        interner: &crate::core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         root: PlaceRoot,
         projections: Vec<PlaceProjection>,
@@ -1504,6 +1660,7 @@ impl<'source> FunctionLowering<'source> {
         status: PlaceStatus,
     ) -> String {
         places.insert_typed_with_context(
+            interner,
             &self.stable_context,
             PlaceInsert {
                 language: Language::Go,
@@ -1539,15 +1696,16 @@ struct OperationDraft {
 
 impl OperationDraft {
     fn new(
+        interner: &crate::core::StableKeyInterner,
         id: MirOpId,
         body: MirBodyId,
         body_stable_key: &str,
         ordinal: u32,
         span: Span,
-        kind: OperationKindDraft,
-        status: MirStatus,
+        pair: (OperationKindDraft, MirStatus),
     ) -> Self {
-        let stable_key = operation_stable_key(body_stable_key, ordinal, &span, &kind);
+        let (kind, status) = pair;
+        let stable_key = operation_stable_key(interner, body_stable_key, ordinal, &span, &kind);
         Self {
             id,
             body,
@@ -1859,7 +2017,11 @@ impl UnsupportedDraft {
         }
     }
 
-    fn to_fact(&self, place_ids: &BTreeMap<String, PlaceId>) -> UnsupportedSemanticFact {
+    fn to_fact(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        place_ids: &BTreeMap<String, PlaceId>,
+    ) -> UnsupportedSemanticFact {
         UnsupportedSemanticFact {
             id: self.id,
             body: self.body,
@@ -1885,12 +2047,13 @@ impl UnsupportedDraft {
             conservative_action: self.conservative_action,
             precision: UnsupportedPrecision::Unsupported,
             status: MirStatus::Unsupported,
-            stable_key: unsupported_stable_key(self),
+            stable_key: unsupported_stable_key(interner, self),
         }
     }
 }
 
 fn operation_stable_key(
+    interner: &crate::core::StableKeyInterner,
     body_stable_key: &str,
     ordinal: u32,
     span: &Span,
@@ -1911,7 +2074,7 @@ fn operation_stable_key(
         .iter()
         .map(|(label, value)| (*label, value.clone()))
         .collect::<Vec<_>>();
-    semantic_stable_key(FactFamily::MirOperation, &borrowed).into_string()
+    semantic_stable_key(interner, FactFamily::MirOperation, &borrowed).into_string()
 }
 
 fn operation_place_label(index: usize) -> &'static str {
@@ -1924,8 +2087,12 @@ fn operation_place_label(index: usize) -> &'static str {
     }
 }
 
-fn unsupported_stable_key(draft: &UnsupportedDraft) -> String {
+fn unsupported_stable_key(
+    interner: &crate::core::StableKeyInterner,
+    draft: &UnsupportedDraft,
+) -> String {
     semantic_stable_key(
+        interner,
         FactFamily::UnsupportedSemantic,
         &[
             ("language", "go".to_string()),
@@ -1987,8 +2154,13 @@ fn span_contains(outer: &Span, inner: &Span) -> bool {
     outer.start_byte <= inner.start_byte && outer.end_byte >= inner.end_byte
 }
 
-fn owner_stable_key(file: &SourceFile, function: &FunctionFact) -> String {
+fn owner_stable_key(
+    interner: &crate::core::StableKeyInterner,
+    file: &SourceFile,
+    function: &FunctionFact,
+) -> String {
     semantic_stable_key(
+        interner,
         FactFamily::Function,
         &[
             ("language", "go".to_string()),

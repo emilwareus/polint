@@ -863,11 +863,13 @@ mod tests {
         let full = solver.solve(input);
         let summary = solver.solve_summary_inputs(input);
         let full_output = DomainOutput::from_results_with_materialization(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
             full.results(),
             None,
             DomainMaterialization::SummaryInputs,
         );
         let summary_output = DomainOutput::from_results_with_materialization(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
             summary.results(),
             None,
             DomainMaterialization::SummaryInputs,

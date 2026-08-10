@@ -31,6 +31,8 @@ use crate::symbol_graph::semantic::SemanticImportKind;
 type RootPlaceKey = (PlaceRoot, Option<FileId>, Option<FunctionId>);
 
 pub(crate) fn derive_ts_js_type_value_alias(db: &AnalysisDb) -> TypeValueAliasOutput {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let body_by_id = db
         .mir_bodies()
         .iter()
@@ -71,12 +73,14 @@ pub(crate) fn derive_ts_js_type_value_alias(db: &AnalysisDb) -> TypeValueAliasOu
     {
         let body = body_for_place(place, &body_by_id, &body_by_function);
         types.push(type_fact_for_place(
+            interner,
             types.len() as u64,
             place,
             body,
             place_types.get(&place.id).copied(),
         ));
         access_paths.push(access_path_for_place(
+            interner,
             access_paths.len() as u64,
             place,
             body,
@@ -92,6 +96,7 @@ pub(crate) fn derive_ts_js_type_value_alias(db: &AnalysisDb) -> TypeValueAliasOu
             .is_some_and(|body| body.language.is_ts_family())
     }) {
         collect_values_for_operation(
+            interner,
             operation,
             &body_by_id,
             &place_by_id,
@@ -100,6 +105,7 @@ pub(crate) fn derive_ts_js_type_value_alias(db: &AnalysisDb) -> TypeValueAliasOu
             &mut allocations,
         );
         collect_narrowing_for_operation(
+            interner,
             operation,
             &body_by_id,
             &place_by_id,
@@ -119,6 +125,7 @@ pub(crate) fn derive_ts_js_type_value_alias(db: &AnalysisDb) -> TypeValueAliasOu
             .and_then(|body| body_by_id.get(&body).copied());
         if unsupported.affected_places.is_empty() {
             types.push(unsupported_type_fact(
+                interner,
                 types.len() as u64,
                 TypeSubject::Unknown(unsupported.construct.clone()),
                 unsupported,
@@ -128,6 +135,7 @@ pub(crate) fn derive_ts_js_type_value_alias(db: &AnalysisDb) -> TypeValueAliasOu
         } else {
             for place in &unsupported.affected_places {
                 types.push(unsupported_type_fact(
+                    interner,
                     types.len() as u64,
                     TypeSubject::Place(*place),
                     unsupported,
@@ -135,6 +143,7 @@ pub(crate) fn derive_ts_js_type_value_alias(db: &AnalysisDb) -> TypeValueAliasOu
                     Some(*place),
                 ));
                 values.push(unsupported_value_fact(
+                    interner,
                     values.len() as u64,
                     ValueSubject::Place(*place),
                     unsupported,
@@ -172,6 +181,7 @@ fn body_for_place<'db>(
 }
 
 fn type_fact_for_place(
+    interner: &crate::core::StableKeyInterner,
     id: u64,
     place: &PlaceFact,
     body: Option<&MirBody>,
@@ -230,6 +240,7 @@ fn type_fact_for_place(
         status,
         provenance: TypeProvenance::Native,
         stable_key: stable_key(
+            interner,
             FactFamily::Type,
             [
                 ("language", language_label(place.language).to_string()),
@@ -273,6 +284,7 @@ fn type_shape_for_place(place: &PlaceFact, ty: Option<&TypeShape>) -> TypeShape 
 }
 
 fn access_path_for_place(
+    interner: &crate::core::StableKeyInterner,
     id: u64,
     place: &PlaceFact,
     body: Option<&MirBody>,
@@ -300,6 +312,7 @@ fn access_path_for_place(
         body: body.map(|body| body.id).or_else(|| place.root.body()),
         status,
         stable_key: stable_key(
+            interner,
             FactFamily::AccessPath,
             [
                 ("language", language_label(place.language).to_string()),
@@ -350,6 +363,7 @@ fn access_path_projection(projection: &PlaceProjection) -> AccessPathProjection 
 }
 
 fn collect_values_for_operation(
+    interner: &crate::core::StableKeyInterner,
     operation: &MirOperation,
     body_by_id: &BTreeMap<crate::analysis::ids::MirBodyId, &MirBody>,
     place_by_id: &BTreeMap<PlaceId, &PlaceFact>,
@@ -362,13 +376,13 @@ fn collect_values_for_operation(
         | MirOperationKind::Assign { place, value, .. }
         | MirOperationKind::Write { place, value } => {
             push_value_for_mir_value(
+                interner,
                 operation,
                 Some(*place),
                 value,
                 body_by_id,
                 file_by_id,
-                values,
-                allocations,
+                (values, allocations),
             );
         }
         MirOperationKind::Call {
@@ -376,7 +390,7 @@ fn collect_values_for_operation(
             return_place,
             ..
         } => {
-            push_function_value(operation, callee, body_by_id, values);
+            push_function_value(interner, operation, callee, body_by_id, values);
             values.push(ValueFact {
                 id: ValueFactId(values.len() as u64),
                 subject: ValueSubject::Place(*return_place),
@@ -395,6 +409,7 @@ fn collect_values_for_operation(
                 status: ValueStatus::Unknown,
                 provenance: ValueProvenance::Native,
                 stable_key: stable_key(
+                    interner,
                     FactFamily::Value,
                     [
                         ("language", "ts-js".to_string()),
@@ -409,14 +424,15 @@ fn collect_values_for_operation(
 }
 
 fn push_value_for_mir_value(
+    interner: &crate::core::StableKeyInterner,
     operation: &MirOperation,
     place: Option<PlaceId>,
     value: &MirValue,
     body_by_id: &BTreeMap<crate::analysis::ids::MirBodyId, &MirBody>,
     file_by_id: &BTreeMap<FileId, &SourceFile>,
-    values: &mut Vec<ValueFact>,
-    allocations: &mut Vec<AllocationTokenFact>,
+    pair: (&mut Vec<ValueFact>, &mut Vec<AllocationTokenFact>),
 ) {
+    let (values, allocations) = pair;
     let source = file_by_id
         .get(&operation.span.file)
         .and_then(|file| source_text(file.source.as_ref(), &operation.span));
@@ -425,10 +441,10 @@ fn push_value_for_mir_value(
         .map_or(Language::Unknown, |body| body.language);
     let (kind, status, precision) = match value {
         MirValue::Literal { value } => {
-            literal_value_kind(value, operation, operation_language, allocations)
+            literal_value_kind(interner, value, operation, operation_language, allocations)
         }
         MirValue::Place(place_ref) => {
-            inferred_value_from_source(source, operation, operation_language, allocations)
+            inferred_value_from_source(interner, source, operation, operation_language, allocations)
                 .unwrap_or((
                     ValueKind::PlaceRef(*place_ref),
                     ValueStatus::Present,
@@ -436,7 +452,7 @@ fn push_value_for_mir_value(
                 ))
         }
         MirValue::Temporary(_) => {
-            inferred_value_from_source(source, operation, operation_language, allocations)
+            inferred_value_from_source(interner, source, operation, operation_language, allocations)
                 .unwrap_or((
                     ValueKind::Unknown {
                         evidence: "ts/js temporary".to_string(),
@@ -468,6 +484,7 @@ fn push_value_for_mir_value(
                 }
             };
             let token = push_allocation(
+                interner,
                 operation,
                 allocation_kind,
                 label,
@@ -483,6 +500,7 @@ fn push_value_for_mir_value(
         }
         MirValue::Closure { .. } => {
             let _ = push_allocation(
+                interner,
                 operation,
                 AllocationKind::Closure,
                 "closure",
@@ -520,6 +538,7 @@ fn push_value_for_mir_value(
         status,
         provenance: ValueProvenance::Native,
         stable_key: stable_key(
+            interner,
             FactFamily::Value,
             [
                 ("language", "ts-js".to_string()),
@@ -531,6 +550,7 @@ fn push_value_for_mir_value(
 }
 
 fn literal_value_kind(
+    interner: &crate::core::StableKeyInterner,
     value: &str,
     operation: &MirOperation,
     language: Language,
@@ -577,6 +597,7 @@ fn literal_value_kind(
     }
     if trimmed.starts_with("function") || trimmed.contains("=>") {
         let _ = push_allocation(
+            interner,
             operation,
             AllocationKind::FunctionObject,
             "function_object",
@@ -591,6 +612,7 @@ fn literal_value_kind(
     }
     if trimmed.starts_with("class") {
         let _ = push_allocation(
+            interner,
             operation,
             AllocationKind::ClassObject,
             "class_object",
@@ -611,6 +633,7 @@ fn literal_value_kind(
 }
 
 fn inferred_value_from_source(
+    interner: &crate::core::StableKeyInterner,
     source: Option<&str>,
     operation: &MirOperation,
     language: Language,
@@ -619,6 +642,7 @@ fn inferred_value_from_source(
     let source = source?.trim();
     if source.contains("=>") || source.contains("function") {
         let _ = push_allocation(
+            interner,
             operation,
             AllocationKind::FunctionObject,
             "function_object",
@@ -633,6 +657,7 @@ fn inferred_value_from_source(
     }
     if source.contains("class ") {
         let _ = push_allocation(
+            interner,
             operation,
             AllocationKind::ClassObject,
             "class_object",
@@ -647,6 +672,7 @@ fn inferred_value_from_source(
     }
     if source.contains('=') && source.contains('{') && source.contains('}') {
         let token = push_allocation(
+            interner,
             operation,
             AllocationKind::ObjectLiteral,
             "object_literal",
@@ -661,6 +687,7 @@ fn inferred_value_from_source(
     }
     if source.contains('=') && source.contains('[') && source.contains(']') {
         let token = push_allocation(
+            interner,
             operation,
             AllocationKind::ArrayLiteral,
             "array_literal",
@@ -677,6 +704,7 @@ fn inferred_value_from_source(
 }
 
 fn push_function_value(
+    interner: &crate::core::StableKeyInterner,
     operation: &MirOperation,
     callee: &MirValue,
     body_by_id: &BTreeMap<crate::analysis::ids::MirBodyId, &MirBody>,
@@ -700,6 +728,7 @@ fn push_function_value(
         status: ValueStatus::Present,
         provenance: ValueProvenance::Native,
         stable_key: stable_key(
+            interner,
             FactFamily::Value,
             [
                 ("language", "ts-js".to_string()),
@@ -715,6 +744,8 @@ fn collect_module_namespace_values(
     values: &mut Vec<ValueFact>,
     allocations: &mut Vec<AllocationTokenFact>,
 ) {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let mut seen = BTreeSet::new();
     for import in db.semantic_imports().iter().filter(|import| {
         import.language.is_ts_family() && import.kind == SemanticImportKind::StaticNamespace
@@ -744,6 +775,7 @@ fn collect_module_namespace_values(
             span: None,
             provenance: ValueProvenance::Native,
             stable_key: stable_key(
+                interner,
                 FactFamily::AllocationToken,
                 [
                     ("language", language_label(import.language).to_string()),
@@ -765,6 +797,7 @@ fn collect_module_namespace_values(
             status: ValueStatus::Present,
             provenance: ValueProvenance::Native,
             stable_key: stable_key(
+                interner,
                 FactFamily::Value,
                 [
                     ("language", language_label(import.language).to_string()),
@@ -777,6 +810,7 @@ fn collect_module_namespace_values(
 }
 
 fn collect_narrowing_for_operation(
+    interner: &crate::core::StableKeyInterner,
     operation: &MirOperation,
     body_by_id: &BTreeMap<crate::analysis::ids::MirBodyId, &MirBody>,
     place_by_id: &BTreeMap<PlaceId, &PlaceFact>,
@@ -809,6 +843,7 @@ fn collect_narrowing_for_operation(
     for place in candidate_places {
         let type_set = TypeSetId(types.len() as u64);
         let type_stable_key = stable_key(
+            interner,
             FactFamily::Type,
             [
                 ("language", language_label(body.language).to_string()),
@@ -851,6 +886,7 @@ fn collect_narrowing_for_operation(
             precision: TypePrecision::Heuristic,
             status: TypeStatus::Present,
             stable_key: stable_key(
+                interner,
                 FactFamily::NarrowedType,
                 [
                     ("language", language_label(body.language).to_string()),
@@ -917,6 +953,7 @@ fn narrowing_shape(evidence: &str) -> Option<TypeShape> {
 }
 
 fn push_allocation(
+    interner: &crate::core::StableKeyInterner,
     operation: &MirOperation,
     kind: AllocationKind,
     label: &str,
@@ -936,6 +973,7 @@ fn push_allocation(
         span: Some(operation.span.clone()),
         provenance: ValueProvenance::Native,
         stable_key: stable_key(
+            interner,
             FactFamily::AllocationToken,
             [
                 ("language", language_label(language).to_string()),
@@ -948,6 +986,7 @@ fn push_allocation(
 }
 
 fn unsupported_type_fact(
+    interner: &crate::core::StableKeyInterner,
     id: u64,
     subject: TypeSubject,
     unsupported: &crate::analysis::mir::op::UnsupportedSemanticFact,
@@ -990,6 +1029,7 @@ fn unsupported_type_fact(
         status,
         provenance: TypeProvenance::Native,
         stable_key: stable_key(
+            interner,
             FactFamily::Type,
             [
                 ("language", language_label(unsupported.language).to_string()),
@@ -1001,6 +1041,7 @@ fn unsupported_type_fact(
 }
 
 fn unsupported_value_fact(
+    interner: &crate::core::StableKeyInterner,
     id: u64,
     subject: ValueSubject,
     unsupported: &crate::analysis::mir::op::UnsupportedSemanticFact,
@@ -1021,6 +1062,7 @@ fn unsupported_value_fact(
         status: ValueStatus::Unsupported,
         provenance: ValueProvenance::Native,
         stable_key: stable_key(
+            interner,
             FactFamily::Value,
             [
                 ("language", language_label(unsupported.language).to_string()),
@@ -1035,8 +1077,12 @@ fn source_text<'source>(source: &'source str, span: &Span) -> Option<&'source st
     source.get(span.start_byte as usize..span.end_byte as usize)
 }
 
-fn stable_key<const N: usize>(family: FactFamily, parts: [(&'static str, String); N]) -> String {
-    semantic_stable_key(family, &parts).into_string()
+fn stable_key<const N: usize>(
+    interner: &crate::core::StableKeyInterner,
+    family: FactFamily,
+    parts: [(&'static str, String); N],
+) -> String {
+    semantic_stable_key(interner, family, &parts).into_string()
 }
 
 fn language_label(language: Language) -> &'static str {

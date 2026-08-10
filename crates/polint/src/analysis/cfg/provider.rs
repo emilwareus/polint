@@ -30,8 +30,10 @@ pub(crate) fn derive_cfg_with_cache_stats(
     semantic_mir_output_digest: Digest,
     upstream_syntax_output_digests: Vec<Digest>,
 ) -> CfgProviderOutput {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let mut output = derive_cfg_output(db).normalized();
-    append_derived_rows(&mut output, CfgView::NormalControl);
+    append_derived_rows(interner, &mut output, CfgView::NormalControl);
     let output = output.normalized();
     let output_digest = cfg_output_digest(
         manifest,
@@ -61,14 +63,18 @@ fn derive_cfg_output(db: &AnalysisDb) -> CfgOutput {
     lower_cfg(db)
 }
 
-fn append_derived_rows(output: &mut CfgOutput, view: CfgView) {
+fn append_derived_rows(
+    interner: &crate::core::StableKeyInterner,
+    output: &mut CfgOutput,
+    view: CfgView,
+) {
     if output.functions.is_empty() {
         return;
     }
-    output.reachability = derive_reachability(output, view);
-    output.dominators = derive_dominators(output, view);
-    output.postdominators = derive_postdominators(output, view);
-    output.control_dependence = derive_control_dependence(output, view);
+    output.reachability = derive_reachability(interner, output, view);
+    output.dominators = derive_dominators(interner, output, view);
+    output.postdominators = derive_postdominators(interner, output, view);
+    output.control_dependence = derive_control_dependence(interner, output, view);
 }
 
 fn cfg_output_digest(
@@ -467,26 +473,91 @@ mod cfg_provider {
 
     fn branch_output_with_derived_rows() -> CfgOutput {
         let mut builder = CfgBuilder::new();
-        builder.start_function(&body(), false);
+        builder.start_function(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &body(),
+            false,
+        );
         let entry = builder.current_block();
-        let condition = builder.start_block(BasicBlockKind::Branch);
-        builder.append_operation_node(Some(&op(1, 1)), CfgNodeKind::Condition, Some(span()));
-        let then_block = builder.start_block(BasicBlockKind::StraightLine);
-        builder.append_operation_node(Some(&op(2, 2)), CfgNodeKind::Operation, Some(span()));
-        let else_block = builder.start_block(BasicBlockKind::StraightLine);
-        builder.append_operation_node(Some(&op(3, 3)), CfgNodeKind::Operation, Some(span()));
-        let join = builder.start_block(BasicBlockKind::Join);
-        builder.append_operation_node(Some(&op(4, 4)), CfgNodeKind::Operation, Some(span()));
+        let condition = builder.start_block(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            BasicBlockKind::Branch,
+        );
+        builder.append_operation_node(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            Some(&op(1, 1)),
+            CfgNodeKind::Condition,
+            Some(span()),
+        );
+        let then_block = builder.start_block(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            BasicBlockKind::StraightLine,
+        );
+        builder.append_operation_node(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            Some(&op(2, 2)),
+            CfgNodeKind::Operation,
+            Some(span()),
+        );
+        let else_block = builder.start_block(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            BasicBlockKind::StraightLine,
+        );
+        builder.append_operation_node(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            Some(&op(3, 3)),
+            CfgNodeKind::Operation,
+            Some(span()),
+        );
+        let join = builder.start_block(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            BasicBlockKind::Join,
+        );
+        builder.append_operation_node(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            Some(&op(4, 4)),
+            CfgNodeKind::Operation,
+            Some(span()),
+        );
 
-        builder.add_edge(entry, condition, CfgEdgeKind::Normal);
-        builder.add_edge(condition, then_block, CfgEdgeKind::True);
-        builder.add_edge(condition, else_block, CfgEdgeKind::False);
-        builder.add_edge(then_block, join, CfgEdgeKind::Normal);
-        builder.add_edge(else_block, join, CfgEdgeKind::Normal);
+        builder.add_edge(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            entry,
+            condition,
+            CfgEdgeKind::Normal,
+        );
+        builder.add_edge(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            condition,
+            then_block,
+            CfgEdgeKind::True,
+        );
+        builder.add_edge(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            condition,
+            else_block,
+            CfgEdgeKind::False,
+        );
+        builder.add_edge(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            then_block,
+            join,
+            CfgEdgeKind::Normal,
+        );
+        builder.add_edge(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            else_block,
+            join,
+            CfgEdgeKind::Normal,
+        );
         builder.finish_function();
 
         let mut output = builder.finish();
-        append_derived_rows(&mut output, CfgView::NormalControl);
+        append_derived_rows(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &mut output,
+            CfgView::NormalControl,
+        );
         output.normalized()
     }
 

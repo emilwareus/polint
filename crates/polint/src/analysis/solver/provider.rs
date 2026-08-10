@@ -67,6 +67,8 @@ pub(crate) fn derive_solver_with_cache_stats(
     type_value_alias_output_digest: Digest,
     go_semantic_output_digest: Digest,
 ) -> SolverProviderRunOutput {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     debug_assert_eq!(manifest.id, SOLVER_PROVIDER_ID);
 
     // Step: drive the unified solver ENGINE over the closed input snapshot (D-02,
@@ -79,7 +81,7 @@ pub(crate) fn derive_solver_with_cache_stats(
     // is the only indirect-call resolver for JavaScript and TypeScript.
     let constraints = db.semantic_constraints().to_vec();
     let engine = SolverEngine::new(solver_policies_for_db(db, &budget), budget);
-    let output = engine.run_to_solver_output(&constraints);
+    let output = engine.run_to_solver_output(interner, &constraints);
 
     // Step: digest over the stored stable KEYS + upstream digests + the budget.
     let output_digest = solver_output_digest(
@@ -130,9 +132,11 @@ pub(crate) fn derive_solver_with_cache_stats(
 }
 
 fn solver_policies_for_db(db: &AnalysisDb, _budget: &SolverBudget) -> Vec<Box<dyn SolverPolicy>> {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let policies: Vec<Box<dyn SolverPolicy>> = vec![
         // The real Go RTA policy (GO-05): contributes resolved call edges.
-        Box::new(GoRtaPolicy::new(GoRtaInputs::from_db(db))),
+        Box::new(GoRtaPolicy::new(GoRtaInputs::from_db(interner, db))),
         Box::new(TsPointsToPolicy::new(TsPointsToInputs::from_db(db))),
     ];
     policies

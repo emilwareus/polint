@@ -4,11 +4,12 @@ use super::store::AliasOutput;
 use crate::analysis::access_paths::facts::AccessPathFact;
 use crate::analysis::ids::AliasAnswerId;
 use crate::analysis::points_to::facts::PointsToSetFact;
-use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
+use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
 
 pub(crate) const MAX_PROVIDER_STACK_PAIRS: usize = 64;
 
 pub(crate) fn derive_alias_answers(
+    interner: &crate::core::StableKeyInterner,
     access_paths: &[AccessPathFact],
     points_to_sets: &[PointsToSetFact],
 ) -> AliasOutput {
@@ -31,18 +32,22 @@ pub(crate) fn derive_alias_answers(
         for right in operands.iter().skip(left_index) {
             if answers.len() >= MAX_PROVIDER_STACK_PAIRS {
                 if !budget_reported {
-                    answers.push(budget_exceeded_answer(*left, *right));
+                    answers.push(budget_exceeded_answer(interner, *left, *right));
                     budget_reported = true;
                 }
                 break;
             }
-            answers.push(index.answer(*left, *right));
+            answers.push(index.answer(interner, *left, *right));
         }
     }
     AliasOutput { answers }.normalized()
 }
 
-fn budget_exceeded_answer(left: AliasOperand, right: AliasOperand) -> AliasAnswerFact {
+fn budget_exceeded_answer(
+    interner: &crate::core::StableKeyInterner,
+    left: AliasOperand,
+    right: AliasOperand,
+) -> AliasAnswerFact {
     AliasAnswerFact {
         id: AliasAnswerId(0),
         left,
@@ -51,7 +56,8 @@ fn budget_exceeded_answer(left: AliasOperand, right: AliasOperand) -> AliasAnswe
         reason: AliasReason::BudgetExceeded,
         evidence: vec!["provider-stack alias pair budget exceeded".to_string()],
         precision: AliasPrecision::Unknown,
-        stable_key: stable_key_from_parts(
+        stable_key: stable_key_text_from_parts(
+            interner,
             FactFamily::AliasAnswer,
             &[
                 ("left", format!("{left:?}")),
@@ -93,7 +99,11 @@ mod tests {
                 &[ObjectTokenId(1), ObjectTokenId(3)],
             ),
         ];
-        let output = derive_alias_answers(&paths, &sets);
+        let output = derive_alias_answers(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &paths,
+            &sets,
+        );
 
         assert!(!output.answers.is_empty());
         assert!(
@@ -113,7 +123,11 @@ mod tests {
             .map(|id| path(AccessPathId(id), PlaceId(id + 1), "field"))
             .collect::<Vec<_>>();
 
-        let output = derive_alias_answers(&paths, &[]);
+        let output = derive_alias_answers(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &paths,
+            &[],
+        );
 
         assert!(output.answers.iter().any(|answer| {
             answer.status == AliasStatus::Unknown && answer.reason == AliasReason::BudgetExceeded

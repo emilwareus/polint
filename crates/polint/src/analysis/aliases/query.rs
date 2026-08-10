@@ -5,7 +5,7 @@ use crate::analysis::access_paths::facts::AccessPathFact;
 use crate::analysis::ids::{AliasAnswerId, ObjectTokenId, PtVarId};
 use crate::analysis::points_to::facts::{PointsToBudgetStatus, PointsToSetFact, PointsToStatus};
 use crate::analysis::points_to::vars;
-use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
+use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
 
 #[derive(Debug, Default)]
 pub(crate) struct AliasQueryIndex<'a> {
@@ -28,7 +28,12 @@ impl<'a> AliasQueryIndex<'a> {
         }
     }
 
-    pub(crate) fn answer(&self, left: AliasOperand, right: AliasOperand) -> AliasAnswerFact {
+    pub(crate) fn answer(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        left: AliasOperand,
+        right: AliasOperand,
+    ) -> AliasAnswerFact {
         let (status, reason, precision, evidence) = self.classify(left, right);
         AliasAnswerFact {
             id: AliasAnswerId(0),
@@ -38,7 +43,8 @@ impl<'a> AliasQueryIndex<'a> {
             reason,
             evidence,
             precision,
-            stable_key: stable_key_from_parts(
+            stable_key: stable_key_text_from_parts(
+                interner,
                 FactFamily::AliasAnswer,
                 &[
                     ("left", format!("{left:?}")),
@@ -201,22 +207,27 @@ mod tests {
 
         let answers = [
             index.answer(
+                &crate::core::AnalysisDb::new().stable_key_interner(),
                 AliasOperand::Place(PlaceId(1)),
                 AliasOperand::Place(PlaceId(1)),
             ),
             index.answer(
+                &crate::core::AnalysisDb::new().stable_key_interner(),
                 AliasOperand::Place(PlaceId(1)),
                 AliasOperand::Place(PlaceId(2)),
             ),
             index.answer(
+                &crate::core::AnalysisDb::new().stable_key_interner(),
                 AliasOperand::Place(PlaceId(3)),
                 AliasOperand::Place(PlaceId(4)),
             ),
             index.answer(
+                &crate::core::AnalysisDb::new().stable_key_interner(),
                 AliasOperand::AccessPath(AccessPathId(0)),
                 AliasOperand::AccessPath(AccessPathId(1)),
             ),
             index.answer(
+                &crate::core::AnalysisDb::new().stable_key_interner(),
                 AliasOperand::Place(PlaceId(1)),
                 AliasOperand::Place(PlaceId(9)),
             ),
@@ -250,6 +261,7 @@ mod tests {
         let index = AliasQueryIndex::new(&paths, &[]);
 
         let answer = index.answer(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
             AliasOperand::Place(PlaceId(3)),
             AliasOperand::AccessPath(AccessPathId(7)),
         );

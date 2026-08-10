@@ -6,7 +6,7 @@
 //! 1. the **contributing fact IDs**, TOTALLY ORDERED BY STABLE ID (the
 //!    dedup total-order rule). Provenance references EXISTING stable identities by
 //!    their stable key (composition over duplication — it does not mint a parallel
-//!    identity space); the total order is the `stable_key_from_parts`
+//!    identity space); the total order is the `stable_key_text_from_parts`
 //!    length-prefixed, label-sorted recipe, so provenance is itself byte-stable and
 //!    insensitive to the order contributing facts are discovered in.
 //! 2. the producing **constraint kind**, sourced from
@@ -30,14 +30,14 @@
 use serde::{Deserialize, Serialize};
 
 use crate::analysis::semantic_graph::constraints::ConstraintKind;
-use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
+use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
 
 /// A reference to one EXISTING upstream fact that contributed to deriving an edge.
 ///
 /// Provenance references existing stable identities — it carries the contributing
 /// fact's `stable_key` rather than a run-local dense ID, so the reference survives
 /// re-densification and is byte-stable across runs (D-08, composition over
-/// duplication). The `stable_key` is built via `stable_key_from_parts`, which
+/// duplication). The `stable_key` is built via `stable_key_text_from_parts`, which
 /// length-prefixes and embeds the originating [`FactFamily`] label, so the family is
 /// captured INSIDE the stable key (no separate non-serializable `FactFamily` field
 /// is carried). The total order over a set of these is the lexicographic order of
@@ -45,19 +45,23 @@ use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) struct ContributingFact {
     /// The contributing fact's stable key — its EXISTING stable identity, built via
-    /// the `stable_key_from_parts` recipe (which embeds the `FactFamily` label).
+    /// the `stable_key_text_from_parts` recipe (which embeds the `FactFamily` label).
     /// Never a run-local dense ID.
     pub(crate) stable_key: String,
 }
 
 impl ContributingFact {
     /// Build a contributing-fact reference from a family + labeled key parts, using
-    /// the canonical length-prefixed `stable_key_from_parts` recipe so the stable
+    /// the canonical length-prefixed `stable_key_text_from_parts` recipe so the stable
     /// key is byte-identical to the upstream producer's key for the same identity.
     /// The `family` is folded into the stable key, not stored separately.
-    pub(crate) fn from_parts(family: FactFamily, parts: &[(&str, String)]) -> Self {
+    pub(crate) fn from_parts(
+        interner: &crate::core::StableKeyInterner,
+        family: FactFamily,
+        parts: &[(&str, String)],
+    ) -> Self {
         Self {
-            stable_key: stable_key_from_parts(family, parts),
+            stable_key: stable_key_text_from_parts(interner, family, parts),
         }
     }
 }
@@ -147,6 +151,7 @@ mod tests {
 
     fn fact(name: &str) -> ContributingFact {
         ContributingFact::from_parts(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
             FactFamily::PointsToConstraint,
             &[("constraint", name.to_string())],
         )
@@ -239,7 +244,11 @@ mod tests {
         let budget = SolverBudget::default();
 
         // Baseline: the transitive a -> c edge is derived, with 2 contributing facts.
-        let baseline = derive_edges(&constraints, &budget);
+        let baseline = derive_edges(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &constraints,
+            &budget,
+        );
         let derived = baseline
             .derived_edges
             .iter()
@@ -270,7 +279,11 @@ mod tests {
                 "exactly one contributing constraint removed"
             );
 
-            let rerun = derive_edges(&remaining, &budget);
+            let rerun = derive_edges(
+                &crate::core::AnalysisDb::new().stable_key_interner(),
+                &remaining,
+                &budget,
+            );
             let reproduced = rerun
                 .derived_edges
                 .iter()

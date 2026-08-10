@@ -66,8 +66,9 @@ pub(crate) struct UnknownRow {
 }
 
 impl UnknownRow {
-    pub(crate) fn new(input: UnknownRowInput) -> Self {
+    pub(crate) fn new(interner: &crate::core::StableKeyInterner, input: UnknownRowInput) -> Self {
         let stable_sort_key = stable_sort_key(
+            interner,
             input.file.as_str(),
             input.span.as_ref(),
             input.category,
@@ -116,6 +117,7 @@ pub(crate) fn normalize_rows(mut rows: Vec<UnknownRow>) -> Vec<UnknownRow> {
 }
 
 fn stable_sort_key(
+    interner: &crate::core::StableKeyInterner,
     file: &str,
     span: Option<&UnknownSpan>,
     category: UnknownCategory,
@@ -124,7 +126,8 @@ fn stable_sort_key(
     source_stable_key: Option<&str>,
 ) -> String {
     let (line, column) = span.map_or((0, 0), |span| (span.line, span.column));
-    crate::analysis_kernel::stable_key_from_parts(
+    crate::analysis_kernel::stable_key_text_from_parts(
+        interner,
         crate::analysis_kernel::FactFamily::UnsupportedSemantic,
         &[
             ("file", file.to_string()),
@@ -166,19 +169,22 @@ mod tests {
     }
 
     fn row(file: &str, line: u32, source: &str) -> UnknownRow {
-        UnknownRow::new(UnknownRowInput {
-            category: UnknownCategory::SetupMissing,
-            capability: Some("references".to_string()),
-            family: Some("Reference".to_string()),
-            provider: "polint.symbol_graph".to_string(),
-            file: file.to_string(),
-            span: Some(UnknownSpan { line, column: 1 }),
-            status: "setup_missing".to_string(),
-            reason: Some("test".to_string()),
-            precision: Some("setup_missing".to_string()),
-            docs_path: None,
-            suggested_artifact: None,
-            source_stable_key: Some(source.to_string()),
-        })
+        UnknownRow::new(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            UnknownRowInput {
+                category: UnknownCategory::SetupMissing,
+                capability: Some("references".to_string()),
+                family: Some("Reference".to_string()),
+                provider: "polint.symbol_graph".to_string(),
+                file: file.to_string(),
+                span: Some(UnknownSpan { line, column: 1 }),
+                status: "setup_missing".to_string(),
+                reason: Some("test".to_string()),
+                precision: Some("setup_missing".to_string()),
+                docs_path: None,
+                suggested_artifact: None,
+                source_stable_key: Some(source.to_string()),
+            },
+        )
     }
 }

@@ -12,7 +12,7 @@ use crate::analysis::ids::{PlaceId, RefinedCallEdgeId};
 use crate::analysis::points_to::facts::{PointsToBudgetStatus, PointsToSetFact, PointsToStatus};
 use crate::analysis::points_to::vars::place_var;
 use crate::analysis::types::facts::{TypeFact, TypePrecision, TypeStatus, TypeSubject};
-use crate::analysis_kernel::{FactFamily, FactRef, stable_key_from_parts};
+use crate::analysis_kernel::{FactFamily, FactRef, stable_key_text_from_parts};
 #[cfg(test)]
 use crate::core::FunctionId;
 use crate::core::{AnalysisDb, Language};
@@ -138,6 +138,8 @@ fn type_edge_from_target(
     type_fact: Option<&TypeFact>,
     index: usize,
 ) -> RefinedCallEdgeFact {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let type_key = type_fact
         .map(|fact| metadata_key(db, FactFamily::Type, fact.id.0, &fact.stable_key))
         .unwrap_or_else(|| "type:none".to_string());
@@ -153,7 +155,8 @@ fn type_edge_from_target(
             }),
             evidence: vec!["go_receiver_type".to_string(), format!("type={type_key}")],
             input_stable_keys: vec![target_key.clone(), type_key.clone()],
-            stable_key: stable_key_from_parts(
+            stable_key: stable_key_text_from_parts(
+                interner,
                 FactFamily::RefinedCallEdge,
                 &[
                     ("tier", "go_receiver_type".to_string()),
@@ -171,6 +174,8 @@ fn points_to_edge_from_target(
     points_to: Option<&PointsToSetFact>,
     index: usize,
 ) -> RefinedCallEdgeFact {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let points_to_key = points_to
         .map(|fact| metadata_key(db, FactFamily::PointsToSet, fact.id.0, &fact.stable_key))
         .unwrap_or_else(|| "points-to:none".to_string());
@@ -187,7 +192,8 @@ fn points_to_edge_from_target(
                 format!("points_to={points_to_key}"),
             ],
             input_stable_keys: vec![target_key.clone(), points_to_key.clone()],
-            stable_key: stable_key_from_parts(
+            stable_key: stable_key_text_from_parts(
+                interner,
                 FactFamily::RefinedCallEdge,
                 &[
                     ("tier", "go_points_to".to_string()),
@@ -245,6 +251,8 @@ fn unresolved_go_edge(
     tier: RefinedCallTier,
     index: usize,
 ) -> RefinedCallEdgeFact {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let unresolved_key = metadata_key(
         db,
         FactFamily::UnresolvedCall,
@@ -283,7 +291,8 @@ fn unresolved_go_edge(
         confidence: RefinedCallConfidence::Low,
         evidence: vec!["go_unresolved_dispatch".to_string()],
         input_stable_keys: vec![unresolved_key.clone()],
-        stable_key: stable_key_from_parts(
+        stable_key: stable_key_text_from_parts(
+            interner,
             FactFamily::RefinedCallEdge,
             &[
                 ("tier", format!("{tier:?}")),

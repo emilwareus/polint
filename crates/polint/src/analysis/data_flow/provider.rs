@@ -18,7 +18,7 @@ use crate::analysis::places::{PlaceFact, PlaceRoot};
 use crate::analysis_kernel::incremental::{
     CacheStats, Digest, DigestKind, InputComponent, InputSnapshot,
 };
-use crate::analysis_kernel::{FactFamily, ProviderManifest, stable_key_from_parts};
+use crate::analysis_kernel::{FactFamily, ProviderManifest, stable_key_text_from_parts};
 use crate::core::AnalysisDb;
 use crate::diagnostics::Diagnostic;
 
@@ -94,9 +94,12 @@ fn derive_local_place_nodes(db: &AnalysisDb, output: &mut DataFlowOutput) {
 }
 
 fn derive_source_models(db: &AnalysisDb, output: &mut DataFlowOutput) {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     for boundary in db.trust_boundary_facts() {
         let model_id = next_data_flow_model_id(&output.models);
-        let stable_key = stable_key_from_parts(
+        let stable_key = stable_key_text_from_parts(
+            interner,
             FactFamily::DataFlowModel,
             &[
                 ("kind", "source".to_string()),
@@ -138,7 +141,8 @@ fn derive_source_models(db: &AnalysisDb, output: &mut DataFlowOutput) {
             call_site: None,
             model: Some(model_id),
             span: Some(boundary.span.clone()),
-            stable_key: stable_key_from_parts(
+            stable_key: stable_key_text_from_parts(
+                interner,
                 FactFamily::DataFlowNode,
                 &[("source_model", stable_key)],
             ),
@@ -154,6 +158,8 @@ fn derive_source_introduction_edges(
     source_node: DataFlowNodeId,
     model_id: DataFlowModelId,
 ) {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let Some(target_function) = boundary.target_parameter else {
         return;
     };
@@ -172,7 +178,15 @@ fn derive_source_introduction_edges(
         .collect::<Vec<_>>();
 
     for (place, target_node) in targets {
-        push_source_introduction_edge(output, boundary, place, source_node, target_node, model_id);
+        push_source_introduction_edge(
+            interner,
+            output,
+            boundary,
+            place,
+            source_node,
+            target_node,
+            model_id,
+        );
     }
 }
 
@@ -197,6 +211,7 @@ fn parameter_matches_boundary(
 }
 
 fn push_source_introduction_edge(
+    interner: &crate::core::StableKeyInterner,
     output: &mut DataFlowOutput,
     boundary: &TrustBoundaryFact,
     place: &PlaceFact,
@@ -204,7 +219,8 @@ fn push_source_introduction_edge(
     target_node: DataFlowNodeId,
     model_id: DataFlowModelId,
 ) {
-    let stable_key = stable_key_from_parts(
+    let stable_key = stable_key_text_from_parts(
+        interner,
         FactFamily::DataFlowEdge,
         &[
             ("kind", "SourceIntroduction".to_string()),
@@ -261,6 +277,8 @@ fn push_source_introduction_edge(
 }
 
 fn derive_extension_models(db: &AnalysisDb, output: &mut DataFlowOutput) {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     for fact in db.extension_facts() {
         let kind = match fact.fact_family.as_str() {
             "data_flow.source" | "source" => DataFlowModelKind::Source,
@@ -284,7 +302,8 @@ fn derive_extension_models(db: &AnalysisDb, output: &mut DataFlowOutput) {
             provenance: DataFlowProvenance::Extension,
             evidence: fact.evidence.clone(),
             payload_labels: fact.payload_labels.clone(),
-            stable_key: stable_key_from_parts(
+            stable_key: stable_key_text_from_parts(
+                interner,
                 FactFamily::DataFlowModel,
                 &[
                     ("kind", format!("{kind:?}")),

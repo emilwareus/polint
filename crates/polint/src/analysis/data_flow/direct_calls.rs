@@ -9,15 +9,17 @@ use crate::analysis::refined_calls::facts::{RefinedCallConfidence, RefinedCallEd
 use crate::analysis::summaries::facts::{
     FlowRoot, SummaryDomainKind, SummaryFact, SummaryPrecision, SummaryStatus,
 };
-use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
+use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
 use crate::core::{AnalysisDb, Language};
 
 pub(crate) fn derive_direct_call_edges(db: &AnalysisDb, output: &mut DataFlowOutput) {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     for edge in db.refined_call_edges() {
         if edge.status == CallTargetStatus::Resolved {
             derive_resolved_call_edge(db, output, edge);
         } else {
-            derive_unresolved_call_edge(output, edge);
+            derive_unresolved_call_edge(interner, output, edge);
         }
     }
 }
@@ -27,9 +29,12 @@ fn derive_resolved_call_edge(
     output: &mut DataFlowOutput,
     edge: &RefinedCallEdgeFact,
 ) {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let site = db.call_sites().iter().find(|site| site.id == edge.site);
     let site_id = site.map(|site| site.id);
     let callee_input = call_node(
+        interner,
         output,
         DataFlowNodeKind::SummaryInput,
         edge,
@@ -37,6 +42,7 @@ fn derive_resolved_call_edge(
         site_id,
     );
     let callee_output = call_node(
+        interner,
         output,
         DataFlowNodeKind::SummaryOutput,
         edge,
@@ -47,6 +53,7 @@ fn derive_resolved_call_edge(
     let argument_nodes = argument_nodes(output, edge, site);
     for (index, argument) in argument_nodes.iter().copied() {
         push_edge(
+            interner,
             output,
             CallEdgeDraft {
                 from: argument,
@@ -68,6 +75,7 @@ fn derive_resolved_call_edge(
     }
     if let Some(receiver) = receiver_node(output, site) {
         push_edge(
+            interner,
             output,
             CallEdgeDraft {
                 from: receiver,
@@ -87,6 +95,7 @@ fn derive_resolved_call_edge(
     bridge_target_summaries(db, output, edge, site, site_id);
     if let Some(returned) = return_node(output, site) {
         push_edge(
+            interner,
             output,
             CallEdgeDraft {
                 from: callee_output,
@@ -112,6 +121,8 @@ fn bridge_target_summaries(
     site: Option<&CallSiteFact>,
     call_site: Option<CallSiteId>,
 ) {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let Some(target_function) = edge.target_function else {
         return;
     };
@@ -132,6 +143,7 @@ fn bridge_target_summaries(
                 continue;
             };
             let summary_input = summary_node(
+                interner,
                 output,
                 summary,
                 DataFlowNodeKind::SummaryInput,
@@ -139,6 +151,7 @@ fn bridge_target_summaries(
                 call_site,
             );
             let summary_output = summary_node(
+                interner,
                 output,
                 summary,
                 DataFlowNodeKind::SummaryOutput,
@@ -150,6 +163,7 @@ fn bridge_target_summaries(
                 summary.callable_stable_key.clone(),
             ];
             push_edge(
+                interner,
                 output,
                 CallEdgeDraft {
                     from,
@@ -170,15 +184,16 @@ fn bridge_target_summaries(
                 },
             );
             push_call_summary_tito_edge(
+                interner,
                 output,
                 edge,
                 summary,
                 flow,
                 summary_input,
-                summary_output,
-                call_site,
+                (summary_output, call_site),
             );
             push_edge(
+                interner,
                 output,
                 CallEdgeDraft {
                     from: summary_output,
@@ -267,8 +282,13 @@ fn place_node(output: &DataFlowOutput, place: PlaceId) -> Option<DataFlowNodeId>
         .map(|node| node.id)
 }
 
-fn derive_unresolved_call_edge(output: &mut DataFlowOutput, edge: &RefinedCallEdgeFact) {
+fn derive_unresolved_call_edge(
+    interner: &crate::core::StableKeyInterner,
+    output: &mut DataFlowOutput,
+    edge: &RefinedCallEdgeFact,
+) {
     let source = call_node(
+        interner,
         output,
         DataFlowNodeKind::CallArgument,
         edge,
@@ -276,6 +296,7 @@ fn derive_unresolved_call_edge(output: &mut DataFlowOutput, edge: &RefinedCallEd
         None,
     );
     let sink = call_node(
+        interner,
         output,
         DataFlowNodeKind::Synthetic,
         edge,
@@ -285,6 +306,7 @@ fn derive_unresolved_call_edge(output: &mut DataFlowOutput, edge: &RefinedCallEd
     let status = unresolved_status(edge.status);
     let budget = (status == DataFlowStatus::BudgetExceeded).then(|| {
         super::local::budget_fact(
+            interner,
             super::facts::DataFlowBudgetReason::PathCount,
             1,
             2,
@@ -293,6 +315,7 @@ fn derive_unresolved_call_edge(output: &mut DataFlowOutput, edge: &RefinedCallEd
         )
     });
     push_edge(
+        interner,
         output,
         CallEdgeDraft {
             from: source,
@@ -329,8 +352,13 @@ struct CallEdgeDraft<'a> {
     edge: &'a RefinedCallEdgeFact,
 }
 
-fn push_edge(output: &mut DataFlowOutput, draft: CallEdgeDraft<'_>) {
-    let stable_key = stable_key_from_parts(
+fn push_edge(
+    interner: &crate::core::StableKeyInterner,
+    output: &mut DataFlowOutput,
+    draft: CallEdgeDraft<'_>,
+) {
+    let stable_key = stable_key_text_from_parts(
+        interner,
         FactFamily::DataFlowEdge,
         &[
             ("kind", format!("{:?}", draft.kind)),
@@ -375,13 +403,15 @@ fn push_edge(output: &mut DataFlowOutput, draft: CallEdgeDraft<'_>) {
 }
 
 fn summary_node(
+    interner: &crate::core::StableKeyInterner,
     output: &mut DataFlowOutput,
     fact: &SummaryFact,
     kind: DataFlowNodeKind,
     role: &str,
     call_site: Option<CallSiteId>,
 ) -> DataFlowNodeId {
-    let stable_key = stable_key_from_parts(
+    let stable_key = stable_key_text_from_parts(
+        interner,
         FactFamily::DataFlowNode,
         &[
             ("kind", format!("{kind:?}")),
@@ -425,15 +455,17 @@ fn summary_node(
 }
 
 fn push_call_summary_tito_edge(
+    interner: &crate::core::StableKeyInterner,
     output: &mut DataFlowOutput,
     edge: &RefinedCallEdgeFact,
     summary: &SummaryFact,
     flow: &crate::analysis::summaries::facts::SummaryFlowEdge,
     from: DataFlowNodeId,
-    to: DataFlowNodeId,
-    call_site: Option<CallSiteId>,
+    pair: (DataFlowNodeId, Option<CallSiteId>),
 ) {
-    let stable_key = stable_key_from_parts(
+    let (to, call_site) = pair;
+    let stable_key = stable_key_text_from_parts(
+        interner,
         FactFamily::DataFlowEdge,
         &[
             ("kind", format!("{:?}", DataFlowEdgeKind::SummaryTito)),
@@ -531,13 +563,15 @@ fn node_key(output: &DataFlowOutput, node: DataFlowNodeId) -> String {
 }
 
 fn call_node(
+    interner: &crate::core::StableKeyInterner,
     output: &mut DataFlowOutput,
     kind: DataFlowNodeKind,
     edge: &RefinedCallEdgeFact,
     suffix: String,
     call_site: Option<CallSiteId>,
 ) -> DataFlowNodeId {
-    let stable_key = stable_key_from_parts(
+    let stable_key = stable_key_text_from_parts(
+        interner,
         FactFamily::DataFlowNode,
         &[
             ("kind", format!("{kind:?}")),
@@ -676,7 +710,11 @@ mod tests {
     #[test]
     fn unresolved_refined_call_creates_unknown_row() {
         let mut output = DataFlowOutput::empty();
-        derive_unresolved_call_edge(&mut output, &refined_edge(CallTargetStatus::Unresolved));
+        derive_unresolved_call_edge(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &mut output,
+            &refined_edge(CallTargetStatus::Unresolved),
+        );
 
         let edge = output
             .edges
@@ -1130,7 +1168,11 @@ mod tests {
             (CallTargetStatus::Rejected, DataFlowStatus::Rejected),
         ] {
             let mut output = DataFlowOutput::empty();
-            derive_unresolved_call_edge(&mut output, &refined_edge(call_status));
+            derive_unresolved_call_edge(
+                &crate::core::AnalysisDb::new().stable_key_interner(),
+                &mut output,
+                &refined_edge(call_status),
+            );
 
             assert_eq!(output.edges[0].status, data_flow_status);
             if data_flow_status == DataFlowStatus::BudgetExceeded {

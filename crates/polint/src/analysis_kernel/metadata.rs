@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use crate::core::{ResolutionPrecision, ResolutionStatus, SymbolPrecision};
+use crate::core::{
+    ResolutionPrecision, ResolutionStatus, StableKeyId, StableKeyInterner, SymbolPrecision,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum FactFamily {
@@ -477,7 +479,11 @@ impl FactMetaStore {
     }
 }
 
-pub(crate) fn stable_key_from_parts(family: FactFamily, parts: &[(&str, String)]) -> String {
+pub(crate) fn stable_key_from_parts(
+    interner: &StableKeyInterner,
+    family: FactFamily,
+    parts: &[(&str, String)],
+) -> StableKeyId {
     let mut normalized = parts
         .iter()
         .map(|(label, value)| (*label, value.replace('\\', "/")))
@@ -491,7 +497,17 @@ pub(crate) fn stable_key_from_parts(family: FactFamily, parts: &[(&str, String)]
         key.push('=');
         key.push_str(&length_prefixed(&value));
     }
-    key
+    interner.intern(key)
+}
+
+pub(crate) fn stable_key_text_from_parts(
+    interner: &StableKeyInterner,
+    family: FactFamily,
+    parts: &[(&str, String)],
+) -> String {
+    interner
+        .resolve(stable_key_from_parts(interner, family, parts))
+        .to_string()
 }
 
 pub(crate) fn resolution_metadata(
@@ -566,7 +582,9 @@ mod tests {
 
     #[test]
     fn stable_key_from_parts_sorts_and_normalizes_length_prefixed_parts() {
+        let interner = crate::core::AnalysisDb::new().stable_key_interner();
         let first = stable_key_from_parts(
+            &interner,
             FactFamily::Import,
             &[
                 ("path", "src\\main.go".to_string()),
@@ -574,6 +592,7 @@ mod tests {
             ],
         );
         let second = stable_key_from_parts(
+            &interner,
             FactFamily::Import,
             &[
                 ("import_path", "fmt".to_string()),
@@ -582,6 +601,7 @@ mod tests {
         );
 
         assert_eq!(first, second);
+        let first = interner.resolve(first);
         assert!(first.contains("6:Import"));
         assert!(first.contains("4:path=11:src/main.go"));
     }

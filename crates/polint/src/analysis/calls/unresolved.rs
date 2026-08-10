@@ -14,11 +14,13 @@ pub(crate) fn derive_unresolved_calls(
     db: &AnalysisDb,
     sites: &[CallSiteFact],
 ) -> Vec<UnresolvedCallFact> {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let mut rows = BTreeMap::new();
 
     for site in sites {
         if let Some(reason) = reason_for_site(site) {
-            insert_unresolved(&mut rows, site, reason, "call-site-shape");
+            insert_unresolved(interner, &mut rows, site, reason, "call-site-shape");
         }
     }
 
@@ -35,20 +37,21 @@ pub(crate) fn derive_unresolved_calls(
             continue;
         };
         let reason = reason_for_unsupported(unsupported);
-        insert_unresolved(&mut rows, site, reason, &unsupported.stable_key);
+        insert_unresolved(interner, &mut rows, site, reason, &unsupported.stable_key);
     }
 
     rows.into_values().collect()
 }
 
 fn insert_unresolved(
+    interner: &crate::core::StableKeyInterner,
     rows: &mut BTreeMap<String, UnresolvedCallFact>,
     site: &CallSiteFact,
     reason: UnresolvedCallReason,
     evidence: &str,
 ) {
     let status = status_for_reason(reason);
-    let stable_key = unresolved_stable_key(site, reason, status, evidence);
+    let stable_key = unresolved_stable_key(interner, site, reason, status, evidence);
     rows.entry(stable_key.clone())
         .or_insert(UnresolvedCallFact {
             site: site.id,
@@ -156,12 +159,14 @@ fn spans_overlap_or_touch(left: &crate::core::Span, right: &crate::core::Span) -
 }
 
 fn unresolved_stable_key(
+    interner: &crate::core::StableKeyInterner,
     site: &CallSiteFact,
     reason: UnresolvedCallReason,
     status: CallTargetStatus,
     evidence: &str,
 ) -> String {
     semantic_stable_key(
+        interner,
         FactFamily::UnresolvedCall,
         &[
             ("site", site.stable_key.clone()),

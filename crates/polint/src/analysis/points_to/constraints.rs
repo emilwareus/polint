@@ -8,15 +8,16 @@ use crate::analysis::types::store::TypeValueAliasOutput;
 use crate::analysis::values::facts::{
     AllocationTokenFact, ValueFact, ValueKind, ValueStatus, ValueSubject,
 };
-use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
+use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
 
 pub(crate) fn derive_points_to_constraints(
+    interner: &crate::core::StableKeyInterner,
     output: &TypeValueAliasOutput,
 ) -> Vec<PointsToConstraintFact> {
     let mut builder = ConstraintBuilder::default();
-    builder.collect_values(&output.values.values);
-    builder.collect_allocations(&output.values.allocations);
-    builder.collect_access_paths(&output.access_paths.access_paths);
+    builder.collect_values(interner, &output.values.values);
+    builder.collect_allocations(interner, &output.values.allocations);
+    builder.collect_access_paths(interner, &output.access_paths.access_paths);
     builder.finish()
 }
 
@@ -26,7 +27,7 @@ struct ConstraintBuilder {
 }
 
 impl ConstraintBuilder {
-    fn collect_values(&mut self, values: &[ValueFact]) {
+    fn collect_values(&mut self, interner: &crate::core::StableKeyInterner, values: &[ValueFact]) {
         for value in values {
             let Some(dst) = subject_var(&value.subject) else {
                 continue;
@@ -35,33 +36,48 @@ impl ConstraintBuilder {
                 ValueKind::Object(object)
                 | ValueKind::Array(object)
                 | ValueKind::CompositeLiteral(object) => {
-                    self.push(PointsToConstraintKind::AddressOf {
-                        dst,
-                        object: vars::allocation_object(*object),
-                    });
+                    self.push(
+                        interner,
+                        PointsToConstraintKind::AddressOf {
+                            dst,
+                            object: vars::allocation_object(*object),
+                        },
+                    );
                 }
                 ValueKind::PlaceRef(src) => {
-                    self.push(PointsToConstraintKind::Copy {
-                        dst,
-                        src: vars::place_var(*src),
-                    });
+                    self.push(
+                        interner,
+                        PointsToConstraintKind::Copy {
+                            dst,
+                            src: vars::place_var(*src),
+                        },
+                    );
                 }
                 ValueKind::CallReturn(place) if value.status == ValueStatus::Present => {
-                    self.push(PointsToConstraintKind::CallReturn {
-                        dst,
-                        value: value.id,
-                    });
-                    self.push(PointsToConstraintKind::Copy {
-                        dst,
-                        src: vars::place_var(*place),
-                    });
+                    self.push(
+                        interner,
+                        PointsToConstraintKind::CallReturn {
+                            dst,
+                            value: value.id,
+                        },
+                    );
+                    self.push(
+                        interner,
+                        PointsToConstraintKind::Copy {
+                            dst,
+                            src: vars::place_var(*place),
+                        },
+                    );
                 }
                 ValueKind::CallReturn(_) => {}
                 ValueKind::FunctionObject | ValueKind::ClassObject | ValueKind::ModuleObject => {
-                    self.push(PointsToConstraintKind::AddressOf {
-                        dst,
-                        object: vars::abstract_value_object(value.value),
-                    });
+                    self.push(
+                        interner,
+                        PointsToConstraintKind::AddressOf {
+                            dst,
+                            object: vars::abstract_value_object(value.value),
+                        },
+                    );
                 }
                 ValueKind::Unknown { .. }
                 | ValueKind::Null
@@ -75,18 +91,29 @@ impl ConstraintBuilder {
         }
     }
 
-    fn collect_allocations(&mut self, allocations: &[AllocationTokenFact]) {
+    fn collect_allocations(
+        &mut self,
+        interner: &crate::core::StableKeyInterner,
+        allocations: &[AllocationTokenFact],
+    ) {
         for allocation in allocations {
             if let Some(place) = allocation.source_place {
-                self.push(PointsToConstraintKind::AddressOf {
-                    dst: vars::place_var(place),
-                    object: vars::allocation_object(allocation.id),
-                });
+                self.push(
+                    interner,
+                    PointsToConstraintKind::AddressOf {
+                        dst: vars::place_var(place),
+                        object: vars::allocation_object(allocation.id),
+                    },
+                );
             }
         }
     }
 
-    fn collect_access_paths(&mut self, paths: &[AccessPathFact]) {
+    fn collect_access_paths(
+        &mut self,
+        interner: &crate::core::StableKeyInterner,
+        paths: &[AccessPathFact],
+    ) {
         for path in paths {
             let mut base = vars::place_var(path.base);
             for (index, projection) in path.projections.iter().enumerate() {
@@ -97,54 +124,81 @@ impl ConstraintBuilder {
                 };
                 match projection {
                     AccessPathProjection::Field(field) | AccessPathProjection::Property(field) => {
-                        self.push(PointsToConstraintKind::FieldLoad {
-                            dst,
-                            base,
-                            field: field.clone(),
-                        });
-                        self.push(PointsToConstraintKind::FieldStore {
-                            base,
-                            field: field.clone(),
-                            src: dst,
-                        });
+                        self.push(
+                            interner,
+                            PointsToConstraintKind::FieldLoad {
+                                dst,
+                                base,
+                                field: field.clone(),
+                            },
+                        );
+                        self.push(
+                            interner,
+                            PointsToConstraintKind::FieldStore {
+                                base,
+                                field: field.clone(),
+                                src: dst,
+                            },
+                        );
                     }
                     AccessPathProjection::IndexKnown(index) => {
-                        self.push(PointsToConstraintKind::ElementLoad {
-                            dst,
-                            base,
-                            index: index.clone(),
-                        });
-                        self.push(PointsToConstraintKind::ElementStore {
-                            base,
-                            index: index.clone(),
-                            src: dst,
-                        });
+                        self.push(
+                            interner,
+                            PointsToConstraintKind::ElementLoad {
+                                dst,
+                                base,
+                                index: index.clone(),
+                            },
+                        );
+                        self.push(
+                            interner,
+                            PointsToConstraintKind::ElementStore {
+                                base,
+                                index: index.clone(),
+                                src: dst,
+                            },
+                        );
                     }
                     AccessPathProjection::IndexUnknown { evidence } => {
-                        self.push(PointsToConstraintKind::ElementLoad {
-                            dst,
-                            base,
-                            index: format!("unknown:{evidence}"),
-                        });
-                        self.push(PointsToConstraintKind::ElementStore {
-                            base,
-                            index: format!("unknown:{evidence}"),
-                            src: dst,
-                        });
+                        self.push(
+                            interner,
+                            PointsToConstraintKind::ElementLoad {
+                                dst,
+                                base,
+                                index: format!("unknown:{evidence}"),
+                            },
+                        );
+                        self.push(
+                            interner,
+                            PointsToConstraintKind::ElementStore {
+                                base,
+                                index: format!("unknown:{evidence}"),
+                                src: dst,
+                            },
+                        );
                     }
                     AccessPathProjection::Deref => {
-                        self.push(PointsToConstraintKind::Load { dst, pointer: base });
-                        self.push(PointsToConstraintKind::Store {
-                            pointer: base,
-                            src: dst,
-                        });
+                        self.push(
+                            interner,
+                            PointsToConstraintKind::Load { dst, pointer: base },
+                        );
+                        self.push(
+                            interner,
+                            PointsToConstraintKind::Store {
+                                pointer: base,
+                                src: dst,
+                            },
+                        );
                     }
                     AccessPathProjection::CallReturn(call) => {
-                        self.push(PointsToConstraintKind::SummaryFlow {
-                            dst,
-                            src: base,
-                            summary_key: format!("call:{}", call.0),
-                        });
+                        self.push(
+                            interner,
+                            PointsToConstraintKind::SummaryFlow {
+                                dst,
+                                src: base,
+                                summary_key: format!("call:{}", call.0),
+                            },
+                        );
                     }
                     AccessPathProjection::AwaitResult | AccessPathProjection::Unknown { .. } => {}
                 }
@@ -153,8 +207,8 @@ impl ConstraintBuilder {
         }
     }
 
-    fn push(&mut self, kind: PointsToConstraintKind) {
-        let stable_key = constraint_stable_key(&kind);
+    fn push(&mut self, interner: &crate::core::StableKeyInterner, kind: PointsToConstraintKind) {
+        let stable_key = constraint_stable_key(interner, &kind);
         self.constraints.push(PointsToConstraintFact {
             id: PointsToConstraintId(self.constraints.len() as u64),
             kind,
@@ -189,8 +243,12 @@ fn access_path_var(path: &AccessPathFact) -> PtVarId {
     vars::access_path_var(path.id)
 }
 
-fn constraint_stable_key(kind: &PointsToConstraintKind) -> String {
-    stable_key_from_parts(
+fn constraint_stable_key(
+    interner: &crate::core::StableKeyInterner,
+    kind: &PointsToConstraintKind,
+) -> String {
+    stable_key_text_from_parts(
+        interner,
         FactFamily::PointsToConstraint,
         &[("kind", format!("{kind:?}"))],
     )
@@ -252,7 +310,10 @@ mod tests {
             ..TypeValueAliasOutput::default()
         };
 
-        let constraints = derive_points_to_constraints(&output);
+        let constraints = derive_points_to_constraints(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &output,
+        );
         assert!(
             constraints
                 .iter()
@@ -320,7 +381,10 @@ mod tests {
             ..TypeValueAliasOutput::default()
         };
 
-        let constraints = derive_points_to_constraints(&output);
+        let constraints = derive_points_to_constraints(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &output,
+        );
 
         assert!(
             !constraints

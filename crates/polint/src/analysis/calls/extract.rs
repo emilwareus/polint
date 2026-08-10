@@ -459,7 +459,10 @@ fn call_site_stable_key(
     callee_shape: &str,
     operation_stable_key: &str,
 ) -> String {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     semantic_stable_key(
+        interner,
         FactFamily::CallSite,
         &[
             ("language", format!("{:?}", body.language)),

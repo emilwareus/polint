@@ -22,9 +22,11 @@ use crate::analysis_kernel::FactFamily;
 use crate::core::{AnalysisDb, Language};
 
 pub(crate) fn lower_cfg(db: &AnalysisDb) -> CfgOutput {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let mut lowering = CfgLowering::new(db);
-    lowering.lower();
-    lowering.finish()
+    lowering.lower(interner);
+    lowering.finish(interner)
 }
 
 struct CfgLowering<'db> {
@@ -42,7 +44,7 @@ impl<'db> CfgLowering<'db> {
         }
     }
 
-    fn lower(&mut self) {
+    fn lower(&mut self, interner: &crate::core::StableKeyInterner) {
         let mut bodies = self.db.mir_bodies().iter().collect::<Vec<_>>();
         bodies.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
 
@@ -60,14 +62,16 @@ impl<'db> CfgLowering<'db> {
             }) || self
                 .unsupported_for_body(body.id)
                 .any(|row| matches!(row.construct.as_str(), "try" | "parser recovery" | "ERROR"));
-            let function = self.builder.start_function(body, has_exceptional_control);
+            let function = self
+                .builder
+                .start_function(interner, body, has_exceptional_control);
             self.body_to_function.insert(body.id, function);
-            self.lower_body(body.id);
+            self.lower_body(interner, body.id);
             self.builder.finish_function();
         }
     }
 
-    fn lower_body(&mut self, body: MirBodyId) {
+    fn lower_body(&mut self, interner: &crate::core::StableKeyInterner, body: MirBodyId) {
         let mut blocks = self
             .db
             .mir_blocks()
@@ -95,7 +99,8 @@ impl<'db> CfgLowering<'db> {
         if blocks.is_empty() {
             let current = self.builder.current_block();
             let exit = self.builder.normal_exit_block();
-            self.builder.add_edge(current, exit, CfgEdgeKind::Normal);
+            self.builder
+                .add_edge(interner, current, exit, CfgEdgeKind::Normal);
             return;
         }
 
@@ -117,7 +122,7 @@ impl<'db> CfgLowering<'db> {
                 }
                 _ => BasicBlockKind::StraightLine,
             };
-            let cfg_block = self.builder.start_block(kind);
+            let cfg_block = self.builder.start_block(interner, kind);
             if matches!(terminator.kind, MirTerminatorKind::Unreachable)
                 && !unwind_targets.contains_key(&block.id)
             {
@@ -156,6 +161,7 @@ impl<'db> CfgLowering<'db> {
                     self.operation_node_kind(operation)
                 };
                 self.builder.append_operation_node(
+                    interner,
                     Some(operation),
                     node_kind,
                     Some(operation.span.clone()),
@@ -174,11 +180,13 @@ impl<'db> CfgLowering<'db> {
                     } => CfgNodeKind::Yield,
                     _ => CfgNodeKind::Synthetic,
                 };
-                self.builder.append_operation_node(None, node_kind, None);
+                self.builder
+                    .append_operation_node(interner, None, node_kind, None);
             }
             cfg_blocks.insert(block.id, cfg_block);
         }
         self.builder.add_edge(
+            interner,
             entry,
             *cfg_blocks
                 .get(&blocks[0].id)
@@ -214,8 +222,11 @@ impl<'db> CfgLowering<'db> {
                             .exceptional_exit_block()
                             .unwrap_or_else(|| self.builder.normal_exit_block())
                     } else {
-                        let target = self.builder.start_block(BasicBlockKind::Synthetic);
+                        let target = self
+                            .builder
+                            .start_block(interner, BasicBlockKind::Synthetic);
                         self.builder.append_operation_node(
+                            interner,
                             None,
                             CfgNodeKind::Synthetic,
                             Some(operation.span.clone()),
@@ -223,7 +234,7 @@ impl<'db> CfgLowering<'db> {
                         target
                     };
                     for edge_kind in &shape.boundary_edges {
-                        self.builder.add_edge(from, target, *edge_kind);
+                        self.builder.add_edge(interner, from, target, *edge_kind);
                     }
                 }
                 stop_lowering |= shape.stop_lowering;
@@ -239,38 +250,63 @@ impl<'db> CfgLowering<'db> {
                 .expect("MIR block terminator must exist");
             match &terminator.kind {
                 MirTerminatorKind::Goto { target } => {
-                    self.add_mir_edge(from, *target, &cfg_blocks, CfgEdgeKind::Normal);
+                    self.add_mir_edge(interner, from, *target, &cfg_blocks, CfgEdgeKind::Normal);
                 }
                 MirTerminatorKind::Branch {
                     then_target,
                     else_target,
                     ..
                 } => {
-                    self.add_mir_edge(from, *then_target, &cfg_blocks, CfgEdgeKind::True);
-                    self.add_mir_edge(from, *else_target, &cfg_blocks, CfgEdgeKind::False);
+                    self.add_mir_edge(interner, from, *then_target, &cfg_blocks, CfgEdgeKind::True);
+                    self.add_mir_edge(
+                        interner,
+                        from,
+                        *else_target,
+                        &cfg_blocks,
+                        CfgEdgeKind::False,
+                    );
                 }
                 MirTerminatorKind::Switch {
                     cases, otherwise, ..
                 } => {
                     for (_, target) in cases {
-                        self.add_mir_edge(from, *target, &cfg_blocks, CfgEdgeKind::SwitchCase);
+                        self.add_mir_edge(
+                            interner,
+                            from,
+                            *target,
+                            &cfg_blocks,
+                            CfgEdgeKind::SwitchCase,
+                        );
                     }
-                    self.add_mir_edge(from, *otherwise, &cfg_blocks, CfgEdgeKind::DefaultCase);
+                    self.add_mir_edge(
+                        interner,
+                        from,
+                        *otherwise,
+                        &cfg_blocks,
+                        CfgEdgeKind::DefaultCase,
+                    );
                 }
                 MirTerminatorKind::Return { .. } => {
                     self.builder.add_edge(
+                        interner,
                         from,
                         self.builder.normal_exit_block(),
                         CfgEdgeKind::Return,
                     );
                 }
                 MirTerminatorKind::Throw { unwind, .. } => {
-                    self.add_mir_edge(from, *unwind, &cfg_blocks, CfgEdgeKind::Throw);
+                    self.add_mir_edge(interner, from, *unwind, &cfg_blocks, CfgEdgeKind::Throw);
                 }
                 MirTerminatorKind::Call { normal, unwind, .. } => {
-                    self.add_mir_edge(from, *normal, &cfg_blocks, CfgEdgeKind::Normal);
+                    self.add_mir_edge(interner, from, *normal, &cfg_blocks, CfgEdgeKind::Normal);
                     if let Some(unwind) = unwind {
-                        self.add_mir_edge(from, *unwind, &cfg_blocks, CfgEdgeKind::ImplicitThrow);
+                        self.add_mir_edge(
+                            interner,
+                            from,
+                            *unwind,
+                            &cfg_blocks,
+                            CfgEdgeKind::ImplicitThrow,
+                        );
                     }
                 }
                 MirTerminatorKind::Suspend { kind, resume, .. } => {
@@ -286,8 +322,8 @@ impl<'db> CfgLowering<'db> {
                             (CfgEdgeKind::Unknown, CfgEdgeKind::Normal)
                         }
                     };
-                    self.add_mir_edge(from, *resume, &cfg_blocks, suspend);
-                    self.add_mir_edge(from, *resume, &cfg_blocks, resumed);
+                    self.add_mir_edge(interner, from, *resume, &cfg_blocks, suspend);
+                    self.add_mir_edge(interner, from, *resume, &cfg_blocks, resumed);
                 }
                 MirTerminatorKind::Unreachable => {
                     if unwind_targets.contains_key(&block.id) {
@@ -295,7 +331,8 @@ impl<'db> CfgLowering<'db> {
                             .builder
                             .exceptional_exit_block()
                             .unwrap_or_else(|| self.builder.normal_exit_block());
-                        self.builder.add_edge(from, exit, CfgEdgeKind::Normal);
+                        self.builder
+                            .add_edge(interner, from, exit, CfgEdgeKind::Normal);
                     }
                 }
                 MirTerminatorKind::Unsupported { .. } => {}
@@ -305,6 +342,7 @@ impl<'db> CfgLowering<'db> {
 
     fn add_mir_edge(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         from: crate::analysis::cfg::ids::BasicBlockId,
         target: MirBlockId,
         blocks: &BTreeMap<MirBlockId, crate::analysis::cfg::ids::BasicBlockId>,
@@ -313,7 +351,7 @@ impl<'db> CfgLowering<'db> {
         let to = *blocks
             .get(&target)
             .expect("MIR terminator target must exist in its body");
-        self.builder.add_edge(from, to, kind);
+        self.builder.add_edge(interner, from, to, kind);
     }
 
     fn operation_node_kind(
@@ -442,7 +480,7 @@ impl<'db> CfgLowering<'db> {
         })
     }
 
-    fn finish(self) -> CfgOutput {
+    fn finish(self, interner: &crate::core::StableKeyInterner) -> CfgOutput {
         let body_to_function = self.body_to_function;
         let db = self.db;
         let mut output = self.builder.finish();
@@ -451,7 +489,9 @@ impl<'db> CfgLowering<'db> {
             .iter()
             .filter(|row| row.affected_domains.contains(&UnsupportedDomain::Cfg))
             .enumerate()
-            .map(|(index, row)| unsupported_control_flow_fact(index, row, &body_to_function))
+            .map(|(index, row)| {
+                unsupported_control_flow_fact(interner, index, row, &body_to_function)
+            })
             .collect::<Vec<_>>();
         output.unsupported.append(&mut unsupported);
         output.normalized()
@@ -466,6 +506,7 @@ struct UnsupportedShape {
 }
 
 fn unsupported_control_flow_fact(
+    interner: &crate::core::StableKeyInterner,
     index: usize,
     row: &UnsupportedSemanticFact,
     body_to_function: &BTreeMap<MirBodyId, CfgFunctionId>,
@@ -485,6 +526,7 @@ fn unsupported_control_flow_fact(
         source_evidence: row.source_evidence.clone(),
         conservative_action: control_flow_action(row.conservative_action),
         stable_key: semantic_stable_key(
+            interner,
             FactFamily::UnsupportedControlFlow,
             &[
                 ("language", language_label(row.language).to_string()),
@@ -885,8 +927,18 @@ export function* values(value) { yield value; }
         first.stable_key = "ts:unsupported:stable-source".to_string();
         second.stable_key = first.stable_key.clone();
 
-        let first_fact = unsupported_control_flow_fact(0, &first, &BTreeMap::new());
-        let second_fact = unsupported_control_flow_fact(0, &second, &BTreeMap::new());
+        let first_fact = unsupported_control_flow_fact(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            0,
+            &first,
+            &BTreeMap::new(),
+        );
+        let second_fact = unsupported_control_flow_fact(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            0,
+            &second,
+            &BTreeMap::new(),
+        );
 
         assert_eq!(first_fact.stable_key, second_fact.stable_key);
     }

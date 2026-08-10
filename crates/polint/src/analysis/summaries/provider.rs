@@ -41,7 +41,9 @@ pub(crate) fn derive_direct_summaries_with_cache_stats(
     module_topology_output_digest: Digest,
     upstream_syntax_output_digests: Vec<Digest>,
 ) -> DirectSummariesProviderOutput {
-    let output = DirectSummaryBuilder::build(db);
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
+    let output = DirectSummaryBuilder::build(interner, db);
     let callable_keys = callable_stable_key_map(db);
     let output_digest = direct_summaries_output_digest(
         manifest,

@@ -214,6 +214,8 @@ fn derive_go_symbols_with_runner(
     plan: &AnalysisPlan,
     runner: impl FnOnce(&GoAnalysisConfig) -> Result<Vec<u8>, GoSidecarFailure>,
 ) -> LanguageSymbolOutput {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let files = lifecycle::go_files(db);
     if files.is_empty() || !plan.requests_any_capability(GO_SYMBOL_GRAPH_CAPABILITIES) {
         return LanguageSymbolOutput::default();
@@ -223,6 +225,7 @@ fn derive_go_symbols_with_runner(
         Ok(config) => config,
         Err(error) => {
             return setup_missing_output(
+                interner,
                 builder,
                 &files,
                 plan,
@@ -234,6 +237,7 @@ fn derive_go_symbols_with_runner(
     let uncovered_files = files_matching_paths(&files, &config.files_without_module_root);
     if !uncovered_files.is_empty() {
         let missing = setup_missing_output(
+            interner,
             builder,
             &uncovered_files,
             plan,
@@ -247,6 +251,7 @@ fn derive_go_symbols_with_runner(
     let missing_roots = config.missing_module_roots(&loaded.root);
     if !missing_roots.is_empty() {
         return setup_missing_output(
+            interner,
             builder,
             &files,
             plan,
@@ -262,6 +267,7 @@ fn derive_go_symbols_with_runner(
         Ok(stdout) => stdout,
         Err(error) => {
             return setup_missing_output(
+                interner,
                 builder,
                 &files,
                 plan,
@@ -275,6 +281,7 @@ fn derive_go_symbols_with_runner(
         Ok(output) => output,
         Err(error) => {
             return setup_missing_output(
+                interner,
                 builder,
                 &files,
                 plan,
@@ -644,6 +651,7 @@ fn lexical_repo_relative(raw_path: &str) -> Result<String, GoSidecarFailure> {
 }
 
 fn setup_missing_output(
+    interner: &crate::core::StableKeyInterner,
     builder: &mut SymbolGraphBuilder,
     files: &[&SourceFile],
     plan: &AnalysisPlan,
@@ -665,7 +673,7 @@ fn setup_missing_output(
         }
         output
             .semantic
-            .extend(setup_missing_semantic_index_for_files(files));
+            .extend(setup_missing_semantic_index_for_files(interner, files));
     }
 
     output
@@ -745,6 +753,8 @@ fn convert_sidecar_output(
     db: &AnalysisDb,
     sidecar: &GoSidecarOutput,
 ) -> SemanticIndexOutput {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let files = go_files_by_path(db);
     let symbol_rows = sidecar
         .symbols
@@ -803,30 +813,43 @@ fn convert_sidecar_output(
         }
     }
 
-    derive_go_semantic_index(sidecar, &files, &symbol_stable_keys, &reference_stable_keys)
+    derive_go_semantic_index(
+        interner,
+        sidecar,
+        &files,
+        &symbol_stable_keys,
+        &reference_stable_keys,
+    )
 }
 
-fn setup_missing_semantic_index_for_files(files: &[&SourceFile]) -> SemanticIndexOutput {
+fn setup_missing_semantic_index_for_files(
+    interner: &crate::core::StableKeyInterner,
+    files: &[&SourceFile],
+) -> SemanticIndexOutput {
     let mut builder = SemanticIndexBuilder::new();
     for file in files {
         let source_key = format!("go:setup-missing|file:{}", file.relative_path);
-        builder.add_resolution(ResolutionFact {
-            id: ResolutionId(0),
-            language: Language::Go,
-            file: Some(file.id),
-            package: None,
-            module: None,
-            source_stable_key: source_key.clone(),
-            target_stable_keys: Vec::new(),
-            step: ResolutionStepKind::UnknownFallback,
-            stable_key: format!("{source_key}|step:UnknownFallback|status:setup_missing"),
-            status: SemanticStatus::SetupMissing,
-        });
+        builder.add_resolution(
+            interner,
+            ResolutionFact {
+                id: ResolutionId(0),
+                language: Language::Go,
+                file: Some(file.id),
+                package: None,
+                module: None,
+                source_stable_key: source_key.clone(),
+                target_stable_keys: Vec::new(),
+                step: ResolutionStepKind::UnknownFallback,
+                stable_key: format!("{source_key}|step:UnknownFallback|status:setup_missing"),
+                status: SemanticStatus::SetupMissing,
+            },
+        );
     }
     builder.finish()
 }
 
 fn derive_go_semantic_index(
+    interner: &crate::core::StableKeyInterner,
     sidecar: &GoSidecarOutput,
     files: &BTreeMap<&str, &SourceFile>,
     symbol_stable_keys: &BTreeMap<String, String>,
@@ -836,18 +859,21 @@ fn derive_go_semantic_index(
     let mut scope_ids = BTreeMap::new();
 
     for scope in &sidecar.scopes {
-        let id = builder.add_scope(ScopeFact {
-            id: ScopeId(0),
-            language: Language::Go,
-            file: file_for_path(files, &scope.file).map(|file| file.id),
-            package: None,
-            module: None,
-            parent: scope_ids.get(scope.parent_key.as_str()).copied(),
-            scope_path: go_scope_path(scope),
-            kind: go_scope_kind(&scope.kind),
-            stable_key: scope.key.clone(),
-            status: SemanticStatus::Resolved,
-        });
+        let id = builder.add_scope(
+            interner,
+            ScopeFact {
+                id: ScopeId(0),
+                language: Language::Go,
+                file: file_for_path(files, &scope.file).map(|file| file.id),
+                package: None,
+                module: None,
+                parent: scope_ids.get(scope.parent_key.as_str()).copied(),
+                scope_path: go_scope_path(scope),
+                kind: go_scope_kind(&scope.kind),
+                stable_key: scope.key.clone(),
+                status: SemanticStatus::Resolved,
+            },
+        );
         scope_ids.insert(scope.key.as_str(), id);
     }
 
@@ -861,74 +887,86 @@ fn derive_go_semantic_index(
         let source_key = go_import_stable_key(import);
         let resolution = resolution_steps.get(source_key.as_str()).copied();
         let status = go_import_status(import, resolution);
-        builder.add_semantic_import(SemanticImportFact {
-            id: SemanticImportId(0),
-            language: Language::Go,
-            file: file_for_path(files, &import.file).map(|file| file.id),
-            package: None,
-            module: None,
-            scope: None,
-            import_path: import.path.clone(),
-            local_name: go_import_local_name(import),
-            imported_name: None,
-            namespace: SymbolNamespace::Package,
-            kind: go_import_kind(&import.alias_kind),
-            stable_key: source_key.clone(),
-            status,
-        });
+        builder.add_semantic_import(
+            interner,
+            SemanticImportFact {
+                id: SemanticImportId(0),
+                language: Language::Go,
+                file: file_for_path(files, &import.file).map(|file| file.id),
+                package: None,
+                module: None,
+                scope: None,
+                import_path: import.path.clone(),
+                local_name: go_import_local_name(import),
+                imported_name: None,
+                namespace: SymbolNamespace::Package,
+                kind: go_import_kind(&import.alias_kind),
+                stable_key: source_key.clone(),
+                status,
+            },
+        );
         if let Some(alias) = go_import_alias_fact(import, resolution, status, symbol_stable_keys) {
-            builder.add_alias(alias);
+            builder.add_alias(interner, alias);
         }
     }
 
     for export in &sidecar.exports {
-        let export_id = builder.add_export_identity(ExportFact {
-            id: ExportId(0),
-            language: Language::Go,
-            file: None,
-            package: None,
-            module: None,
-            scope: None,
-            symbol: None,
-            export_name: export.export_name.clone(),
-            namespace: symbol_namespace(&export.namespace),
-            kind: ExportKind::Named,
-            stable_key: go_export_stable_key(export),
-            status: if export.generated {
-                SemanticStatus::Generated
-            } else {
-                SemanticStatus::Resolved
+        let export_id = builder.add_export_identity(
+            interner,
+            ExportFact {
+                id: ExportId(0),
+                language: Language::Go,
+                file: None,
+                package: None,
+                module: None,
+                scope: None,
+                symbol: None,
+                export_name: export.export_name.clone(),
+                namespace: symbol_namespace(&export.namespace),
+                kind: ExportKind::Named,
+                stable_key: go_export_stable_key(export),
+                status: if export.generated {
+                    SemanticStatus::Generated
+                } else {
+                    SemanticStatus::Resolved
+                },
             },
-        });
-        builder.add_stable_export(StableExportIdentity {
-            id: StableExportId(0),
-            export: export_id,
-            language: Language::Go,
-            package_key: Some(format!("go:package:{}", export.package_path)),
-            module_key: None,
-            export_name: export.export_name.clone(),
-            namespace: symbol_namespace(&export.namespace),
-            symbol_stable_key: mapped_symbol_key(symbol_stable_keys, &export.symbol_key),
-            generated_discriminator: Some("native".to_string()),
-            stable_key: go_stable_export_key(export),
-            status: SemanticStatus::Resolved,
-        });
+        );
+        builder.add_stable_export(
+            interner,
+            StableExportIdentity {
+                id: StableExportId(0),
+                export: export_id,
+                language: Language::Go,
+                package_key: Some(format!("go:package:{}", export.package_path)),
+                module_key: None,
+                export_name: export.export_name.clone(),
+                namespace: symbol_namespace(&export.namespace),
+                symbol_stable_key: mapped_symbol_key(symbol_stable_keys, &export.symbol_key),
+                generated_discriminator: Some("native".to_string()),
+                stable_key: go_stable_export_key(export),
+                status: SemanticStatus::Resolved,
+            },
+        );
     }
 
     for step in &sidecar.resolution_steps {
         let target_stable_keys = mapped_candidate_keys(step, symbol_stable_keys);
-        builder.add_resolution(ResolutionFact {
-            id: ResolutionId(0),
-            language: Language::Go,
-            file: None,
-            package: None,
-            module: None,
-            source_stable_key: mapped_reference_key(reference_stable_keys, &step.reference_key),
-            target_stable_keys,
-            step: go_resolution_step_kind(&step.step),
-            stable_key: go_resolution_stable_key(step),
-            status: semantic_status(&step.status),
-        });
+        builder.add_resolution(
+            interner,
+            ResolutionFact {
+                id: ResolutionId(0),
+                language: Language::Go,
+                file: None,
+                package: None,
+                module: None,
+                source_stable_key: mapped_reference_key(reference_stable_keys, &step.reference_key),
+                target_stable_keys,
+                step: go_resolution_step_kind(&step.step),
+                stable_key: go_resolution_stable_key(step),
+                status: semantic_status(&step.status),
+            },
+        );
     }
     for reference in &sidecar.references {
         let reference_key = go_reference_key(reference);
@@ -936,18 +974,21 @@ fn derive_go_semantic_index(
             continue;
         }
         if reference.target_key.is_empty() {
-            builder.add_resolution(ResolutionFact {
-                id: ResolutionId(0),
-                language: Language::Go,
-                file: file_for_path(files, &reference.file).map(|file| file.id),
-                package: None,
-                module: None,
-                source_stable_key: mapped_reference_key(reference_stable_keys, &reference_key),
-                target_stable_keys: Vec::new(),
-                step: ResolutionStepKind::UnknownFallback,
-                stable_key: go_reference_unknown_fallback_key(reference),
-                status: SemanticStatus::Unresolved,
-            });
+            builder.add_resolution(
+                interner,
+                ResolutionFact {
+                    id: ResolutionId(0),
+                    language: Language::Go,
+                    file: file_for_path(files, &reference.file).map(|file| file.id),
+                    package: None,
+                    module: None,
+                    source_stable_key: mapped_reference_key(reference_stable_keys, &reference_key),
+                    target_stable_keys: Vec::new(),
+                    step: ResolutionStepKind::UnknownFallback,
+                    stable_key: go_reference_unknown_fallback_key(reference),
+                    status: SemanticStatus::Unresolved,
+                },
+            );
         }
     }
 
@@ -1552,7 +1593,13 @@ mod semantic_conversion {
         let files = BTreeMap::from([(file.relative_path.as_str(), &file)]);
         let sidecar = parse_sidecar_output(json).expect("sidecar fixture parses");
 
-        derive_go_semantic_index(&sidecar, &files, &BTreeMap::new(), &BTreeMap::new())
+        derive_go_semantic_index(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &sidecar,
+            &files,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
     }
 
     #[test]
@@ -1699,7 +1746,10 @@ mod semantic_setup_missing {
         let file = source_file("main.go", "package app\n");
         let files = vec![&file];
 
-        let output = setup_missing_semantic_index_for_files(&files);
+        let output = setup_missing_semantic_index_for_files(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &files,
+        );
 
         assert!(output.resolutions.iter().any(|resolution| {
             resolution.step == ResolutionStepKind::UnknownFallback
@@ -1736,7 +1786,13 @@ mod semantic_setup_missing {
 }"#,
         );
 
-        let output = derive_go_semantic_index(&sidecar, &files, &BTreeMap::new(), &BTreeMap::new());
+        let output = derive_go_semantic_index(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &sidecar,
+            &files,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        );
 
         assert!(output.resolutions.iter().any(|resolution| {
             resolution.step == ResolutionStepKind::UnknownFallback

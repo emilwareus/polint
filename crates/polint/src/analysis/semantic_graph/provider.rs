@@ -75,6 +75,8 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
     semantic_mir_output_digest: Digest,
     go_semantic_output_digest: Digest,
 ) -> SemanticGraphProviderRunOutput {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     debug_assert_eq!(manifest.id, SEMANTIC_GRAPH_PROVIDER_ID);
 
     let mut cache_stats = CacheStats::default();
@@ -104,7 +106,8 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
     let base_output =
         build_semantic_graph_with_ts_direct_binding_collection(db, &ts_direct_bindings)
             .normalized();
-    let adaptation_models = collect_adaptation_model_input(loaded, &base_output, adaptation_budget);
+    let adaptation_models =
+        collect_adaptation_model_input(interner, loaded, &base_output, adaptation_budget);
     let output = if adaptation_models.store.accepted().is_empty() {
         base_output
     } else {
@@ -186,6 +189,7 @@ enum AdaptationModelDiscoveryEntry {
 }
 
 fn collect_adaptation_model_input(
+    interner: &crate::core::StableKeyInterner,
     loaded: &LoadedConfig,
     base_output: &SemanticGraphOutput,
     budget: AdaptationModelBudget,
@@ -224,7 +228,7 @@ fn collect_adaptation_model_input(
                     "model_file={relative_path}:content={}",
                     crate::cache::stable_hash(&[contents.as_str()])
                 ));
-                match load_model_file(relative_path, &contents) {
+                match load_model_file(interner, relative_path, &contents) {
                     Ok(mut loaded_facts) => facts.append(&mut loaded_facts),
                     Err(error) => {
                         diagnostics.push(adaptation_model_diagnostic(

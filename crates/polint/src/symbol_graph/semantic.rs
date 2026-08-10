@@ -1,4 +1,4 @@
-use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
+use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
 use crate::core::{FileId, Language, ModuleNodeId, PackageId, Span, SymbolId, SymbolNamespace};
 use crate::diagnostics::{Diagnostic, TextRange};
 use serde::{Deserialize, Serialize};
@@ -284,51 +284,71 @@ impl SemanticIndexBuilder {
         Self::default()
     }
 
-    pub(crate) fn add_scope(&mut self, mut fact: ScopeFact) -> ScopeId {
+    pub(crate) fn add_scope(
+        &mut self,
+        interner: &crate::core::StableKeyInterner,
+        mut fact: ScopeFact,
+    ) -> ScopeId {
         let id = ScopeId(self.scopes.len() as u64);
         fact.id = id;
         if fact.stable_key.is_empty() {
-            fact.stable_key = fact.computed_stable_key();
+            fact.stable_key = fact.computed_stable_key(interner);
         }
         self.scopes.push(fact);
         id
     }
 
-    pub(crate) fn add_semantic_import(&mut self, mut fact: SemanticImportFact) -> SemanticImportId {
+    pub(crate) fn add_semantic_import(
+        &mut self,
+        interner: &crate::core::StableKeyInterner,
+        mut fact: SemanticImportFact,
+    ) -> SemanticImportId {
         let id = SemanticImportId(self.semantic_imports.len() as u64);
         fact.id = id;
         if fact.stable_key.is_empty() {
-            fact.stable_key = fact.computed_stable_key();
+            fact.stable_key = fact.computed_stable_key(interner);
         }
         self.semantic_imports.push(fact);
         id
     }
 
-    pub(crate) fn add_export_identity(&mut self, mut fact: ExportFact) -> ExportId {
+    pub(crate) fn add_export_identity(
+        &mut self,
+        interner: &crate::core::StableKeyInterner,
+        mut fact: ExportFact,
+    ) -> ExportId {
         let id = ExportId(self.exports.len() as u64);
         fact.id = id;
         if fact.stable_key.is_empty() {
-            fact.stable_key = fact.computed_stable_key();
+            fact.stable_key = fact.computed_stable_key(interner);
         }
         self.exports.push(fact);
         id
     }
 
-    pub(crate) fn add_alias(&mut self, mut fact: AliasFact) -> AliasId {
+    pub(crate) fn add_alias(
+        &mut self,
+        interner: &crate::core::StableKeyInterner,
+        mut fact: AliasFact,
+    ) -> AliasId {
         let id = AliasId(self.aliases.len() as u64);
         fact.id = id;
         if fact.stable_key.is_empty() {
-            fact.stable_key = fact.computed_stable_key();
+            fact.stable_key = fact.computed_stable_key(interner);
         }
         self.aliases.push(fact);
         id
     }
 
-    pub(crate) fn add_resolution(&mut self, mut fact: ResolutionFact) -> ResolutionId {
+    pub(crate) fn add_resolution(
+        &mut self,
+        interner: &crate::core::StableKeyInterner,
+        mut fact: ResolutionFact,
+    ) -> ResolutionId {
         let id = ResolutionId(self.resolutions.len() as u64);
         fact.id = id;
         if fact.stable_key.is_empty() {
-            fact.stable_key = fact.computed_stable_key();
+            fact.stable_key = fact.computed_stable_key(interner);
         }
         self.resolutions.push(fact);
         id
@@ -342,17 +362,22 @@ impl SemanticIndexBuilder {
         let id = GeneratedSymbolId(self.generated_symbols.len() as u64);
         fact.id = id;
         if fact.stable_key.is_empty() {
-            fact.stable_key = fact.computed_stable_key();
+            fact.stable_key =
+                fact.computed_stable_key(&crate::core::AnalysisDb::new().stable_key_interner());
         }
         self.generated_symbols.push(fact);
         id
     }
 
-    pub(crate) fn add_stable_export(&mut self, mut fact: StableExportIdentity) -> StableExportId {
+    pub(crate) fn add_stable_export(
+        &mut self,
+        interner: &crate::core::StableKeyInterner,
+        mut fact: StableExportIdentity,
+    ) -> StableExportId {
         let id = StableExportId(self.stable_exports.len() as u64);
         fact.id = id;
         if fact.stable_key.is_empty() {
-            fact.stable_key = fact.computed_stable_key();
+            fact.stable_key = fact.computed_stable_key(interner);
         }
         self.stable_exports.push(fact);
         id
@@ -384,6 +409,7 @@ impl SemanticIndexOutput {
 }
 
 pub(crate) fn alias_reexport_closure(
+    interner: &crate::core::StableKeyInterner,
     aliases: &[AliasFact],
     exports: &[ExportFact],
     stable_exports: &[StableExportIdentity],
@@ -410,8 +436,8 @@ pub(crate) fn alias_reexport_closure(
         let mut closure = alias.clone();
         closure.target_symbol_stable_keys = targets.into_iter().collect();
         closure.status = closure_status(alias.status, status);
-        closure.stable_key = closure_alias_stable_key(alias, &closure);
-        let resolution = closure_resolution_for_alias(&closure);
+        closure.stable_key = closure_alias_stable_key(interner, alias, &closure);
+        let resolution = closure_resolution_for_alias(interner, &closure);
         closure_resolutions.insert(resolution.stable_key.clone(), resolution);
         closure_aliases.insert(closure.stable_key.clone(), closure);
     }
@@ -436,8 +462,8 @@ pub(crate) fn alias_reexport_closure(
             stable_key: String::new(),
             status: SemanticStatus::Ambiguous,
         };
-        closure.stable_key = closure.computed_stable_key();
-        let resolution = closure_resolution_for_alias(&closure);
+        closure.stable_key = closure.computed_stable_key(interner);
+        let resolution = closure_resolution_for_alias(interner, &closure);
         closure_resolutions.insert(resolution.stable_key.clone(), resolution);
         closure_aliases.insert(closure.stable_key.clone(), closure);
     }
@@ -452,6 +478,7 @@ pub(crate) fn alias_reexport_closure(
 }
 
 pub(crate) fn emit_native_generated_symbol_hooks(
+    interner: &crate::core::StableKeyInterner,
     semantic: &SemanticIndexOutput,
 ) -> NativeGeneratedHooksOutput {
     let mut generated = BTreeMap::<String, GeneratedSymbolFact>::new();
@@ -478,7 +505,7 @@ pub(crate) fn emit_native_generated_symbol_hooks(
             stable_key: String::new(),
             status: SemanticStatus::Generated,
         };
-        row.stable_key = row.computed_stable_key();
+        row.stable_key = row.computed_stable_key(interner);
 
         if let Some(existing) = generated.get(&row.stable_key) {
             if existing != &row {
@@ -489,7 +516,7 @@ pub(crate) fn emit_native_generated_symbol_hooks(
             continue;
         }
 
-        let resolution = generated_hint_resolution(stable_export, &row);
+        let resolution = generated_hint_resolution(interner, stable_export, &row);
         resolutions.insert(resolution.stable_key.clone(), resolution);
         generated.insert(row.stable_key.clone(), row);
     }
@@ -502,6 +529,7 @@ pub(crate) fn emit_native_generated_symbol_hooks(
 }
 
 fn generated_hint_resolution(
+    interner: &crate::core::StableKeyInterner,
     stable_export: &StableExportIdentity,
     generated: &GeneratedSymbolFact,
 ) -> ResolutionFact {
@@ -517,7 +545,7 @@ fn generated_hint_resolution(
         stable_key: String::new(),
         status: SemanticStatus::Generated,
     };
-    resolution.stable_key = resolution.computed_stable_key();
+    resolution.stable_key = resolution.computed_stable_key(interner);
     resolution
 }
 
@@ -587,8 +615,13 @@ fn closure_status(original: SemanticStatus, resolved: SemanticStatus) -> Semanti
     }
 }
 
-fn closure_alias_stable_key(original: &AliasFact, closure: &AliasFact) -> String {
-    stable_key_from_parts(
+fn closure_alias_stable_key(
+    interner: &crate::core::StableKeyInterner,
+    original: &AliasFact,
+    closure: &AliasFact,
+) -> String {
+    stable_key_text_from_parts(
+        interner,
         FactFamily::Alias,
         &[
             ("base_alias", original.stable_key.clone()),
@@ -601,7 +634,10 @@ fn closure_alias_stable_key(original: &AliasFact, closure: &AliasFact) -> String
     )
 }
 
-fn closure_resolution_for_alias(alias: &AliasFact) -> ResolutionFact {
+fn closure_resolution_for_alias(
+    interner: &crate::core::StableKeyInterner,
+    alias: &AliasFact,
+) -> ResolutionFact {
     let mut resolution = ResolutionFact {
         id: ResolutionId(0),
         language: alias.language,
@@ -614,33 +650,35 @@ fn closure_resolution_for_alias(alias: &AliasFact) -> ResolutionFact {
         stable_key: String::new(),
         status: alias.status,
     };
-    resolution.stable_key = resolution.computed_stable_key();
+    resolution.stable_key = resolution.computed_stable_key(interner);
     resolution
 }
 
 impl ScopeFact {
-    pub(crate) fn computed_stable_key(&self) -> String {
+    pub(crate) fn computed_stable_key(&self, interner: &crate::core::StableKeyInterner) -> String {
         Self::stable_key_for(
+            interner,
             self.language,
             &self.scope_path,
             self.file.map(file_id_key),
             self.package.map(package_id_key),
             self.module.map(module_node_id_key),
-            self.kind,
-            self.status,
+            (self.kind, self.status),
         )
     }
 
     pub(crate) fn stable_key_for(
+        interner: &crate::core::StableKeyInterner,
         language: Language,
         scope_path: &[String],
         file_key: Option<String>,
         package_key: Option<String>,
         module_key: Option<String>,
-        kind: ScopeKind,
-        status: SemanticStatus,
+        pair: (ScopeKind, SemanticStatus),
     ) -> String {
-        stable_key_from_parts(
+        let (kind, status) = pair;
+        stable_key_text_from_parts(
+            interner,
             FactFamily::Scope,
             &[
                 ("language", language_label(language).to_string()),
@@ -656,8 +694,9 @@ impl ScopeFact {
 }
 
 impl SemanticImportFact {
-    pub(crate) fn computed_stable_key(&self) -> String {
-        stable_key_from_parts(
+    pub(crate) fn computed_stable_key(&self, interner: &crate::core::StableKeyInterner) -> String {
+        stable_key_text_from_parts(
+            interner,
             FactFamily::SemanticImport,
             &[
                 ("language", language_label(self.language).to_string()),
@@ -687,8 +726,9 @@ impl SemanticImportFact {
 }
 
 impl ExportFact {
-    pub(crate) fn computed_stable_key(&self) -> String {
-        stable_key_from_parts(
+    pub(crate) fn computed_stable_key(&self, interner: &crate::core::StableKeyInterner) -> String {
+        stable_key_text_from_parts(
+            interner,
             FactFamily::Export,
             &[
                 ("language", language_label(self.language).to_string()),
@@ -716,8 +756,9 @@ impl ExportFact {
 }
 
 impl AliasFact {
-    pub(crate) fn computed_stable_key(&self) -> String {
-        stable_key_from_parts(
+    pub(crate) fn computed_stable_key(&self, interner: &crate::core::StableKeyInterner) -> String {
+        stable_key_text_from_parts(
+            interner,
             FactFamily::Alias,
             &[
                 ("language", language_label(self.language).to_string()),
@@ -748,8 +789,9 @@ impl AliasFact {
 }
 
 impl ResolutionFact {
-    pub(crate) fn computed_stable_key(&self) -> String {
-        stable_key_from_parts(
+    pub(crate) fn computed_stable_key(&self, interner: &crate::core::StableKeyInterner) -> String {
+        stable_key_text_from_parts(
+            interner,
             FactFamily::Resolution,
             &[
                 ("language", language_label(self.language).to_string()),
@@ -780,8 +822,9 @@ impl ResolutionFact {
 }
 
 impl GeneratedSymbolFact {
-    pub(crate) fn computed_stable_key(&self) -> String {
-        stable_key_from_parts(
+    pub(crate) fn computed_stable_key(&self, interner: &crate::core::StableKeyInterner) -> String {
+        stable_key_text_from_parts(
+            interner,
             FactFamily::GeneratedSymbol,
             &[
                 ("language", language_label(self.language).to_string()),
@@ -814,8 +857,9 @@ impl GeneratedSymbolFact {
 }
 
 impl StableExportIdentity {
-    pub(crate) fn computed_stable_key(&self) -> String {
-        stable_key_from_parts(
+    pub(crate) fn computed_stable_key(&self, interner: &crate::core::StableKeyInterner) -> String {
+        stable_key_text_from_parts(
+            interner,
             FactFamily::StableExport,
             &[
                 ("language", language_label(self.language).to_string()),
@@ -1151,22 +1195,22 @@ mod tests {
     #[test]
     fn scope_stable_keys_are_deterministic_across_input_order() {
         let first = ScopeFact::stable_key_for(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
             Language::TypeScript,
             &["module".to_string(), "function:handler".to_string()],
             Some("src/api.ts".to_string()),
             Some("pkg:web".to_string()),
             Some("mod:web".to_string()),
-            ScopeKind::Function,
-            SemanticStatus::Resolved,
+            (ScopeKind::Function, SemanticStatus::Resolved),
         );
         let second = ScopeFact::stable_key_for(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
             Language::TypeScript,
             &["function:handler".to_string(), "module".to_string()],
             Some("src/api.ts".to_string()),
             Some("pkg:web".to_string()),
             Some("mod:web".to_string()),
-            ScopeKind::Function,
-            SemanticStatus::Resolved,
+            (ScopeKind::Function, SemanticStatus::Resolved),
         );
 
         assert_eq!(first, second);
@@ -1188,7 +1232,8 @@ mod tests {
             status: SemanticStatus::Generated,
         };
 
-        let stable_key = identity.computed_stable_key();
+        let stable_key =
+            identity.computed_stable_key(&crate::core::AnalysisDb::new().stable_key_interner());
 
         assert!(stable_key.contains("language"));
         assert!(stable_key.contains("package"));
@@ -1236,30 +1281,36 @@ mod tests {
     #[test]
     fn semantic_index_builder_sorts_scope_rows_by_stable_key() {
         let mut builder = SemanticIndexBuilder::new();
-        builder.add_scope(ScopeFact {
-            id: ScopeId(0),
-            language: Language::TypeScript,
-            file: Some(FileId(0)),
-            package: None,
-            module: None,
-            parent: None,
-            scope_path: vec!["src/app.ts".to_string(), "function@20-40".to_string()],
-            kind: ScopeKind::Function,
-            stable_key: "z-scope".to_string(),
-            status: SemanticStatus::Resolved,
-        });
-        builder.add_scope(ScopeFact {
-            id: ScopeId(0),
-            language: Language::TypeScript,
-            file: Some(FileId(0)),
-            package: None,
-            module: None,
-            parent: None,
-            scope_path: vec!["src/app.ts".to_string(), "module@0-50".to_string()],
-            kind: ScopeKind::Module,
-            stable_key: "a-scope".to_string(),
-            status: SemanticStatus::Resolved,
-        });
+        builder.add_scope(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            ScopeFact {
+                id: ScopeId(0),
+                language: Language::TypeScript,
+                file: Some(FileId(0)),
+                package: None,
+                module: None,
+                parent: None,
+                scope_path: vec!["src/app.ts".to_string(), "function@20-40".to_string()],
+                kind: ScopeKind::Function,
+                stable_key: "z-scope".to_string(),
+                status: SemanticStatus::Resolved,
+            },
+        );
+        builder.add_scope(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            ScopeFact {
+                id: ScopeId(0),
+                language: Language::TypeScript,
+                file: Some(FileId(0)),
+                package: None,
+                module: None,
+                parent: None,
+                scope_path: vec!["src/app.ts".to_string(), "module@0-50".to_string()],
+                kind: ScopeKind::Module,
+                stable_key: "a-scope".to_string(),
+                status: SemanticStatus::Resolved,
+            },
+        );
 
         let output = builder.finish();
 
@@ -1276,59 +1327,71 @@ mod tests {
     #[test]
     fn semantic_index_builder_collects_all_row_families() {
         let mut builder = SemanticIndexBuilder::new();
-        builder.add_semantic_import(SemanticImportFact {
-            id: SemanticImportId(0),
-            language: Language::TypeScript,
-            file: Some(FileId(0)),
-            package: None,
-            module: None,
-            scope: None,
-            import_path: "./target".to_string(),
-            local_name: Some("target".to_string()),
-            imported_name: Some("default".to_string()),
-            namespace: SymbolNamespace::Value,
-            kind: SemanticImportKind::EsDefault,
-            stable_key: String::new(),
-            status: SemanticStatus::Resolved,
-        });
-        let export = builder.add_export_identity(ExportFact {
-            id: ExportId(0),
-            language: Language::TypeScript,
-            file: Some(FileId(0)),
-            package: None,
-            module: None,
-            scope: None,
-            symbol: None,
-            export_name: "target".to_string(),
-            namespace: SymbolNamespace::Value,
-            kind: ExportKind::Default,
-            stable_key: String::new(),
-            status: SemanticStatus::Resolved,
-        });
-        builder.add_alias(AliasFact {
-            id: AliasId(0),
-            language: Language::TypeScript,
-            file: Some(FileId(0)),
-            package: None,
-            module: None,
-            source_symbol_stable_key: "alias:source".to_string(),
-            target_symbol_stable_keys: vec!["alias:target".to_string()],
-            kind: AliasKind::Import,
-            stable_key: String::new(),
-            status: SemanticStatus::Resolved,
-        });
-        builder.add_resolution(ResolutionFact {
-            id: ResolutionId(0),
-            language: Language::TypeScript,
-            file: Some(FileId(0)),
-            package: None,
-            module: None,
-            source_stable_key: "ref:source".to_string(),
-            target_stable_keys: vec!["symbol:target".to_string()],
-            step: ResolutionStepKind::Lexical,
-            stable_key: String::new(),
-            status: SemanticStatus::Resolved,
-        });
+        builder.add_semantic_import(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            SemanticImportFact {
+                id: SemanticImportId(0),
+                language: Language::TypeScript,
+                file: Some(FileId(0)),
+                package: None,
+                module: None,
+                scope: None,
+                import_path: "./target".to_string(),
+                local_name: Some("target".to_string()),
+                imported_name: Some("default".to_string()),
+                namespace: SymbolNamespace::Value,
+                kind: SemanticImportKind::EsDefault,
+                stable_key: String::new(),
+                status: SemanticStatus::Resolved,
+            },
+        );
+        let export = builder.add_export_identity(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            ExportFact {
+                id: ExportId(0),
+                language: Language::TypeScript,
+                file: Some(FileId(0)),
+                package: None,
+                module: None,
+                scope: None,
+                symbol: None,
+                export_name: "target".to_string(),
+                namespace: SymbolNamespace::Value,
+                kind: ExportKind::Default,
+                stable_key: String::new(),
+                status: SemanticStatus::Resolved,
+            },
+        );
+        builder.add_alias(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            AliasFact {
+                id: AliasId(0),
+                language: Language::TypeScript,
+                file: Some(FileId(0)),
+                package: None,
+                module: None,
+                source_symbol_stable_key: "alias:source".to_string(),
+                target_symbol_stable_keys: vec!["alias:target".to_string()],
+                kind: AliasKind::Import,
+                stable_key: String::new(),
+                status: SemanticStatus::Resolved,
+            },
+        );
+        builder.add_resolution(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            ResolutionFact {
+                id: ResolutionId(0),
+                language: Language::TypeScript,
+                file: Some(FileId(0)),
+                package: None,
+                module: None,
+                source_stable_key: "ref:source".to_string(),
+                target_stable_keys: vec!["symbol:target".to_string()],
+                step: ResolutionStepKind::Lexical,
+                stable_key: String::new(),
+                status: SemanticStatus::Resolved,
+            },
+        );
         builder.add_generated_symbol(GeneratedSymbolFact {
             id: GeneratedSymbolId(0),
             language: Language::TypeScript,
@@ -1345,19 +1408,22 @@ mod tests {
             stable_key: String::new(),
             status: SemanticStatus::Generated,
         });
-        builder.add_stable_export(StableExportIdentity {
-            id: StableExportId(0),
-            export,
-            language: Language::TypeScript,
-            package_key: None,
-            module_key: Some("src/target.ts".to_string()),
-            export_name: "target".to_string(),
-            namespace: SymbolNamespace::Value,
-            symbol_stable_key: "symbol:target".to_string(),
-            generated_discriminator: Some("native".to_string()),
-            stable_key: String::new(),
-            status: SemanticStatus::Resolved,
-        });
+        builder.add_stable_export(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            StableExportIdentity {
+                id: StableExportId(0),
+                export,
+                language: Language::TypeScript,
+                package_key: None,
+                module_key: Some("src/target.ts".to_string()),
+                export_name: "target".to_string(),
+                namespace: SymbolNamespace::Value,
+                symbol_stable_key: "symbol:target".to_string(),
+                generated_discriminator: Some("native".to_string()),
+                stable_key: String::new(),
+                status: SemanticStatus::Resolved,
+            },
+        );
 
         let output = builder.finish();
 
@@ -1388,7 +1454,8 @@ mod alias_reexport_closure_tests {
             stable_key: String::new(),
             status,
         };
-        fact.stable_key = fact.computed_stable_key();
+        fact.stable_key =
+            fact.computed_stable_key(&crate::core::AnalysisDb::new().stable_key_interner());
         fact
     }
 
@@ -1428,6 +1495,7 @@ mod alias_reexport_closure_tests {
     #[test]
     fn acyclic_import_alias_chains_resolve_to_deterministic_targets() {
         let output = super::alias_reexport_closure(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
             &[
                 alias("import:a", &["import:b"], SemanticStatus::Resolved),
                 alias("import:b", &["symbol:c"], SemanticStatus::Resolved),
@@ -1455,6 +1523,7 @@ mod alias_reexport_closure_tests {
     #[test]
     fn reexport_cycles_terminate_and_emit_cycle_rows() {
         let output = super::alias_reexport_closure(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
             &[
                 alias("reexport:a", &["reexport:b"], SemanticStatus::Resolved),
                 alias("reexport:b", &["reexport:a"], SemanticStatus::Resolved),
@@ -1476,6 +1545,7 @@ mod alias_reexport_closure_tests {
     #[test]
     fn star_exports_with_incomplete_targets_emit_ambiguous_closure_rows() {
         let output = super::alias_reexport_closure(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
             &[],
             &[star_export(
                 "export:*:src/star.ts",
@@ -1501,6 +1571,7 @@ mod alias_reexport_closure_tests {
     #[test]
     fn star_reexport_closure_keys_include_original_export_key() {
         let output = super::alias_reexport_closure(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
             &[],
             &[
                 star_export("export:*:src/a.ts", SemanticStatus::Unresolved),
@@ -1556,7 +1627,10 @@ mod native_generated_hooks {
             .stable_exports
             .push(stable_export(Language::TypeScript, "route", true));
 
-        let output = super::emit_native_generated_symbol_hooks(&semantic);
+        let output = super::emit_native_generated_symbol_hooks(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &semantic,
+        );
 
         assert_eq!(output.generated_symbols.len(), 1);
         let generated = &output.generated_symbols[0];
@@ -1579,7 +1653,10 @@ mod native_generated_hooks {
             .stable_exports
             .push(stable_export(Language::Go, "Handler", true));
 
-        let output = super::emit_native_generated_symbol_hooks(&semantic);
+        let output = super::emit_native_generated_symbol_hooks(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &semantic,
+        );
 
         assert_eq!(output.generated_symbols.len(), 1);
         let generated = &output.generated_symbols[0];
@@ -1595,7 +1672,10 @@ mod native_generated_hooks {
         semantic
             .stable_exports
             .push(stable_export(Language::TypeScript, "route", true));
-        let output = super::emit_native_generated_symbol_hooks(&semantic);
+        let output = super::emit_native_generated_symbol_hooks(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &semantic,
+        );
         let mut db = AnalysisDb::new();
         db.add_file(
             std::path::PathBuf::from("src/mod.ts"),

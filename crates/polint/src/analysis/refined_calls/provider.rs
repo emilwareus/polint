@@ -45,6 +45,8 @@ pub(crate) fn derive_refined_calls_with_cache_stats(
     extensions_output_digest: Digest,
     solver_output_digest: Digest,
 ) -> RefinedCallsProviderOutput {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     debug_assert_eq!(manifest.id, REFINED_CALLS_PROVIDER_ID);
     let mut output = RefinedCallOutput::empty();
     let call_site_languages = db
@@ -58,6 +60,7 @@ pub(crate) fn derive_refined_calls_with_cache_stats(
             .map(|metadata| metadata.stable_key.clone())
             .unwrap_or_else(|| target.stable_key.clone());
         output.edges.push(refined_edge_from_base_target(
+            interner,
             target,
             crate::analysis::ids::RefinedCallEdgeId(0),
             RefinedCallTier::DirectOnly,
@@ -123,6 +126,7 @@ fn finalized_output(mut output: RefinedCallOutput) -> RefinedCallOutput {
 }
 
 fn refined_edge_from_base_target(
+    interner: &crate::core::StableKeyInterner,
     target: &CallTargetFact,
     id: crate::analysis::ids::RefinedCallEdgeId,
     tier: RefinedCallTier,
@@ -149,22 +153,25 @@ fn refined_edge_from_base_target(
         confidence: confidence_for_target(target),
         evidence: vec!["base_call_target".to_string()],
         input_stable_keys: vec![base_target_key.clone()],
-        stable_key: stable_refined_call_key(target, tier, &base_target_key),
+        stable_key: stable_refined_call_key(interner, target, tier, &base_target_key),
     }
 }
 
 fn derive_solver_refinements(db: &AnalysisDb) -> RefinedCallOutput {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let index = SolverProjectionIndex::new(db);
     let mut output = RefinedCallOutput::empty();
     output.edges.extend(
         db.solver_derived_edges()
             .iter()
-            .filter_map(|edge| refined_edge_from_solver_edge(&index, edge)),
+            .filter_map(|edge| refined_edge_from_solver_edge(interner, &index, edge)),
     );
     output
 }
 
 fn refined_edge_from_solver_edge(
+    interner: &crate::core::StableKeyInterner,
     index: &SolverProjectionIndex<'_>,
     edge: &DerivedEdgeFact,
 ) -> Option<RefinedCallEdgeFact> {
@@ -198,7 +205,7 @@ fn refined_edge_from_solver_edge(
         confidence: confidence_for_solver_edge(edge.status),
         evidence: solver_evidence(edge),
         input_stable_keys: solver_input_stable_keys(edge),
-        stable_key: stable_refined_call_key_from_solver_edge(site, edge),
+        stable_key: stable_refined_call_key_from_solver_edge(interner, site, edge),
     })
 }
 
@@ -456,8 +463,13 @@ fn solver_input_stable_keys(edge: &DerivedEdgeFact) -> Vec<String> {
     keys
 }
 
-fn stable_refined_call_key_from_solver_edge(site: &CallSiteFact, edge: &DerivedEdgeFact) -> String {
-    crate::analysis_kernel::stable_key_from_parts(
+fn stable_refined_call_key_from_solver_edge(
+    interner: &crate::core::StableKeyInterner,
+    site: &CallSiteFact,
+    edge: &DerivedEdgeFact,
+) -> String {
+    crate::analysis_kernel::stable_key_text_from_parts(
+        interner,
         FactFamily::RefinedCallEdge,
         &[
             ("tier", format!("{:?}", RefinedCallTier::PointsToAssisted)),
@@ -487,11 +499,13 @@ fn confidence_for_target(target: &CallTargetFact) -> RefinedCallConfidence {
 }
 
 fn stable_refined_call_key(
+    interner: &crate::core::StableKeyInterner,
     target: &CallTargetFact,
     tier: RefinedCallTier,
     base_target_key: &str,
 ) -> String {
-    crate::analysis_kernel::stable_key_from_parts(
+    crate::analysis_kernel::stable_key_text_from_parts(
+        interner,
         FactFamily::RefinedCallEdge,
         &[
             ("tier", format!("{tier:?}")),
@@ -1364,8 +1378,18 @@ mod tests {
         };
 
         assert_eq!(
-            stable_refined_call_key(&target, RefinedCallTier::DirectOnly, &target.stable_key),
-            stable_refined_call_key(&target, RefinedCallTier::DirectOnly, &target.stable_key)
+            stable_refined_call_key(
+                &crate::core::AnalysisDb::new().stable_key_interner(),
+                &target,
+                RefinedCallTier::DirectOnly,
+                &target.stable_key
+            ),
+            stable_refined_call_key(
+                &crate::core::AnalysisDb::new().stable_key_interner(),
+                &target,
+                RefinedCallTier::DirectOnly,
+                &target.stable_key
+            )
         );
     }
 

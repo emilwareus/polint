@@ -13,7 +13,7 @@ use crate::analysis_kernel::FactFamily;
 use crate::analysis_kernel::incremental::{
     DemandQueryEngine, DemandQueryResult, Digest, DigestKind, PrecisionTier, QueryKey,
 };
-use crate::analysis_kernel::stable_key_from_parts;
+use crate::analysis_kernel::stable_key_text_from_parts;
 use crate::core::{AnalysisDb, FunctionId};
 
 // ---------------------------------------------------------------------------
@@ -187,6 +187,8 @@ fn process_non_recursive_scc(
     db: &AnalysisDb,
     scc: &Scc,
 ) -> (Vec<SummaryFact>, Vec<SummaryEventFact>) {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     debug_assert_eq!(scc.members.len(), 1);
     let function = scc.members[0];
     let callable_key = &scc.member_stable_keys[0];
@@ -214,6 +216,7 @@ fn process_non_recursive_scc(
 
     // Apply callee effects to improve caller summaries
     let updated = apply_callee_effects(
+        interner,
         &existing_summaries,
         &callee_info,
         callable_key,
@@ -233,6 +236,8 @@ fn process_recursive_scc(
     scc: &Scc,
     config: &SccClosureConfig,
 ) -> (Vec<SummaryFact>, Vec<SummaryEventFact>, u32, bool) {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     // Initialize per-function summary state from direct summaries
     let mut states: BTreeMap<FunctionId, FunctionSummaryState> = BTreeMap::new();
     let summary_store = match db.summary_store() {
@@ -375,7 +380,8 @@ fn process_recursive_scc(
                 ),
                 status: SummaryStatus::BudgetExceeded,
                 precision: SummaryPrecision::UnknownTop,
-                stable_key: stable_key_from_parts(
+                stable_key: stable_key_text_from_parts(
+                    interner,
                     FactFamily::SummaryEvent,
                     &[
                         ("callable", state.callable_stable_key.clone()),
@@ -458,6 +464,7 @@ fn collect_callee_info(db: &AnalysisDb, caller: FunctionId) -> Vec<CalleeInfo> {
 ///      param[j], then caller has transitive memory effect on param[i])
 /// (c) Mark unresolved-callee entries with unknown top reasons
 fn apply_callee_effects(
+    interner: &crate::core::StableKeyInterner,
     existing_summaries: &[SummaryFact],
     callee_info: &[CalleeInfo],
     callable_key: &str,
@@ -578,7 +585,8 @@ fn apply_callee_effects(
             reason: "callee has no summary or is unresolved".to_string(),
             status: SummaryStatus::Unknown,
             precision: SummaryPrecision::UnknownTop,
-            stable_key: stable_key_from_parts(
+            stable_key: stable_key_text_from_parts(
+                interner,
                 FactFamily::SummaryEvent,
                 &[
                     ("callable", callable_key.to_string()),

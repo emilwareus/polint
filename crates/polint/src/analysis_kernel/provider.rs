@@ -386,8 +386,7 @@ impl Provider for AbstractDomainsProvider {
                 .any(|c| c == "calls" || c == "dataflow")
         });
         let derivation = if compact_domain_materialization {
-            crate::analysis::domains::provider::derive_summary_input_abstract_domains_with_cache_stats(
-                ctx.db,
+            crate::analysis::domains::provider::derive_summary_input_abstract_domains_with_cache_stats(ctx.db,
                 ctx.input_snapshot,
                 self.manifest(),
                 ctx.dependency_digest("polint.semantic_mir"),

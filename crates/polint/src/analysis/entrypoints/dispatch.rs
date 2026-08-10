@@ -17,12 +17,15 @@ pub(crate) fn derive_dispatch_edges(
     _db: &AnalysisDb,
     entrypoints: &[EntrypointFact],
 ) -> Vec<FrameworkDispatchEdgeFact> {
+    let interner_handle = _db.stable_key_interner();
+    let interner = &interner_handle;
     let mut edges = Vec::new();
 
     for entrypoint in entrypoints {
         let edge_kind = edge_kind_for_entrypoint(entrypoint.kind);
 
         let stable_key = dispatch_edge_stable_key(
+            interner,
             &entrypoint.stable_key,
             &format!("{}", entrypoint.target_function.0),
             edge_kind,
@@ -82,12 +85,14 @@ fn edge_kind_for_entrypoint(kind: EntrypointKind) -> DispatchEdgeKind {
 
 /// Generate a stable key for a dispatch edge fact.
 fn dispatch_edge_stable_key(
+    interner: &crate::core::StableKeyInterner,
     from_source: &str,
     to_function_key: &str,
     edge_kind: DispatchEdgeKind,
     language: crate::core::Language,
 ) -> String {
     semantic_stable_key(
+        interner,
         FactFamily::DispatchEdge,
         &[
             ("from", from_source.to_string()),

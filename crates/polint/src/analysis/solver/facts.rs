@@ -95,6 +95,7 @@ mod tests {
     fn provenance() -> DerivedEdgeProvenance {
         DerivedEdgeProvenance::new(
             vec![ContributingFact::from_parts(
+                &crate::core::AnalysisDb::new().stable_key_interner(),
                 FactFamily::PointsToConstraint,
                 &[("constraint", "copy".to_string())],
             )],

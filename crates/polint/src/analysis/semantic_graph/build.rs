@@ -118,6 +118,8 @@ fn build_semantic_graph_with_inputs(
     adaptation_models: &AdaptationModelStore,
     ts_analyses: Option<&[TsFileAnalysis]>,
 ) -> SemanticGraphOutput {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let mut builder = GraphBuilder::default();
 
     builder.project_nodes(db);
@@ -126,7 +128,7 @@ fn build_semantic_graph_with_inputs(
     builder.project_ts_direct_bindings(db, ts_direct_bindings);
     builder.project_ts_token_source_flows(db, ts_analyses);
     builder.project_ts_object_model(db);
-    builder.project_adaptation_models(adaptation_models);
+    builder.project_adaptation_models(interner, adaptation_models);
     builder.project_member_of_edges(db);
     builder.project_value_constraints(db);
     // TypeConstraint intentionally emits zero rows in this pass (see module docs).
@@ -226,14 +228,16 @@ pub(crate) fn collect_ts_direct_bindings(db: &AnalysisDb) -> TsDirectBindingOutp
 }
 
 fn collect_ts_file_analyses(db: &AnalysisDb) -> Vec<TsFileAnalysis> {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     db.files()
         .iter()
         .filter(|file| file.language.is_ts_family())
-        .map(analyze_ts_file)
+        .map(|file| analyze_ts_file(interner, file))
         .collect()
 }
 
-fn analyze_ts_file(file: &SourceFile) -> TsFileAnalysis {
+fn analyze_ts_file(interner: &crate::core::StableKeyInterner, file: &SourceFile) -> TsFileAnalysis {
     let source = file.source.as_ref();
     let allocator = Allocator::default();
     let parsed = parse_ts_file(&allocator, file);
@@ -268,7 +272,8 @@ fn analyze_ts_file(file: &SourceFile) -> TsFileAnalysis {
         mark_scope_partial_ast(&mut scope);
         mark_object_model_partial_ast(&mut object_model);
     }
-    let token_source_flows = collect_ts_token_source_flows_from_nodes(file, &inventory, nodes);
+    let token_source_flows =
+        collect_ts_token_source_flows_from_nodes(interner, file, &inventory, nodes);
 
     TsFileAnalysis {
         file: file.id,
@@ -408,13 +413,20 @@ impl GraphBuilder {
         id
     }
 
-    fn push_edge(&mut self, kind: EdgeKind, source: SemanticNodeId, target: SemanticNodeId) {
+    fn push_edge(
+        &mut self,
+        interner: &crate::core::StableKeyInterner,
+        kind: EdgeKind,
+        source: SemanticNodeId,
+        target: SemanticNodeId,
+    ) {
         // Edge stable key is composed from (edge-kind label, source node stable key,
         // target node stable key) — never dense IDs (D-06). Resolve the endpoint
         // stable keys from the interned node table.
         let source_key = self.node_key_for(source);
         let target_key = self.node_key_for(target);
         let stable_key = semantic_stable_key(
+            interner,
             FactFamily::Reference,
             &[
                 ("edge_kind", kind.as_str().to_string()),
@@ -433,8 +445,14 @@ impl GraphBuilder {
         });
     }
 
-    fn push_constraint(&mut self, kind: ConstraintKind, identity: &str) {
+    fn push_constraint(
+        &mut self,
+        interner: &crate::core::StableKeyInterner,
+        kind: ConstraintKind,
+        identity: &str,
+    ) {
         let stable_key = semantic_stable_key(
+            interner,
             FactFamily::PointsToConstraint,
             &[
                 ("constraint_kind", kind.as_str().to_string()),
@@ -467,8 +485,10 @@ impl GraphBuilder {
     // -- node projection ----------------------------------------------------
 
     fn project_nodes(&mut self, db: &AnalysisDb) {
+        let interner_handle = db.stable_key_interner();
+        let interner = &interner_handle;
         for function in db.functions() {
-            let key = function_node_key(db, function);
+            let key = function_node_key(interner, db, function);
             self.intern_node(NodeKind::Function(function.id), key);
         }
         for package in db.packages() {
@@ -476,50 +496,54 @@ impl GraphBuilder {
             self.intern_node(NodeKind::Package(package.id), key);
         }
         for scope in db.scopes() {
-            let key = node_key_from_identity("scope", &scope.stable_key);
+            let key = node_key_from_identity(interner, "scope", &scope.stable_key);
             self.intern_node(NodeKind::Scope(scope.id), key);
         }
         for site in db.call_sites() {
-            let key = node_key_from_identity("callsite", &site.stable_key);
+            let key = node_key_from_identity(interner, "callsite", &site.stable_key);
             self.intern_node(NodeKind::Callsite(site.id), key);
         }
     }
 
     fn function_node(
         &self,
+        interner: &crate::core::StableKeyInterner,
         db: &AnalysisDb,
         function: &crate::core::FunctionFact,
     ) -> Option<SemanticNodeId> {
-        let key = function_node_key(db, function);
+        let key = function_node_key(interner, db, function);
         self.node_by_key.get(&key).copied()
     }
 
     // -- call edges + call constraints --------------------------------------
 
     fn project_call_edges_and_constraints(&mut self, db: &AnalysisDb) {
+        let interner_handle = db.stable_key_interner();
+        let interner = &interner_handle;
         // Map FunctionId -> its node id by walking functions once. Functions that
         // were not interned as nodes are simply absent (no sentinel).
         let func_node: BTreeMap<_, _> = db
             .functions()
             .iter()
             .filter_map(|function| {
-                self.function_node(db, function)
+                self.function_node(interner, db, function)
                     .map(|node| (function.id, node))
             })
             .collect();
 
         for site in db.call_sites() {
-            let site_key = node_key_from_identity("callsite", &site.stable_key);
+            let site_key = node_key_from_identity(interner, "callsite", &site.stable_key);
             let Some(&callsite_node) = self.node_by_key.get(&site_key) else {
                 continue;
             };
             // Call edge: caller function node -> callsite node, only where the caller
             // resolves to a projected function node (honest: no fabricated endpoints).
             if let Some(&caller_node) = func_node.get(&site.caller) {
-                self.push_edge(EdgeKind::Call, caller_node, callsite_node);
+                self.push_edge(interner, EdgeKind::Call, caller_node, callsite_node);
             }
             // CallConstraint anchored at the callsite node — one per call site.
             self.push_constraint(
+                interner,
                 ConstraintKind::CallConstraint {
                     callsite: callsite_node,
                 },
@@ -531,11 +555,13 @@ impl GraphBuilder {
     // -- TS direct binding constraints -------------------------------------
 
     fn project_ts_direct_bindings(&mut self, db: &AnalysisDb, bindings: &[TsDirectBindingFact]) {
+        let interner_handle = db.stable_key_interner();
+        let interner = &interner_handle;
         // Semantic-graph-only projection: TS direct binding rows emit
         // CopyEdge/CallConstraint rows here and do not create CallTargetFact rows.
         // The calls/refined-calls contract remains owned by analysis::calls until a
         // later plan deliberately promotes direct TS bindings into that fact family.
-        let context = TsDirectBindingNodeContext::new(db, self);
+        let context = TsDirectBindingNodeContext::new(interner, db, self);
         for binding in bindings {
             if binding.status != TsDirectBindingStatus::Resolved {
                 continue;
@@ -546,6 +572,7 @@ impl GraphBuilder {
                 continue;
             };
             self.push_constraint(
+                interner,
                 ConstraintKind::CallConstraint {
                     callsite: callsite_node,
                 },
@@ -560,6 +587,7 @@ impl GraphBuilder {
             };
             if direct_binding_emits_copy_edge(binding.kind) {
                 self.push_constraint(
+                    interner,
                     ConstraintKind::CopyEdge {
                         dst: callsite_node,
                         src: target_node,
@@ -575,11 +603,13 @@ impl GraphBuilder {
         db: &AnalysisDb,
         ts_analyses: Option<&[TsFileAnalysis]>,
     ) {
-        let context = TsDirectBindingNodeContext::new(db, self);
+        let interner_handle = db.stable_key_interner();
+        let interner = &interner_handle;
+        let context = TsDirectBindingNodeContext::new(interner, db, self);
         if let Some(analyses) = ts_analyses {
             for analysis in analyses {
                 for flow in &analysis.token_source_flows {
-                    self.project_ts_token_source_flow(flow, &context);
+                    self.project_ts_token_source_flow(interner, flow, &context);
                 }
             }
             return;
@@ -590,14 +620,15 @@ impl GraphBuilder {
             .iter()
             .filter(|file| file.language.is_ts_family())
         {
-            for flow in collect_ts_token_source_flows(file, None) {
-                self.project_ts_token_source_flow(&flow, &context);
+            for flow in collect_ts_token_source_flows(interner, file, None) {
+                self.project_ts_token_source_flow(interner, &flow, &context);
             }
         }
     }
 
     fn project_ts_token_source_flow(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         flow: &TsTokenSourceFlow,
         context: &TsDirectBindingNodeContext<'_>,
     ) {
@@ -610,6 +641,7 @@ impl GraphBuilder {
             return;
         };
         self.push_constraint(
+            interner,
             ConstraintKind::CopyEdge {
                 dst: callsite_node,
                 src: source_node,
@@ -621,19 +653,23 @@ impl GraphBuilder {
     // -- TS object-model constraints ---------------------------------------
 
     fn project_ts_object_model(&mut self, db: &AnalysisDb) {
-        let context = TsObjectModelNodeContext::new(db, self);
+        let interner_handle = db.stable_key_interner();
+        let interner = &interner_handle;
+        let context = TsObjectModelNodeContext::new(interner, db, self);
 
         for allocation in db.ts_object_allocations() {
             if !is_lowerable_object_model_status(&allocation.status) {
                 continue;
             }
-            let Some(dst) = context.allocation_place_node(self, &allocation.stable_key) else {
+            let Some(dst) = context.allocation_place_node(interner, self, &allocation.stable_key)
+            else {
                 continue;
             };
-            let Some(object) = context.object_node(self, &allocation.stable_key) else {
+            let Some(object) = context.object_node(interner, self, &allocation.stable_key) else {
                 continue;
             };
             self.push_constraint(
+                interner,
                 ConstraintKind::Alloc { dst, object },
                 &allocation.stable_key,
             );
@@ -643,13 +679,15 @@ impl GraphBuilder {
             if !is_lowerable_object_model_status(&write.status) {
                 continue;
             }
-            let Some(base) = context.object_node(self, &write.base_object_stable_key) else {
+            let Some(base) = context.object_node(interner, self, &write.base_object_stable_key)
+            else {
                 continue;
             };
-            let Some(src) = context.property_write_source_node(self, write) else {
+            let Some(src) = context.property_write_source_node(interner, self, write) else {
                 continue;
             };
             self.push_constraint(
+                interner,
                 ConstraintKind::FieldStore {
                     base,
                     field: property_field_label(&write.property_key),
@@ -663,13 +701,15 @@ impl GraphBuilder {
             if !is_lowerable_object_model_status(&read.status) {
                 continue;
             }
-            let Some(base) = context.object_node(self, &read.base_object_stable_key) else {
+            let Some(base) = context.object_node(interner, self, &read.base_object_stable_key)
+            else {
                 continue;
             };
-            let Some(dst) = context.property_read_destination_node(self, read) else {
+            let Some(dst) = context.property_read_destination_node(interner, self, read) else {
                 continue;
             };
             self.push_constraint(
+                interner,
                 ConstraintKind::FieldLoad {
                     dst,
                     base,
@@ -679,6 +719,7 @@ impl GraphBuilder {
             );
             if let Some(callsite) = context.callsite_node(read.callsite_stable_key.as_deref()) {
                 self.push_constraint(
+                    interner,
                     ConstraintKind::CallConstraint { callsite },
                     &read.stable_key,
                 );
@@ -690,13 +731,18 @@ impl GraphBuilder {
                 continue;
             }
             if let (Some(dst), Some(src)) = (
-                context.receiver_destination_node(self, binding),
-                context.receiver_source_node(self, binding),
+                context.receiver_destination_node(interner, self, binding),
+                context.receiver_source_node(interner, self, binding),
             ) {
-                self.push_constraint(ConstraintKind::CopyEdge { dst, src }, &binding.stable_key);
+                self.push_constraint(
+                    interner,
+                    ConstraintKind::CopyEdge { dst, src },
+                    &binding.stable_key,
+                );
             }
             if let Some(callsite) = context.callsite_node(binding.callsite_stable_key.as_deref()) {
                 self.push_constraint(
+                    interner,
                     ConstraintKind::CallConstraint { callsite },
                     &binding.stable_key,
                 );
@@ -707,13 +753,14 @@ impl GraphBuilder {
             if !is_lowerable_object_model_status(&link.status) {
                 continue;
             }
-            let Some(base) = context.object_node(self, &link.object_stable_key) else {
+            let Some(base) = context.object_node(interner, self, &link.object_stable_key) else {
                 continue;
             };
-            let Some(src) = context.object_node(self, &link.prototype_stable_key) else {
+            let Some(src) = context.object_node(interner, self, &link.prototype_stable_key) else {
                 continue;
             };
             self.push_constraint(
+                interner,
                 ConstraintKind::FieldStore {
                     base,
                     field: link
@@ -729,12 +776,14 @@ impl GraphBuilder {
     }
 
     fn project_go_semantic(&mut self, db: &AnalysisDb) {
+        let interner_handle = db.stable_key_interner();
+        let interner = &interner_handle;
         let function_node_by_qualified = db
             .go_semantic_functions()
             .iter()
             .filter_map(|semantic_function| {
                 let function = matching_core_function(db, semantic_function)?;
-                let node = self.function_node(db, function)?;
+                let node = self.function_node(interner, db, function)?;
                 Some((semantic_function.qualified.as_str(), node))
             })
             .collect::<BTreeMap<_, _>>();
@@ -743,11 +792,12 @@ impl GraphBuilder {
             let Some(core_callsite) = matching_core_callsite(db, callsite) else {
                 continue;
             };
-            let site_key = node_key_from_identity("callsite", &core_callsite.stable_key);
+            let site_key = node_key_from_identity(interner, "callsite", &core_callsite.stable_key);
             let Some(&callsite_node) = self.node_by_key.get(&site_key) else {
                 continue;
             };
             self.push_constraint(
+                interner,
                 ConstraintKind::CallConstraint {
                     callsite: callsite_node,
                 },
@@ -763,6 +813,7 @@ impl GraphBuilder {
                 continue;
             };
             self.push_constraint(
+                interner,
                 ConstraintKind::CopyEdge {
                     dst: callsite_node,
                     src: target_node,
@@ -774,7 +825,11 @@ impl GraphBuilder {
 
     // -- adaptation model constraints --------------------------------------
 
-    fn project_adaptation_models(&mut self, adaptation_models: &AdaptationModelStore) {
+    fn project_adaptation_models(
+        &mut self,
+        interner: &crate::core::StableKeyInterner,
+        adaptation_models: &AdaptationModelStore,
+    ) {
         for accepted in adaptation_models.accepted() {
             let fact = &accepted.fact;
             let (Some(&source), Some(&target)) = (
@@ -784,6 +839,7 @@ impl GraphBuilder {
                 continue;
             };
             self.push_constraint(
+                interner,
                 ConstraintKind::ModelEdge {
                     source,
                     target,
@@ -800,6 +856,8 @@ impl GraphBuilder {
     // -- member-of edges ----------------------------------------------------
 
     fn project_member_of_edges(&mut self, db: &AnalysisDb) {
+        let interner_handle = db.stable_key_interner();
+        let interner = &interner_handle;
         // Scope-in-package containment: scope node -> package node, where both the
         // scope and its package are projected nodes.
         let pkg_node: BTreeMap<_, _> = db
@@ -815,12 +873,12 @@ impl GraphBuilder {
             let Some(package_id) = scope.package else {
                 continue;
             };
-            let scope_key = node_key_from_identity("scope", &scope.stable_key);
+            let scope_key = node_key_from_identity(interner, "scope", &scope.stable_key);
             let Some(&scope_node) = self.node_by_key.get(&scope_key) else {
                 continue;
             };
             if let Some(&package_node) = pkg_node.get(&package_id) {
-                self.push_edge(EdgeKind::MemberOf, scope_node, package_node);
+                self.push_edge(interner, EdgeKind::MemberOf, scope_node, package_node);
             }
         }
     }
@@ -835,6 +893,8 @@ impl GraphBuilder {
     // that wires the object-token bridge (D-07 honesty), rather than inflating recall.
 
     fn project_value_constraints(&mut self, db: &AnalysisDb) {
+        let interner_handle = db.stable_key_interner();
+        let interner = &interner_handle;
         // `PlaceId` -> the place's own content-stable key. Keying a Place node by the
         // *place* identity (not the owning value fact) means the SAME place referenced
         // by different value facts maps to ONE node, so the solver can unify
@@ -869,9 +929,16 @@ impl GraphBuilder {
                 continue;
             };
 
-            let dst_node = self.intern_node(NodeKind::Place(dst_place), place_node_key(dst_stable));
-            let src_node = self.intern_node(NodeKind::Place(src_place), place_node_key(src_stable));
+            let dst_node = self.intern_node(
+                NodeKind::Place(dst_place),
+                place_node_key(interner, dst_stable),
+            );
+            let src_node = self.intern_node(
+                NodeKind::Place(src_place),
+                place_node_key(interner, src_stable),
+            );
             self.push_constraint(
+                interner,
                 ConstraintKind::CopyEdge {
                     dst: dst_node,
                     src: src_node,
@@ -944,19 +1011,21 @@ struct TsTokenSourceFlowIndex {
 }
 
 fn collect_ts_token_source_flows(
+    interner: &crate::core::StableKeyInterner,
     file: &SourceFile,
     inventory: Option<&TsInventoryOutput>,
 ) -> Vec<TsTokenSourceFlow> {
     match inventory {
-        Some(inventory) => collect_ts_token_source_flows_with_inventory(file, inventory),
+        Some(inventory) => collect_ts_token_source_flows_with_inventory(interner, file, inventory),
         None => {
             let inventory = extract_ts_inventory(file);
-            collect_ts_token_source_flows_with_inventory(file, &inventory)
+            collect_ts_token_source_flows_with_inventory(interner, file, &inventory)
         }
     }
 }
 
 fn collect_ts_token_source_flows_with_inventory(
+    interner: &crate::core::StableKeyInterner,
     file: &SourceFile,
     inventory: &TsInventoryOutput,
 ) -> Vec<TsTokenSourceFlow> {
@@ -968,10 +1037,11 @@ fn collect_ts_token_source_flows_with_inventory(
     }
 
     let semantic = SemanticBuilder::new().build(parsed.program()).semantic;
-    collect_ts_token_source_flows_from_nodes(file, inventory, semantic.nodes())
+    collect_ts_token_source_flows_from_nodes(interner, file, inventory, semantic.nodes())
 }
 
 fn collect_ts_token_source_flows_from_nodes(
+    interner: &crate::core::StableKeyInterner,
     file: &SourceFile,
     inventory: &TsInventoryOutput,
     nodes: &AstNodes<'_>,
@@ -982,7 +1052,7 @@ fn collect_ts_token_source_flows_from_nodes(
     index.collect_local_alias_assignments(nodes);
     index.collect_returned_functions(nodes);
     index.collect_local_return_assignments(nodes);
-    index.collect_flows(source, nodes)
+    index.collect_flows(interner, source, nodes)
 }
 
 impl TsTokenSourceFlowIndex {
@@ -1148,7 +1218,12 @@ impl TsTokenSourceFlowIndex {
         }
     }
 
-    fn collect_flows(&self, source: &str, nodes: &AstNodes<'_>) -> Vec<TsTokenSourceFlow> {
+    fn collect_flows(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        source: &str,
+        nodes: &AstNodes<'_>,
+    ) -> Vec<TsTokenSourceFlow> {
         let mut flows = Vec::new();
         for (node_id, node) in nodes.iter_enumerated() {
             let AstKind::CallExpression(call) = node.kind() else {
@@ -1161,8 +1236,21 @@ impl TsTokenSourceFlowIndex {
                 continue;
             };
 
-            self.collect_parameter_argument_flows(&mut flows, &callee_name, call, &callsite_key);
-            self.collect_return_value_flow(&mut flows, nodes, node_id, &callee_name, &callsite_key);
+            self.collect_parameter_argument_flows(
+                interner,
+                &mut flows,
+                &callee_name,
+                call,
+                &callsite_key,
+            );
+            self.collect_return_value_flow(
+                interner,
+                &mut flows,
+                nodes,
+                node_id,
+                &callee_name,
+                &callsite_key,
+            );
         }
         flows.sort();
         flows.dedup();
@@ -1171,6 +1259,7 @@ impl TsTokenSourceFlowIndex {
 
     fn collect_parameter_argument_flows(
         &self,
+        interner: &crate::core::StableKeyInterner,
         flows: &mut Vec<TsTokenSourceFlow>,
         callee_name: &str,
         call: &oxc_ast::ast::CallExpression<'_>,
@@ -1198,6 +1287,7 @@ impl TsTokenSourceFlowIndex {
             };
             for destination_callsite_key in destination_callsites {
                 flows.push(ts_token_source_flow(
+                    interner,
                     TsTokenSourceFlowKind::ParameterArgument,
                     argument_function_key,
                     destination_callsite_key,
@@ -1209,6 +1299,7 @@ impl TsTokenSourceFlowIndex {
 
     fn collect_return_value_flow(
         &self,
+        interner: &crate::core::StableKeyInterner,
         flows: &mut Vec<TsTokenSourceFlow>,
         nodes: &AstNodes<'_>,
         node_id: NodeId,
@@ -1225,6 +1316,7 @@ impl TsTokenSourceFlowIndex {
             return;
         };
         flows.push(ts_token_source_flow(
+            interner,
             TsTokenSourceFlowKind::ReturnValue,
             returned_function_key,
             callsite_key,
@@ -1331,6 +1423,7 @@ impl TsTokenSourceFlowIndex {
 }
 
 fn ts_token_source_flow(
+    interner: &crate::core::StableKeyInterner,
     kind: TsTokenSourceFlowKind,
     source_function_stable_key: &str,
     callsite_stable_key: &str,
@@ -1340,6 +1433,7 @@ fn ts_token_source_flow(
         source_function_stable_key: source_function_stable_key.to_string(),
         callsite_stable_key: callsite_stable_key.to_string(),
         stable_key: semantic_stable_key(
+            interner,
             FactFamily::PointsToConstraint,
             &[
                 ("source", source_function_stable_key.to_string()),
@@ -1516,7 +1610,11 @@ struct TsDirectBindingNodeContext<'a> {
 }
 
 impl<'a> TsDirectBindingNodeContext<'a> {
-    fn new(db: &'a AnalysisDb, builder: &GraphBuilder) -> Self {
+    fn new(
+        interner: &crate::core::StableKeyInterner,
+        db: &'a AnalysisDb,
+        builder: &GraphBuilder,
+    ) -> Self {
         let file_by_relative_path = db
             .files()
             .iter()
@@ -1527,7 +1625,7 @@ impl<'a> TsDirectBindingNodeContext<'a> {
             .call_sites()
             .iter()
             .filter_map(|site| {
-                let key = node_key_from_identity("callsite", &site.stable_key);
+                let key = node_key_from_identity(interner, "callsite", &site.stable_key);
                 let node = builder.node_by_key.get(&key).copied()?;
                 Some(((site.file, site.span.start_byte, site.span.end_byte), node))
             })
@@ -1536,7 +1634,7 @@ impl<'a> TsDirectBindingNodeContext<'a> {
         let mut function_nodes_by_location =
             BTreeMap::<(FileId, u32, u32), Vec<(String, SemanticNodeId)>>::new();
         for function in db.functions() {
-            let key = function_node_key(db, function);
+            let key = function_node_key(interner, db, function);
             let Some(node) = builder.node_by_key.get(&key).copied() else {
                 continue;
             };
@@ -1598,8 +1696,12 @@ struct TsObjectModelNodeContext<'a> {
 }
 
 impl<'a> TsObjectModelNodeContext<'a> {
-    fn new(db: &'a AnalysisDb, builder: &GraphBuilder) -> Self {
-        let direct = TsDirectBindingNodeContext::new(db, builder);
+    fn new(
+        interner: &crate::core::StableKeyInterner,
+        db: &'a AnalysisDb,
+        builder: &GraphBuilder,
+    ) -> Self {
+        let direct = TsDirectBindingNodeContext::new(interner, db, builder);
         let object_token_by_key = db
             .ts_object_allocations()
             .iter()
@@ -1620,28 +1722,29 @@ impl<'a> TsObjectModelNodeContext<'a> {
             insert_synthetic_place_key(
                 &place_by_stable_key,
                 &mut synthetic_place_keys,
-                allocation_result_place_identity(&allocation.stable_key),
+                allocation_result_place_identity(interner, &allocation.stable_key),
             );
         }
         for write in db.ts_property_writes() {
             insert_synthetic_place_key(
                 &place_by_stable_key,
                 &mut synthetic_place_keys,
-                property_write_source_place_identity(write),
+                property_write_source_place_identity(interner, write),
             );
         }
         for read in db.ts_property_reads() {
-            let key = read
-                .destination_stable_key
-                .clone()
-                .unwrap_or_else(|| property_read_destination_place_identity(&read.stable_key));
+            let key = read.destination_stable_key.clone().unwrap_or_else(|| {
+                property_read_destination_place_identity(interner, &read.stable_key)
+            });
             insert_synthetic_place_key(&place_by_stable_key, &mut synthetic_place_keys, key);
         }
         for binding in db.ts_receiver_bindings() {
             let key = binding
                 .receiver_place_stable_key
                 .clone()
-                .unwrap_or_else(|| receiver_destination_place_identity(&binding.stable_key));
+                .unwrap_or_else(|| {
+                    receiver_destination_place_identity(interner, &binding.stable_key)
+                });
             insert_synthetic_place_key(&place_by_stable_key, &mut synthetic_place_keys, key);
         }
 
@@ -1667,34 +1770,38 @@ impl<'a> TsObjectModelNodeContext<'a> {
 
     fn object_node(
         &self,
+        interner: &crate::core::StableKeyInterner,
         builder: &mut GraphBuilder,
         object_stable_key: &str,
     ) -> Option<SemanticNodeId> {
         let token = *self.object_token_by_key.get(object_stable_key)?;
         Some(builder.intern_node(
             NodeKind::AbstractObject(token),
-            object_node_key(object_stable_key),
+            object_node_key(interner, object_stable_key),
         ))
     }
 
     fn allocation_place_node(
         &self,
+        interner: &crate::core::StableKeyInterner,
         builder: &mut GraphBuilder,
         allocation_stable_key: &str,
     ) -> Option<SemanticNodeId> {
         self.place_node(
+            interner,
             builder,
-            &allocation_result_place_identity(allocation_stable_key),
+            &allocation_result_place_identity(interner, allocation_stable_key),
         )
     }
 
     fn property_write_source_node(
         &self,
+        interner: &crate::core::StableKeyInterner,
         builder: &mut GraphBuilder,
         write: &TsPropertyWriteFact,
     ) -> Option<SemanticNodeId> {
         if let Some(value_object) = write.value_object_stable_key.as_deref()
-            && let Some(node) = self.object_node(builder, value_object)
+            && let Some(node) = self.object_node(interner, builder, value_object)
         {
             return Some(node);
         }
@@ -1703,45 +1810,51 @@ impl<'a> TsObjectModelNodeContext<'a> {
         {
             return Some(node);
         }
-        self.place_node(builder, &property_write_source_place_identity(write))
+        self.place_node(
+            interner,
+            builder,
+            &property_write_source_place_identity(interner, write),
+        )
     }
 
     fn property_read_destination_node(
         &self,
+        interner: &crate::core::StableKeyInterner,
         builder: &mut GraphBuilder,
         read: &TsPropertyReadFact,
     ) -> Option<SemanticNodeId> {
-        let destination = read
-            .destination_stable_key
-            .clone()
-            .unwrap_or_else(|| property_read_destination_place_identity(&read.stable_key));
-        self.place_node(builder, &destination)
+        let destination = read.destination_stable_key.clone().unwrap_or_else(|| {
+            property_read_destination_place_identity(interner, &read.stable_key)
+        });
+        self.place_node(interner, builder, &destination)
     }
 
     fn receiver_destination_node(
         &self,
+        interner: &crate::core::StableKeyInterner,
         builder: &mut GraphBuilder,
         binding: &TsReceiverBindingFact,
     ) -> Option<SemanticNodeId> {
         let destination = binding
             .receiver_place_stable_key
             .clone()
-            .unwrap_or_else(|| receiver_destination_place_identity(&binding.stable_key));
-        self.place_node(builder, &destination)
+            .unwrap_or_else(|| receiver_destination_place_identity(interner, &binding.stable_key));
+        self.place_node(interner, builder, &destination)
     }
 
     fn receiver_source_node(
         &self,
+        interner: &crate::core::StableKeyInterner,
         builder: &mut GraphBuilder,
         binding: &TsReceiverBindingFact,
     ) -> Option<SemanticNodeId> {
         if let Some(receiver_object) = binding.receiver_object_stable_key.as_deref() {
-            return self.object_node(builder, receiver_object);
+            return self.object_node(interner, builder, receiver_object);
         }
         binding
             .receiver_place_stable_key
             .as_deref()
-            .and_then(|place| self.place_node(builder, place))
+            .and_then(|place| self.place_node(interner, builder, place))
     }
 
     fn callsite_node(&self, callsite_stable_key: Option<&str>) -> Option<SemanticNodeId> {
@@ -1750,16 +1863,21 @@ impl<'a> TsObjectModelNodeContext<'a> {
 
     fn place_node(
         &self,
+        interner: &crate::core::StableKeyInterner,
         builder: &mut GraphBuilder,
         place_stable_key: &str,
     ) -> Option<SemanticNodeId> {
         if let Some(place) = self.place_by_stable_key.get(place_stable_key) {
-            return Some(
-                builder.intern_node(NodeKind::Place(*place), place_node_key(place_stable_key)),
-            );
+            return Some(builder.intern_node(
+                NodeKind::Place(*place),
+                place_node_key(interner, place_stable_key),
+            ));
         }
         let place = *self.synthetic_place_by_key.get(place_stable_key)?;
-        Some(builder.intern_node(NodeKind::Place(place), place_node_key(place_stable_key)))
+        Some(builder.intern_node(
+            NodeKind::Place(place),
+            place_node_key(interner, place_stable_key),
+        ))
     }
 }
 
@@ -1836,9 +1954,14 @@ fn parse_length_prefixed_token(input: &str, start: usize) -> Option<(&str, usize
 
 /// Function node key = (node-kind label, function stable identity: path + name +
 /// span), composed via the length-prefixed recipe.
-fn function_node_key(db: &AnalysisDb, function: &crate::core::FunctionFact) -> String {
+fn function_node_key(
+    interner: &crate::core::StableKeyInterner,
+    db: &AnalysisDb,
+    function: &crate::core::FunctionFact,
+) -> String {
     let path = db.path_for(function.file);
     semantic_stable_key(
+        interner,
         FactFamily::Function,
         &[
             ("node_kind", "function".to_string()),
@@ -1851,8 +1974,11 @@ fn function_node_key(db: &AnalysisDb, function: &crate::core::FunctionFact) -> S
 }
 
 fn package_node_key(db: &AnalysisDb, package: &crate::core::PackageFact) -> String {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let path = db.path_for(package.file);
     semantic_stable_key(
+        interner,
         FactFamily::Package,
         &[
             ("node_kind", "package".to_string()),
@@ -1866,8 +1992,13 @@ fn package_node_key(db: &AnalysisDb, package: &crate::core::PackageFact) -> Stri
 /// Node key for an entity that already carries its own composed stable key (scopes,
 /// call sites). The node-kind label disambiguates kinds that might otherwise share a
 /// referenced identity string.
-fn node_key_from_identity(node_kind: &str, identity: &str) -> String {
+fn node_key_from_identity(
+    interner: &crate::core::StableKeyInterner,
+    node_kind: &str,
+    identity: &str,
+) -> String {
     semantic_stable_key(
+        interner,
         FactFamily::Scope,
         &[
             ("node_kind", node_kind.to_string()),
@@ -1881,8 +2012,9 @@ fn node_key_from_identity(node_kind: &str, identity: &str) -> String {
 /// `PlaceFact.stable_key`, which the MIR layer composes from stable context, never
 /// run-local dense IDs). Keying on the place identity — not the owning value fact —
 /// is what makes the same place a single shared node across copies.
-fn place_node_key(place_stable_key: &str) -> String {
+fn place_node_key(interner: &crate::core::StableKeyInterner, place_stable_key: &str) -> String {
     semantic_stable_key(
+        interner,
         FactFamily::Place,
         &[
             ("node_kind", "place".to_string()),
@@ -1892,8 +2024,9 @@ fn place_node_key(place_stable_key: &str) -> String {
     .into_string()
 }
 
-fn object_node_key(object_stable_key: &str) -> String {
+fn object_node_key(interner: &crate::core::StableKeyInterner, object_stable_key: &str) -> String {
     semantic_stable_key(
+        interner,
         FactFamily::AllocationToken,
         &[
             ("node_kind", "abstract_object".to_string()),
@@ -1903,29 +2036,46 @@ fn object_node_key(object_stable_key: &str) -> String {
     .into_string()
 }
 
-fn allocation_result_place_identity(allocation_stable_key: &str) -> String {
-    object_model_place_identity("allocation_result", allocation_stable_key)
+fn allocation_result_place_identity(
+    interner: &crate::core::StableKeyInterner,
+    allocation_stable_key: &str,
+) -> String {
+    object_model_place_identity(interner, "allocation_result", allocation_stable_key)
 }
 
-fn property_write_source_place_identity(write: &TsPropertyWriteFact) -> String {
+fn property_write_source_place_identity(
+    interner: &crate::core::StableKeyInterner,
+    write: &TsPropertyWriteFact,
+) -> String {
     let source_identity = write
         .value_function_stable_key
         .as_deref()
         .or(write.value_object_stable_key.as_deref())
         .unwrap_or(write.stable_key.as_str());
-    object_model_place_identity("property_write_source", source_identity)
+    object_model_place_identity(interner, "property_write_source", source_identity)
 }
 
-fn property_read_destination_place_identity(read_stable_key: &str) -> String {
-    object_model_place_identity("property_read_destination", read_stable_key)
+fn property_read_destination_place_identity(
+    interner: &crate::core::StableKeyInterner,
+    read_stable_key: &str,
+) -> String {
+    object_model_place_identity(interner, "property_read_destination", read_stable_key)
 }
 
-fn receiver_destination_place_identity(receiver_stable_key: &str) -> String {
-    object_model_place_identity("receiver_destination", receiver_stable_key)
+fn receiver_destination_place_identity(
+    interner: &crate::core::StableKeyInterner,
+    receiver_stable_key: &str,
+) -> String {
+    object_model_place_identity(interner, "receiver_destination", receiver_stable_key)
 }
 
-fn object_model_place_identity(kind: &str, identity: &str) -> String {
+fn object_model_place_identity(
+    interner: &crate::core::StableKeyInterner,
+    kind: &str,
+    identity: &str,
+) -> String {
     semantic_stable_key(
+        interner,
         FactFamily::Place,
         &[
             ("place_kind", kind.to_string()),

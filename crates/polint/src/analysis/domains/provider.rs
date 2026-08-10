@@ -82,6 +82,8 @@ fn derive_abstract_domains_with_materialization(
     upstream_syntax_output_digests: Vec<Digest>,
     materialization: DomainMaterialization,
 ) -> AbstractDomainsProviderOutput {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let solver = IdeDomainSolver::new(SolverPolicy::deterministic());
     let result = match materialization {
         DomainMaterialization::Full => solver.solve(SolverInput::from(&*db)),
@@ -94,6 +96,7 @@ fn derive_abstract_domains_with_materialization(
     let operation_keys = operation_stable_key_map(db);
     let place_keys = place_stable_key_map(db);
     let output = DomainOutput::from_results_with_materialization(
+        interner,
         result.results(),
         Some(&place_keys),
         materialization,

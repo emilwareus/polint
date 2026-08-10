@@ -63,6 +63,7 @@ mod metadata;
 mod review;
 pub(crate) mod rule;
 mod span;
+mod stable_key;
 
 pub use facts::{
     BranchObligation, ComplexityMetricFact, CoverageFact, DefinitionFact, DefinitionKind,
@@ -82,6 +83,7 @@ pub use ids::{
 };
 pub use lang::Language;
 pub use span::{Span, TextRange};
+pub(crate) use stable_key::{StableKeyId, StableKeyInterner};
 
 pub use review::ChangeStatus;
 pub(crate) use review::{ChangedFile, ReviewChangeset};

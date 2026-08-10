@@ -630,8 +630,7 @@
             "export function handler() {}\n".to_string(),
         );
 
-        db.replace_semantic_index_facts(
-            vec![test_scope("root", file, SemanticStatus::Resolved)],
+        db.replace_semantic_index_facts(vec![test_scope("root", file, SemanticStatus::Resolved)],
             Vec::<SemanticImportFact>::new(),
             Vec::<ExportFact>::new(),
             Vec::<AliasFact>::new(),

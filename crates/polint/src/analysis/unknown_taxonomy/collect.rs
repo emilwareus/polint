@@ -30,23 +30,30 @@ pub(crate) const PUBLIC_UNKNOWN_CAPABILITIES: &[&str] = &[
     "dataflow",
 ];
 
-pub(crate) fn unsupported_capability_row(capability: &str, docs_path: Option<&str>) -> UnknownRow {
-    UnknownRow::new(UnknownRowInput {
-        category: UnknownCategory::UnsupportedSemantic,
-        capability: Some(capability.to_string()),
-        family: None,
-        provider: "polint.capabilities".to_string(),
-        file: "<workspace>".to_string(),
-        span: None,
-        status: "unsupported".to_string(),
-        reason: Some("Capability does not support public unknown inspection.".to_string()),
-        precision: None,
-        docs_path: docs_path
-            .or(Some("docs/facts/capability-plans.md"))
-            .map(str::to_string),
-        suggested_artifact: Some("provider".to_string()),
-        source_stable_key: Some(format!("capability:{capability}")),
-    })
+pub(crate) fn unsupported_capability_row(
+    interner: &crate::core::StableKeyInterner,
+    capability: &str,
+    docs_path: Option<&str>,
+) -> UnknownRow {
+    UnknownRow::new(
+        interner,
+        UnknownRowInput {
+            category: UnknownCategory::UnsupportedSemantic,
+            capability: Some(capability.to_string()),
+            family: None,
+            provider: "polint.capabilities".to_string(),
+            file: "<workspace>".to_string(),
+            span: None,
+            status: "unsupported".to_string(),
+            reason: Some("Capability does not support public unknown inspection.".to_string()),
+            precision: None,
+            docs_path: docs_path
+                .or(Some("docs/facts/capability-plans.md"))
+                .map(str::to_string),
+            suggested_artifact: Some("provider".to_string()),
+            source_stable_key: Some(format!("capability:{capability}")),
+        },
+    )
 }
 
 pub(crate) fn public_capability_unknowns(db: &AnalysisDb, capability: &str) -> Vec<UnknownRow> {
@@ -73,9 +80,11 @@ pub(crate) fn graph_engine_unknowns_with_diagnostics(
     db: &AnalysisDb,
     diagnostics: &[Diagnostic],
 ) -> Vec<UnknownRow> {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let mut rows = Vec::new();
     rows.extend(go_semantic_unknowns(db));
-    rows.extend(go_semantic_diagnostic_unknowns(diagnostics));
+    rows.extend(go_semantic_diagnostic_unknowns(interner, diagnostics));
     rows.extend(unsupported_semantic_unknowns(db));
     rows.extend(solver_unknowns(db));
     rows.extend(refined_call_unknowns(db));
@@ -104,6 +113,8 @@ pub(crate) fn all_unknowns_with_diagnostics(
 }
 
 fn resolved_import_unknowns(db: &AnalysisDb) -> Vec<UnknownRow> {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     db.resolved_imports()
         .iter()
         .filter(|fact| {
@@ -114,25 +125,32 @@ fn resolved_import_unknowns(db: &AnalysisDb) -> Vec<UnknownRow> {
         })
         .map(|fact| {
             let reason = fact.reason.map(unresolved_reason_label).map(str::to_string);
-            UnknownRow::new(UnknownRowInput {
-                category: resolution_category(fact.status, fact.reason),
-                capability: Some("resolved_imports".to_string()),
-                family: Some("ResolvedImport".to_string()),
-                provider: "polint.module_graph".to_string(),
-                file: db.path_for(fact.from_file),
-                span: None,
-                status: resolution_status_label(fact.status).to_string(),
-                reason,
-                precision: Some(resolution_precision_label(fact.precision).to_string()),
-                docs_path: Some("docs/facts/resolved-imports.md".to_string()),
-                suggested_artifact: Some(artifact_for_resolution_status(fact.status).to_string()),
-                source_stable_key: stable_key_for(db, FactFamily::ResolvedImport, fact.id.0),
-            })
+            UnknownRow::new(
+                interner,
+                UnknownRowInput {
+                    category: resolution_category(fact.status, fact.reason),
+                    capability: Some("resolved_imports".to_string()),
+                    family: Some("ResolvedImport".to_string()),
+                    provider: "polint.module_graph".to_string(),
+                    file: db.path_for(fact.from_file),
+                    span: None,
+                    status: resolution_status_label(fact.status).to_string(),
+                    reason,
+                    precision: Some(resolution_precision_label(fact.precision).to_string()),
+                    docs_path: Some("docs/facts/resolved-imports.md".to_string()),
+                    suggested_artifact: Some(
+                        artifact_for_resolution_status(fact.status).to_string(),
+                    ),
+                    source_stable_key: stable_key_for(db, FactFamily::ResolvedImport, fact.id.0),
+                },
+            )
         })
         .collect()
 }
 
 fn symbol_unknowns(db: &AnalysisDb) -> Vec<UnknownRow> {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     db.symbols()
         .iter()
         .filter(|symbol| {
@@ -146,77 +164,95 @@ fn symbol_unknowns(db: &AnalysisDb) -> Vec<UnknownRow> {
         })
         .map(|symbol| {
             let status = symbol_precision_label(symbol.precision);
-            UnknownRow::new(UnknownRowInput {
-                category: symbol_precision_category(symbol.precision),
-                capability: Some("symbols".to_string()),
-                family: Some("Symbol".to_string()),
-                provider: "polint.symbol_graph".to_string(),
-                file: symbol
-                    .file
-                    .map(|file| db.path_for(file))
-                    .unwrap_or_else(|| "<workspace>".to_string()),
-                span: symbol.primary_span.as_ref().map(UnknownSpan::from_span),
-                status: status.to_string(),
-                reason: Some("symbol precision is not exact".to_string()),
-                precision: Some(status.to_string()),
-                docs_path: Some("docs/facts/symbols-and-references.md".to_string()),
-                suggested_artifact: Some("model".to_string()),
-                source_stable_key: Some(symbol.stable_key.clone()),
-            })
+            UnknownRow::new(
+                interner,
+                UnknownRowInput {
+                    category: symbol_precision_category(symbol.precision),
+                    capability: Some("symbols".to_string()),
+                    family: Some("Symbol".to_string()),
+                    provider: "polint.symbol_graph".to_string(),
+                    file: symbol
+                        .file
+                        .map(|file| db.path_for(file))
+                        .unwrap_or_else(|| "<workspace>".to_string()),
+                    span: symbol.primary_span.as_ref().map(UnknownSpan::from_span),
+                    status: status.to_string(),
+                    reason: Some("symbol precision is not exact".to_string()),
+                    precision: Some(status.to_string()),
+                    docs_path: Some("docs/facts/symbols-and-references.md".to_string()),
+                    suggested_artifact: Some("model".to_string()),
+                    source_stable_key: Some(symbol.stable_key.clone()),
+                },
+            )
         })
         .collect()
 }
 
 fn reference_unknowns(db: &AnalysisDb) -> Vec<UnknownRow> {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     db.references()
         .iter()
         .filter(|reference| reference.status != SymbolResolutionStatus::Resolved)
         .map(|reference| {
-            UnknownRow::new(UnknownRowInput {
-                category: symbol_status_category(reference.status),
-                capability: Some("references".to_string()),
-                family: Some("Reference".to_string()),
-                provider: "polint.symbol_graph".to_string(),
-                file: reference
-                    .file
-                    .map(|file| db.path_for(file))
-                    .unwrap_or_else(|| "<workspace>".to_string()),
-                span: reference.primary_span.as_ref().map(UnknownSpan::from_span),
-                status: symbol_status_label(reference.status).to_string(),
-                reason: Some("reference did not resolve to exactly one public symbol".to_string()),
-                precision: Some(symbol_precision_label(reference.precision).to_string()),
-                docs_path: Some("docs/facts/symbols-and-references.md".to_string()),
-                suggested_artifact: Some("model".to_string()),
-                source_stable_key: Some(reference.stable_key.clone()),
-            })
+            UnknownRow::new(
+                interner,
+                UnknownRowInput {
+                    category: symbol_status_category(reference.status),
+                    capability: Some("references".to_string()),
+                    family: Some("Reference".to_string()),
+                    provider: "polint.symbol_graph".to_string(),
+                    file: reference
+                        .file
+                        .map(|file| db.path_for(file))
+                        .unwrap_or_else(|| "<workspace>".to_string()),
+                    span: reference.primary_span.as_ref().map(UnknownSpan::from_span),
+                    status: symbol_status_label(reference.status).to_string(),
+                    reason: Some(
+                        "reference did not resolve to exactly one public symbol".to_string(),
+                    ),
+                    precision: Some(symbol_precision_label(reference.precision).to_string()),
+                    docs_path: Some("docs/facts/symbols-and-references.md".to_string()),
+                    suggested_artifact: Some("model".to_string()),
+                    source_stable_key: Some(reference.stable_key.clone()),
+                },
+            )
         })
         .collect()
 }
 
 fn go_semantic_unknowns(db: &AnalysisDb) -> Vec<UnknownRow> {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     db.go_semantic_package_errors()
         .iter()
         .map(|error| {
             let category = go_package_error_category(&error.message);
-            UnknownRow::new(UnknownRowInput {
-                category,
-                capability: Some("go_semantic".to_string()),
-                family: Some("GoSemanticPackageError".to_string()),
-                provider: "polint.go.semantic".to_string(),
-                file: "<workspace>".to_string(),
-                span: None,
-                status: category.as_str().to_string(),
-                reason: Some(error.message.clone()),
-                precision: Some("unsupported".to_string()),
-                docs_path: Some("docs/facts/capability-plans.md".to_string()),
-                suggested_artifact: Some("go_setup".to_string()),
-                source_stable_key: Some(error.stable_key.clone()),
-            })
+            UnknownRow::new(
+                interner,
+                UnknownRowInput {
+                    category,
+                    capability: Some("go_semantic".to_string()),
+                    family: Some("GoSemanticPackageError".to_string()),
+                    provider: "polint.go.semantic".to_string(),
+                    file: "<workspace>".to_string(),
+                    span: None,
+                    status: category.as_str().to_string(),
+                    reason: Some(error.message.clone()),
+                    precision: Some("unsupported".to_string()),
+                    docs_path: Some("docs/facts/capability-plans.md".to_string()),
+                    suggested_artifact: Some("go_setup".to_string()),
+                    source_stable_key: Some(error.stable_key.clone()),
+                },
+            )
         })
         .collect()
 }
 
-fn go_semantic_diagnostic_unknowns(diagnostics: &[Diagnostic]) -> Vec<UnknownRow> {
+fn go_semantic_diagnostic_unknowns(
+    interner: &crate::core::StableKeyInterner,
+    diagnostics: &[Diagnostic],
+) -> Vec<UnknownRow> {
     diagnostics
         .iter()
         .filter(|diagnostic| diagnostic.rule_id == "polint/go-semantic")
@@ -230,47 +266,57 @@ fn go_semantic_diagnostic_unknowns(diagnostics: &[Diagnostic]) -> Vec<UnknownRow
                     column: diagnostic.range.start_col,
                 })
             };
-            Some(UnknownRow::new(UnknownRowInput {
-                category,
-                capability: Some("go_semantic".to_string()),
-                family: Some("GoSemanticDiagnostic".to_string()),
-                provider: "polint.go.semantic".to_string(),
-                file: diagnostic.file.clone(),
-                span,
-                status: category.as_str().to_string(),
-                reason: Some(reason),
-                precision: Some("unsupported".to_string()),
-                docs_path: Some("docs/facts/capability-plans.md".to_string()),
-                suggested_artifact: Some("go_setup".to_string()),
-                source_stable_key: Some(diagnostic.stable_fingerprint.clone()),
-            }))
+            Some(UnknownRow::new(
+                interner,
+                UnknownRowInput {
+                    category,
+                    capability: Some("go_semantic".to_string()),
+                    family: Some("GoSemanticDiagnostic".to_string()),
+                    provider: "polint.go.semantic".to_string(),
+                    file: diagnostic.file.clone(),
+                    span,
+                    status: category.as_str().to_string(),
+                    reason: Some(reason),
+                    precision: Some("unsupported".to_string()),
+                    docs_path: Some("docs/facts/capability-plans.md".to_string()),
+                    suggested_artifact: Some("go_setup".to_string()),
+                    source_stable_key: Some(diagnostic.stable_fingerprint.clone()),
+                },
+            ))
         })
         .collect()
 }
 
 fn unsupported_semantic_unknowns(db: &AnalysisDb) -> Vec<UnknownRow> {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     db.unsupported_semantics()
         .iter()
         .map(|row| {
-            UnknownRow::new(UnknownRowInput {
-                category: UnknownCategory::UnsupportedSemantic,
-                capability: Some("semantic_mir".to_string()),
-                family: Some("UnsupportedSemantic".to_string()),
-                provider: "polint.semantic_mir".to_string(),
-                file: db.path_for(row.file),
-                span: Some(UnknownSpan::from_span(&row.span)),
-                status: "unsupported".to_string(),
-                reason: Some(row.construct.clone()),
-                precision: Some("unsupported".to_string()),
-                docs_path: Some("docs/facts/capability-plans.md".to_string()),
-                suggested_artifact: Some("provider".to_string()),
-                source_stable_key: Some(row.stable_key.clone()),
-            })
+            UnknownRow::new(
+                interner,
+                UnknownRowInput {
+                    category: UnknownCategory::UnsupportedSemantic,
+                    capability: Some("semantic_mir".to_string()),
+                    family: Some("UnsupportedSemantic".to_string()),
+                    provider: "polint.semantic_mir".to_string(),
+                    file: db.path_for(row.file),
+                    span: Some(UnknownSpan::from_span(&row.span)),
+                    status: "unsupported".to_string(),
+                    reason: Some(row.construct.clone()),
+                    precision: Some("unsupported".to_string()),
+                    docs_path: Some("docs/facts/capability-plans.md".to_string()),
+                    suggested_artifact: Some("provider".to_string()),
+                    source_stable_key: Some(row.stable_key.clone()),
+                },
+            )
         })
         .collect()
 }
 
 fn solver_unknowns(db: &AnalysisDb) -> Vec<UnknownRow> {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let mut rows = Vec::new();
     if db.solver_budget_status() == crate::analysis::solver::budget::BudgetStatus::BudgetExceeded {
         let reason = if db.solver_budget_reasons().is_empty() {
@@ -282,20 +328,23 @@ fn solver_unknowns(db: &AnalysisDb) -> Vec<UnknownRow> {
                 .collect::<Vec<_>>()
                 .join(",")
         };
-        rows.push(UnknownRow::new(UnknownRowInput {
-            category: UnknownCategory::BudgetExceeded,
-            capability: Some("solver".to_string()),
-            family: Some("SolverRun".to_string()),
-            provider: "polint.solver".to_string(),
-            file: "<workspace>".to_string(),
-            span: None,
-            status: "budget_exceeded".to_string(),
-            reason: Some(reason),
-            precision: Some("unknown".to_string()),
-            docs_path: Some("docs/facts/capability-plans.md".to_string()),
-            suggested_artifact: Some("budget_or_model".to_string()),
-            source_stable_key: Some("polint.solver:run-level-budget".to_string()),
-        }));
+        rows.push(UnknownRow::new(
+            interner,
+            UnknownRowInput {
+                category: UnknownCategory::BudgetExceeded,
+                capability: Some("solver".to_string()),
+                family: Some("SolverRun".to_string()),
+                provider: "polint.solver".to_string(),
+                file: "<workspace>".to_string(),
+                span: None,
+                status: "budget_exceeded".to_string(),
+                reason: Some(reason),
+                precision: Some("unknown".to_string()),
+                docs_path: Some("docs/facts/capability-plans.md".to_string()),
+                suggested_artifact: Some("budget_or_model".to_string()),
+                source_stable_key: Some("polint.solver:run-level-budget".to_string()),
+            },
+        ));
     }
 
     rows.extend(
@@ -310,20 +359,23 @@ fn solver_unknowns(db: &AnalysisDb) -> Vec<UnknownRow> {
                     PointsToStatus::Unknown => UnknownCategory::MissingFact,
                     PointsToStatus::Present => UnknownCategory::MissingFact,
                 };
-                UnknownRow::new(UnknownRowInput {
-                    category,
-                    capability: Some("solver".to_string()),
-                    family: Some("SolverDerivedEdge".to_string()),
-                    provider: "polint.solver".to_string(),
-                    file: "<workspace>".to_string(),
-                    span: None,
-                    status: points_to_status_label(edge.status).to_string(),
-                    reason: Some(edge.provenance.constraint_kind.clone()),
-                    precision: Some(points_to_precision_label(edge.precision).to_string()),
-                    docs_path: Some("docs/facts/capability-plans.md".to_string()),
-                    suggested_artifact: Some("budget_or_model".to_string()),
-                    source_stable_key: Some(edge.stable_key.clone()),
-                })
+                UnknownRow::new(
+                    interner,
+                    UnknownRowInput {
+                        category,
+                        capability: Some("solver".to_string()),
+                        family: Some("SolverDerivedEdge".to_string()),
+                        provider: "polint.solver".to_string(),
+                        file: "<workspace>".to_string(),
+                        span: None,
+                        status: points_to_status_label(edge.status).to_string(),
+                        reason: Some(edge.provenance.constraint_kind.clone()),
+                        precision: Some(points_to_precision_label(edge.precision).to_string()),
+                        docs_path: Some("docs/facts/capability-plans.md".to_string()),
+                        suggested_artifact: Some("budget_or_model".to_string()),
+                        source_stable_key: Some(edge.stable_key.clone()),
+                    },
+                )
             }),
     );
     rows
@@ -352,6 +404,8 @@ fn refined_call_unknown(
     docs_path: &str,
     suggested_artifact: &str,
 ) -> UnknownRow {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let category = match edge.status {
         CallTargetStatus::SetupMissing => UnknownCategory::SetupMissing,
         CallTargetStatus::Unsupported => UnknownCategory::UnsupportedSemantic,
@@ -361,28 +415,33 @@ fn refined_call_unknown(
         CallTargetStatus::Resolved => UnknownCategory::MissingFact,
     };
     let site = db.call_sites().iter().find(|site| site.id == edge.site);
-    UnknownRow::new(UnknownRowInput {
-        category,
-        capability: Some(capability.to_string()),
-        family: Some("RefinedCallEdge".to_string()),
-        provider: "polint.refined_calls".to_string(),
-        file: site
-            .map(|site| db.path_for(site.file))
-            .unwrap_or_else(|| "<workspace>".to_string()),
-        span: site.map(|site| UnknownSpan::from_span(&site.span)),
-        status: call_status_label(edge.status).to_string(),
-        reason: edge
-            .reason
-            .map(unresolved_call_reason_label)
-            .map(str::to_string),
-        precision: Some(call_precision_label(edge.precision).to_string()),
-        docs_path: Some(docs_path.to_string()),
-        suggested_artifact: Some(suggested_artifact.to_string()),
-        source_stable_key: Some(edge.stable_key.clone()),
-    })
+    UnknownRow::new(
+        interner,
+        UnknownRowInput {
+            category,
+            capability: Some(capability.to_string()),
+            family: Some("RefinedCallEdge".to_string()),
+            provider: "polint.refined_calls".to_string(),
+            file: site
+                .map(|site| db.path_for(site.file))
+                .unwrap_or_else(|| "<workspace>".to_string()),
+            span: site.map(|site| UnknownSpan::from_span(&site.span)),
+            status: call_status_label(edge.status).to_string(),
+            reason: edge
+                .reason
+                .map(unresolved_call_reason_label)
+                .map(str::to_string),
+            precision: Some(call_precision_label(edge.precision).to_string()),
+            docs_path: Some(docs_path.to_string()),
+            suggested_artifact: Some(suggested_artifact.to_string()),
+            source_stable_key: Some(edge.stable_key.clone()),
+        },
+    )
 }
 
 fn adaptation_unknowns(db: &AnalysisDb) -> Vec<UnknownRow> {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     db.rejected_adaptation_model_facts()
         .iter()
         .map(|fact| {
@@ -393,20 +452,23 @@ fn adaptation_unknowns(db: &AnalysisDb) -> Vec<UnknownRow> {
                 }
                 _ => UnknownCategory::Rejected,
             };
-            UnknownRow::new(UnknownRowInput {
-                category,
-                capability: Some("adaptation_models".to_string()),
-                family: Some("RejectedModelFact".to_string()),
-                provider: "polint.adaptation.model".to_string(),
-                file: fact.fact.model_path.clone(),
-                span: None,
-                status: "rejected".to_string(),
-                reason: Some(fact.reason.as_str().to_string()),
-                precision: Some(fact.fact.confidence.as_str().to_string()),
-                docs_path: Some("docs/facts/capability-plans.md".to_string()),
-                suggested_artifact: Some("model".to_string()),
-                source_stable_key: Some(fact.fact.stable_key.clone()),
-            })
+            UnknownRow::new(
+                interner,
+                UnknownRowInput {
+                    category,
+                    capability: Some("adaptation_models".to_string()),
+                    family: Some("RejectedModelFact".to_string()),
+                    provider: "polint.adaptation.model".to_string(),
+                    file: fact.fact.model_path.clone(),
+                    span: None,
+                    status: "rejected".to_string(),
+                    reason: Some(fact.reason.as_str().to_string()),
+                    precision: Some(fact.fact.confidence.as_str().to_string()),
+                    docs_path: Some("docs/facts/capability-plans.md".to_string()),
+                    suggested_artifact: Some("model".to_string()),
+                    source_stable_key: Some(fact.fact.stable_key.clone()),
+                },
+            )
         })
         .collect()
 }
@@ -428,6 +490,8 @@ fn policy_call_unknowns(db: &AnalysisDb, capability: &str) -> Vec<UnknownRow> {
 }
 
 fn data_flow_unknowns(db: &AnalysisDb) -> Vec<UnknownRow> {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let mut rows = Vec::new();
     rows.extend(
         db.data_flow_edges()
@@ -439,75 +503,92 @@ fn data_flow_unknowns(db: &AnalysisDb) -> Vec<UnknownRow> {
         db.data_flow_budgets()
             .iter()
             .filter(|budget| budget.status != DataFlowStatus::Present)
-            .map(data_flow_budget_unknown),
+            .map(|budget| data_flow_budget_unknown(interner, budget)),
     );
     rows.extend(
         db.evidence_unknowns()
             .iter()
-            .map(evidence_unknown_for_data_flow),
+            .map(|unknown| evidence_unknown_for_data_flow(interner, unknown)),
     );
     rows
 }
 
 fn data_flow_edge_unknown(db: &AnalysisDb, edge: &DataFlowEdgeFact) -> UnknownRow {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let (file, span) = data_flow_edge_location(db, edge);
-    UnknownRow::new(UnknownRowInput {
-        category: data_flow_status_category(edge.status),
-        capability: Some("dataflow".to_string()),
-        family: Some("DataFlowEdge".to_string()),
-        provider: "polint.data_flow".to_string(),
-        file,
-        span,
-        status: data_flow_status_label(edge.status).to_string(),
-        reason: Some(data_flow_edge_reason(edge)),
-        precision: Some(data_flow_precision_label(edge.precision).to_string()),
-        docs_path: Some("docs/facts/data-flow.md".to_string()),
-        suggested_artifact: Some(data_flow_status_artifact(edge.status).to_string()),
-        source_stable_key: Some(edge.stable_key.clone()),
-    })
+    UnknownRow::new(
+        interner,
+        UnknownRowInput {
+            category: data_flow_status_category(edge.status),
+            capability: Some("dataflow".to_string()),
+            family: Some("DataFlowEdge".to_string()),
+            provider: "polint.data_flow".to_string(),
+            file,
+            span,
+            status: data_flow_status_label(edge.status).to_string(),
+            reason: Some(data_flow_edge_reason(edge)),
+            precision: Some(data_flow_precision_label(edge.precision).to_string()),
+            docs_path: Some("docs/facts/data-flow.md".to_string()),
+            suggested_artifact: Some(data_flow_status_artifact(edge.status).to_string()),
+            source_stable_key: Some(edge.stable_key.clone()),
+        },
+    )
 }
 
-fn data_flow_budget_unknown(budget: &DataFlowBudgetFact) -> UnknownRow {
-    UnknownRow::new(UnknownRowInput {
-        category: UnknownCategory::BudgetExceeded,
-        capability: Some("dataflow".to_string()),
-        family: Some("DataFlowBudget".to_string()),
-        provider: "polint.data_flow".to_string(),
-        file: "<workspace>".to_string(),
-        span: None,
-        status: data_flow_status_label(budget.status).to_string(),
-        reason: Some(format!(
-            "{} limit={} observed={}",
-            data_flow_budget_reason_label(budget.reason),
-            budget.limit,
-            budget.observed
-        )),
-        precision: Some("unknown".to_string()),
-        docs_path: Some("docs/facts/data-flow.md".to_string()),
-        suggested_artifact: Some("budget_or_model".to_string()),
-        source_stable_key: Some(budget.stable_key.clone()),
-    })
+fn data_flow_budget_unknown(
+    interner: &crate::core::StableKeyInterner,
+    budget: &DataFlowBudgetFact,
+) -> UnknownRow {
+    UnknownRow::new(
+        interner,
+        UnknownRowInput {
+            category: UnknownCategory::BudgetExceeded,
+            capability: Some("dataflow".to_string()),
+            family: Some("DataFlowBudget".to_string()),
+            provider: "polint.data_flow".to_string(),
+            file: "<workspace>".to_string(),
+            span: None,
+            status: data_flow_status_label(budget.status).to_string(),
+            reason: Some(format!(
+                "{} limit={} observed={}",
+                data_flow_budget_reason_label(budget.reason),
+                budget.limit,
+                budget.observed
+            )),
+            precision: Some("unknown".to_string()),
+            docs_path: Some("docs/facts/data-flow.md".to_string()),
+            suggested_artifact: Some("budget_or_model".to_string()),
+            source_stable_key: Some(budget.stable_key.clone()),
+        },
+    )
 }
 
-fn evidence_unknown_for_data_flow(unknown: &EvidenceUnknownFact) -> UnknownRow {
-    UnknownRow::new(UnknownRowInput {
-        category: evidence_unknown_category(unknown.reason),
-        capability: Some("dataflow".to_string()),
-        family: Some("EvidenceUnknown".to_string()),
-        provider: "polint.evidence".to_string(),
-        file: "<workspace>".to_string(),
-        span: None,
-        status: "unknown".to_string(),
-        reason: Some(format!(
-            "{}:{}",
-            evidence_unknown_reason_label(unknown.reason),
-            unknown.message
-        )),
-        precision: Some("unknown".to_string()),
-        docs_path: Some("docs/facts/evidence.md".to_string()),
-        suggested_artifact: Some("model_or_budget".to_string()),
-        source_stable_key: Some(unknown.stable_key.clone()),
-    })
+fn evidence_unknown_for_data_flow(
+    interner: &crate::core::StableKeyInterner,
+    unknown: &EvidenceUnknownFact,
+) -> UnknownRow {
+    UnknownRow::new(
+        interner,
+        UnknownRowInput {
+            category: evidence_unknown_category(unknown.reason),
+            capability: Some("dataflow".to_string()),
+            family: Some("EvidenceUnknown".to_string()),
+            provider: "polint.evidence".to_string(),
+            file: "<workspace>".to_string(),
+            span: None,
+            status: "unknown".to_string(),
+            reason: Some(format!(
+                "{}:{}",
+                evidence_unknown_reason_label(unknown.reason),
+                unknown.message
+            )),
+            precision: Some("unknown".to_string()),
+            docs_path: Some("docs/facts/evidence.md".to_string()),
+            suggested_artifact: Some("model_or_budget".to_string()),
+            source_stable_key: Some(unknown.stable_key.clone()),
+        },
+    )
 }
 
 fn data_flow_edge_location(

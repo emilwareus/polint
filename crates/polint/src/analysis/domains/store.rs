@@ -16,7 +16,7 @@ use super::results::{DomainResults, SolverStatus};
 use super::state::ProductState;
 use crate::analysis::cfg::ids::BasicBlockId;
 use crate::analysis::ids::{DomainEventId, DomainObservationId, MirBodyId, MirOpId, PlaceId};
-use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
+use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct DomainOutput {
@@ -35,37 +35,46 @@ impl DomainOutput {
         Self::default()
     }
 
-    pub(crate) fn from_results(results: &DomainResults) -> Self {
-        Self::from_results_with_place_filter(results, None)
+    pub(crate) fn from_results(
+        interner: &crate::core::StableKeyInterner,
+        results: &DomainResults,
+    ) -> Self {
+        Self::from_results_with_place_filter(interner, results, None)
     }
 
     pub(crate) fn from_results_with_place_keys(
+        interner: &crate::core::StableKeyInterner,
         results: &DomainResults,
         place_stable_keys: &BTreeMap<PlaceId, String>,
     ) -> Self {
-        Self::from_results_with_place_filter(results, Some(place_stable_keys))
+        Self::from_results_with_place_filter(interner, results, Some(place_stable_keys))
     }
 
     pub(crate) fn from_results_with_materialization(
+        interner: &crate::core::StableKeyInterner,
         results: &DomainResults,
         place_stable_keys: Option<&BTreeMap<PlaceId, String>>,
         materialization: DomainMaterialization,
     ) -> Self {
         match materialization {
             DomainMaterialization::Full => {
-                Self::from_results_with_place_filter(results, place_stable_keys)
+                Self::from_results_with_place_filter(interner, results, place_stable_keys)
             }
-            DomainMaterialization::SummaryInputs => Self::from_results_for_summary_inputs(results),
+            DomainMaterialization::SummaryInputs => {
+                Self::from_results_for_summary_inputs(interner, results)
+            }
         }
     }
 
     fn from_results_with_place_filter(
+        interner: &crate::core::StableKeyInterner,
         results: &DomainResults,
         place_stable_keys: Option<&BTreeMap<PlaceId, String>>,
     ) -> Self {
         let mut output = Self::empty();
         for function in results.functions() {
             push_state_observations(
+                interner,
                 &mut output.observations,
                 function.body,
                 None,
@@ -85,7 +94,8 @@ impl DomainOutput {
                     status: DomainStatus::BudgetExceeded,
                     precision: DomainPrecision::Unknown,
                     reason: "solver_budget_exceeded".to_string(),
-                    stable_key: stable_key_from_parts(
+                    stable_key: stable_key_text_from_parts(
+                        interner,
                         FactFamily::DomainEvent,
                         &[
                             ("body", function.body_stable_key.clone()),
@@ -97,6 +107,7 @@ impl DomainOutput {
         }
         for block in results.blocks() {
             push_state_observations(
+                interner,
                 &mut output.observations,
                 block.body,
                 Some(block.block),
@@ -107,6 +118,7 @@ impl DomainOutput {
                 place_stable_keys,
             );
             push_state_observations(
+                interner,
                 &mut output.observations,
                 block.body,
                 Some(block.block),
@@ -119,6 +131,7 @@ impl DomainOutput {
         }
         for operation in results.operations() {
             push_state_observations(
+                interner,
                 &mut output.observations,
                 operation.body,
                 Some(operation.block),
@@ -129,6 +142,7 @@ impl DomainOutput {
                 place_stable_keys,
             );
             push_state_observations(
+                interner,
                 &mut output.observations,
                 operation.body,
                 Some(operation.block),
@@ -149,7 +163,8 @@ impl DomainOutput {
                 status: status_for_top_reason(event.reason),
                 precision: precision_for_top_reason(event.reason),
                 reason: event.reason.as_str().to_string(),
-                stable_key: stable_key_from_parts(
+                stable_key: stable_key_text_from_parts(
+                    interner,
                     FactFamily::DomainEvent,
                     &[
                         ("source", event.stable_key.clone()),
@@ -161,17 +176,20 @@ impl DomainOutput {
         output.normalized()
     }
 
-    fn from_results_for_summary_inputs(results: &DomainResults) -> Self {
+    fn from_results_for_summary_inputs(
+        interner: &crate::core::StableKeyInterner,
+        results: &DomainResults,
+    ) -> Self {
         let mut output = Self::empty();
         for function in results.functions() {
             push_reachability_observation(
+                interner,
                 &mut output.observations,
                 function.body,
                 None,
                 None,
                 DomainLocation::FunctionEntry,
-                &function.body_stable_key,
-                &function.entry_state,
+                (&function.body_stable_key, &function.entry_state),
             );
             if function.status == SolverStatus::BudgetExceeded {
                 output.events.push(DomainEventFact {
@@ -183,7 +201,8 @@ impl DomainOutput {
                     status: DomainStatus::BudgetExceeded,
                     precision: DomainPrecision::Unknown,
                     reason: "solver_budget_exceeded".to_string(),
-                    stable_key: stable_key_from_parts(
+                    stable_key: stable_key_text_from_parts(
+                        interner,
                         FactFamily::DomainEvent,
                         &[
                             ("body", function.body_stable_key.clone()),
@@ -195,13 +214,13 @@ impl DomainOutput {
         }
         for block in results.blocks() {
             push_reachability_observation(
+                interner,
                 &mut output.observations,
                 block.body,
                 Some(block.block),
                 None,
                 DomainLocation::BlockEntry,
-                &block.stable_key,
-                &block.entry,
+                (&block.stable_key, &block.entry),
             );
         }
         for event in results.unknown_top_events() {
@@ -214,7 +233,8 @@ impl DomainOutput {
                 status: status_for_top_reason(event.reason),
                 precision: precision_for_top_reason(event.reason),
                 reason: event.reason.as_str().to_string(),
-                stable_key: stable_key_from_parts(
+                stable_key: stable_key_text_from_parts(
+                    interner,
                     FactFamily::DomainEvent,
                     &[
                         ("source", event.stable_key.clone()),
@@ -285,6 +305,7 @@ impl DomainOutput {
 
 #[allow(clippy::too_many_arguments)]
 fn push_state_observations(
+    interner: &crate::core::StableKeyInterner,
     rows: &mut Vec<DomainObservationFact>,
     body: MirBodyId,
     block: Option<BasicBlockId>,
@@ -295,18 +316,19 @@ fn push_state_observations(
     place_stable_keys: Option<&BTreeMap<PlaceId, String>>,
 ) {
     push_reachability_observation(
+        interner,
         rows,
         body,
         block,
         operation,
         location,
-        source_stable_key,
-        state,
+        (source_stable_key, state),
     );
     for (place, value) in &state.core.nilness {
         let (status, precision, value) = nilness_fact_value(value);
         let (place_ref, stable_place) = stable_place_ref(*place, place_stable_keys);
         rows.push(observation(
+            interner,
             body,
             block,
             operation,
@@ -324,6 +346,7 @@ fn push_state_observations(
         let (status, precision, value) = truthiness_fact_value(value);
         let (place_ref, stable_place) = stable_place_ref(*place, place_stable_keys);
         rows.push(observation(
+            interner,
             body,
             block,
             operation,
@@ -341,6 +364,7 @@ fn push_state_observations(
         let (status, precision, value) = constant_fact_value(value);
         let (place_ref, stable_place) = stable_place_ref(*place, place_stable_keys);
         rows.push(observation(
+            interner,
             body,
             block,
             operation,
@@ -358,6 +382,7 @@ fn push_state_observations(
         let (status, precision, value) = string_fact_value(value);
         let (place_ref, stable_place) = stable_place_ref(*place, place_stable_keys);
         rows.push(observation(
+            interner,
             body,
             block,
             operation,
@@ -375,6 +400,7 @@ fn push_state_observations(
         let (status, precision, value) = initializedness_fact_value(value);
         let (place_ref, stable_place) = stable_place_ref(*place, place_stable_keys);
         rows.push(observation(
+            interner,
             body,
             block,
             operation,
@@ -391,16 +417,18 @@ fn push_state_observations(
 }
 
 fn push_reachability_observation(
+    interner: &crate::core::StableKeyInterner,
     rows: &mut Vec<DomainObservationFact>,
     body: MirBodyId,
     block: Option<BasicBlockId>,
     operation: Option<MirOpId>,
     location: DomainLocation,
-    source_stable_key: &str,
-    state: &ProductState,
+    pair: (&str, &ProductState),
 ) {
+    let (source_stable_key, state) = pair;
     let (status, precision, value) = reachability_fact_value(&state.core.reachability);
     rows.push(observation(
+        interner,
         body,
         block,
         operation,
@@ -433,6 +461,7 @@ fn stable_place_ref(
     reason = "Domain fact identity is a normalized tuple over location, slot, and optional place."
 )]
 fn observation(
+    interner: &crate::core::StableKeyInterner,
     body: MirBodyId,
     block: Option<BasicBlockId>,
     operation: Option<MirOpId>,
@@ -458,7 +487,8 @@ fn observation(
         value,
         status,
         precision,
-        stable_key: stable_key_from_parts(
+        stable_key: stable_key_text_from_parts(
+            interner,
             FactFamily::DomainObservation,
             &[
                 ("source", source_stable_key.to_string()),
@@ -886,6 +916,7 @@ mod tests {
             state,
         );
         DomainOutput::from_results_with_place_keys(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
             &results,
             &BTreeMap::from([(place, place_key.to_string())]),
         )

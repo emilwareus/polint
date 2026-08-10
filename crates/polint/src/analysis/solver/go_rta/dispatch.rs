@@ -20,7 +20,7 @@ use crate::analysis::semantic_graph::constraints::ConstraintKind;
 use crate::analysis::solver::engine::{weakest_precision, weakest_status};
 use crate::analysis::solver::facts::DerivedEdgeFact;
 use crate::analysis::solver::provenance::{ContributingFact, DerivedEdgeProvenance};
-use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
+use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
 
 use super::inputs::{GoRtaCallsite, GoRtaInputs};
 
@@ -56,6 +56,7 @@ pub(crate) struct CallsiteResolution {
 /// set) still proceeds — a func-value callsite then resolves to nothing (honest
 /// unresolved), an interface callsite is unaffected.
 pub(crate) fn resolve_callsite(
+    interner: &crate::core::StableKeyInterner,
     callsite: &GoRtaCallsite,
     inputs: &GoRtaInputs,
     address_taken: &BTreeSet<String>,
@@ -135,7 +136,8 @@ pub(crate) fn resolve_callsite(
             },
             solver_step,
         );
-        let stable_key = stable_key_from_parts(
+        let stable_key = stable_key_text_from_parts(
+            interner,
             FactFamily::SolverDerivedEdge,
             &[
                 ("source", caller_node.0.to_string()),
@@ -306,7 +308,15 @@ mod tests {
             dispatch_stable_key: "dd|main".to_string(),
         };
 
-        let resolution = resolve_callsite(&callsite, &inputs, &BTreeSet::new(), 1, true, 7);
+        let resolution = resolve_callsite(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &callsite,
+            &inputs,
+            &BTreeSet::new(),
+            1,
+            true,
+            7,
+        );
         assert!(resolution.candidate_cap_exceeded, "cap of 1 must latch");
         assert_eq!(
             resolution.edges.len(),
@@ -328,7 +338,15 @@ mod tests {
             signature: None,
             dispatch_stable_key: "dd|main".to_string(),
         };
-        let resolution = resolve_callsite(&callsite, &inputs, &BTreeSet::new(), 128, true, 1);
+        let resolution = resolve_callsite(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &callsite,
+            &inputs,
+            &BTreeSet::new(),
+            128,
+            true,
+            1,
+        );
         assert!(resolution.edges.is_empty());
         assert!(!resolution.candidate_cap_exceeded);
     }
@@ -365,14 +383,30 @@ mod tests {
         };
 
         // Disabled: no edge (the signature-matching handler is NOT resolved).
-        let disabled = resolve_callsite(&callsite, &inputs, &address_taken, 128, false, 1);
+        let disabled = resolve_callsite(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &callsite,
+            &inputs,
+            &address_taken,
+            128,
+            false,
+            1,
+        );
         assert!(
             disabled.edges.is_empty(),
             "func-value resolution must yield nothing when disabled: {:#?}",
             disabled.edges
         );
         // Enabled: the same callsite resolves to the address-taken handler (control).
-        let enabled = resolve_callsite(&callsite, &inputs, &address_taken, 128, true, 1);
+        let enabled = resolve_callsite(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &callsite,
+            &inputs,
+            &address_taken,
+            128,
+            true,
+            1,
+        );
         assert!(
             enabled.edges.iter().any(|e| e.target == SemanticNodeId(3)),
             "func-value resolution must work when enabled (control)"

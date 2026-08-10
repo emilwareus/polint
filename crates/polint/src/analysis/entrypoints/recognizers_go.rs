@@ -68,6 +68,8 @@ fn is_unrecognized_framework_import(path: &str) -> bool {
 // ---------------------------------------------------------------------------
 
 pub(crate) fn recognize_go_entrypoints(db: &AnalysisDb) -> GoRecognizerOutput {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let files_by_id: BTreeMap<FileId, &crate::core::SourceFile> =
         db.files().iter().map(|file| (file.id, file)).collect();
     let functions_by_id: BTreeMap<FunctionId, &FunctionFact> =
@@ -130,6 +132,7 @@ pub(crate) fn recognize_go_entrypoints(db: &AnalysisDb) -> GoRecognizerOutput {
 
     // 3. Detect Go testing entrypoints from function naming conventions
     recognize_test_entrypoints(
+        interner,
         db,
         &files_by_id,
         &file_frameworks,
@@ -141,6 +144,7 @@ pub(crate) fn recognize_go_entrypoints(db: &AnalysisDb) -> GoRecognizerOutput {
     for (file, import_path, span) in &unrecognized_imports {
         let file_key = file_stable_key(db, *file);
         let stable_key = semantic_stable_key(
+            interner,
             FactFamily::UnresolvedFramework,
             &[
                 ("language", "Go".to_string()),
@@ -166,7 +170,13 @@ pub(crate) fn recognize_go_entrypoints(db: &AnalysisDb) -> GoRecognizerOutput {
     }
 
     // 5. Check for chi imports without matching registration patterns (D-10)
-    emit_unresolved_for_unused_frameworks(db, &file_frameworks, &entrypoints, &mut unresolved);
+    emit_unresolved_for_unused_frameworks(
+        interner,
+        db,
+        &file_frameworks,
+        &entrypoints,
+        &mut unresolved,
+    );
 
     // Sort output by stable key
     entrypoints.sort_by(|a, b| a.stable_key.cmp(&b.stable_key));
@@ -195,6 +205,8 @@ fn recognize_http_entrypoints(
     entrypoints: &mut Vec<EntrypointFact>,
     unresolved: &mut Vec<UnresolvedFrameworkFact>,
 ) {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     for site in db.call_sites() {
         if site.language != Language::Go {
             continue;
@@ -230,6 +242,7 @@ fn recognize_http_entrypoints(
 
                 if let Some(target_function) = handler_function {
                     let stable_key = entrypoint_stable_key(
+                        interner,
                         &file_key,
                         "go.net_http",
                         "HttpRoute",
@@ -264,6 +277,7 @@ fn recognize_http_entrypoints(
                 } else {
                     // Cannot resolve handler
                     let stable_key = unresolved_stable_key(
+                        interner,
                         &file_key,
                         "go.net_http",
                         "UnresolvedHandler",
@@ -304,6 +318,7 @@ fn recognize_http_entrypoints(
 
                 if let Some(target_function) = handler_function {
                     let stable_key = entrypoint_stable_key(
+                        interner,
                         &file_key,
                         "go.chi",
                         "HttpRoute",
@@ -337,6 +352,7 @@ fn recognize_http_entrypoints(
                     });
                 } else {
                     let stable_key = unresolved_stable_key(
+                        interner,
                         &file_key,
                         "go.chi",
                         "UnresolvedHandler",
@@ -375,6 +391,7 @@ fn recognize_http_entrypoints(
 
                 if let Some(target_function) = handler_function {
                     let stable_key = entrypoint_stable_key(
+                        interner,
                         &file_key,
                         "go.chi",
                         "HttpMiddleware",
@@ -418,6 +435,7 @@ fn recognize_http_entrypoints(
 
                 if let Some(target_function) = handler_function {
                     let stable_key = entrypoint_stable_key(
+                        interner,
                         &file_key,
                         "go.chi",
                         "HttpRoute",
@@ -469,6 +487,8 @@ fn recognize_cobra_entrypoints(
     entrypoints: &mut Vec<EntrypointFact>,
     _unresolved: &mut Vec<UnresolvedFrameworkFact>,
 ) {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     for site in db.call_sites().iter() {
         if site.language != Language::Go {
             continue;
@@ -502,6 +522,7 @@ fn recognize_cobra_entrypoints(
 
             if let Some(target_function) = handler_function {
                 let stable_key = entrypoint_stable_key(
+                    interner,
                     &file_key,
                     "go.cobra",
                     "CliCommand",
@@ -546,6 +567,7 @@ fn recognize_cobra_entrypoints(
 const GO_TEST_PREFIXES: &[&str] = &["Test", "Benchmark", "Example", "Fuzz"];
 
 fn recognize_test_entrypoints(
+    interner: &crate::core::StableKeyInterner,
     db: &AnalysisDb,
     files_by_id: &BTreeMap<FileId, &crate::core::SourceFile>,
     file_frameworks: &BTreeMap<FileId, Vec<(&str, GoFramework, Span)>>,
@@ -580,6 +602,7 @@ fn recognize_test_entrypoints(
 
             let file_key = file_stable_key(db, *file_id);
             let stable_key = entrypoint_stable_key(
+                interner,
                 &file_key,
                 "go.testing",
                 "Test",
@@ -623,6 +646,7 @@ fn recognize_test_entrypoints(
 /// from that file, emit an UnresolvedFrameworkFact. This catches cases where
 /// the router is used in an unrecognized pattern.
 fn emit_unresolved_for_unused_frameworks(
+    interner: &crate::core::StableKeyInterner,
     db: &AnalysisDb,
     file_frameworks: &BTreeMap<FileId, Vec<(&str, GoFramework, Span)>>,
     entrypoints: &[EntrypointFact],
@@ -645,6 +669,7 @@ fn emit_unresolved_for_unused_frameworks(
             if !files_with_entrypoints.contains(&(*file_id, framework_id)) {
                 let file_key = file_stable_key(db, *file_id);
                 let stable_key = unresolved_stable_key(
+                    interner,
                     &file_key,
                     framework_id,
                     "UnrecognizedPattern",
@@ -935,6 +960,7 @@ fn span_key(span: &Span) -> String {
 }
 
 fn entrypoint_stable_key(
+    interner: &crate::core::StableKeyInterner,
     file_key: &str,
     framework_id: &str,
     kind: &str,
@@ -942,6 +968,7 @@ fn entrypoint_stable_key(
     registration_span: &str,
 ) -> String {
     semantic_stable_key(
+        interner,
         FactFamily::Entrypoint,
         &[
             ("language", "Go".to_string()),
@@ -955,8 +982,15 @@ fn entrypoint_stable_key(
     .into_string()
 }
 
-fn unresolved_stable_key(file_key: &str, framework_id: &str, reason: &str, span: &str) -> String {
+fn unresolved_stable_key(
+    interner: &crate::core::StableKeyInterner,
+    file_key: &str,
+    framework_id: &str,
+    reason: &str,
+    span: &str,
+) -> String {
     semantic_stable_key(
+        interner,
         FactFamily::UnresolvedFramework,
         &[
             ("language", "Go".to_string()),

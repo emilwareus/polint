@@ -14,7 +14,7 @@ pub(crate) mod validation;
 
 pub(crate) use metadata::{
     FactConfidence, FactFamily, FactMeta, FactMetaStore, FactPrecision, FactRef, MissingFactMeta,
-    ValidationStatus, resolution_metadata, resolution_status_metadata, stable_key_from_parts,
+    ValidationStatus, resolution_metadata, resolution_status_metadata, stable_key_text_from_parts,
     symbol_metadata,
 };
 #[cfg(test)]

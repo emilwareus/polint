@@ -37,6 +37,8 @@ pub(crate) fn derive_type_value_alias_with_cache_stats(
     module_topology_output_digest: Digest,
     upstream_syntax_output_digests: Vec<Digest>,
 ) -> TypeValueAliasProviderOutput {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     debug_assert_eq!(manifest.id, TYPE_VALUE_ALIAS_PROVIDER_ID);
     let mut diagnostics = Vec::new();
     let mut output = super::go::derive_go_type_value_alias(db);
@@ -64,13 +66,15 @@ pub(crate) fn derive_type_value_alias_with_cache_stats(
     output = relation_merge.output;
     diagnostics.extend(relation_merge.diagnostics);
     let mut points_to_constraints =
-        crate::analysis::points_to::constraints::derive_points_to_constraints(&output);
+        crate::analysis::points_to::constraints::derive_points_to_constraints(interner, &output);
     points_to_constraints.extend(std::mem::take(&mut output.points_to.constraints));
     let points_to_output = crate::analysis::points_to::solver::output_with_solved_sets(
+        interner,
         points_to_constraints,
         crate::analysis::points_to::solver::PointsToBudget::default(),
     );
     let mut alias_output = crate::analysis::aliases::provider_stack::derive_alias_answers(
+        interner,
         &output.access_paths.access_paths,
         &points_to_output.sets,
     );

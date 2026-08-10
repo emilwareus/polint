@@ -1,4 +1,4 @@
-use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
+use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
 use crate::analysis_plan::AnalysisPlan;
 use crate::config::LoadedConfig;
 use crate::core::{
@@ -79,6 +79,8 @@ pub(crate) fn derive_ts_symbols(
     _loaded: &LoadedConfig,
     plan: &AnalysisPlan,
 ) -> LanguageSymbolOutput {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let files = ts_files(db);
     if files.is_empty() {
         return LanguageSymbolOutput::default();
@@ -104,6 +106,7 @@ pub(crate) fn derive_ts_symbols(
     let mut summaries = Vec::new();
     for file in files {
         summaries.push(derive_ts_file_symbols(
+            interner,
             builder,
             &mut output,
             file,
@@ -151,6 +154,7 @@ fn supported_language_support(plan: &AnalysisPlan, language: Language) -> Vec<Ca
 }
 
 fn derive_ts_file_symbols(
+    interner: &crate::core::StableKeyInterner,
     builder: &mut SymbolGraphBuilder,
     output: &mut LanguageSymbolOutput,
     file: &SourceFile,
@@ -184,6 +188,7 @@ fn derive_ts_file_symbols(
     let scoping = semantic.scoping();
     let nodes = semantic.nodes();
     output.semantic.extend(derive_ts_semantic_index(
+        interner,
         file,
         source,
         parsed.program(),
@@ -278,6 +283,7 @@ fn derive_ts_file_symbols(
 }
 
 fn derive_ts_semantic_index(
+    interner: &crate::core::StableKeyInterner,
     file: &SourceFile,
     source: &str,
     program: &Program<'_>,
@@ -293,31 +299,35 @@ fn derive_ts_semantic_index(
     for scope_id in scoping.scope_descendants_from_root() {
         let node_id = scoping.get_node_id(scope_id);
         let kind = scope_kind_for_ast(nodes.kind(node_id));
-        let stable_key = scope_stable_key(file, scoping, nodes, scope_id);
+        let stable_key = scope_stable_key(interner, file, scoping, nodes, scope_id);
         if ids_by_stable_key.contains_key(&stable_key) {
             continue;
         }
         let parent = scoping.scope_parent_id(scope_id).and_then(|parent| {
-            let parent_key = scope_stable_key(file, scoping, nodes, parent);
+            let parent_key = scope_stable_key(interner, file, scoping, nodes, parent);
             ids_by_stable_key.get(&parent_key).copied()
         });
-        let id = builder.add_scope(ScopeFact {
-            id: ScopeId(0),
-            language: file.language,
-            file: Some(file.id),
-            package: None,
-            module: None,
-            parent,
-            scope_path: scope_path_for_scope(file, scoping, nodes, scope_id),
-            kind,
-            stable_key: stable_key.clone(),
-            status: SemanticStatus::Resolved,
-        });
+        let id = builder.add_scope(
+            interner,
+            ScopeFact {
+                id: ScopeId(0),
+                language: file.language,
+                file: Some(file.id),
+                package: None,
+                module: None,
+                parent,
+                scope_path: scope_path_for_scope(file, scoping, nodes, scope_id),
+                kind,
+                stable_key: stable_key.clone(),
+                status: SemanticStatus::Resolved,
+            },
+        );
         ids_by_stable_key.insert(stable_key, id);
     }
 
     let module_scope_id = ids_by_stable_key
         .get(&scope_stable_key(
+            interner,
             file,
             scoping,
             nodes,
@@ -337,35 +347,40 @@ fn derive_ts_semantic_index(
     for (_, _, node_id, kind) in semantic_nodes {
         let scope_path = scope_path_for_node(file, nodes, node_id);
         let stable_key = ScopeFact::stable_key_for(
+            interner,
             file.language,
             &scope_path,
             Some(file.relative_path.clone()),
             None,
             None,
-            kind,
-            SemanticStatus::Resolved,
+            (kind, SemanticStatus::Resolved),
         );
         if ids_by_stable_key.contains_key(&stable_key) {
             continue;
         }
-        let parent = nearest_semantic_scope_parent(file, nodes, node_id, &ids_by_stable_key)
-            .or(module_scope_id);
-        let id = builder.add_scope(ScopeFact {
-            id: ScopeId(0),
-            language: file.language,
-            file: Some(file.id),
-            package: None,
-            module: None,
-            parent,
-            scope_path,
-            kind,
-            stable_key: stable_key.clone(),
-            status: SemanticStatus::Resolved,
-        });
+        let parent =
+            nearest_semantic_scope_parent(interner, file, nodes, node_id, &ids_by_stable_key)
+                .or(module_scope_id);
+        let id = builder.add_scope(
+            interner,
+            ScopeFact {
+                id: ScopeId(0),
+                language: file.language,
+                file: Some(file.id),
+                package: None,
+                module: None,
+                parent,
+                scope_path,
+                kind,
+                stable_key: stable_key.clone(),
+                status: SemanticStatus::Resolved,
+            },
+        );
         ids_by_stable_key.insert(stable_key, id);
     }
 
     add_ts_semantic_import_export_rows(
+        interner,
         &mut builder,
         file,
         source,
@@ -374,7 +389,7 @@ fn derive_ts_semantic_index(
         &export_symbol_stable_keys,
     );
     if requests_references {
-        add_ts_semantic_resolution_rows(&mut builder, file, source, scoping, nodes);
+        add_ts_semantic_resolution_rows(interner, &mut builder, file, source, scoping, nodes);
     }
 
     builder.finish()
@@ -443,6 +458,7 @@ fn ts_symbol_stable_key_input(
 }
 
 fn add_ts_semantic_import_export_rows(
+    interner: &crate::core::StableKeyInterner,
     builder: &mut SemanticIndexBuilder,
     file: &SourceFile,
     source: &str,
@@ -453,10 +469,11 @@ fn add_ts_semantic_import_export_rows(
     for statement in &program.body {
         match statement {
             Statement::ImportDeclaration(import) => {
-                add_import_declaration_rows(builder, file, module_scope, import);
+                add_import_declaration_rows(interner, builder, file, module_scope, import);
             }
             Statement::ExportNamedDeclaration(export) => {
                 add_export_named_rows(
+                    interner,
                     builder,
                     file,
                     module_scope,
@@ -466,6 +483,7 @@ fn add_ts_semantic_import_export_rows(
             }
             Statement::ExportDefaultDeclaration(export) => {
                 add_export_row(
+                    interner,
                     builder,
                     file,
                     module_scope,
@@ -475,10 +493,18 @@ fn add_ts_semantic_import_export_rows(
                     export_symbol_stable_keys.get("default").cloned(),
                     SemanticStatus::Resolved,
                 );
-                collect_commonjs_from_export_default(builder, file, source, module_scope, export);
+                collect_commonjs_from_export_default(
+                    interner,
+                    builder,
+                    file,
+                    source,
+                    module_scope,
+                    export,
+                );
             }
             Statement::ExportAllDeclaration(export) => {
                 add_export_row(
+                    interner,
                     builder,
                     file,
                     module_scope,
@@ -489,6 +515,7 @@ fn add_ts_semantic_import_export_rows(
                     SemanticStatus::Unresolved,
                 );
                 add_alias_row(
+                    interner,
                     builder,
                     file,
                     "export:*".to_string(),
@@ -499,6 +526,7 @@ fn add_ts_semantic_import_export_rows(
             }
             Statement::ExpressionStatement(statement) => {
                 collect_commonjs_from_expression(
+                    interner,
                     builder,
                     file,
                     source,
@@ -509,7 +537,14 @@ fn add_ts_semantic_import_export_rows(
             Statement::VariableDeclaration(variable) => {
                 for declarator in &variable.declarations {
                     if let Some(init) = &declarator.init {
-                        collect_commonjs_from_expression(builder, file, source, module_scope, init);
+                        collect_commonjs_from_expression(
+                            interner,
+                            builder,
+                            file,
+                            source,
+                            module_scope,
+                            init,
+                        );
                     }
                 }
             }
@@ -519,6 +554,7 @@ fn add_ts_semantic_import_export_rows(
 }
 
 fn add_import_declaration_rows(
+    interner: &crate::core::StableKeyInterner,
     builder: &mut SemanticIndexBuilder,
     file: &SourceFile,
     module_scope: Option<ScopeId>,
@@ -528,6 +564,7 @@ fn add_import_declaration_rows(
     let status = import_status_for_path(&import_path);
     let Some(specifiers) = &import.specifiers else {
         add_import_row(
+            interner,
             builder,
             file,
             module_scope,
@@ -546,6 +583,7 @@ fn add_import_declaration_rows(
             ImportDeclarationSpecifier::ImportDefaultSpecifier(default) => {
                 let local_name = default.local.name.to_string();
                 add_import_row(
+                    interner,
                     builder,
                     file,
                     module_scope,
@@ -556,11 +594,12 @@ fn add_import_declaration_rows(
                     SemanticImportKind::StaticDefault,
                     status,
                 );
-                add_import_lookup_rows(builder, file, &local_name, &import_path, status);
+                add_import_lookup_rows(interner, builder, file, &local_name, &import_path, status);
             }
             ImportDeclarationSpecifier::ImportNamespaceSpecifier(namespace) => {
                 let local_name = namespace.local.name.to_string();
                 add_import_row(
+                    interner,
                     builder,
                     file,
                     module_scope,
@@ -571,13 +610,14 @@ fn add_import_declaration_rows(
                     SemanticImportKind::StaticNamespace,
                     status,
                 );
-                add_import_lookup_rows(builder, file, &local_name, &import_path, status);
+                add_import_lookup_rows(interner, builder, file, &local_name, &import_path, status);
             }
             ImportDeclarationSpecifier::ImportSpecifier(named) => {
                 let is_type_import = matches!(import.import_kind, ImportOrExportKind::Type)
                     || matches!(named.import_kind, ImportOrExportKind::Type);
                 let local_name = named.local.name.to_string();
                 add_import_row(
+                    interner,
                     builder,
                     file,
                     module_scope,
@@ -597,6 +637,7 @@ fn add_import_declaration_rows(
                     status,
                 );
                 add_alias_row(
+                    interner,
                     builder,
                     file,
                     format!("import:{local_name}"),
@@ -608,13 +649,14 @@ fn add_import_declaration_rows(
                     },
                     status,
                 );
-                add_import_lookup_rows(builder, file, &local_name, &import_path, status);
+                add_import_lookup_rows(interner, builder, file, &local_name, &import_path, status);
             }
         }
     }
 }
 
 fn add_export_named_rows(
+    interner: &crate::core::StableKeyInterner,
     builder: &mut SemanticIndexBuilder,
     file: &SourceFile,
     module_scope: Option<ScopeId>,
@@ -624,6 +666,7 @@ fn add_export_named_rows(
     if let Some(source) = &export.source {
         for specifier in &export.specifiers {
             add_export_row(
+                interner,
                 builder,
                 file,
                 module_scope,
@@ -634,6 +677,7 @@ fn add_export_named_rows(
                 SemanticStatus::Unresolved,
             );
             add_alias_row(
+                interner,
                 builder,
                 file,
                 format!("reexport:{}", module_export_name_text(&specifier.exported)),
@@ -654,6 +698,7 @@ fn add_export_named_rows(
         collect_declaration_symbols(declaration, &mut declarations);
         for (_, name) in declarations {
             add_export_row(
+                interner,
                 builder,
                 file,
                 module_scope,
@@ -668,6 +713,7 @@ fn add_export_named_rows(
     for specifier in &export.specifiers {
         let export_name = module_export_name_text(&specifier.exported);
         add_export_row(
+            interner,
             builder,
             file,
             module_scope,
@@ -685,6 +731,7 @@ fn add_export_named_rows(
     reason = "semantic import rows mirror the normalized internal fact fields"
 )]
 fn add_import_row(
+    interner: &crate::core::StableKeyInterner,
     builder: &mut SemanticIndexBuilder,
     file: &SourceFile,
     scope: Option<ScopeId>,
@@ -696,29 +743,32 @@ fn add_import_row(
     status: SemanticStatus,
 ) -> SemanticImportId {
     let stable_key = ts_semantic_import_stable_key(
+        interner,
         file,
         &import_path,
         local_name.as_deref(),
         imported_name.as_deref(),
         namespace,
-        kind,
-        status,
+        (kind, status),
     );
-    builder.add_semantic_import(SemanticImportFact {
-        id: SemanticImportId(0),
-        language: file.language,
-        file: Some(file.id),
-        package: None,
-        module: None,
-        scope,
-        import_path,
-        local_name,
-        imported_name,
-        namespace,
-        kind,
-        stable_key,
-        status,
-    })
+    builder.add_semantic_import(
+        interner,
+        SemanticImportFact {
+            id: SemanticImportId(0),
+            language: file.language,
+            file: Some(file.id),
+            package: None,
+            module: None,
+            scope,
+            import_path,
+            local_name,
+            imported_name,
+            namespace,
+            kind,
+            stable_key,
+            status,
+        },
+    )
 }
 
 #[expect(
@@ -726,6 +776,7 @@ fn add_import_row(
     reason = "semantic export rows mirror the normalized internal fact fields"
 )]
 fn add_export_row(
+    interner: &crate::core::StableKeyInterner,
     builder: &mut SemanticIndexBuilder,
     file: &SourceFile,
     scope: Option<ScopeId>,
@@ -735,21 +786,24 @@ fn add_export_row(
     symbol_stable_key: Option<String>,
     status: SemanticStatus,
 ) -> ExportId {
-    let stable_key = ts_export_stable_key(file, &export_name, namespace, kind, status);
-    let export = builder.add_export_identity(ExportFact {
-        id: ExportId(0),
-        language: file.language,
-        file: Some(file.id),
-        package: None,
-        module: None,
-        scope,
-        symbol: None,
-        export_name: export_name.clone(),
-        namespace,
-        kind,
-        stable_key,
-        status,
-    });
+    let stable_key = ts_export_stable_key(interner, file, &export_name, namespace, kind, status);
+    let export = builder.add_export_identity(
+        interner,
+        ExportFact {
+            id: ExportId(0),
+            language: file.language,
+            file: Some(file.id),
+            package: None,
+            module: None,
+            scope,
+            symbol: None,
+            export_name: export_name.clone(),
+            namespace,
+            kind,
+            stable_key,
+            status,
+        },
+    );
     if status == SemanticStatus::Resolved
         && matches!(
             kind,
@@ -758,19 +812,20 @@ fn add_export_row(
         && let Some(symbol_stable_key) = symbol_stable_key
     {
         add_stable_export_identity(
+            interner,
             builder,
             file,
             export,
             &export_name,
             namespace,
-            symbol_stable_key,
-            status,
+            (symbol_stable_key, status),
         );
     }
     export
 }
 
 fn add_alias_row(
+    interner: &crate::core::StableKeyInterner,
     builder: &mut SemanticIndexBuilder,
     file: &SourceFile,
     source_symbol_stable_key: String,
@@ -779,27 +834,32 @@ fn add_alias_row(
     status: SemanticStatus,
 ) -> AliasId {
     let stable_key = ts_alias_stable_key(
+        interner,
         file,
         &source_symbol_stable_key,
         &target_symbol_stable_keys,
         kind,
         status,
     );
-    builder.add_alias(AliasFact {
-        id: AliasId(0),
-        language: file.language,
-        file: Some(file.id),
-        package: None,
-        module: None,
-        source_symbol_stable_key,
-        target_symbol_stable_keys,
-        kind,
-        stable_key,
-        status,
-    })
+    builder.add_alias(
+        interner,
+        AliasFact {
+            id: AliasId(0),
+            language: file.language,
+            file: Some(file.id),
+            package: None,
+            module: None,
+            source_symbol_stable_key,
+            target_symbol_stable_keys,
+            kind,
+            stable_key,
+            status,
+        },
+    )
 }
 
 fn add_resolution_row(
+    interner: &crate::core::StableKeyInterner,
     builder: &mut SemanticIndexBuilder,
     file: &SourceFile,
     source_stable_key: String,
@@ -807,23 +867,33 @@ fn add_resolution_row(
     step: ResolutionStepKind,
     status: SemanticStatus,
 ) -> ResolutionId {
-    let stable_key =
-        ts_resolution_stable_key(file, &source_stable_key, &target_stable_keys, step, status);
-    builder.add_resolution(ResolutionFact {
-        id: ResolutionId(0),
-        language: file.language,
-        file: Some(file.id),
-        package: None,
-        module: None,
-        source_stable_key,
-        target_stable_keys,
+    let stable_key = ts_resolution_stable_key(
+        interner,
+        file,
+        &source_stable_key,
+        &target_stable_keys,
         step,
-        stable_key,
         status,
-    })
+    );
+    builder.add_resolution(
+        interner,
+        ResolutionFact {
+            id: ResolutionId(0),
+            language: file.language,
+            file: Some(file.id),
+            package: None,
+            module: None,
+            source_stable_key,
+            target_stable_keys,
+            step,
+            stable_key,
+            status,
+        },
+    )
 }
 
 fn add_import_lookup_rows(
+    interner: &crate::core::StableKeyInterner,
     builder: &mut SemanticIndexBuilder,
     file: &SourceFile,
     local_name: &str,
@@ -832,6 +902,7 @@ fn add_import_lookup_rows(
 ) {
     let source = format!("{}::import::{local_name}", file.relative_path);
     add_resolution_row(
+        interner,
         builder,
         file,
         source.clone(),
@@ -840,6 +911,7 @@ fn add_import_lookup_rows(
         status,
     );
     add_resolution_row(
+        interner,
         builder,
         file,
         source,
@@ -850,39 +922,45 @@ fn add_import_lookup_rows(
 }
 
 fn add_stable_export_identity(
+    interner: &crate::core::StableKeyInterner,
     builder: &mut SemanticIndexBuilder,
     file: &SourceFile,
     export: ExportId,
     export_name: &str,
     namespace: SymbolNamespace,
-    symbol_stable_key: String,
-    status: SemanticStatus,
+    pair: (String, SemanticStatus),
 ) -> StableExportId {
-    builder.add_stable_export(StableExportIdentity {
-        id: StableExportId(0),
-        export,
-        language: file.language,
-        package_key: None,
-        module_key: Some(file.relative_path.clone()),
-        export_name: export_name.to_string(),
-        namespace,
-        symbol_stable_key,
-        generated_discriminator: Some("native".to_string()),
-        stable_key: String::new(),
-        status,
-    })
+    let (symbol_stable_key, status) = pair;
+    builder.add_stable_export(
+        interner,
+        StableExportIdentity {
+            id: StableExportId(0),
+            export,
+            language: file.language,
+            package_key: None,
+            module_key: Some(file.relative_path.clone()),
+            export_name: export_name.to_string(),
+            namespace,
+            symbol_stable_key,
+            generated_discriminator: Some("native".to_string()),
+            stable_key: String::new(),
+            status,
+        },
+    )
 }
 
 fn ts_semantic_import_stable_key(
+    interner: &crate::core::StableKeyInterner,
     file: &SourceFile,
     import_path: &str,
     local_name: Option<&str>,
     imported_name: Option<&str>,
     namespace: SymbolNamespace,
-    kind: SemanticImportKind,
-    status: SemanticStatus,
+    pair: (SemanticImportKind, SemanticStatus),
 ) -> String {
-    stable_key_from_parts(
+    let (kind, status) = pair;
+    stable_key_text_from_parts(
+        interner,
         FactFamily::SemanticImport,
         &[
             ("language", format!("{:?}", file.language)),
@@ -901,13 +979,15 @@ fn ts_semantic_import_stable_key(
 }
 
 fn ts_export_stable_key(
+    interner: &crate::core::StableKeyInterner,
     file: &SourceFile,
     export_name: &str,
     namespace: SymbolNamespace,
     kind: ExportKind,
     status: SemanticStatus,
 ) -> String {
-    stable_key_from_parts(
+    stable_key_text_from_parts(
+        interner,
         FactFamily::Export,
         &[
             ("language", format!("{:?}", file.language)),
@@ -921,6 +1001,7 @@ fn ts_export_stable_key(
 }
 
 fn ts_alias_stable_key(
+    interner: &crate::core::StableKeyInterner,
     file: &SourceFile,
     source_symbol_stable_key: &str,
     target_symbol_stable_keys: &[String],
@@ -930,7 +1011,8 @@ fn ts_alias_stable_key(
     let mut targets = target_symbol_stable_keys.to_vec();
     targets.sort();
     targets.dedup();
-    stable_key_from_parts(
+    stable_key_text_from_parts(
+        interner,
         FactFamily::Alias,
         &[
             ("language", format!("{:?}", file.language)),
@@ -944,6 +1026,7 @@ fn ts_alias_stable_key(
 }
 
 fn ts_resolution_stable_key(
+    interner: &crate::core::StableKeyInterner,
     file: &SourceFile,
     source_stable_key: &str,
     target_stable_keys: &[String],
@@ -953,7 +1036,8 @@ fn ts_resolution_stable_key(
     let mut targets = target_stable_keys.to_vec();
     targets.sort();
     targets.dedup();
-    stable_key_from_parts(
+    stable_key_text_from_parts(
+        interner,
         FactFamily::Resolution,
         &[
             ("language", format!("{:?}", file.language)),
@@ -967,6 +1051,7 @@ fn ts_resolution_stable_key(
 }
 
 fn collect_commonjs_from_export_default(
+    interner: &crate::core::StableKeyInterner,
     builder: &mut SemanticIndexBuilder,
     file: &SourceFile,
     source: &str,
@@ -974,11 +1059,12 @@ fn collect_commonjs_from_export_default(
     export: &oxc_ast::ast::ExportDefaultDeclaration<'_>,
 ) {
     if let ExportDefaultDeclarationKind::CallExpression(call) = &export.declaration {
-        collect_commonjs_from_call(builder, file, source, module_scope, call);
+        collect_commonjs_from_call(interner, builder, file, source, module_scope, call);
     }
 }
 
 fn collect_commonjs_from_expression(
+    interner: &crate::core::StableKeyInterner,
     builder: &mut SemanticIndexBuilder,
     file: &SourceFile,
     source: &str,
@@ -987,10 +1073,11 @@ fn collect_commonjs_from_expression(
 ) {
     match expression {
         Expression::CallExpression(call) => {
-            collect_commonjs_from_call(builder, file, source, module_scope, call);
+            collect_commonjs_from_call(interner, builder, file, source, module_scope, call);
             for argument in &call.arguments {
                 if let Some(expression) = argument.as_expression() {
                     collect_commonjs_from_expression(
+                        interner,
                         builder,
                         file,
                         source,
@@ -1009,6 +1096,7 @@ fn collect_commonjs_from_expression(
                 _ => ("<dynamic>".to_string(), SemanticStatus::Dynamic),
             };
             add_import_row(
+                interner,
                 builder,
                 file,
                 module_scope,
@@ -1023,6 +1111,7 @@ fn collect_commonjs_from_expression(
         Expression::AssignmentExpression(assignment) => {
             if let Some(kind) = commonjs_export_kind(&assignment.left) {
                 add_export_row(
+                    interner,
                     builder,
                     file,
                     module_scope,
@@ -1034,6 +1123,7 @@ fn collect_commonjs_from_expression(
                 );
             }
             collect_commonjs_from_expression(
+                interner,
                 builder,
                 file,
                 source,
@@ -1043,6 +1133,7 @@ fn collect_commonjs_from_expression(
         }
         Expression::AwaitExpression(expression) => {
             collect_commonjs_from_expression(
+                interner,
                 builder,
                 file,
                 source,
@@ -1052,6 +1143,7 @@ fn collect_commonjs_from_expression(
         }
         Expression::ParenthesizedExpression(expression) => {
             collect_commonjs_from_expression(
+                interner,
                 builder,
                 file,
                 source,
@@ -1061,6 +1153,7 @@ fn collect_commonjs_from_expression(
         }
         Expression::TSAsExpression(expression) => {
             collect_commonjs_from_expression(
+                interner,
                 builder,
                 file,
                 source,
@@ -1070,6 +1163,7 @@ fn collect_commonjs_from_expression(
         }
         Expression::TSSatisfiesExpression(expression) => {
             collect_commonjs_from_expression(
+                interner,
                 builder,
                 file,
                 source,
@@ -1079,6 +1173,7 @@ fn collect_commonjs_from_expression(
         }
         Expression::TSNonNullExpression(expression) => {
             collect_commonjs_from_expression(
+                interner,
                 builder,
                 file,
                 source,
@@ -1088,6 +1183,7 @@ fn collect_commonjs_from_expression(
         }
         Expression::TSTypeAssertion(expression) => {
             collect_commonjs_from_expression(
+                interner,
                 builder,
                 file,
                 source,
@@ -1102,6 +1198,7 @@ fn collect_commonjs_from_expression(
 }
 
 fn collect_commonjs_from_call(
+    interner: &crate::core::StableKeyInterner,
     builder: &mut SemanticIndexBuilder,
     file: &SourceFile,
     _source: &str,
@@ -1119,6 +1216,7 @@ fn collect_commonjs_from_call(
         _ => ("<dynamic>".to_string(), SemanticStatus::Dynamic),
     };
     add_import_row(
+        interner,
         builder,
         file,
         module_scope,
@@ -1192,6 +1290,7 @@ fn expression_text(expression: &Expression<'_>) -> Option<String> {
 }
 
 fn scope_stable_key(
+    interner: &crate::core::StableKeyInterner,
     file: &SourceFile,
     scoping: &Scoping,
     nodes: &AstNodes<'_>,
@@ -1199,13 +1298,13 @@ fn scope_stable_key(
 ) -> String {
     let kind = scope_kind_for_ast(nodes.kind(scoping.get_node_id(scope_id)));
     ScopeFact::stable_key_for(
+        interner,
         file.language,
         &scope_path_for_scope(file, scoping, nodes, scope_id),
         Some(file.relative_path.clone()),
         None,
         None,
-        kind,
-        SemanticStatus::Resolved,
+        (kind, SemanticStatus::Resolved),
     )
 }
 
@@ -1217,10 +1316,17 @@ fn reference_scope_stable_key(
     reference_id: OxcReferenceId,
 ) -> String {
     let reference = scoping.get_reference(reference_id);
-    scope_stable_key(file, scoping, nodes, reference.scope_id())
+    scope_stable_key(
+        &crate::core::AnalysisDb::new().stable_key_interner(),
+        file,
+        scoping,
+        nodes,
+        reference.scope_id(),
+    )
 }
 
 fn add_ts_semantic_resolution_rows(
+    interner: &crate::core::StableKeyInterner,
     builder: &mut SemanticIndexBuilder,
     file: &SourceFile,
     source: &str,
@@ -1247,6 +1353,7 @@ fn add_ts_semantic_resolution_rows(
         let target_key =
             ts_symbol_stable_key_input(file, source, scoping, nodes, symbol, &parameter_symbols);
         add_resolution_row(
+            interner,
             builder,
             file,
             semantic_resolved_reference_key(file, source, nodes, reference, target_key.clone()),
@@ -1269,6 +1376,7 @@ fn add_ts_semantic_resolution_rows(
         let reference = scoping.get_reference(reference_id);
         let name = reference_name(nodes, reference);
         add_resolution_row(
+            interner,
             builder,
             file,
             semantic_unresolved_reference_key(file, source, nodes, reference, &name),
@@ -1343,6 +1451,7 @@ fn scope_path_for_node(
 }
 
 fn nearest_semantic_scope_parent(
+    interner: &crate::core::StableKeyInterner,
     file: &SourceFile,
     nodes: &AstNodes<'_>,
     node_id: oxc_semantic::NodeId,
@@ -1352,13 +1461,13 @@ fn nearest_semantic_scope_parent(
         let kind = semantic_scope_kind_for_ast(node.kind())?;
         let scope_path = scope_path_for_node(file, nodes, node.id());
         let stable_key = ScopeFact::stable_key_for(
+            interner,
             file.language,
             &scope_path,
             Some(file.relative_path.clone()),
             None,
             None,
-            kind,
-            SemanticStatus::Resolved,
+            (kind, SemanticStatus::Resolved),
         );
         ids_by_stable_key.get(&stable_key).copied()
     })
@@ -2710,6 +2819,7 @@ class Widget {
         let semantic = SemanticBuilder::new().build(parsed.program()).semantic;
 
         let output = derive_ts_semantic_index(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
             &file,
             source,
             parsed.program(),
@@ -2794,6 +2904,7 @@ mod semantic_imports_exports {
         let semantic = SemanticBuilder::new().build(parsed.program()).semantic;
 
         derive_ts_semantic_index(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
             &file,
             source,
             parsed.program(),
@@ -2945,6 +3056,7 @@ mod semantic_resolution {
         let semantic = SemanticBuilder::new().build(parsed.program()).semantic;
 
         derive_ts_semantic_index(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
             &file,
             source,
             parsed.program(),
@@ -2966,7 +3078,13 @@ mod semantic_resolution {
         let mut builder = SymbolGraphBuilder::new();
         let mut output = LanguageSymbolOutput::default();
 
-        derive_ts_file_symbols(&mut builder, &mut output, &file, false);
+        derive_ts_file_symbols(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &mut builder,
+            &mut output,
+            &file,
+            false,
+        );
         let symbol_output = builder.finish();
 
         (symbol_output.symbols, output.semantic)

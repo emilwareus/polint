@@ -393,18 +393,61 @@ mod tests {
     #[test]
     fn graph_view_exposes_sorted_block_successors_and_predecessors() {
         let mut builder = CfgBuilder::new();
-        let function = builder.start_function(&body(), false);
+        let function = builder.start_function(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &body(),
+            false,
+        );
         let entry = builder.current_block();
-        let branch = builder.start_block(BasicBlockKind::Branch);
-        builder.append_operation_node(Some(&op(1, 1)), CfgNodeKind::Condition, Some(span()));
-        let then_block = builder.start_block(BasicBlockKind::StraightLine);
-        builder.append_operation_node(Some(&op(2, 2)), CfgNodeKind::Operation, Some(span()));
-        let else_block = builder.start_block(BasicBlockKind::StraightLine);
-        builder.append_operation_node(Some(&op(3, 3)), CfgNodeKind::Operation, Some(span()));
+        let branch = builder.start_block(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            BasicBlockKind::Branch,
+        );
+        builder.append_operation_node(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            Some(&op(1, 1)),
+            CfgNodeKind::Condition,
+            Some(span()),
+        );
+        let then_block = builder.start_block(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            BasicBlockKind::StraightLine,
+        );
+        builder.append_operation_node(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            Some(&op(2, 2)),
+            CfgNodeKind::Operation,
+            Some(span()),
+        );
+        let else_block = builder.start_block(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            BasicBlockKind::StraightLine,
+        );
+        builder.append_operation_node(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            Some(&op(3, 3)),
+            CfgNodeKind::Operation,
+            Some(span()),
+        );
 
-        builder.add_edge(entry, branch, CfgEdgeKind::Normal);
-        builder.add_edge(branch, else_block, CfgEdgeKind::False);
-        builder.add_edge(branch, then_block, CfgEdgeKind::True);
+        builder.add_edge(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            entry,
+            branch,
+            CfgEdgeKind::Normal,
+        );
+        builder.add_edge(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            branch,
+            else_block,
+            CfgEdgeKind::False,
+        );
+        builder.add_edge(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            branch,
+            then_block,
+            CfgEdgeKind::True,
+        );
         builder.finish_function();
         let output = builder.finish();
 

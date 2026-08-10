@@ -2294,7 +2294,10 @@ fn unknowns(root: PathBuf, args: &UnknownsArgs) -> Result<u8> {
         .as_ref()
         .is_none_or(|view| !view_supports_unknowns(view))
     {
+        let db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
         let row = crate::analysis::unknown_taxonomy::collect::unsupported_capability_row(
+            &interner,
             &args.capability,
             support.map(|view| view.docs_path),
         );
@@ -2343,7 +2346,10 @@ fn inspect_unknowns(root: PathBuf, args: &InspectUnknownsArgs) -> Result<u8> {
             .as_ref()
             .is_none_or(|view| !view_supports_unknowns(view))
         {
+            let db = AnalysisDb::new();
+            let interner = db.stable_key_interner();
             let row = crate::analysis::unknown_taxonomy::collect::unsupported_capability_row(
+                &interner,
                 capability,
                 support.map(|view| view.docs_path),
             );
@@ -4268,7 +4274,11 @@ mod tests {
 
         let constraints = vec![copy("copy|a-b", 1, 2), copy("copy|b-c", 2, 3)];
         let budget = crate::analysis::solver::budget::SolverBudget::default();
-        let output = derive_edges(&constraints, &budget);
+        let output = derive_edges(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &constraints,
+            &budget,
+        );
         let store = SolverStore::from_output(output).expect("store");
 
         // Pick the transitive edge (the one with 2 contributing facts).

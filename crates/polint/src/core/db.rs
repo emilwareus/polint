@@ -70,9 +70,10 @@ use crate::analysis::values::facts::{AllocationTokenFact, ValueFact};
 use crate::analysis::values::store::ValueStore;
 use crate::analysis_kernel::{
     FactConfidence, FactFamily, FactMeta, FactMetaStore, FactPrecision, FactRef, MissingFactMeta,
-    ValidationStatus, resolution_metadata, resolution_status_metadata, stable_key_from_parts,
+    ValidationStatus, resolution_metadata, resolution_status_metadata, stable_key_text_from_parts,
     symbol_metadata,
 };
+use crate::core::StableKeyInterner;
 use crate::diagnostics::fingerprint;
 use crate::go::semantic::facts::{
     GoSemanticAddressTakenFact, GoSemanticCallsiteFact, GoSemanticDynamicDispatchFact,
@@ -135,9 +136,10 @@ use super::{
     TS_SYNTAX_PROVIDER_ID,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct AnalysisDb {
     pub(crate) files: Vec<SourceFile>,
+    pub(crate) stable_keys: StableKeyInterner,
     pub(crate) fact_meta: FactMetaStore,
     /// Provider-owned stores keyed by primary [`FactFamily`]. Iteration stays ordered.
     pub(crate) fact_stores: BTreeMap<FactFamily, FactStoreEntry>,
@@ -149,6 +151,19 @@ pub struct AnalysisDb {
     /// derived by a provider. It is `None` under `polint check` (so the
     /// `ChangedFiles` view is empty there) and excluded from all cache digests.
     pub(crate) changeset: Option<ReviewChangeset>,
+}
+
+impl Clone for AnalysisDb {
+    fn clone(&self) -> Self {
+        Self {
+            files: self.files.clone(),
+            stable_keys: self.stable_keys.detached_clone(),
+            fact_meta: self.fact_meta.clone(),
+            fact_stores: self.fact_stores.clone(),
+            path_contexts: self.path_contexts.clone(),
+            changeset: self.changeset.clone(),
+        }
+    }
 }
 
 impl Default for AnalysisDb {
@@ -260,6 +275,7 @@ impl Default for AnalysisDb {
         fact_stores.insert(SEMANTIC_MIR_STORE_FAMILY, FactStoreEntry::new(semantic_mir));
         Self {
             files: Vec::new(),
+            stable_keys: StableKeyInterner::default(),
             fact_meta: FactMetaStore::default(),
             fact_stores,
             path_contexts: None,
@@ -271,6 +287,10 @@ impl Default for AnalysisDb {
 impl AnalysisDb {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub(crate) fn stable_key_interner(&self) -> StableKeyInterner {
+        self.stable_keys.clone()
     }
 
     fn go_syntax_store(&self) -> &GoSyntaxStore {
@@ -594,9 +614,12 @@ impl AnalysisDb {
     }
 
     pub fn add_file(&mut self, path: PathBuf, relative_path: String, source: String) -> FileId {
+        let interner_handle = self.stable_key_interner();
+        let interner = &interner_handle;
         let language = Language::from_path(&path);
         let content_hash = fingerprint(&[&source]);
         self.push_source_file(
+            interner,
             path,
             relative_path,
             language,
@@ -613,11 +636,21 @@ impl AnalysisDb {
         source: Arc<str>,
         content_hash: String,
     ) -> FileId {
-        self.push_source_file(path, relative_path, language, source, content_hash)
+        let interner_handle = self.stable_key_interner();
+        let interner = &interner_handle;
+        self.push_source_file(
+            interner,
+            path,
+            relative_path,
+            language,
+            source,
+            content_hash,
+        )
     }
 
     fn push_source_file(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         path: PathBuf,
         relative_path: String,
         language: Language,
@@ -625,7 +658,7 @@ impl AnalysisDb {
         content_hash: String,
     ) -> FileId {
         let id = FileId(self.files.len() as u32);
-        let metadata = source_file_metadata(&relative_path, language, &content_hash);
+        let metadata = source_file_metadata(interner, &relative_path, language, &content_hash);
         self.files.push(SourceFile {
             id,
             path,
@@ -639,45 +672,57 @@ impl AnalysisDb {
     }
 
     pub fn push_package(&mut self, mut fact: PackageFact) -> PackageId {
+        let interner_handle = self.stable_key_interner();
+        let interner = &interner_handle;
         fact.id = PackageId(self.go_syntax_store().packages().len() as u64);
-        let metadata = self.package_metadata(&fact);
+        let metadata = self.package_metadata(interner, &fact);
         let id = self.go_syntax_store_mut().push_package(fact);
         self.record_fact_meta(FactFamily::Package, id.0, metadata);
         id
     }
 
     pub fn push_function(&mut self, mut fact: FunctionFact) -> FunctionId {
+        let interner_handle = self.stable_key_interner();
+        let interner = &interner_handle;
         fact.id = FunctionId(self.go_syntax_store().functions().len() as u64);
-        let metadata = self.function_metadata(&fact);
+        let metadata = self.function_metadata(interner, &fact);
         let id = self.go_syntax_store_mut().push_function(fact);
         self.record_fact_meta(FactFamily::Function, id.0, metadata);
         id
     }
 
     pub fn push_import(&mut self, mut fact: ImportFact) -> ImportId {
+        let interner_handle = self.stable_key_interner();
+        let interner = &interner_handle;
         fact.id = ImportId(self.go_syntax_store().imports().len() as u64);
-        let metadata = self.import_metadata(&fact);
+        let metadata = self.import_metadata(interner, &fact);
         let id = self.go_syntax_store_mut().push_import(fact);
         self.record_fact_meta(FactFamily::Import, id.0, metadata);
         id
     }
 
     pub fn push_branch(&mut self, mut fact: BranchObligation) -> BranchId {
+        let interner_handle = self.stable_key_interner();
+        let interner = &interner_handle;
         fact.id = BranchId(self.go_syntax_store().branches().len() as u64);
-        let metadata = self.branch_metadata(&fact);
+        let metadata = self.branch_metadata(interner, &fact);
         let id = self.go_syntax_store_mut().push_branch(fact);
         self.record_fact_meta(FactFamily::BranchObligation, id.0, metadata);
         id
     }
 
     pub fn push_test(&mut self, fact: TestFact) {
-        let metadata = self.test_metadata(&fact);
+        let interner_handle = self.stable_key_interner();
+        let interner = &interner_handle;
+        let metadata = self.test_metadata(interner, &fact);
         let run_id = self.go_syntax_store_mut().push_test(fact);
         self.record_fact_meta(FactFamily::Test, run_id, metadata);
     }
 
     pub fn push_coverage(&mut self, fact: CoverageFact) {
-        let metadata = self.coverage_metadata(&fact);
+        let interner_handle = self.stable_key_interner();
+        let interner = &interner_handle;
+        let metadata = self.coverage_metadata(interner, &fact);
         let run_id = self.metrics_store_mut().push_coverage(fact);
         self.record_fact_meta(FactFamily::Coverage, run_id, metadata);
     }
@@ -688,12 +733,14 @@ impl AnalysisDb {
         function_metrics: Vec<FunctionMetricFact>,
         complexity_metrics: Vec<ComplexityMetricFact>,
     ) {
+        let interner_handle = self.stable_key_interner();
+        let interner = &interner_handle;
         self.metrics_store_mut().replace_metrics(
             file_metrics,
             function_metrics,
             complexity_metrics,
         );
-        self.refresh_metric_metadata();
+        self.refresh_metric_metadata(interner);
     }
 
     pub(crate) fn replace_module_graph_facts(
@@ -702,6 +749,8 @@ impl AnalysisDb {
         mut module_nodes: Vec<ModuleNode>,
         mut module_edges: Vec<ModuleEdge>,
     ) {
+        let interner_handle = self.stable_key_interner();
+        let interner = &interner_handle;
         let resolved_import_ids = resolved_imports
             .iter()
             .enumerate()
@@ -741,7 +790,7 @@ impl AnalysisDb {
 
         self.module_graph_store_mut()
             .replace(resolved_imports, module_nodes, module_edges);
-        self.refresh_module_graph_metadata();
+        self.refresh_module_graph_metadata(interner);
     }
 
     pub(crate) fn replace_topology_facts(&mut self, output: TopologyOutput) {
@@ -786,7 +835,9 @@ impl AnalysisDb {
         mut generated_symbols: Vec<GeneratedSymbolFact>,
         mut stable_exports: Vec<StableExportIdentity>,
     ) {
-        normalize_scope_facts(&mut scopes);
+        let interner_handle = self.stable_key_interner();
+        let interner = &interner_handle;
+        normalize_scope_facts(interner, &mut scopes);
         let scope_ids = scopes
             .iter()
             .enumerate()
@@ -801,7 +852,7 @@ impl AnalysisDb {
             }
         }
 
-        normalize_semantic_import_facts(&mut semantic_imports);
+        normalize_semantic_import_facts(interner, &mut semantic_imports);
         for (index, import) in semantic_imports.iter_mut().enumerate() {
             import.id = SemanticImportId(index as u64);
             if let Some(scope) = import.scope
@@ -811,7 +862,7 @@ impl AnalysisDb {
             }
         }
 
-        normalize_export_facts(&mut exports);
+        normalize_export_facts(interner, &mut exports);
         let export_ids = exports
             .iter()
             .enumerate()
@@ -826,22 +877,22 @@ impl AnalysisDb {
             }
         }
 
-        normalize_alias_facts(&mut aliases);
+        normalize_alias_facts(interner, &mut aliases);
         for (index, alias) in aliases.iter_mut().enumerate() {
             alias.id = AliasId(index as u64);
         }
 
-        normalize_resolution_facts(&mut resolutions);
+        normalize_resolution_facts(interner, &mut resolutions);
         for (index, resolution) in resolutions.iter_mut().enumerate() {
             resolution.id = ResolutionId(index as u64);
         }
 
-        normalize_generated_symbol_facts(&mut generated_symbols);
+        normalize_generated_symbol_facts(interner, &mut generated_symbols);
         for (index, generated) in generated_symbols.iter_mut().enumerate() {
             generated.id = GeneratedSymbolId(index as u64);
         }
 
-        normalize_stable_export_identities(&mut stable_exports);
+        normalize_stable_export_identities(interner, &mut stable_exports);
         for (index, stable_export) in stable_exports.iter_mut().enumerate() {
             stable_export.id = StableExportId(index as u64);
             if let Some(remapped) = export_ids.get(&stable_export.export) {
@@ -862,8 +913,10 @@ impl AnalysisDb {
     }
 
     pub(crate) fn replace_semantic_mir(&mut self, output: MirOutput) -> Result<(), AnalysisError> {
+        let interner_handle = self.stable_key_interner();
+        let interner = &interner_handle;
         *self.semantic_mir_store_mut() = SemanticStore::from_output(output)?;
-        self.refresh_semantic_mir_metadata();
+        self.refresh_semantic_mir_metadata(interner);
         Ok(())
     }
 
@@ -878,10 +931,12 @@ impl AnalysisDb {
         &mut self,
         mut output: CallOutput,
     ) -> Result<(), AnalysisError> {
+        let interner_handle = self.stable_key_interner();
+        let interner = &interner_handle;
         self.populate_call_owner_symbols(&mut output);
         let store = CallStore::from_output(output)?;
         *self.calls_store_mut() = store;
-        self.refresh_call_metadata();
+        self.refresh_call_metadata(interner);
         Ok(())
     }
 
@@ -1213,9 +1268,11 @@ impl AnalysisDb {
         &mut self,
         output: EntrypointOutput,
     ) -> Result<(), AnalysisError> {
+        let interner_handle = self.stable_key_interner();
+        let interner = &interner_handle;
         let store = EntrypointStore::from_output(output)?;
         *self.entrypoint_store_mut() = store;
-        self.refresh_entrypoint_metadata();
+        self.refresh_entrypoint_metadata(interner);
         Ok(())
     }
 
@@ -1564,7 +1621,7 @@ impl AnalysisDb {
         self.calls_store().unresolved_by_status(status)
     }
 
-    fn refresh_call_metadata(&mut self) {
+    fn refresh_call_metadata(&mut self, interner: &crate::core::StableKeyInterner) {
         self.fact_meta.remove_family(FactFamily::CallSite);
         self.fact_meta.remove_family(FactFamily::CallTarget);
         self.fact_meta.remove_family(FactFamily::UnresolvedCall);
@@ -1574,7 +1631,7 @@ impl AnalysisDb {
         let unresolved_calls = self.unresolved_calls().to_vec();
 
         for fact in &call_sites {
-            let metadata = self.call_site_metadata(fact);
+            let metadata = self.call_site_metadata(interner, fact);
             self.record_fact_meta(FactFamily::CallSite, fact.id.0, metadata);
         }
 
@@ -1777,7 +1834,7 @@ impl AnalysisDb {
         self.finish_fact_meta_insertions(&[FactFamily::AdaptationModel]);
     }
 
-    fn refresh_entrypoint_metadata(&mut self) {
+    fn refresh_entrypoint_metadata(&mut self, interner: &crate::core::StableKeyInterner) {
         self.fact_meta.remove_family(FactFamily::Entrypoint);
         self.fact_meta.remove_family(FactFamily::TrustBoundary);
         self.fact_meta.remove_family(FactFamily::DispatchEdge);
@@ -1790,7 +1847,7 @@ impl AnalysisDb {
         let unresolved = self.unresolved_framework_facts().to_vec();
 
         for fact in &entrypoints {
-            let metadata = self.entrypoint_fact_metadata(fact);
+            let metadata = self.entrypoint_fact_metadata(interner, fact);
             self.record_fact_meta(FactFamily::Entrypoint, fact.id.0, metadata);
         }
         for fact in &trust_boundaries {
@@ -2067,7 +2124,11 @@ impl AnalysisDb {
         )
     }
 
-    fn entrypoint_fact_metadata(&self, fact: &EntrypointFact) -> FactMeta {
+    fn entrypoint_fact_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        fact: &EntrypointFact,
+    ) -> FactMeta {
         let (precision, confidence) = entrypoint_precision_metadata(fact.status, fact.precision);
         fact_meta_from_stable_key(
             FactFamily::Entrypoint,
@@ -2085,6 +2146,7 @@ impl AnalysisDb {
                 (
                     "function_key",
                     self.function_key(
+                        interner,
                         fact.target_function,
                         &fact.framework_id,
                         &fact.registration_span,
@@ -2257,7 +2319,7 @@ impl AnalysisDb {
         ]);
     }
 
-    fn refresh_semantic_mir_metadata(&mut self) {
+    fn refresh_semantic_mir_metadata(&mut self, interner: &crate::core::StableKeyInterner) {
         self.fact_meta.remove_family(FactFamily::MirBody);
         self.fact_meta.remove_family(FactFamily::MirOperation);
         self.fact_meta.remove_family(FactFamily::Place);
@@ -2267,7 +2329,7 @@ impl AnalysisDb {
         for index in 0..self.mir_bodies().len() {
             let (run_id, metadata) = {
                 let body = &self.mir_bodies()[index];
-                (body.id.0, self.mir_body_metadata(body))
+                (body.id.0, self.mir_body_metadata(interner, body))
             };
             self.record_fact_meta(FactFamily::MirBody, run_id, metadata);
         }
@@ -2306,7 +2368,7 @@ impl AnalysisDb {
 }
 
 impl AnalysisDb {
-    fn refresh_module_graph_metadata(&mut self) {
+    fn refresh_module_graph_metadata(&mut self, interner: &crate::core::StableKeyInterner) {
         self.fact_meta.remove_family(FactFamily::ModuleNode);
         self.fact_meta.remove_family(FactFamily::ResolvedImport);
         self.fact_meta.remove_family(FactFamily::ModuleEdge);
@@ -2317,7 +2379,7 @@ impl AnalysisDb {
 
         let node_metadata = module_nodes
             .iter()
-            .map(|node| (node.id.0, self.module_node_metadata(node)))
+            .map(|node| (node.id.0, self.module_node_metadata(interner, node)))
             .collect::<Vec<_>>();
         for (run_id, metadata) in node_metadata {
             self.record_fact_meta(FactFamily::ModuleNode, run_id, metadata);
@@ -2325,7 +2387,7 @@ impl AnalysisDb {
 
         let resolved_metadata = resolved_imports
             .iter()
-            .map(|fact| (fact.id.0, self.resolved_import_metadata(fact)))
+            .map(|fact| (fact.id.0, self.resolved_import_metadata(interner, fact)))
             .collect::<Vec<_>>();
         for (run_id, metadata) in resolved_metadata {
             self.record_fact_meta(FactFamily::ResolvedImport, run_id, metadata);
@@ -2333,7 +2395,7 @@ impl AnalysisDb {
 
         let edge_metadata = module_edges
             .iter()
-            .map(|edge| (edge.id.0, self.module_edge_metadata(edge)))
+            .map(|edge| (edge.id.0, self.module_edge_metadata(interner, edge)))
             .collect::<Vec<_>>();
         for (run_id, metadata) in edge_metadata {
             self.record_fact_meta(FactFamily::ModuleEdge, run_id, metadata);
@@ -2668,7 +2730,7 @@ impl AnalysisDb {
         ]);
     }
 
-    fn refresh_metric_metadata(&mut self) {
+    fn refresh_metric_metadata(&mut self, interner: &crate::core::StableKeyInterner) {
         self.fact_meta.remove_family(FactFamily::FileMetric);
         self.fact_meta.remove_family(FactFamily::FunctionMetric);
         self.fact_meta.remove_family(FactFamily::ComplexityMetric);
@@ -2680,7 +2742,7 @@ impl AnalysisDb {
         let file_metadata = file_metrics
             .iter()
             .enumerate()
-            .map(|(index, fact)| (index as u64, self.file_metric_metadata(fact)))
+            .map(|(index, fact)| (index as u64, self.file_metric_metadata(interner, fact)))
             .collect::<Vec<_>>();
         for (run_id, metadata) in file_metadata {
             self.record_fact_meta(FactFamily::FileMetric, run_id, metadata);
@@ -2689,7 +2751,7 @@ impl AnalysisDb {
         let function_metadata = function_metrics
             .iter()
             .enumerate()
-            .map(|(index, fact)| (index as u64, self.function_metric_metadata(fact)))
+            .map(|(index, fact)| (index as u64, self.function_metric_metadata(interner, fact)))
             .collect::<Vec<_>>();
         for (run_id, metadata) in function_metadata {
             self.record_fact_meta(FactFamily::FunctionMetric, run_id, metadata);
@@ -2698,7 +2760,12 @@ impl AnalysisDb {
         let complexity_metadata = complexity_metrics
             .iter()
             .enumerate()
-            .map(|(index, fact)| (index as u64, self.complexity_metric_metadata(fact)))
+            .map(|(index, fact)| {
+                (
+                    index as u64,
+                    self.complexity_metric_metadata(interner, fact),
+                )
+            })
             .collect::<Vec<_>>();
         for (run_id, metadata) in complexity_metadata {
             self.record_fact_meta(FactFamily::ComplexityMetric, run_id, metadata);
@@ -2711,25 +2778,33 @@ impl AnalysisDb {
     }
 
     pub fn push_ts_component(&mut self, fact: TsComponentFact) {
-        let metadata = self.ts_component_metadata(&fact);
+        let interner_handle = self.stable_key_interner();
+        let interner = &interner_handle;
+        let metadata = self.ts_component_metadata(interner, &fact);
         let run_id = self.ts_syntax_store_mut().push_ts_component(fact);
         self.record_fact_meta(FactFamily::TsComponent, run_id, metadata);
     }
 
     pub fn push_ts_class(&mut self, fact: TsClassFact) {
-        let metadata = self.ts_class_metadata(&fact);
+        let interner_handle = self.stable_key_interner();
+        let interner = &interner_handle;
+        let metadata = self.ts_class_metadata(interner, &fact);
         let run_id = self.ts_syntax_store_mut().push_ts_class(fact);
         self.record_fact_meta(FactFamily::TsClass, run_id, metadata);
     }
 
     pub fn push_string_literal(&mut self, fact: StringLiteralFact) {
-        let metadata = self.string_literal_metadata(&fact);
+        let interner_handle = self.stable_key_interner();
+        let interner = &interner_handle;
+        let metadata = self.string_literal_metadata(interner, &fact);
         let run_id = self.ts_syntax_store_mut().push_string_literal(fact);
         self.record_fact_meta(FactFamily::StringLiteral, run_id, metadata);
     }
 
     pub fn push_jsx_attribute(&mut self, fact: JsxAttributeFact) {
-        let metadata = self.jsx_attribute_metadata(&fact);
+        let interner_handle = self.stable_key_interner();
+        let interner = &interner_handle;
+        let metadata = self.jsx_attribute_metadata(interner, &fact);
         let run_id = self.ts_syntax_store_mut().push_jsx_attribute(fact);
         self.record_fact_meta(FactFamily::JsxAttribute, run_id, metadata);
     }
@@ -3460,8 +3535,13 @@ impl AnalysisDb {
         self.fact_meta.finish_all_insertions();
     }
 
-    fn package_metadata(&self, fact: &PackageFact) -> FactMeta {
+    fn package_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        fact: &PackageFact,
+    ) -> FactMeta {
         fact_meta_from_parts(
+            interner,
             FactFamily::Package,
             syntax_provider_for_language(fact.language),
             FactPrecision::Syntax,
@@ -3476,8 +3556,13 @@ impl AnalysisDb {
         )
     }
 
-    fn function_metadata(&self, fact: &FunctionFact) -> FactMeta {
+    fn function_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        fact: &FunctionFact,
+    ) -> FactMeta {
         fact_meta_from_parts(
+            interner,
             FactFamily::Function,
             syntax_provider_for_language(fact.language),
             FactPrecision::Syntax,
@@ -3500,8 +3585,13 @@ impl AnalysisDb {
         )
     }
 
-    fn import_metadata(&self, fact: &ImportFact) -> FactMeta {
+    fn import_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        fact: &ImportFact,
+    ) -> FactMeta {
         fact_meta_from_parts(
+            interner,
             FactFamily::Import,
             syntax_provider_for_language(fact.language),
             FactPrecision::Syntax,
@@ -3519,8 +3609,13 @@ impl AnalysisDb {
         )
     }
 
-    fn branch_metadata(&self, fact: &BranchObligation) -> FactMeta {
+    fn branch_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        fact: &BranchObligation,
+    ) -> FactMeta {
         fact_meta_from_parts(
+            interner,
             FactFamily::BranchObligation,
             GO_SYNTAX_PROVIDER_ID,
             FactPrecision::Heuristic,
@@ -3539,8 +3634,13 @@ impl AnalysisDb {
         )
     }
 
-    fn test_metadata(&self, fact: &TestFact) -> FactMeta {
+    fn test_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        fact: &TestFact,
+    ) -> FactMeta {
         fact_meta_from_parts(
+            interner,
             FactFamily::Test,
             GO_SYNTAX_PROVIDER_ID,
             FactPrecision::Heuristic,
@@ -3561,7 +3661,11 @@ impl AnalysisDb {
         )
     }
 
-    fn coverage_metadata(&self, fact: &CoverageFact) -> FactMeta {
+    fn coverage_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        fact: &CoverageFact,
+    ) -> FactMeta {
         let branch = self
             .branches()
             .iter()
@@ -3583,6 +3687,7 @@ impl AnalysisDb {
         };
 
         fact_meta_from_parts(
+            interner,
             FactFamily::Coverage,
             branch
                 .map(|branch| syntax_provider_for_file(self.file(branch.file)))
@@ -3601,8 +3706,13 @@ impl AnalysisDb {
         )
     }
 
-    fn file_metric_metadata(&self, fact: &FileMetricFact) -> FactMeta {
+    fn file_metric_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        fact: &FileMetricFact,
+    ) -> FactMeta {
         fact_meta_from_parts(
+            interner,
             FactFamily::FileMetric,
             METRICS_PROVIDER_ID,
             FactPrecision::Syntax,
@@ -3621,8 +3731,13 @@ impl AnalysisDb {
         )
     }
 
-    fn function_metric_metadata(&self, fact: &FunctionMetricFact) -> FactMeta {
+    fn function_metric_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        fact: &FunctionMetricFact,
+    ) -> FactMeta {
         fact_meta_from_parts(
+            interner,
             FactFamily::FunctionMetric,
             METRICS_PROVIDER_ID,
             FactPrecision::Syntax,
@@ -3630,7 +3745,7 @@ impl AnalysisDb {
             stable_parts([
                 (
                     "function_key",
-                    self.function_key(fact.function, &fact.name, &fact.span),
+                    self.function_key(interner, fact.function, &fact.name, &fact.span),
                 ),
                 ("metric_name", FUNCTION_SIZE_METRIC_NAME.to_string()),
             ]),
@@ -3643,8 +3758,13 @@ impl AnalysisDb {
         )
     }
 
-    fn complexity_metric_metadata(&self, fact: &ComplexityMetricFact) -> FactMeta {
+    fn complexity_metric_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        fact: &ComplexityMetricFact,
+    ) -> FactMeta {
         fact_meta_from_parts(
+            interner,
             FactFamily::ComplexityMetric,
             METRICS_PROVIDER_ID,
             FactPrecision::Syntax,
@@ -3652,7 +3772,7 @@ impl AnalysisDb {
             stable_parts([
                 (
                     "function_key",
-                    self.function_key(fact.function, &fact.name, &fact.span),
+                    self.function_key(interner, fact.function, &fact.name, &fact.span),
                 ),
                 ("metric_name", CYCLOMATIC_COMPLEXITY_METRIC_NAME.to_string()),
             ]),
@@ -3667,8 +3787,13 @@ impl AnalysisDb {
         )
     }
 
-    fn module_node_metadata(&self, node: &ModuleNode) -> FactMeta {
+    fn module_node_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        node: &ModuleNode,
+    ) -> FactMeta {
         fact_meta_from_parts(
+            interner,
             FactFamily::ModuleNode,
             MODULE_GRAPH_PROVIDER_ID,
             FactPrecision::SetupAware,
@@ -3694,9 +3819,14 @@ impl AnalysisDb {
         )
     }
 
-    fn resolved_import_metadata(&self, fact: &ResolvedImportFact) -> FactMeta {
+    fn resolved_import_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        fact: &ResolvedImportFact,
+    ) -> FactMeta {
         let (precision, confidence) = resolution_metadata(fact.precision, fact.status);
         fact_meta_from_parts(
+            interner,
             FactFamily::ResolvedImport,
             MODULE_GRAPH_PROVIDER_ID,
             precision,
@@ -3739,9 +3869,14 @@ impl AnalysisDb {
         )
     }
 
-    fn module_edge_metadata(&self, edge: &ModuleEdge) -> FactMeta {
+    fn module_edge_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        edge: &ModuleEdge,
+    ) -> FactMeta {
         let (precision, confidence) = resolution_status_metadata(edge.status);
         fact_meta_from_parts(
+            interner,
             FactFamily::ModuleEdge,
             MODULE_GRAPH_PROVIDER_ID,
             precision,
@@ -3886,7 +4021,11 @@ impl AnalysisDb {
         )
     }
 
-    fn mir_body_metadata(&self, body: &MirBody) -> FactMeta {
+    fn mir_body_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        body: &MirBody,
+    ) -> FactMeta {
         let (precision, confidence) = mir_status_metadata(body.status);
         fact_meta_from_stable_key(
             FactFamily::MirBody,
@@ -3900,7 +4039,7 @@ impl AnalysisDb {
                 ("file_key", self.source_file_key(body.file)),
                 (
                     "function_key",
-                    self.function_key(body.function, "", &body.span),
+                    self.function_key(interner, body.function, "", &body.span),
                 ),
                 ("owner_stable_key", body.owner_stable_key.clone()),
                 (
@@ -4001,7 +4140,11 @@ impl AnalysisDb {
         )
     }
 
-    fn call_site_metadata(&self, fact: &CallSiteFact) -> FactMeta {
+    fn call_site_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        fact: &CallSiteFact,
+    ) -> FactMeta {
         let (precision, confidence) = call_status_metadata(fact.status, fact.precision);
         fact_meta_from_stable_key(
             FactFamily::CallSite,
@@ -4018,7 +4161,10 @@ impl AnalysisDb {
                 ("kind", call_syntax_kind_label(fact.kind).to_string()),
                 ("language", language_label(fact.language).to_string()),
                 ("file_key", self.source_file_key(fact.file)),
-                ("caller_key", self.function_key(fact.caller, "", &fact.span)),
+                (
+                    "caller_key",
+                    self.function_key(interner, fact.caller, "", &fact.span),
+                ),
                 (
                     "owner_symbol_key",
                     fact.owner_symbol
@@ -4902,11 +5048,18 @@ impl AnalysisDb {
             .unwrap_or_else(none_value)
     }
 
-    fn function_key(&self, function: FunctionId, name: &str, span: &Span) -> String {
+    fn function_key(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        function: FunctionId,
+        name: &str,
+        span: &Span,
+    ) -> String {
         self.metadata_for(FactRef::new(FactFamily::Function, function.0))
             .map(|metadata| metadata.stable_key.clone())
             .unwrap_or_else(|| {
-                stable_key_from_parts(
+                stable_key_text_from_parts(
+                    interner,
                     FactFamily::Function,
                     &[
                         ("path", self.path_for(span.file)),
@@ -4917,8 +5070,13 @@ impl AnalysisDb {
             })
     }
 
-    fn ts_component_metadata(&self, fact: &TsComponentFact) -> FactMeta {
+    fn ts_component_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        fact: &TsComponentFact,
+    ) -> FactMeta {
         fact_meta_from_parts(
+            interner,
             FactFamily::TsComponent,
             TS_SYNTAX_PROVIDER_ID,
             FactPrecision::Heuristic,
@@ -4932,8 +5090,13 @@ impl AnalysisDb {
         )
     }
 
-    fn ts_class_metadata(&self, fact: &TsClassFact) -> FactMeta {
+    fn ts_class_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        fact: &TsClassFact,
+    ) -> FactMeta {
         fact_meta_from_parts(
+            interner,
             FactFamily::TsClass,
             TS_SYNTAX_PROVIDER_ID,
             FactPrecision::Syntax,
@@ -4950,8 +5113,13 @@ impl AnalysisDb {
         )
     }
 
-    fn string_literal_metadata(&self, fact: &StringLiteralFact) -> FactMeta {
+    fn string_literal_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        fact: &StringLiteralFact,
+    ) -> FactMeta {
         fact_meta_from_parts(
+            interner,
             FactFamily::StringLiteral,
             syntax_provider_for_language(fact.language),
             FactPrecision::Syntax,
@@ -4966,8 +5134,13 @@ impl AnalysisDb {
         )
     }
 
-    fn jsx_attribute_metadata(&self, fact: &JsxAttributeFact) -> FactMeta {
+    fn jsx_attribute_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        fact: &JsxAttributeFact,
+    ) -> FactMeta {
         fact_meta_from_parts(
+            interner,
             FactFamily::JsxAttribute,
             TS_SYNTAX_PROVIDER_ID,
             FactPrecision::Syntax,

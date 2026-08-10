@@ -10,46 +10,55 @@ use crate::analysis::summaries::facts::{
     FlowKind, FlowRoot, SummaryDomainKind, SummaryEventFact, SummaryFact, SummaryFlowEdge,
     SummaryPrecision, SummaryStatus,
 };
-use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
+use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
 use crate::core::{AnalysisDb, Language};
 
 pub(crate) fn derive_summary_projected_edges(db: &AnalysisDb, output: &mut DataFlowOutput) {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     for fact in db.summary_facts() {
         if fact.domain != SummaryDomainKind::DataFlowTito {
             continue;
         }
         if fact.status == SummaryStatus::Present {
-            project_present_tito(output, fact);
+            project_present_tito(interner, output, fact);
         } else {
-            project_summary_status(output, fact);
+            project_summary_status(interner, output, fact);
         }
     }
     for event in db.summary_events() {
         if event.domain == SummaryDomainKind::DataFlowTito && event.status != SummaryStatus::Present
         {
-            project_summary_event(output, event);
+            project_summary_event(interner, output, event);
         }
     }
 }
 
-fn project_present_tito(output: &mut DataFlowOutput, fact: &SummaryFact) {
+fn project_present_tito(
+    interner: &crate::core::StableKeyInterner,
+    output: &mut DataFlowOutput,
+    fact: &SummaryFact,
+) {
     for flow in &fact.tito_flows {
         if !flow_kind_projects_as_tito(flow.kind) {
             continue;
         }
         let input = summary_node(
+            interner,
             output,
             fact,
             DataFlowNodeKind::SummaryInput,
             &root_role(flow.from),
         );
         let output_node = summary_node(
+            interner,
             output,
             fact,
             DataFlowNodeKind::SummaryOutput,
             &root_role(flow.to),
         );
         push_edge(
+            interner,
             output,
             SummaryEdgeDraft {
                 from: input,
@@ -78,14 +87,20 @@ fn project_present_tito(output: &mut DataFlowOutput, fact: &SummaryFact) {
     }
 }
 
-fn project_summary_status(output: &mut DataFlowOutput, fact: &SummaryFact) {
+fn project_summary_status(
+    interner: &crate::core::StableKeyInterner,
+    output: &mut DataFlowOutput,
+    fact: &SummaryFact,
+) {
     let source = summary_node(
+        interner,
         output,
         fact,
         DataFlowNodeKind::SummaryInput,
         "uncertain-input",
     );
     let sink = summary_node(
+        interner,
         output,
         fact,
         DataFlowNodeKind::Synthetic,
@@ -94,6 +109,7 @@ fn project_summary_status(output: &mut DataFlowOutput, fact: &SummaryFact) {
     let status = status(fact.status);
     let budget = (status == DataFlowStatus::BudgetExceeded).then(|| {
         budget_fact(
+            interner,
             DataFlowBudgetReason::PathCount,
             1,
             2,
@@ -102,6 +118,7 @@ fn project_summary_status(output: &mut DataFlowOutput, fact: &SummaryFact) {
         )
     });
     push_edge(
+        interner,
         output,
         SummaryEdgeDraft {
             from: source,
@@ -131,12 +148,29 @@ fn project_summary_status(output: &mut DataFlowOutput, fact: &SummaryFact) {
     );
 }
 
-fn project_summary_event(output: &mut DataFlowOutput, event: &SummaryEventFact) {
-    let source = event_node(output, event, DataFlowNodeKind::SummaryInput, "event-input");
-    let sink = event_node(output, event, DataFlowNodeKind::Synthetic, "event-output");
+fn project_summary_event(
+    interner: &crate::core::StableKeyInterner,
+    output: &mut DataFlowOutput,
+    event: &SummaryEventFact,
+) {
+    let source = event_node(
+        interner,
+        output,
+        event,
+        DataFlowNodeKind::SummaryInput,
+        "event-input",
+    );
+    let sink = event_node(
+        interner,
+        output,
+        event,
+        DataFlowNodeKind::Synthetic,
+        "event-output",
+    );
     let status = status(event.status);
     let budget = (status == DataFlowStatus::BudgetExceeded).then(|| {
         budget_fact(
+            interner,
             DataFlowBudgetReason::PathCount,
             1,
             2,
@@ -145,6 +179,7 @@ fn project_summary_event(output: &mut DataFlowOutput, event: &SummaryEventFact) 
         )
     });
     push_edge(
+        interner,
         output,
         SummaryEdgeDraft {
             from: source,
@@ -191,8 +226,13 @@ struct SummaryEdgeDraft {
     stable_anchor: String,
 }
 
-fn push_edge(output: &mut DataFlowOutput, draft: SummaryEdgeDraft) {
-    let stable_key = stable_key_from_parts(
+fn push_edge(
+    interner: &crate::core::StableKeyInterner,
+    output: &mut DataFlowOutput,
+    draft: SummaryEdgeDraft,
+) {
+    let stable_key = stable_key_text_from_parts(
+        interner,
         FactFamily::DataFlowEdge,
         &[
             ("kind", format!("{:?}", draft.kind)),
@@ -230,12 +270,14 @@ fn push_edge(output: &mut DataFlowOutput, draft: SummaryEdgeDraft) {
 }
 
 fn summary_node(
+    interner: &crate::core::StableKeyInterner,
     output: &mut DataFlowOutput,
     fact: &SummaryFact,
     kind: DataFlowNodeKind,
     role: &str,
 ) -> DataFlowNodeId {
-    let stable_key = stable_key_from_parts(
+    let stable_key = stable_key_text_from_parts(
+        interner,
         FactFamily::DataFlowNode,
         &[
             ("kind", format!("{kind:?}")),
@@ -273,12 +315,14 @@ fn summary_node(
 }
 
 fn event_node(
+    interner: &crate::core::StableKeyInterner,
     output: &mut DataFlowOutput,
     event: &SummaryEventFact,
     kind: DataFlowNodeKind,
     role: &str,
 ) -> DataFlowNodeId {
-    let stable_key = stable_key_from_parts(
+    let stable_key = stable_key_text_from_parts(
+        interner,
         FactFamily::DataFlowNode,
         &[
             ("kind", format!("{kind:?}")),
@@ -365,7 +409,11 @@ mod tests {
     #[test]
     fn data_flow_tito_summary_produces_projected_edge() {
         let mut output = DataFlowOutput::empty();
-        project_present_tito(&mut output, &summary(SummaryStatus::Present));
+        project_present_tito(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &mut output,
+            &summary(SummaryStatus::Present),
+        );
 
         assert!(
             output
@@ -387,7 +435,11 @@ mod tests {
         let mut fact = summary(SummaryStatus::Present);
         fact.tito_flows.clear();
 
-        project_present_tito(&mut output, &fact);
+        project_present_tito(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &mut output,
+            &fact,
+        );
 
         assert!(output.edges.is_empty());
         assert!(output.nodes.is_empty());
@@ -404,7 +456,11 @@ mod tests {
                 kind,
             }];
 
-            project_present_tito(&mut output, &fact);
+            project_present_tito(
+                &crate::core::AnalysisDb::new().stable_key_interner(),
+                &mut output,
+                &fact,
+            );
 
             assert!(
                 output.edges.is_empty(),
@@ -426,7 +482,11 @@ mod tests {
             SummaryStatus::BudgetExceeded,
         ] {
             let mut output = DataFlowOutput::empty();
-            project_summary_status(&mut output, &summary(summary_status));
+            project_summary_status(
+                &crate::core::AnalysisDb::new().stable_key_interner(),
+                &mut output,
+                &summary(summary_status),
+            );
             assert_eq!(output.edges.len(), 1);
             assert_eq!(output.edges[0].status, status(summary_status));
             if summary_status == SummaryStatus::BudgetExceeded {

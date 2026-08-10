@@ -25,7 +25,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use crate::analysis::ids::DerivedEdgeId;
 use crate::analysis::points_to::facts::{PointsToPrecision, PointsToStatus};
 use crate::analysis::semantic_graph::constraints::{ConstraintFact, ConstraintKind};
-use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
+use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
 
 use super::budget::{BudgetReason, BudgetStatus, SolverBudget};
 use super::facts::DerivedEdgeFact;
@@ -76,7 +76,7 @@ impl SolverEngine {
     /// budget, accumulating outcomes in deterministic order (D-02). The monotonic
     /// step counter increments once per worklist step and latches budget
     /// exhaustion honestly (D-06/D-11) rather than looping unbounded.
-    pub(crate) fn run(&self) -> SolverRunResult {
+    pub(crate) fn run(&self, interner: &crate::core::StableKeyInterner) -> SolverRunResult {
         // Deterministic worklist of policy indices in stable registration order.
         // The bounded outer-iteration cap (D-11) guards against draining more
         // policies than the budget allows; policy-internal work contributes to
@@ -99,7 +99,7 @@ impl SolverEngine {
             }
 
             let policy = &self.policies[index];
-            let outcome = policy.solve(&self.budget);
+            let outcome = policy.solve(interner, &self.budget);
             if outcome.budget_status == BudgetStatus::BudgetExceeded {
                 budget_exceeded = true;
                 budget_reasons.extend(outcome.budget_reasons.iter().cloned());
@@ -156,14 +156,15 @@ impl SolverEngine {
     /// the policy drain; `derive_edges` is per-source bounded by `max_steps`).
     pub(crate) fn run_to_solver_output(
         &self,
+        interner: &crate::core::StableKeyInterner,
         copy_edge_constraints: &[ConstraintFact],
     ) -> SolverOutput {
         // Step 1: the points-to CopyEdge closure, byte-identical to today's production.
-        let points_to_output = derive_edges(copy_edge_constraints, &self.budget);
+        let points_to_output = derive_edges(interner, copy_edge_constraints, &self.budget);
 
         // Step 2: drive the registered policies (points-to fold + Go RTA) and collect
         // their derived edges.
-        let run = self.run();
+        let run = self.run(interner);
         let mut derived_edges = points_to_output.derived_edges;
         for record in &run.policy_outcomes {
             derived_edges.extend(record.outcome.derived_edges.iter().cloned());
@@ -271,7 +272,11 @@ fn combine_budget_status(a: BudgetStatus, b: BudgetStatus) -> BudgetStatus {
 /// derived (review finding #R1). `solver_step` is a GLOBAL monotonic (non-decreasing)
 /// counter, independent of the per-source budget counter (review finding #R3). Derived
 /// edges never claim exact precision (D-06).
-pub(crate) fn derive_edges(constraints: &[ConstraintFact], budget: &SolverBudget) -> SolverOutput {
+pub(crate) fn derive_edges(
+    interner: &crate::core::StableKeyInterner,
+    constraints: &[ConstraintFact],
+    budget: &SolverBudget,
+) -> SolverOutput {
     // Primitive copy adjacency `src -> {dst}`. For each hop `src -> dst` accumulate
     // (a) the UNION of contributing constraint stable keys (#10 — never drop a
     // justifying identity) and (b) the WEAKEST status/precision across the
@@ -302,7 +307,7 @@ pub(crate) fn derive_edges(constraints: &[ConstraintFact], budget: &SolverBudget
 
     let mut edges: Vec<DerivedEdgeFact> = Vec::new();
     let (model_edges, model_budget_exceeded, model_budget_reasons) =
-        model_edges(constraints, budget);
+        model_edges(interner, constraints, budget);
     edges.extend(model_edges);
     let mut run_budget_exceeded = model_budget_exceeded;
     let mut budget_reasons = model_budget_reasons;
@@ -412,7 +417,8 @@ pub(crate) fn derive_edges(constraints: &[ConstraintFact], budget: &SolverBudget
                 },
                 meta.step,
             );
-            let stable_key = stable_key_from_parts(
+            let stable_key = stable_key_text_from_parts(
+                interner,
                 FactFamily::SolverDerivedEdge,
                 &[
                     ("source", start.to_string()),
@@ -449,6 +455,7 @@ pub(crate) fn derive_edges(constraints: &[ConstraintFact], budget: &SolverBudget
 }
 
 fn model_edges(
+    interner: &crate::core::StableKeyInterner,
     constraints: &[ConstraintFact],
     budget: &SolverBudget,
 ) -> (Vec<DerivedEdgeFact>, bool, BTreeSet<String>) {
@@ -519,7 +526,8 @@ fn model_edges(
             &constraint.kind,
             0,
         );
-        let stable_key = stable_key_from_parts(
+        let stable_key = stable_key_text_from_parts(
+            interner,
             FactFamily::SolverDerivedEdge,
             &[
                 ("source", source.0.to_string()),
@@ -691,11 +699,15 @@ mod tests {
         let constraints = sample_constraints();
         let budget = SolverBudget::default();
 
-        let direct = solve_points_to(&constraints, PointsToBudget::default());
+        let direct = solve_points_to(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &constraints,
+            PointsToBudget::default(),
+        );
 
         let policy = PointsToPolicy::new(constraints);
         let engine = SolverEngine::new(vec![Box::new(policy)], budget);
-        let run = engine.run();
+        let run = engine.run(&crate::core::AnalysisDb::new().stable_key_interner());
 
         let via_engine = run.policy_outcomes[0]
             .outcome
@@ -715,9 +727,9 @@ mod tests {
             vec![Box::new(PointsToPolicy::new(constraints.clone()))],
             budget,
         )
-        .run();
-        let second =
-            SolverEngine::new(vec![Box::new(PointsToPolicy::new(constraints))], budget).run();
+        .run(&crate::core::AnalysisDb::new().stable_key_interner());
+        let second = SolverEngine::new(vec![Box::new(PointsToPolicy::new(constraints))], budget)
+            .run(&crate::core::AnalysisDb::new().stable_key_interner());
 
         assert_eq!(first, second);
         assert_eq!(first.budget_status, BudgetStatus::WithinBudget);
@@ -748,7 +760,7 @@ mod tests {
         budget.points_to.max_objects_per_var = 1;
 
         let engine = SolverEngine::new(vec![Box::new(PointsToPolicy::new(constraints))], budget);
-        let run = engine.run();
+        let run = engine.run(&crate::core::AnalysisDb::new().stable_key_interner());
 
         assert_eq!(run.budget_status, BudgetStatus::BudgetExceeded);
     }
@@ -765,7 +777,7 @@ mod tests {
             ],
             budget,
         );
-        let run = engine.run();
+        let run = engine.run(&crate::core::AnalysisDb::new().stable_key_interner());
 
         assert_eq!(run.policy_outcomes.len(), 2);
         assert_eq!(run.policy_outcomes[0].policy_id, "go_rta");
@@ -790,7 +802,11 @@ mod tests {
             self.id
         }
 
-        fn solve(&self, _budget: &SolverBudget) -> PolicyOutcome {
+        fn solve(
+            &self,
+            _interner: &crate::core::StableKeyInterner,
+            _budget: &SolverBudget,
+        ) -> PolicyOutcome {
             self.outcome.clone()
         }
     }
@@ -800,6 +816,7 @@ mod tests {
         let target = SemanticNodeId(target);
         let provenance = DerivedEdgeProvenance::new(
             [ContributingFact::from_parts(
+                &crate::core::AnalysisDb::new().stable_key_interner(),
                 FactFamily::ExtensionFact,
                 &[("constraint", stable_key.to_string())],
             )],
@@ -847,7 +864,7 @@ mod tests {
         };
         let engine = SolverEngine::new(vec![Box::new(first), Box::new(second)], budget);
 
-        let run = engine.run();
+        let run = engine.run(&crate::core::AnalysisDb::new().stable_key_interner());
 
         assert_eq!(run.policy_outcomes.len(), 2);
         assert_eq!(run.policy_outcomes[1].policy_id, "edge_producer");
@@ -862,7 +879,7 @@ mod tests {
     #[test]
     fn empty_engine_reports_not_run() {
         let engine = SolverEngine::new(Vec::new(), SolverBudget::default());
-        let run = engine.run();
+        let run = engine.run(&crate::core::AnalysisDb::new().stable_key_interner());
         assert_eq!(run.budget_status, BudgetStatus::NotRun);
         assert!(run.policy_outcomes.is_empty());
     }
@@ -907,7 +924,11 @@ mod tests {
             copy_constraint("copy|a-b", 1, 2),
             copy_constraint("copy|b-c", 2, 3),
         ];
-        let output = derive_edges(&constraints, &SolverBudget::default());
+        let output = derive_edges(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &constraints,
+            &SolverBudget::default(),
+        );
 
         use crate::analysis::ids::SemanticNodeId;
         let transitive = output
@@ -924,6 +945,7 @@ mod tests {
     #[test]
     fn solver_model_edge_provenance_is_private_and_deterministic() {
         let output = derive_edges(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
             &[model_constraint("model|register", 10, 20)],
             &SolverBudget::default(),
         );
@@ -945,10 +967,12 @@ mod tests {
     #[test]
     fn solver_model_edge_cache_identity_changes_with_model_input() {
         let first = derive_edges(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
             &[model_constraint("model|register-a", 10, 20)],
             &SolverBudget::default(),
         );
         let second = derive_edges(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
             &[model_constraint("model|register-b", 10, 20)],
             &SolverBudget::default(),
         );
@@ -966,6 +990,7 @@ mod tests {
         let mut budget = SolverBudget::default();
         budget.adaptation.max_model_derived_edges = 1;
         let output = derive_edges(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
             &[
                 model_constraint("model|register-a", 10, 20),
                 model_constraint("model|register-b", 11, 21),
@@ -982,6 +1007,7 @@ mod tests {
         let mut budget = SolverBudget::default();
         budget.adaptation.max_targets_per_source = 1;
         let output = derive_edges(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
             &[
                 model_constraint("model|register-a", 10, 20),
                 model_constraint("model|register-b", 10, 21),
@@ -1006,7 +1032,11 @@ mod tests {
         untrusted.precision = PointsToPrecision::Unknown;
         let constraints = vec![clean, untrusted];
 
-        let output = derive_edges(&constraints, &SolverBudget::default());
+        let output = derive_edges(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &constraints,
+            &SolverBudget::default(),
+        );
 
         use crate::analysis::ids::SemanticNodeId;
         let edge = output
@@ -1036,7 +1066,11 @@ mod tests {
             copy_constraint("copy|b-c", 2, 3),
         ];
 
-        let output = derive_edges(&constraints, &SolverBudget::default());
+        let output = derive_edges(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &constraints,
+            &SolverBudget::default(),
+        );
 
         use crate::analysis::ids::SemanticNodeId;
         let edge = output
@@ -1072,7 +1106,11 @@ mod tests {
             ..SolverBudget::default()
         };
 
-        let output = derive_edges(&constraints, &budget);
+        let output = derive_edges(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &constraints,
+            &budget,
+        );
 
         use crate::analysis::ids::SemanticNodeId;
         assert!(
@@ -1106,7 +1144,11 @@ mod tests {
         let budget = SolverBudget::default();
         use crate::analysis::ids::SemanticNodeId;
 
-        let base = derive_edges(&constraints, &budget);
+        let base = derive_edges(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &constraints,
+            &budget,
+        );
         let ad: Vec<&DerivedEdgeFact> = base
             .derived_edges
             .iter()
@@ -1131,7 +1173,11 @@ mod tests {
             .filter(|c| c.stable_key != "copy|a-c")
             .cloned()
             .collect();
-        let rerun_off = derive_edges(&without_off_path, &budget);
+        let rerun_off = derive_edges(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &without_off_path,
+            &budget,
+        );
         assert!(
             rerun_off
                 .derived_edges
@@ -1147,7 +1193,11 @@ mod tests {
             .filter(|c| c.stable_key != "copy|a-b")
             .cloned()
             .collect();
-        let rerun_witness = derive_edges(&without_witness, &budget);
+        let rerun_witness = derive_edges(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &without_witness,
+            &budget,
+        );
         assert!(
             !rerun_witness
                 .derived_edges
@@ -1172,7 +1222,11 @@ mod tests {
             ..SolverBudget::default()
         };
 
-        let output = derive_edges(&constraints, &budget);
+        let output = derive_edges(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &constraints,
+            &budget,
+        );
 
         use crate::analysis::ids::SemanticNodeId;
         let edge_1_2 = output
@@ -1213,7 +1267,11 @@ mod tests {
             copy_constraint("copy|c-d", 3, 4),
         ];
 
-        let output = derive_edges(&constraints, &SolverBudget::default());
+        let output = derive_edges(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &constraints,
+            &SolverBudget::default(),
+        );
 
         use crate::analysis::ids::SemanticNodeId;
         let edge = output
@@ -1261,7 +1319,11 @@ mod tests {
             copy_constraint("copy|y-d", 3, 4),
         ];
 
-        let output = derive_edges(&constraints, &SolverBudget::default());
+        let output = derive_edges(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &constraints,
+            &SolverBudget::default(),
+        );
 
         use crate::analysis::ids::SemanticNodeId;
         let edge_ae = output
@@ -1292,7 +1354,11 @@ mod tests {
             copy_constraint("copy|10-11", 10, 11),
         ];
 
-        let output = derive_edges(&constraints, &SolverBudget::default());
+        let output = derive_edges(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &constraints,
+            &SolverBudget::default(),
+        );
 
         use crate::analysis::ids::SemanticNodeId;
         let first = output
@@ -1359,7 +1425,10 @@ mod tests {
             budget,
         );
 
-        let output = engine.run_to_solver_output(&copy_constraints);
+        let output = engine.run_to_solver_output(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &copy_constraints,
+        );
 
         // The transitive CopyEdge closure is present (the points-to edges that DO enter
         // the output completed within budget).
@@ -1458,7 +1527,8 @@ mod tests {
             ],
             budget,
         );
-        let output = engine.run_to_solver_output(&[]);
+        let output =
+            engine.run_to_solver_output(&crate::core::AnalysisDb::new().stable_key_interner(), &[]);
         assert_eq!(
             output.budget_status,
             BudgetStatus::BudgetExceeded,
@@ -1476,8 +1546,16 @@ mod tests {
         let mut shuffled = constraints.clone();
         shuffled.reverse();
 
-        let a = derive_edges(&constraints, &SolverBudget::default());
-        let b = derive_edges(&shuffled, &SolverBudget::default());
+        let a = derive_edges(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &constraints,
+            &SolverBudget::default(),
+        );
+        let b = derive_edges(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &shuffled,
+            &SolverBudget::default(),
+        );
 
         let a_json = serde_json::to_string(&a.derived_edges).expect("serialize a");
         let b_json = serde_json::to_string(&b.derived_edges).expect("serialize b");

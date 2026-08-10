@@ -215,6 +215,8 @@ fn derive_requested_symbols_uncached_with_payload(
     loaded: &LoadedConfig,
     plan: &AnalysisPlan,
 ) -> (SymbolGraphDerivation, Option<SymbolGraphLayerPayload>) {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     if !plan.requests_any_capability(SYMBOL_GRAPH_CAPABILITIES) {
         return (SymbolGraphDerivation::default(), None);
     }
@@ -236,13 +238,14 @@ fn derive_requested_symbols_uncached_with_payload(
 
     let output = builder.finish();
     let closure = alias_reexport_closure(
+        interner,
         &semantic_output.aliases,
         &semantic_output.exports,
         &semantic_output.stable_exports,
     );
     semantic_output.aliases = closure.aliases;
     semantic_output.resolutions.extend(closure.resolutions);
-    let generated_hooks = emit_native_generated_symbol_hooks(&semantic_output);
+    let generated_hooks = emit_native_generated_symbol_hooks(interner, &semantic_output);
     semantic_output
         .generated_symbols
         .extend(generated_hooks.generated_symbols);

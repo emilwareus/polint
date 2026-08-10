@@ -40,6 +40,8 @@ use crate::ts::{
 };
 
 pub(crate) fn lower_ts_mir(db: &AnalysisDb) -> MirOutput {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let mut lowering = TsMirLowering::default();
     let mut files = db
         .files()
@@ -49,7 +51,7 @@ pub(crate) fn lower_ts_mir(db: &AnalysisDb) -> MirOutput {
     files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
 
     for file in files {
-        lowering.lower_file(db, file);
+        lowering.lower_file(interner, db, file);
     }
 
     let (places, place_types) = lowering.places.clone().finish_with_types();
@@ -58,7 +60,7 @@ pub(crate) fn lower_ts_mir(db: &AnalysisDb) -> MirOutput {
         .map(|place| (place.stable_key.clone(), place.id))
         .collect::<BTreeMap<_, _>>();
     let operations = lowering.finish_operations(&place_ids);
-    let unsupported = lowering.finish_unsupported(&place_ids);
+    let unsupported = lowering.finish_unsupported(interner, &place_ids);
     let control_effects = lowering
         .operations
         .iter()
@@ -128,7 +130,10 @@ fn lower_control_flow(
             .chain(body_effects.keys())
             .copied()
             .collect::<BTreeSet<_>>();
-        let mut drafts = vec![BlockDraft::new(MirBlockId(blocks.len() as u64), body.id, 0)];
+        let mut drafts = vec![BlockDraft::new(
+            MirBlockId(blocks.len() as u64),
+            (body.id, 0),
+        )];
         let mut current = push_block_draft(&mut drafts, blocks.len(), body.id);
         drafts[0].terminator = Some(MirTerminatorKind::Goto {
             target: drafts[current].id,
@@ -320,7 +325,8 @@ struct BlockDraft {
 }
 
 impl BlockDraft {
-    fn new(id: MirBlockId, body: MirBodyId, ordinal: u32) -> Self {
+    fn new(id: MirBlockId, pair: (MirBodyId, u32)) -> Self {
+        let (body, ordinal) = pair;
         Self {
             id,
             body,
@@ -335,8 +341,7 @@ fn push_block_draft(drafts: &mut Vec<BlockDraft>, base: usize, body: MirBodyId) 
     let index = drafts.len();
     drafts.push(BlockDraft::new(
         MirBlockId((base + index) as u64),
-        body,
-        index as u32,
+        (body, index as u32),
     ));
     index
 }
@@ -357,7 +362,12 @@ struct TsMirLowering {
 }
 
 impl TsMirLowering {
-    fn lower_file(&mut self, db: &AnalysisDb, file: &SourceFile) {
+    fn lower_file(
+        &mut self,
+        interner: &crate::core::StableKeyInterner,
+        db: &AnalysisDb,
+        file: &SourceFile,
+    ) {
         let allocator = Allocator::default();
         let parsed = parse_ts_file(&allocator, file);
         for error in &parsed.errors {
@@ -421,7 +431,7 @@ impl TsMirLowering {
             else {
                 continue;
             };
-            let body = self.push_body(db, file, function_fact, span);
+            let body = self.push_body(interner, db, file, function_fact, span);
             prepared.push((function, function_fact.id, body));
         }
         let closure_bodies = prepared
@@ -438,7 +448,7 @@ impl TsMirLowering {
                 0,
                 file.source.len(),
             );
-            let body = self.push_body(db, file, module_function, span);
+            let body = self.push_body(interner, db, file, module_function, span);
             let mut module_lowering = FunctionLowering::new(
                 file,
                 file.source.as_ref(),
@@ -448,6 +458,7 @@ impl TsMirLowering {
                 closure_capture_names.clone(),
             );
             module_lowering.lower_statements(
+                interner,
                 &parsed.program().body,
                 &mut self.places,
                 &mut self.operations,
@@ -464,9 +475,10 @@ impl TsMirLowering {
                 closure_bodies.clone(),
                 closure_capture_names.clone(),
             );
-            function_lowering.lower_parameters(&function.parameters, &mut self.places);
+            function_lowering.lower_parameters(interner, &function.parameters, &mut self.places);
             match function.body {
                 CandidateBody::Statements(statements) => function_lowering.lower_statements(
+                    interner,
                     statements,
                     &mut self.places,
                     &mut self.operations,
@@ -474,6 +486,7 @@ impl TsMirLowering {
                 ),
                 CandidateBody::Expression(expression) => {
                     function_lowering.lower_expression(
+                        interner,
                         expression,
                         &mut self.places,
                         &mut self.operations,
@@ -483,12 +496,14 @@ impl TsMirLowering {
                 }
                 CandidateBody::ReturnExpression(expression) => {
                     let value = function_lowering.lower_value(
+                        interner,
                         expression,
                         &mut self.places,
                         &mut self.operations,
                         &mut self.unsupported,
                     );
                     function_lowering.push_operation(
+                        interner,
                         &mut self.operations,
                         expression.span(),
                         OperationKindDraft::Return { value },
@@ -501,14 +516,16 @@ impl TsMirLowering {
 
     fn push_body(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         db: &AnalysisDb,
         file: &SourceFile,
         function: &FunctionFact,
         span: Span,
     ) -> MirBody {
         let id = MirBodyId(self.bodies.len() as u64);
-        let owner_stable_key = owner_stable_key(file, function);
+        let owner_stable_key = owner_stable_key(interner, file, function);
         let stable_key = semantic_stable_key(
+            interner,
             FactFamily::MirBody,
             &[
                 ("language", language_label(file.language).to_string()),
@@ -554,11 +571,12 @@ impl TsMirLowering {
 
     fn finish_unsupported(
         &self,
+        interner: &crate::core::StableKeyInterner,
         place_ids: &BTreeMap<String, PlaceId>,
     ) -> Vec<UnsupportedSemanticFact> {
         self.unsupported
             .iter()
-            .map(|draft| draft.to_fact(place_ids))
+            .map(|draft| draft.to_fact(interner, place_ids))
             .collect()
     }
 }
@@ -1346,7 +1364,12 @@ impl<'source> FunctionLowering<'source> {
         }
     }
 
-    fn lower_parameters(&mut self, names: &[String], places: &mut PlaceTableBuilder) {
+    fn lower_parameters(
+        &mut self,
+        interner: &crate::core::StableKeyInterner,
+        names: &[String],
+        places: &mut PlaceTableBuilder,
+    ) {
         for (index, name) in names.iter().enumerate() {
             let root = PlaceRoot::Parameter {
                 function: self.function,
@@ -1354,24 +1377,26 @@ impl<'source> FunctionLowering<'source> {
                 name: Some(name.clone()),
             };
             self.parameters.insert(name.clone(), root.clone());
-            self.insert_place(places, root, Vec::new(), PlaceStatus::Resolved);
+            self.insert_place(interner, places, root, Vec::new(), PlaceStatus::Resolved);
         }
     }
 
     fn lower_statements(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         statements: &[Statement<'_>],
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
         unsupported: &mut Vec<UnsupportedDraft>,
     ) {
         for statement in statements {
-            self.lower_statement(statement, places, operations, unsupported);
+            self.lower_statement(interner, statement, places, operations, unsupported);
         }
     }
 
     fn lower_statement(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         statement: &Statement<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -1380,11 +1405,12 @@ impl<'source> FunctionLowering<'source> {
         match statement {
             Statement::BlockStatement(block) => {
                 for statement in &block.body {
-                    self.lower_statement(statement, places, operations, unsupported);
+                    self.lower_statement(interner, statement, places, operations, unsupported);
                 }
             }
             Statement::ExpressionStatement(statement) => {
                 if let Some(shape) = self.lower_expression(
+                    interner,
                     &statement.expression,
                     places,
                     operations,
@@ -1392,6 +1418,7 @@ impl<'source> FunctionLowering<'source> {
                     false,
                 ) {
                     self.push_operation(
+                        interner,
                         operations,
                         statement.span,
                         OperationKindDraft::Read {
@@ -1403,14 +1430,21 @@ impl<'source> FunctionLowering<'source> {
             }
             Statement::VariableDeclaration(variable) => {
                 for declarator in &variable.declarations {
-                    self.lower_variable_declarator(declarator, places, operations, unsupported);
+                    self.lower_variable_declarator(
+                        interner,
+                        declarator,
+                        places,
+                        operations,
+                        unsupported,
+                    );
                 }
             }
             Statement::ReturnStatement(statement) => {
                 let value = statement.argument.as_ref().and_then(|argument| {
-                    self.lower_value(argument, places, operations, unsupported)
+                    self.lower_value(interner, argument, places, operations, unsupported)
                 });
                 self.push_operation(
+                    interner,
                     operations,
                     statement.span,
                     OperationKindDraft::Return { value },
@@ -1418,70 +1452,123 @@ impl<'source> FunctionLowering<'source> {
                 );
             }
             Statement::IfStatement(statement) => {
-                self.push_branch(operations, statement.span, ControlShape::Conditional);
-                self.lower_expression(&statement.test, places, operations, unsupported, false);
-                self.lower_statement(&statement.consequent, places, operations, unsupported);
+                self.push_branch(
+                    interner,
+                    operations,
+                    statement.span,
+                    ControlShape::Conditional,
+                );
+                self.lower_expression(
+                    interner,
+                    &statement.test,
+                    places,
+                    operations,
+                    unsupported,
+                    false,
+                );
+                self.lower_statement(
+                    interner,
+                    &statement.consequent,
+                    places,
+                    operations,
+                    unsupported,
+                );
                 if let Some(alternate) = &statement.alternate {
-                    self.lower_statement(alternate, places, operations, unsupported);
+                    self.lower_statement(interner, alternate, places, operations, unsupported);
                 }
             }
             Statement::WhileStatement(statement) => {
-                self.push_branch(operations, statement.span, ControlShape::Loop);
-                self.lower_expression(&statement.test, places, operations, unsupported, false);
-                self.lower_statement(&statement.body, places, operations, unsupported);
+                self.push_branch(interner, operations, statement.span, ControlShape::Loop);
+                self.lower_expression(
+                    interner,
+                    &statement.test,
+                    places,
+                    operations,
+                    unsupported,
+                    false,
+                );
+                self.lower_statement(interner, &statement.body, places, operations, unsupported);
             }
             Statement::DoWhileStatement(statement) => {
                 self.push_unsupported(
+                    interner,
                     operations,
                     unsupported,
                     statement.span,
                     "do while",
-                    Vec::new(),
-                    ConservativeAction::HavocAffectedPlaces,
+                    (Vec::new(), ConservativeAction::HavocAffectedPlaces),
                 );
-                self.push_branch(operations, statement.span, ControlShape::Loop);
-                self.lower_statement(&statement.body, places, operations, unsupported);
-                self.lower_expression(&statement.test, places, operations, unsupported, false);
+                self.push_branch(interner, operations, statement.span, ControlShape::Loop);
+                self.lower_statement(interner, &statement.body, places, operations, unsupported);
+                self.lower_expression(
+                    interner,
+                    &statement.test,
+                    places,
+                    operations,
+                    unsupported,
+                    false,
+                );
             }
             Statement::ForStatement(statement) => {
                 if let Some(init) = &statement.init {
-                    self.lower_for_statement_init(init, places, operations, unsupported);
+                    self.lower_for_statement_init(interner, init, places, operations, unsupported);
                 }
                 if let Some(test) = &statement.test {
-                    self.push_branch(operations, test.span(), ControlShape::Loop);
-                    self.lower_expression(test, places, operations, unsupported, false);
+                    self.push_branch(interner, operations, test.span(), ControlShape::Loop);
+                    self.lower_expression(interner, test, places, operations, unsupported, false);
                 }
                 if let Some(update) = &statement.update {
-                    self.lower_expression(update, places, operations, unsupported, false);
+                    self.lower_expression(interner, update, places, operations, unsupported, false);
                 }
-                self.lower_statement(&statement.body, places, operations, unsupported);
+                self.lower_statement(interner, &statement.body, places, operations, unsupported);
             }
             Statement::ForInStatement(statement) => {
                 self.push_unsupported(
+                    interner,
                     operations,
                     unsupported,
                     statement.span,
                     "for-in",
-                    Vec::new(),
-                    ConservativeAction::HavocAffectedPlaces,
+                    (Vec::new(), ConservativeAction::HavocAffectedPlaces),
                 );
-                self.lower_for_statement_left(&statement.left, places, operations, unsupported);
-                self.lower_expression(&statement.right, places, operations, unsupported, false);
-                self.lower_statement(&statement.body, places, operations, unsupported);
+                self.lower_for_statement_left(
+                    interner,
+                    &statement.left,
+                    places,
+                    operations,
+                    unsupported,
+                );
+                self.lower_expression(
+                    interner,
+                    &statement.right,
+                    places,
+                    operations,
+                    unsupported,
+                    false,
+                );
+                self.lower_statement(interner, &statement.body, places, operations, unsupported);
             }
             Statement::ForOfStatement(statement) => {
                 self.push_unsupported(
+                    interner,
                     operations,
                     unsupported,
                     statement.span,
                     "for-of",
-                    Vec::new(),
-                    ConservativeAction::HavocAffectedPlaces,
+                    (Vec::new(), ConservativeAction::HavocAffectedPlaces),
                 );
-                self.lower_for_statement_left(&statement.left, places, operations, unsupported);
-                let value = self.lower_value(&statement.right, places, operations, unsupported);
+                self.lower_for_statement_left(
+                    interner,
+                    &statement.left,
+                    places,
+                    operations,
+                    unsupported,
+                );
+                let value =
+                    self.lower_value(interner, &statement.right, places, operations, unsupported);
                 if statement.r#await {
                     self.push_operation(
+                        interner,
                         operations,
                         statement.span,
                         OperationKindDraft::Suspend {
@@ -1491,19 +1578,20 @@ impl<'source> FunctionLowering<'source> {
                         MirStatus::Partial,
                     );
                 }
-                self.lower_statement(&statement.body, places, operations, unsupported);
+                self.lower_statement(interner, &statement.body, places, operations, unsupported);
             }
             Statement::SwitchStatement(statement) => {
                 self.push_unsupported(
+                    interner,
                     operations,
                     unsupported,
                     statement.span,
                     "switch",
-                    Vec::new(),
-                    ConservativeAction::HavocAffectedPlaces,
+                    (Vec::new(), ConservativeAction::HavocAffectedPlaces),
                 );
-                self.push_branch(operations, statement.span, ControlShape::Switch);
+                self.push_branch(interner, operations, statement.span, ControlShape::Switch);
                 self.lower_expression(
+                    interner,
                     &statement.discriminant,
                     places,
                     operations,
@@ -1512,54 +1600,73 @@ impl<'source> FunctionLowering<'source> {
                 );
                 for case in &statement.cases {
                     if let Some(test) = &case.test {
-                        self.push_branch(operations, test.span(), ControlShape::Conditional);
-                        self.lower_expression(test, places, operations, unsupported, false);
+                        self.push_branch(
+                            interner,
+                            operations,
+                            test.span(),
+                            ControlShape::Conditional,
+                        );
+                        self.lower_expression(
+                            interner,
+                            test,
+                            places,
+                            operations,
+                            unsupported,
+                            false,
+                        );
                     }
                     for statement in &case.consequent {
-                        self.lower_statement(statement, places, operations, unsupported);
+                        self.lower_statement(interner, statement, places, operations, unsupported);
                     }
                 }
             }
             Statement::TryStatement(statement) => {
                 self.push_unsupported(
+                    interner,
                     operations,
                     unsupported,
                     statement.span,
                     "try",
-                    Vec::new(),
-                    ConservativeAction::HavocAffectedPlaces,
+                    (Vec::new(), ConservativeAction::HavocAffectedPlaces),
                 );
                 for statement in &statement.block.body {
-                    self.lower_statement(statement, places, operations, unsupported);
+                    self.lower_statement(interner, statement, places, operations, unsupported);
                 }
                 if let Some(handler) = &statement.handler {
                     if let Some(param) = &handler.param {
                         if let Some(name) = binding_identifier_name(&param.pattern) {
-                            self.insert_local(places, &name);
+                            self.insert_local(interner, places, &name);
                         } else {
                             self.push_unsupported(
+                                interner,
                                 operations,
                                 unsupported,
                                 param.span,
                                 "catch destructuring",
-                                Vec::new(),
-                                ConservativeAction::HavocAffectedPlaces,
+                                (Vec::new(), ConservativeAction::HavocAffectedPlaces),
                             );
                         }
                     }
                     for statement in &handler.body.body {
-                        self.lower_statement(statement, places, operations, unsupported);
+                        self.lower_statement(interner, statement, places, operations, unsupported);
                     }
                 }
                 if let Some(finalizer) = &statement.finalizer {
                     for statement in &finalizer.body {
-                        self.lower_statement(statement, places, operations, unsupported);
+                        self.lower_statement(interner, statement, places, operations, unsupported);
                     }
                 }
             }
             Statement::ThrowStatement(statement) => {
-                let value = self.lower_value(&statement.argument, places, operations, unsupported);
+                let value = self.lower_value(
+                    interner,
+                    &statement.argument,
+                    places,
+                    operations,
+                    unsupported,
+                );
                 self.push_operation(
+                    interner,
                     operations,
                     statement.span,
                     OperationKindDraft::Throw { value },
@@ -1568,56 +1675,63 @@ impl<'source> FunctionLowering<'source> {
             }
             Statement::BreakStatement(statement) => {
                 self.push_unsupported(
+                    interner,
                     operations,
                     unsupported,
                     statement.span,
                     "break",
-                    Vec::new(),
-                    ConservativeAction::HavocAffectedPlaces,
+                    (Vec::new(), ConservativeAction::HavocAffectedPlaces),
                 );
             }
             Statement::ContinueStatement(statement) => {
                 self.push_unsupported(
+                    interner,
                     operations,
                     unsupported,
                     statement.span,
                     "continue",
-                    Vec::new(),
-                    ConservativeAction::HavocAffectedPlaces,
+                    (Vec::new(), ConservativeAction::HavocAffectedPlaces),
                 );
             }
             Statement::LabeledStatement(statement) => {
                 self.push_unsupported(
+                    interner,
                     operations,
                     unsupported,
                     statement.span,
                     "labeled statement",
-                    Vec::new(),
-                    ConservativeAction::HavocAffectedPlaces,
+                    (Vec::new(), ConservativeAction::HavocAffectedPlaces),
                 );
-                self.lower_statement(&statement.body, places, operations, unsupported);
+                self.lower_statement(interner, &statement.body, places, operations, unsupported);
             }
             Statement::WithStatement(statement) => {
                 self.push_unsupported(
+                    interner,
                     operations,
                     unsupported,
                     statement.span,
                     "with",
-                    Vec::new(),
-                    ConservativeAction::HavocAffectedPlaces,
+                    (Vec::new(), ConservativeAction::HavocAffectedPlaces),
                 );
-                self.lower_expression(&statement.object, places, operations, unsupported, false);
-                self.lower_statement(&statement.body, places, operations, unsupported);
+                self.lower_expression(
+                    interner,
+                    &statement.object,
+                    places,
+                    operations,
+                    unsupported,
+                    false,
+                );
+                self.lower_statement(interner, &statement.body, places, operations, unsupported);
             }
             Statement::EmptyStatement(_) => {}
             Statement::DebuggerStatement(statement) => {
                 self.push_unsupported(
+                    interner,
                     operations,
                     unsupported,
                     statement.span,
                     "debugger",
-                    Vec::new(),
-                    ConservativeAction::HavocAffectedPlaces,
+                    (Vec::new(), ConservativeAction::HavocAffectedPlaces),
                 );
             }
             _ => {}
@@ -1626,6 +1740,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_variable_declarator(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         declarator: &VariableDeclarator<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -1633,19 +1748,20 @@ impl<'source> FunctionLowering<'source> {
     ) {
         let Some(name) = binding_identifier_name(&declarator.id) else {
             if let Some(init) = &declarator.init {
-                self.lower_expression(init, places, operations, unsupported, false);
+                self.lower_expression(interner, init, places, operations, unsupported, false);
             }
             self.push_unsupported(
+                interner,
                 operations,
                 unsupported,
                 declarator.span,
                 "complex destructuring",
-                Vec::new(),
-                ConservativeAction::HavocAffectedPlaces,
+                (Vec::new(), ConservativeAction::HavocAffectedPlaces),
             );
             return;
         };
         let key = self.insert_local_typed(
+            interner,
             places,
             &name,
             declarator
@@ -1656,11 +1772,12 @@ impl<'source> FunctionLowering<'source> {
         let value = declarator
             .init
             .as_ref()
-            .and_then(|init| self.lower_value(init, places, operations, unsupported))
+            .and_then(|init| self.lower_value(interner, init, places, operations, unsupported))
             .unwrap_or_else(|| ValueDraft::Unknown {
                 evidence: "declaration initializer".to_string(),
             });
         self.push_assign(
+            interner,
             operations,
             declarator.span,
             key,
@@ -1671,6 +1788,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_for_statement_init(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         init: &oxc_ast::ast::ForStatementInit<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -1679,25 +1797,39 @@ impl<'source> FunctionLowering<'source> {
         match init {
             oxc_ast::ast::ForStatementInit::VariableDeclaration(variable) => {
                 for declarator in &variable.declarations {
-                    self.lower_variable_declarator(declarator, places, operations, unsupported);
+                    self.lower_variable_declarator(
+                        interner,
+                        declarator,
+                        places,
+                        operations,
+                        unsupported,
+                    );
                 }
             }
             _ => {
                 self.push_unsupported(
+                    interner,
                     operations,
                     unsupported,
                     init.span(),
                     "for initializer",
-                    Vec::new(),
-                    ConservativeAction::HavocAffectedPlaces,
+                    (Vec::new(), ConservativeAction::HavocAffectedPlaces),
                 );
-                self.lower_expression(init.to_expression(), places, operations, unsupported, false);
+                self.lower_expression(
+                    interner,
+                    init.to_expression(),
+                    places,
+                    operations,
+                    unsupported,
+                    false,
+                );
             }
         }
     }
 
     fn lower_for_statement_left(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         left: &oxc_ast::ast::ForStatementLeft<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -1706,25 +1838,33 @@ impl<'source> FunctionLowering<'source> {
         match left {
             oxc_ast::ast::ForStatementLeft::VariableDeclaration(variable) => {
                 for declarator in &variable.declarations {
-                    self.lower_variable_declarator(declarator, places, operations, unsupported);
+                    self.lower_variable_declarator(
+                        interner,
+                        declarator,
+                        places,
+                        operations,
+                        unsupported,
+                    );
                 }
             }
             _ => {
                 self.push_unsupported(
+                    interner,
                     operations,
                     unsupported,
                     left.span(),
                     "for left binding",
-                    Vec::new(),
-                    ConservativeAction::HavocAffectedPlaces,
+                    (Vec::new(), ConservativeAction::HavocAffectedPlaces),
                 );
                 if let Some(target) = self.assignment_target_shape(
+                    interner,
                     left.to_assignment_target(),
                     places,
                     operations,
                     unsupported,
                 ) {
                     self.push_assign(
+                        interner,
                         operations,
                         left.span(),
                         target.key,
@@ -1744,6 +1884,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_value(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         expression: &Expression<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -1768,13 +1909,13 @@ impl<'source> FunctionLowering<'source> {
             Expression::BinaryExpression(binary) => Some(ValueDraft::BinOp {
                 op: binary_operator_text(self.source, binary),
                 lhs: Box::new(
-                    self.lower_value(&binary.left, places, operations, unsupported)
+                    self.lower_value(interner, &binary.left, places, operations, unsupported)
                         .unwrap_or_else(|| ValueDraft::Unknown {
                             evidence: "binary left operand".to_string(),
                         }),
                 ),
                 rhs: Box::new(
-                    self.lower_value(&binary.right, places, operations, unsupported)
+                    self.lower_value(interner, &binary.right, places, operations, unsupported)
                         .unwrap_or_else(|| ValueDraft::Unknown {
                             evidence: "binary right operand".to_string(),
                         }),
@@ -1789,6 +1930,7 @@ impl<'source> FunctionLowering<'source> {
                         ObjectPropertyKind::ObjectProperty(property) => {
                             if property.computed {
                                 self.lower_expression(
+                                    interner,
                                     property.key.to_expression(),
                                     places,
                                     operations,
@@ -1798,27 +1940,43 @@ impl<'source> FunctionLowering<'source> {
                             }
                             (
                                 constant_property_key(&property.key),
-                                self.lower_value(&property.value, places, operations, unsupported)
-                                    .unwrap_or_else(|| ValueDraft::Unknown {
+                                self.lower_value(
+                                    interner,
+                                    &property.value,
+                                    places,
+                                    operations,
+                                    unsupported,
+                                )
+                                .unwrap_or_else(|| {
+                                    ValueDraft::Unknown {
                                         evidence: "object property value".to_string(),
-                                    }),
+                                    }
+                                }),
                             )
                         }
                         ObjectPropertyKind::SpreadProperty(spread) => {
                             self.push_unsupported(
+                                interner,
                                 operations,
                                 unsupported,
                                 spread.span,
                                 "spread",
-                                Vec::new(),
-                                ConservativeAction::HavocAffectedPlaces,
+                                (Vec::new(), ConservativeAction::HavocAffectedPlaces),
                             );
                             (
                                 None,
-                                self.lower_value(&spread.argument, places, operations, unsupported)
-                                    .unwrap_or_else(|| ValueDraft::Unknown {
+                                self.lower_value(
+                                    interner,
+                                    &spread.argument,
+                                    places,
+                                    operations,
+                                    unsupported,
+                                )
+                                .unwrap_or_else(|| {
+                                    ValueDraft::Unknown {
                                         evidence: "object spread value".to_string(),
-                                    }),
+                                    }
+                                }),
                             )
                         }
                     })
@@ -1834,24 +1992,33 @@ impl<'source> FunctionLowering<'source> {
                         oxc_ast::ast::ArrayExpressionElement::Elision(_) => None,
                         oxc_ast::ast::ArrayExpressionElement::SpreadElement(spread) => {
                             self.push_unsupported(
+                                interner,
                                 operations,
                                 unsupported,
                                 spread.span,
                                 "spread",
-                                Vec::new(),
-                                ConservativeAction::HavocAffectedPlaces,
+                                (Vec::new(), ConservativeAction::HavocAffectedPlaces),
                             );
                             Some((
                                 Some(index.to_string()),
-                                self.lower_value(&spread.argument, places, operations, unsupported)
-                                    .unwrap_or_else(|| ValueDraft::Unknown {
+                                self.lower_value(
+                                    interner,
+                                    &spread.argument,
+                                    places,
+                                    operations,
+                                    unsupported,
+                                )
+                                .unwrap_or_else(|| {
+                                    ValueDraft::Unknown {
                                         evidence: "array spread value".to_string(),
-                                    }),
+                                    }
+                                }),
                             ))
                         }
                         _ => Some((
                             Some(index.to_string()),
                             self.lower_value(
+                                interner,
                                 element.to_expression(),
                                 places,
                                 operations,
@@ -1865,20 +2032,23 @@ impl<'source> FunctionLowering<'source> {
                     .collect(),
             }),
             Expression::ArrowFunctionExpression(function) => {
-                self.closure_value(function.span, places)
+                self.closure_value(interner, function.span, places)
             }
-            Expression::FunctionExpression(function) => self.closure_value(function.span, places),
+            Expression::FunctionExpression(function) => {
+                self.closure_value(interner, function.span, places)
+            }
             Expression::CallExpression(call) => self
-                .lower_call(call, places, operations, unsupported)
+                .lower_call(interner, call, places, operations, unsupported)
                 .map(ValueDraft::PlaceKey),
             _ => self
-                .lower_expression(expression, places, operations, unsupported, false)
+                .lower_expression(interner, expression, places, operations, unsupported, false)
                 .map(|shape| ValueDraft::PlaceKey(shape.key)),
         }
     }
 
     fn closure_value(
         &self,
+        interner: &crate::core::StableKeyInterner,
         span: oxc_span::Span,
         places: &mut PlaceTableBuilder,
     ) -> Option<ValueDraft> {
@@ -1894,7 +2064,13 @@ impl<'source> FunctionLowering<'source> {
                     .get(name)
                     .or_else(|| self.parameters.get(name))
                     .map(|root| {
-                        self.insert_place(places, root.clone(), Vec::new(), PlaceStatus::Resolved)
+                        self.insert_place(
+                            interner,
+                            places,
+                            root.clone(),
+                            Vec::new(),
+                            PlaceStatus::Resolved,
+                        )
                     })
             })
             .collect();
@@ -1903,6 +2079,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_expression(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         expression: &Expression<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -1910,10 +2087,14 @@ impl<'source> FunctionLowering<'source> {
         assignment_destination: bool,
     ) -> Option<PlaceShape> {
         match expression {
-            Expression::Identifier(identifier) => {
-                self.lower_identifier(identifier.name.as_str(), places, assignment_destination)
-            }
+            Expression::Identifier(identifier) => self.lower_identifier(
+                interner,
+                identifier.name.as_str(),
+                places,
+                assignment_destination,
+            ),
             Expression::StaticMemberExpression(member) => self.lower_static_member(
+                interner,
                 member,
                 places,
                 operations,
@@ -1921,6 +2102,7 @@ impl<'source> FunctionLowering<'source> {
                 assignment_destination,
             ),
             Expression::ComputedMemberExpression(member) => self.lower_computed_member(
+                interner,
                 member,
                 places,
                 operations,
@@ -1928,15 +2110,20 @@ impl<'source> FunctionLowering<'source> {
                 assignment_destination,
             ),
             Expression::AssignmentExpression(assignment) => {
-                if let Some(target) =
-                    self.assignment_target_shape(&assignment.left, places, operations, unsupported)
-                {
+                if let Some(target) = self.assignment_target_shape(
+                    interner,
+                    &assignment.left,
+                    places,
+                    operations,
+                    unsupported,
+                ) {
                     let value = self
-                        .lower_value(&assignment.right, places, operations, unsupported)
+                        .lower_value(interner, &assignment.right, places, operations, unsupported)
                         .unwrap_or_else(|| ValueDraft::Unknown {
                             evidence: "assignment value".to_string(),
                         });
                     self.push_assign(
+                        interner,
                         operations,
                         assignment.span,
                         target.key.clone(),
@@ -1949,17 +2136,26 @@ impl<'source> FunctionLowering<'source> {
                     );
                     Some(target)
                 } else {
-                    self.lower_expression(&assignment.right, places, operations, unsupported, false)
+                    self.lower_expression(
+                        interner,
+                        &assignment.right,
+                        places,
+                        operations,
+                        unsupported,
+                        false,
+                    )
                 }
             }
             Expression::UpdateExpression(update) => {
                 let target = self.simple_assignment_target_shape(
+                    interner,
                     &update.argument,
                     places,
                     operations,
                     unsupported,
                 )?;
                 self.push_assign(
+                    interner,
                     operations,
                     update.span,
                     target.key.clone(),
@@ -1976,6 +2172,7 @@ impl<'source> FunctionLowering<'source> {
                         ObjectPropertyKind::ObjectProperty(property) => {
                             if property.computed {
                                 self.lower_expression(
+                                    interner,
                                     property.key.to_expression(),
                                     places,
                                     operations,
@@ -1984,6 +2181,7 @@ impl<'source> FunctionLowering<'source> {
                                 );
                             }
                             self.lower_expression(
+                                interner,
                                 &property.value,
                                 places,
                                 operations,
@@ -1993,14 +2191,15 @@ impl<'source> FunctionLowering<'source> {
                         }
                         ObjectPropertyKind::SpreadProperty(spread) => {
                             self.push_unsupported(
+                                interner,
                                 operations,
                                 unsupported,
                                 spread.span,
                                 "spread",
-                                Vec::new(),
-                                ConservativeAction::HavocAffectedPlaces,
+                                (Vec::new(), ConservativeAction::HavocAffectedPlaces),
                             );
                             self.lower_expression(
+                                interner,
                                 &spread.argument,
                                 places,
                                 operations,
@@ -2011,6 +2210,7 @@ impl<'source> FunctionLowering<'source> {
                     }
                 }
                 Some(self.temporary_shape_typed(
+                    interner,
                     places,
                     expression.span(),
                     TypeShape::Object { shape_id: None },
@@ -2021,14 +2221,15 @@ impl<'source> FunctionLowering<'source> {
                     match element {
                         oxc_ast::ast::ArrayExpressionElement::SpreadElement(spread) => {
                             self.push_unsupported(
+                                interner,
                                 operations,
                                 unsupported,
                                 spread.span,
                                 "spread",
-                                Vec::new(),
-                                ConservativeAction::HavocAffectedPlaces,
+                                (Vec::new(), ConservativeAction::HavocAffectedPlaces),
                             );
                             self.lower_expression(
+                                interner,
                                 &spread.argument,
                                 places,
                                 operations,
@@ -2039,6 +2240,7 @@ impl<'source> FunctionLowering<'source> {
                         oxc_ast::ast::ArrayExpressionElement::Elision(_) => {}
                         _ => {
                             self.lower_expression(
+                                interner,
                                 element.to_expression(),
                                 places,
                                 operations,
@@ -2049,6 +2251,7 @@ impl<'source> FunctionLowering<'source> {
                     }
                 }
                 Some(self.temporary_shape_typed(
+                    interner,
                     places,
                     expression.span(),
                     TypeShape::Structural {
@@ -2057,6 +2260,7 @@ impl<'source> FunctionLowering<'source> {
                 ))
             }
             Expression::ParenthesizedExpression(parenthesized) => self.lower_expression(
+                interner,
                 &parenthesized.expression,
                 places,
                 operations,
@@ -2064,6 +2268,7 @@ impl<'source> FunctionLowering<'source> {
                 assignment_destination,
             ),
             Expression::TSAsExpression(expression) => self.lower_expression(
+                interner,
                 &expression.expression,
                 places,
                 operations,
@@ -2071,6 +2276,7 @@ impl<'source> FunctionLowering<'source> {
                 assignment_destination,
             ),
             Expression::TSSatisfiesExpression(expression) => self.lower_expression(
+                interner,
                 &expression.expression,
                 places,
                 operations,
@@ -2078,6 +2284,7 @@ impl<'source> FunctionLowering<'source> {
                 assignment_destination,
             ),
             Expression::TSNonNullExpression(expression) => self.lower_expression(
+                interner,
                 &expression.expression,
                 places,
                 operations,
@@ -2085,6 +2292,7 @@ impl<'source> FunctionLowering<'source> {
                 assignment_destination,
             ),
             Expression::TSTypeAssertion(expression) => self.lower_expression(
+                interner,
                 &expression.expression,
                 places,
                 operations,
@@ -2092,7 +2300,7 @@ impl<'source> FunctionLowering<'source> {
                 assignment_destination,
             ),
             Expression::CallExpression(call) => self
-                .lower_call(call, places, operations, unsupported)
+                .lower_call(interner, call, places, operations, unsupported)
                 .map(|key| PlaceShape {
                     root: PlaceRoot::CallReturn {
                         call: call_site_for_span(normalized_call_expression_span(
@@ -2105,9 +2313,24 @@ impl<'source> FunctionLowering<'source> {
                     key,
                 }),
             Expression::BinaryExpression(binary) => {
-                self.lower_expression(&binary.left, places, operations, unsupported, false);
-                self.lower_expression(&binary.right, places, operations, unsupported, false);
+                self.lower_expression(
+                    interner,
+                    &binary.left,
+                    places,
+                    operations,
+                    unsupported,
+                    false,
+                );
+                self.lower_expression(
+                    interner,
+                    &binary.right,
+                    places,
+                    operations,
+                    unsupported,
+                    false,
+                );
                 Some(self.temporary_shape_typed(
+                    interner,
                     places,
                     binary.span,
                     TypeShape::Unknown {
@@ -2116,13 +2339,33 @@ impl<'source> FunctionLowering<'source> {
                 ))
             }
             Expression::UnaryExpression(unary) => {
-                self.lower_expression(&unary.argument, places, operations, unsupported, false);
-                Some(self.temporary_shape(places, unary.span))
+                self.lower_expression(
+                    interner,
+                    &unary.argument,
+                    places,
+                    operations,
+                    unsupported,
+                    false,
+                );
+                Some(self.temporary_shape(interner, places, unary.span))
             }
             Expression::ConditionalExpression(conditional) => {
-                self.push_branch(operations, conditional.span, ControlShape::Conditional);
-                self.lower_expression(&conditional.test, places, operations, unsupported, false);
+                self.push_branch(
+                    interner,
+                    operations,
+                    conditional.span,
+                    ControlShape::Conditional,
+                );
                 self.lower_expression(
+                    interner,
+                    &conditional.test,
+                    places,
+                    operations,
+                    unsupported,
+                    false,
+                );
+                self.lower_expression(
+                    interner,
                     &conditional.consequent,
                     places,
                     operations,
@@ -2130,6 +2373,7 @@ impl<'source> FunctionLowering<'source> {
                     false,
                 );
                 self.lower_expression(
+                    interner,
                     &conditional.alternate,
                     places,
                     operations,
@@ -2142,33 +2386,74 @@ impl<'source> FunctionLowering<'source> {
                     logical.operator,
                     LogicalOperator::And | LogicalOperator::Or | LogicalOperator::Coalesce
                 ) {
-                    self.push_branch(operations, logical.span, ControlShape::Conditional);
+                    self.push_branch(
+                        interner,
+                        operations,
+                        logical.span,
+                        ControlShape::Conditional,
+                    );
                 }
-                self.lower_expression(&logical.left, places, operations, unsupported, false);
-                self.lower_expression(&logical.right, places, operations, unsupported, false)
+                self.lower_expression(
+                    interner,
+                    &logical.left,
+                    places,
+                    operations,
+                    unsupported,
+                    false,
+                );
+                self.lower_expression(
+                    interner,
+                    &logical.right,
+                    places,
+                    operations,
+                    unsupported,
+                    false,
+                )
             }
             Expression::TemplateLiteral(template) => {
                 for expression in &template.expressions {
-                    self.lower_expression(expression, places, operations, unsupported, false);
+                    self.lower_expression(
+                        interner,
+                        expression,
+                        places,
+                        operations,
+                        unsupported,
+                        false,
+                    );
                 }
-                Some(self.temporary_shape(places, template.span))
+                Some(self.temporary_shape(interner, places, template.span))
             }
-            Expression::TaggedTemplateExpression(tagged) => {
-                self.lower_tagged_template_expression(tagged, places, operations, unsupported)
-            }
+            Expression::TaggedTemplateExpression(tagged) => self.lower_tagged_template_expression(
+                interner,
+                tagged,
+                places,
+                operations,
+                unsupported,
+            ),
             Expression::SequenceExpression(sequence) => {
                 let mut last = None;
                 for expression in &sequence.expressions {
-                    last =
-                        self.lower_expression(expression, places, operations, unsupported, false);
+                    last = self.lower_expression(
+                        interner,
+                        expression,
+                        places,
+                        operations,
+                        unsupported,
+                        false,
+                    );
                 }
-                last.or_else(|| Some(self.temporary_shape(places, sequence.span)))
+                last.or_else(|| Some(self.temporary_shape(interner, places, sequence.span)))
             }
-            Expression::ChainExpression(chain) => {
-                self.lower_chain_element(&chain.expression, places, operations, unsupported)
-            }
+            Expression::ChainExpression(chain) => self.lower_chain_element(
+                interner,
+                &chain.expression,
+                places,
+                operations,
+                unsupported,
+            ),
             Expression::AwaitExpression(await_expression) => {
                 let shape = self.lower_expression(
+                    interner,
                     &await_expression.argument,
                     places,
                     operations,
@@ -2176,6 +2461,7 @@ impl<'source> FunctionLowering<'source> {
                     false,
                 );
                 self.push_operation(
+                    interner,
                     operations,
                     await_expression.span,
                     OperationKindDraft::Suspend {
@@ -2190,14 +2476,15 @@ impl<'source> FunctionLowering<'source> {
             }
             Expression::ImportExpression(import_expression) => {
                 self.push_unsupported(
+                    interner,
                     operations,
                     unsupported,
                     import_expression.span,
                     "dynamic import",
-                    Vec::new(),
-                    ConservativeAction::HavocAffectedPlaces,
+                    (Vec::new(), ConservativeAction::HavocAffectedPlaces),
                 );
                 self.lower_expression(
+                    interner,
                     &import_expression.source,
                     places,
                     operations,
@@ -2205,15 +2492,30 @@ impl<'source> FunctionLowering<'source> {
                     false,
                 );
                 if let Some(options) = &import_expression.options {
-                    self.lower_expression(options, places, operations, unsupported, false);
+                    self.lower_expression(
+                        interner,
+                        options,
+                        places,
+                        operations,
+                        unsupported,
+                        false,
+                    );
                 }
-                Some(self.temporary_shape(places, import_expression.span))
+                Some(self.temporary_shape(interner, places, import_expression.span))
             }
             Expression::YieldExpression(yield_expression) => {
                 let shape = yield_expression.argument.as_ref().and_then(|argument| {
-                    self.lower_expression(argument, places, operations, unsupported, false)
+                    self.lower_expression(
+                        interner,
+                        argument,
+                        places,
+                        operations,
+                        unsupported,
+                        false,
+                    )
                 });
                 self.push_operation(
+                    interner,
                     operations,
                     yield_expression.span,
                     OperationKindDraft::Suspend {
@@ -2227,7 +2529,7 @@ impl<'source> FunctionLowering<'source> {
                 shape
             }
             Expression::NewExpression(new_expression) => self
-                .lower_new_expression(new_expression, places, operations, unsupported)
+                .lower_new_expression(interner, new_expression, places, operations, unsupported)
                 .map(|key| PlaceShape {
                     root: PlaceRoot::CallReturn {
                         call: call_site_for_span(normalized_new_expression_span(
@@ -2240,6 +2542,7 @@ impl<'source> FunctionLowering<'source> {
                     key,
                 }),
             Expression::PrivateFieldExpression(private) => self.lower_private_field(
+                interner,
                 private,
                 places,
                 operations,
@@ -2248,19 +2551,27 @@ impl<'source> FunctionLowering<'source> {
             ),
             Expression::PrivateInExpression(private_in) => {
                 self.push_unsupported(
+                    interner,
                     operations,
                     unsupported,
                     private_in.span,
                     "private in",
-                    Vec::new(),
-                    ConservativeAction::HavocAffectedPlaces,
+                    (Vec::new(), ConservativeAction::HavocAffectedPlaces),
                 );
-                self.lower_expression(&private_in.right, places, operations, unsupported, false);
-                Some(self.temporary_shape(places, private_in.span))
+                self.lower_expression(
+                    interner,
+                    &private_in.right,
+                    places,
+                    operations,
+                    unsupported,
+                    false,
+                );
+                Some(self.temporary_shape(interner, places, private_in.span))
             }
             Expression::ArrowFunctionExpression(function) => {
-                let value = self.closure_value(function.span, places)?;
+                let value = self.closure_value(interner, function.span, places)?;
                 let shape = self.temporary_shape_typed(
+                    interner,
                     places,
                     function.span,
                     TypeShape::Callable {
@@ -2268,6 +2579,7 @@ impl<'source> FunctionLowering<'source> {
                     },
                 );
                 self.push_assign(
+                    interner,
                     operations,
                     function.span,
                     shape.key.clone(),
@@ -2277,8 +2589,9 @@ impl<'source> FunctionLowering<'source> {
                 Some(shape)
             }
             Expression::FunctionExpression(function) => {
-                let value = self.closure_value(function.span, places)?;
+                let value = self.closure_value(interner, function.span, places)?;
                 let shape = self.temporary_shape_typed(
+                    interner,
                     places,
                     function.span,
                     TypeShape::Callable {
@@ -2286,6 +2599,7 @@ impl<'source> FunctionLowering<'source> {
                     },
                 );
                 self.push_assign(
+                    interner,
                     operations,
                     function.span,
                     shape.key.clone(),
@@ -2296,34 +2610,38 @@ impl<'source> FunctionLowering<'source> {
             }
             Expression::ClassExpression(class) => {
                 self.push_unsupported(
+                    interner,
                     operations,
                     unsupported,
                     class.span,
                     "class expression",
-                    Vec::new(),
-                    ConservativeAction::HavocAffectedPlaces,
+                    (Vec::new(), ConservativeAction::HavocAffectedPlaces),
                 );
-                Some(self.temporary_shape(places, class.span))
+                Some(self.temporary_shape(interner, places, class.span))
             }
             Expression::ThisExpression(this_expression) => Some(self.keyword_shape(
+                interner,
                 places,
                 "this",
                 this_expression.span,
                 assignment_destination,
             )),
             Expression::Super(super_expression) => Some(self.keyword_shape(
+                interner,
                 places,
                 "super",
                 super_expression.span,
                 assignment_destination,
             )),
             Expression::MetaProperty(meta) => Some(self.keyword_shape(
+                interner,
                 places,
                 &format!("{}.{}", meta.meta.name, meta.property.name),
                 meta.span,
                 assignment_destination,
             )),
             Expression::TSInstantiationExpression(expression) => self.lower_expression(
+                interner,
                 &expression.expression,
                 places,
                 operations,
@@ -2333,43 +2651,56 @@ impl<'source> FunctionLowering<'source> {
             Expression::JSXElement(element) => {
                 if source_text(self.source, element.span).is_some_and(|text| text.contains("=>")) {
                     self.push_unsupported(
+                        interner,
                         operations,
                         unsupported,
                         element.span,
                         "JSX callback scheduling",
-                        Vec::new(),
-                        ConservativeAction::HavocAffectedPlaces,
+                        (Vec::new(), ConservativeAction::HavocAffectedPlaces),
                     );
                 }
-                self.lower_jsx_element(element, places, operations, unsupported);
-                Some(self.temporary_shape(places, element.span))
+                self.lower_jsx_element(interner, element, places, operations, unsupported);
+                Some(self.temporary_shape(interner, places, element.span))
             }
             Expression::JSXFragment(fragment) => {
-                self.lower_jsx_children(&fragment.children, places, operations, unsupported);
-                Some(self.temporary_shape(places, fragment.span))
+                self.lower_jsx_children(
+                    interner,
+                    &fragment.children,
+                    places,
+                    operations,
+                    unsupported,
+                );
+                Some(self.temporary_shape(interner, places, fragment.span))
             }
             Expression::V8IntrinsicExpression(intrinsic) => {
                 self.push_unsupported(
+                    interner,
                     operations,
                     unsupported,
                     intrinsic.span,
                     "v8 intrinsic",
-                    Vec::new(),
-                    ConservativeAction::HavocAffectedPlaces,
+                    (Vec::new(), ConservativeAction::HavocAffectedPlaces),
                 );
-                Some(self.temporary_shape(places, intrinsic.span))
+                Some(self.temporary_shape(interner, places, intrinsic.span))
             }
-            Expression::BigIntLiteral(literal) => Some(self.temporary_shape(places, literal.span)),
-            Expression::RegExpLiteral(literal) => Some(self.temporary_shape(places, literal.span)),
+            Expression::BigIntLiteral(literal) => {
+                Some(self.temporary_shape(interner, places, literal.span))
+            }
+            Expression::RegExpLiteral(literal) => {
+                Some(self.temporary_shape(interner, places, literal.span))
+            }
             Expression::BooleanLiteral(_)
             | Expression::NullLiteral(_)
             | Expression::NumericLiteral(_)
-            | Expression::StringLiteral(_) => Some(self.temporary_shape(places, expression.span())),
+            | Expression::StringLiteral(_) => {
+                Some(self.temporary_shape(interner, places, expression.span()))
+            }
         }
     }
 
     fn lower_chain_element(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         element: &oxc_ast::ast::ChainElement<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -2377,7 +2708,7 @@ impl<'source> FunctionLowering<'source> {
     ) -> Option<PlaceShape> {
         match element {
             oxc_ast::ast::ChainElement::CallExpression(call) => self
-                .lower_call(call, places, operations, unsupported)
+                .lower_call(interner, call, places, operations, unsupported)
                 .map(|key| PlaceShape {
                     root: PlaceRoot::CallReturn {
                         call: call_site_for_span(normalized_call_expression_span(
@@ -2390,15 +2721,16 @@ impl<'source> FunctionLowering<'source> {
                     key,
                 }),
             oxc_ast::ast::ChainElement::StaticMemberExpression(member) => {
-                self.lower_static_member(member, places, operations, unsupported, false)
+                self.lower_static_member(interner, member, places, operations, unsupported, false)
             }
             oxc_ast::ast::ChainElement::ComputedMemberExpression(member) => {
-                self.lower_computed_member(member, places, operations, unsupported, false)
+                self.lower_computed_member(interner, member, places, operations, unsupported, false)
             }
             oxc_ast::ast::ChainElement::PrivateFieldExpression(private) => {
-                self.lower_private_field(private, places, operations, unsupported, false)
+                self.lower_private_field(interner, private, places, operations, unsupported, false)
             }
             oxc_ast::ast::ChainElement::TSNonNullExpression(expression) => self.lower_expression(
+                interner,
                 &expression.expression,
                 places,
                 operations,
@@ -2410,6 +2742,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_private_field(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         private: &oxc_ast::ast::PrivateFieldExpression<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -2418,34 +2751,41 @@ impl<'source> FunctionLowering<'source> {
     ) -> Option<PlaceShape> {
         if private.optional {
             self.push_unsupported(
+                interner,
                 operations,
                 unsupported,
                 private.span,
                 "optional chaining",
-                Vec::new(),
-                ConservativeAction::HavocAffectedPlaces,
+                (Vec::new(), ConservativeAction::HavocAffectedPlaces),
             );
         }
         self.push_unsupported(
+            interner,
             operations,
             unsupported,
             private.field.span,
             "private field",
-            Vec::new(),
-            ConservativeAction::HavocAffectedPlaces,
+            (Vec::new(), ConservativeAction::HavocAffectedPlaces),
         );
-        let mut shape =
-            self.lower_expression(&private.object, places, operations, unsupported, false)?;
+        let mut shape = self.lower_expression(
+            interner,
+            &private.object,
+            places,
+            operations,
+            unsupported,
+            false,
+        )?;
         shape.projections.push(PlaceProjection::Unknown {
             evidence: format!("#{}", private.field.name),
         });
-        shape.key = self.insert_shape(places, &shape);
-        self.insert_temporary(places, private.span, PlaceStatus::Partial);
+        shape.key = self.insert_shape(interner, places, &shape);
+        self.insert_temporary(interner, places, private.span, PlaceStatus::Partial);
         Some(shape)
     }
 
     fn keyword_shape(
         &self,
+        interner: &crate::core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         evidence: &str,
         span: oxc_span::Span,
@@ -2454,8 +2794,14 @@ impl<'source> FunctionLowering<'source> {
         let root = PlaceRoot::Unknown {
             evidence: evidence.to_string(),
         };
-        let key = self.insert_place(places, root.clone(), Vec::new(), PlaceStatus::Unknown);
-        self.insert_temporary(places, span, PlaceStatus::Partial);
+        let key = self.insert_place(
+            interner,
+            places,
+            root.clone(),
+            Vec::new(),
+            PlaceStatus::Unknown,
+        );
+        self.insert_temporary(interner, places, span, PlaceStatus::Partial);
         PlaceShape {
             root,
             projections: Vec::new(),
@@ -2466,6 +2812,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_jsx_element(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         element: &oxc_ast::ast::JSXElement<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -2475,27 +2822,41 @@ impl<'source> FunctionLowering<'source> {
             match attribute {
                 oxc_ast::ast::JSXAttributeItem::Attribute(attribute) => {
                     if let Some(value) = &attribute.value {
-                        self.lower_jsx_attribute_value(value, places, operations, unsupported);
+                        self.lower_jsx_attribute_value(
+                            interner,
+                            value,
+                            places,
+                            operations,
+                            unsupported,
+                        );
                     }
                 }
                 oxc_ast::ast::JSXAttributeItem::SpreadAttribute(spread) => {
                     self.push_unsupported(
+                        interner,
                         operations,
                         unsupported,
                         spread.span,
                         "spread",
-                        Vec::new(),
-                        ConservativeAction::HavocAffectedPlaces,
+                        (Vec::new(), ConservativeAction::HavocAffectedPlaces),
                     );
-                    self.lower_expression(&spread.argument, places, operations, unsupported, false);
+                    self.lower_expression(
+                        interner,
+                        &spread.argument,
+                        places,
+                        operations,
+                        unsupported,
+                        false,
+                    );
                 }
             }
         }
-        self.lower_jsx_children(&element.children, places, operations, unsupported);
+        self.lower_jsx_children(interner, &element.children, places, operations, unsupported);
     }
 
     fn lower_jsx_attribute_value(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         value: &oxc_ast::ast::JSXAttributeValue<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -2503,13 +2864,25 @@ impl<'source> FunctionLowering<'source> {
     ) {
         match value {
             oxc_ast::ast::JSXAttributeValue::ExpressionContainer(container) => {
-                self.lower_jsx_expression(&container.expression, places, operations, unsupported);
+                self.lower_jsx_expression(
+                    interner,
+                    &container.expression,
+                    places,
+                    operations,
+                    unsupported,
+                );
             }
             oxc_ast::ast::JSXAttributeValue::Element(element) => {
-                self.lower_jsx_element(element, places, operations, unsupported);
+                self.lower_jsx_element(interner, element, places, operations, unsupported);
             }
             oxc_ast::ast::JSXAttributeValue::Fragment(fragment) => {
-                self.lower_jsx_children(&fragment.children, places, operations, unsupported);
+                self.lower_jsx_children(
+                    interner,
+                    &fragment.children,
+                    places,
+                    operations,
+                    unsupported,
+                );
             }
             oxc_ast::ast::JSXAttributeValue::StringLiteral(_) => {}
         }
@@ -2517,6 +2890,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_jsx_children(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         children: &[oxc_ast::ast::JSXChild<'_>],
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -2525,13 +2899,20 @@ impl<'source> FunctionLowering<'source> {
         for child in children {
             match child {
                 oxc_ast::ast::JSXChild::Element(element) => {
-                    self.lower_jsx_element(element, places, operations, unsupported);
+                    self.lower_jsx_element(interner, element, places, operations, unsupported);
                 }
                 oxc_ast::ast::JSXChild::Fragment(fragment) => {
-                    self.lower_jsx_children(&fragment.children, places, operations, unsupported);
+                    self.lower_jsx_children(
+                        interner,
+                        &fragment.children,
+                        places,
+                        operations,
+                        unsupported,
+                    );
                 }
                 oxc_ast::ast::JSXChild::ExpressionContainer(container) => {
                     self.lower_jsx_expression(
+                        interner,
                         &container.expression,
                         places,
                         operations,
@@ -2540,14 +2921,15 @@ impl<'source> FunctionLowering<'source> {
                 }
                 oxc_ast::ast::JSXChild::Spread(spread) => {
                     self.push_unsupported(
+                        interner,
                         operations,
                         unsupported,
                         spread.span,
                         "spread",
-                        Vec::new(),
-                        ConservativeAction::HavocAffectedPlaces,
+                        (Vec::new(), ConservativeAction::HavocAffectedPlaces),
                     );
                     self.lower_expression(
+                        interner,
                         &spread.expression,
                         places,
                         operations,
@@ -2562,6 +2944,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_jsx_expression(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         expression: &oxc_ast::ast::JSXExpression<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -2571,6 +2954,7 @@ impl<'source> FunctionLowering<'source> {
             oxc_ast::ast::JSXExpression::EmptyExpression(_) => {}
             _ => {
                 self.lower_expression(
+                    interner,
                     expression.to_expression(),
                     places,
                     operations,
@@ -2583,6 +2967,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_static_member(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         member: &oxc_ast::ast::StaticMemberExpression<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -2591,26 +2976,33 @@ impl<'source> FunctionLowering<'source> {
     ) -> Option<PlaceShape> {
         if member.optional {
             self.push_unsupported(
+                interner,
                 operations,
                 unsupported,
                 member.span,
                 "optional chaining",
-                Vec::new(),
-                ConservativeAction::HavocAffectedPlaces,
+                (Vec::new(), ConservativeAction::HavocAffectedPlaces),
             );
         }
-        let mut shape =
-            self.lower_expression(&member.object, places, operations, unsupported, false)?;
+        let mut shape = self.lower_expression(
+            interner,
+            &member.object,
+            places,
+            operations,
+            unsupported,
+            false,
+        )?;
         shape
             .projections
             .push(PlaceProjection::Property(member.property.name.to_string()));
-        shape.key = self.insert_shape(places, &shape);
-        self.insert_temporary(places, member.span, PlaceStatus::Partial);
+        shape.key = self.insert_shape(interner, places, &shape);
+        self.insert_temporary(interner, places, member.span, PlaceStatus::Partial);
         Some(shape)
     }
 
     fn lower_computed_member(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         member: &oxc_ast::ast::ComputedMemberExpression<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -2619,38 +3011,55 @@ impl<'source> FunctionLowering<'source> {
     ) -> Option<PlaceShape> {
         if member.optional {
             self.push_unsupported(
+                interner,
                 operations,
                 unsupported,
                 member.span,
                 "optional chaining",
-                Vec::new(),
-                ConservativeAction::HavocAffectedPlaces,
+                (Vec::new(), ConservativeAction::HavocAffectedPlaces),
             );
         }
-        let mut shape =
-            self.lower_expression(&member.object, places, operations, unsupported, false)?;
+        let mut shape = self.lower_expression(
+            interner,
+            &member.object,
+            places,
+            operations,
+            unsupported,
+            false,
+        )?;
         shape.projections.push(index_projection(&member.expression));
-        shape.key = self.insert_shape(places, &shape);
+        shape.key = self.insert_shape(interner, places, &shape);
         if matches!(
             shape.projections.last(),
             Some(PlaceProjection::IndexUnknown { .. })
         ) {
             self.push_unsupported(
+                interner,
                 operations,
                 unsupported,
                 member.expression.span(),
                 "dynamic property key",
-                vec![shape.key.clone()],
-                ConservativeAction::HavocAffectedPlaces,
+                (
+                    vec![shape.key.clone()],
+                    ConservativeAction::HavocAffectedPlaces,
+                ),
             );
         }
-        self.lower_expression(&member.expression, places, operations, unsupported, false);
-        self.insert_temporary(places, member.span, PlaceStatus::Partial);
+        self.lower_expression(
+            interner,
+            &member.expression,
+            places,
+            operations,
+            unsupported,
+            false,
+        );
+        self.insert_temporary(interner, places, member.span, PlaceStatus::Partial);
         Some(shape)
     }
 
     fn lower_identifier(
         &self,
+        interner: &crate::core::StableKeyInterner,
         name: &str,
         places: &mut PlaceTableBuilder,
         assignment_destination: bool,
@@ -2681,12 +3090,13 @@ impl<'source> FunctionLowering<'source> {
             status,
             key: String::new(),
         };
-        shape.key = self.insert_shape(places, &shape);
+        shape.key = self.insert_shape(interner, places, &shape);
         Some(shape)
     }
 
     fn assignment_target_shape(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         target: &oxc_ast::ast::AssignmentTarget<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -2694,18 +3104,19 @@ impl<'source> FunctionLowering<'source> {
     ) -> Option<PlaceShape> {
         match target {
             oxc_ast::ast::AssignmentTarget::AssignmentTargetIdentifier(identifier) => {
-                self.lower_identifier(identifier.name.as_str(), places, true)
+                self.lower_identifier(interner, identifier.name.as_str(), places, true)
             }
             oxc_ast::ast::AssignmentTarget::StaticMemberExpression(member) => {
-                self.lower_static_member(member, places, operations, unsupported, true)
+                self.lower_static_member(interner, member, places, operations, unsupported, true)
             }
             oxc_ast::ast::AssignmentTarget::ComputedMemberExpression(member) => {
-                self.lower_computed_member(member, places, operations, unsupported, true)
+                self.lower_computed_member(interner, member, places, operations, unsupported, true)
             }
             oxc_ast::ast::AssignmentTarget::PrivateFieldExpression(private) => {
-                self.lower_private_field(private, places, operations, unsupported, true)
+                self.lower_private_field(interner, private, places, operations, unsupported, true)
             }
             oxc_ast::ast::AssignmentTarget::TSAsExpression(expression) => self.lower_expression(
+                interner,
                 &expression.expression,
                 places,
                 operations,
@@ -2714,6 +3125,7 @@ impl<'source> FunctionLowering<'source> {
             ),
             oxc_ast::ast::AssignmentTarget::TSSatisfiesExpression(expression) => self
                 .lower_expression(
+                    interner,
                     &expression.expression,
                     places,
                     operations,
@@ -2722,6 +3134,7 @@ impl<'source> FunctionLowering<'source> {
                 ),
             oxc_ast::ast::AssignmentTarget::TSNonNullExpression(expression) => self
                 .lower_expression(
+                    interner,
                     &expression.expression,
                     places,
                     operations,
@@ -2729,6 +3142,7 @@ impl<'source> FunctionLowering<'source> {
                     true,
                 ),
             oxc_ast::ast::AssignmentTarget::TSTypeAssertion(expression) => self.lower_expression(
+                interner,
                 &expression.expression,
                 places,
                 operations,
@@ -2738,12 +3152,12 @@ impl<'source> FunctionLowering<'source> {
             oxc_ast::ast::AssignmentTarget::ObjectAssignmentTarget(_)
             | oxc_ast::ast::AssignmentTarget::ArrayAssignmentTarget(_) => {
                 self.push_unsupported(
+                    interner,
                     operations,
                     unsupported,
                     target.span(),
                     "complex destructuring",
-                    Vec::new(),
-                    ConservativeAction::HavocAffectedPlaces,
+                    (Vec::new(), ConservativeAction::HavocAffectedPlaces),
                 );
                 None
             }
@@ -2752,6 +3166,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn simple_assignment_target_shape(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         target: &oxc_ast::ast::SimpleAssignmentTarget<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -2759,19 +3174,20 @@ impl<'source> FunctionLowering<'source> {
     ) -> Option<PlaceShape> {
         match target {
             oxc_ast::ast::SimpleAssignmentTarget::AssignmentTargetIdentifier(identifier) => {
-                self.lower_identifier(identifier.name.as_str(), places, true)
+                self.lower_identifier(interner, identifier.name.as_str(), places, true)
             }
             oxc_ast::ast::SimpleAssignmentTarget::StaticMemberExpression(member) => {
-                self.lower_static_member(member, places, operations, unsupported, true)
+                self.lower_static_member(interner, member, places, operations, unsupported, true)
             }
             oxc_ast::ast::SimpleAssignmentTarget::ComputedMemberExpression(member) => {
-                self.lower_computed_member(member, places, operations, unsupported, true)
+                self.lower_computed_member(interner, member, places, operations, unsupported, true)
             }
             oxc_ast::ast::SimpleAssignmentTarget::PrivateFieldExpression(private) => {
-                self.lower_private_field(private, places, operations, unsupported, true)
+                self.lower_private_field(interner, private, places, operations, unsupported, true)
             }
             oxc_ast::ast::SimpleAssignmentTarget::TSAsExpression(expression) => self
                 .lower_expression(
+                    interner,
                     &expression.expression,
                     places,
                     operations,
@@ -2780,6 +3196,7 @@ impl<'source> FunctionLowering<'source> {
                 ),
             oxc_ast::ast::SimpleAssignmentTarget::TSSatisfiesExpression(expression) => self
                 .lower_expression(
+                    interner,
                     &expression.expression,
                     places,
                     operations,
@@ -2788,6 +3205,7 @@ impl<'source> FunctionLowering<'source> {
                 ),
             oxc_ast::ast::SimpleAssignmentTarget::TSNonNullExpression(expression) => self
                 .lower_expression(
+                    interner,
                     &expression.expression,
                     places,
                     operations,
@@ -2796,6 +3214,7 @@ impl<'source> FunctionLowering<'source> {
                 ),
             oxc_ast::ast::SimpleAssignmentTarget::TSTypeAssertion(expression) => self
                 .lower_expression(
+                    interner,
                     &expression.expression,
                     places,
                     operations,
@@ -2805,12 +3224,18 @@ impl<'source> FunctionLowering<'source> {
         }
     }
 
-    fn insert_local(&mut self, places: &mut PlaceTableBuilder, name: &str) -> String {
-        self.insert_local_typed(places, name, None)
+    fn insert_local(
+        &mut self,
+        interner: &crate::core::StableKeyInterner,
+        places: &mut PlaceTableBuilder,
+        name: &str,
+    ) -> String {
+        self.insert_local_typed(interner, places, name, None)
     }
 
     fn insert_local_typed(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         name: &str,
         ty: Option<TypeShape>,
@@ -2820,11 +3245,24 @@ impl<'source> FunctionLowering<'source> {
             name: name.to_string(),
         };
         self.locals.insert(name.to_string(), root.clone());
-        self.insert_typed_place(places, root, Vec::new(), ty, PlaceStatus::Resolved)
+        self.insert_typed_place(
+            interner,
+            places,
+            root,
+            Vec::new(),
+            ty,
+            PlaceStatus::Resolved,
+        )
     }
 
-    fn temporary_shape(&self, places: &mut PlaceTableBuilder, span: oxc_span::Span) -> PlaceShape {
+    fn temporary_shape(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        places: &mut PlaceTableBuilder,
+        span: oxc_span::Span,
+    ) -> PlaceShape {
         self.temporary_shape_typed(
+            interner,
             places,
             span,
             TypeShape::Unknown {
@@ -2835,6 +3273,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn temporary_shape_typed(
         &self,
+        interner: &crate::core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         span: oxc_span::Span,
         ty: TypeShape,
@@ -2844,6 +3283,7 @@ impl<'source> FunctionLowering<'source> {
             ordinal: span.start,
         };
         let key = self.insert_typed_place(
+            interner,
             places,
             root.clone(),
             Vec::new(),
@@ -2860,11 +3300,13 @@ impl<'source> FunctionLowering<'source> {
 
     fn insert_temporary(
         &self,
+        interner: &crate::core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         span: oxc_span::Span,
         status: PlaceStatus,
     ) -> String {
         self.insert_place(
+            interner,
             places,
             PlaceRoot::Temporary {
                 body: self.body,
@@ -2875,8 +3317,14 @@ impl<'source> FunctionLowering<'source> {
         )
     }
 
-    fn insert_shape(&self, places: &mut PlaceTableBuilder, shape: &PlaceShape) -> String {
+    fn insert_shape(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        places: &mut PlaceTableBuilder,
+        shape: &PlaceShape,
+    ) -> String {
         self.insert_place(
+            interner,
             places,
             shape.root.clone(),
             shape.projections.clone(),
@@ -2886,16 +3334,18 @@ impl<'source> FunctionLowering<'source> {
 
     fn insert_place(
         &self,
+        interner: &crate::core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         root: PlaceRoot,
         projections: Vec<PlaceProjection>,
         status: PlaceStatus,
     ) -> String {
-        self.insert_typed_place(places, root, projections, None, status)
+        self.insert_typed_place(interner, places, root, projections, None, status)
     }
 
     fn insert_typed_place(
         &self,
+        interner: &crate::core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         root: PlaceRoot,
         projections: Vec<PlaceProjection>,
@@ -2903,6 +3353,7 @@ impl<'source> FunctionLowering<'source> {
         status: PlaceStatus,
     ) -> String {
         places.insert_typed_with_context(
+            interner,
             &self.stable_context,
             PlaceInsert {
                 language: self.language,
@@ -2918,6 +3369,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn push_assign(
         &self,
+        interner: &crate::core::StableKeyInterner,
         operations: &mut Vec<OperationDraft>,
         span: oxc_span::Span,
         place_key: String,
@@ -2925,6 +3377,7 @@ impl<'source> FunctionLowering<'source> {
         mode: AssignMode,
     ) {
         self.push_operation(
+            interner,
             operations,
             span,
             OperationKindDraft::Assign {
@@ -2938,6 +3391,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_call(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         call: &oxc_ast::ast::CallExpression<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -2945,45 +3399,53 @@ impl<'source> FunctionLowering<'source> {
     ) -> Option<String> {
         if call.optional {
             self.push_unsupported(
+                interner,
                 operations,
                 unsupported,
                 call.span,
                 "optional chaining",
-                Vec::new(),
-                ConservativeAction::HavocAffectedPlaces,
+                (Vec::new(), ConservativeAction::HavocAffectedPlaces),
             );
         }
         if callee_text(&call.callee).as_deref() == Some("eval") {
             self.push_unsupported(
+                interner,
                 operations,
                 unsupported,
                 call.span,
                 "eval",
-                Vec::new(),
-                ConservativeAction::HavocAffectedPlaces,
+                (Vec::new(), ConservativeAction::HavocAffectedPlaces),
             );
         }
         if callee_text(&call.callee).as_deref() == Some("require")
             && !matches!(call.arguments.first(), Some(Argument::StringLiteral(_)))
         {
             self.push_unsupported(
+                interner,
                 operations,
                 unsupported,
                 call.span,
                 "dynamic CommonJS require",
-                Vec::new(),
-                ConservativeAction::HavocAffectedPlaces,
+                (Vec::new(), ConservativeAction::HavocAffectedPlaces),
             );
         }
         let span = normalized_call_expression_span(self.source, call);
         let site = call_site_for_span(span);
         let return_key = self.insert_place(
+            interner,
             places,
             PlaceRoot::CallReturn { call: site },
             Vec::new(),
             PlaceStatus::Partial,
         );
-        self.lower_expression(&call.callee, places, operations, unsupported, false);
+        self.lower_expression(
+            interner,
+            &call.callee,
+            places,
+            operations,
+            unsupported,
+            false,
+        );
         let callee = callee_text(&call.callee).map_or_else(
             || ValueDraft::Unknown {
                 evidence: "call".to_string(),
@@ -2992,11 +3454,14 @@ impl<'source> FunctionLowering<'source> {
         );
         let mut arguments = Vec::new();
         for argument in &call.arguments {
-            if let Some(shape) = self.argument_shape(argument, places, operations, unsupported) {
+            if let Some(shape) =
+                self.argument_shape(interner, argument, places, operations, unsupported)
+            {
                 arguments.push(shape.key);
             }
         }
         self.push_operation(
+            interner,
             operations,
             span,
             OperationKindDraft::Call {
@@ -3018,6 +3483,7 @@ impl<'source> FunctionLowering<'source> {
     /// (offset by the implicit `strings` array at index 0).
     fn lower_tagged_template_expression(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         tagged: &oxc_ast::ast::TaggedTemplateExpression<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -3026,12 +3492,20 @@ impl<'source> FunctionLowering<'source> {
         let span = normalized_tagged_template_span(tagged);
         let site = call_site_for_span(span);
         let return_key = self.insert_place(
+            interner,
             places,
             PlaceRoot::CallReturn { call: site },
             Vec::new(),
             PlaceStatus::Partial,
         );
-        self.lower_expression(&tagged.tag, places, operations, unsupported, false);
+        self.lower_expression(
+            interner,
+            &tagged.tag,
+            places,
+            operations,
+            unsupported,
+            false,
+        );
         let callee = callee_text(&tagged.tag).map_or_else(
             || ValueDraft::Unknown {
                 evidence: "tagged template".to_string(),
@@ -3039,15 +3513,16 @@ impl<'source> FunctionLowering<'source> {
             |evidence| ValueDraft::Unknown { evidence },
         );
         // The strings array occupies argument slot 0; interpolations follow.
-        let mut arguments = vec![self.temporary_shape(places, span).key];
+        let mut arguments = vec![self.temporary_shape(interner, places, span).key];
         for expression in &tagged.quasi.expressions {
             if let Some(shape) =
-                self.lower_expression(expression, places, operations, unsupported, false)
+                self.lower_expression(interner, expression, places, operations, unsupported, false)
             {
                 arguments.push(shape.key);
             }
         }
         self.push_operation(
+            interner,
             operations,
             span,
             OperationKindDraft::Call {
@@ -3069,6 +3544,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_new_expression(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         expression: &oxc_ast::ast::NewExpression<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -3076,23 +3552,31 @@ impl<'source> FunctionLowering<'source> {
     ) -> Option<String> {
         if callee_text(&expression.callee).as_deref() == Some("Proxy") {
             self.push_unsupported(
+                interner,
                 operations,
                 unsupported,
                 expression.span,
                 "Proxy",
-                Vec::new(),
-                ConservativeAction::HavocAffectedPlaces,
+                (Vec::new(), ConservativeAction::HavocAffectedPlaces),
             );
         }
         let span = normalized_new_expression_span(self.source, expression);
         let site = call_site_for_span(span);
         let return_key = self.insert_place(
+            interner,
             places,
             PlaceRoot::CallReturn { call: site },
             Vec::new(),
             PlaceStatus::Partial,
         );
-        self.lower_expression(&expression.callee, places, operations, unsupported, false);
+        self.lower_expression(
+            interner,
+            &expression.callee,
+            places,
+            operations,
+            unsupported,
+            false,
+        );
         let callee = callee_text(&expression.callee).map_or_else(
             || ValueDraft::Unknown {
                 evidence: "new".to_string(),
@@ -3103,11 +3587,14 @@ impl<'source> FunctionLowering<'source> {
         );
         let mut arguments = Vec::new();
         for argument in &expression.arguments {
-            if let Some(shape) = self.argument_shape(argument, places, operations, unsupported) {
+            if let Some(shape) =
+                self.argument_shape(interner, argument, places, operations, unsupported)
+            {
                 arguments.push(shape.key);
             }
         }
         self.push_operation(
+            interner,
             operations,
             span,
             OperationKindDraft::Call {
@@ -3124,6 +3611,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn argument_shape(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         argument: &Argument<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -3132,16 +3620,24 @@ impl<'source> FunctionLowering<'source> {
         match argument {
             Argument::SpreadElement(spread) => {
                 self.push_unsupported(
+                    interner,
                     operations,
                     unsupported,
                     spread.span,
                     "spread",
-                    Vec::new(),
-                    ConservativeAction::HavocAffectedPlaces,
+                    (Vec::new(), ConservativeAction::HavocAffectedPlaces),
                 );
-                self.lower_expression(&spread.argument, places, operations, unsupported, false)
+                self.lower_expression(
+                    interner,
+                    &spread.argument,
+                    places,
+                    operations,
+                    unsupported,
+                    false,
+                )
             }
             _ => self.lower_expression(
+                interner,
                 argument.to_expression(),
                 places,
                 operations,
@@ -3153,11 +3649,13 @@ impl<'source> FunctionLowering<'source> {
 
     fn push_branch(
         &self,
+        interner: &crate::core::StableKeyInterner,
         operations: &mut Vec<OperationDraft>,
         span: oxc_span::Span,
         shape: ControlShape,
     ) {
         self.push_operation(
+            interner,
             operations,
             span,
             OperationKindDraft::Branch {
@@ -3171,13 +3669,14 @@ impl<'source> FunctionLowering<'source> {
 
     fn push_unsupported(
         &self,
+        interner: &crate::core::StableKeyInterner,
         operations: &mut Vec<OperationDraft>,
         unsupported: &mut Vec<UnsupportedDraft>,
         span: oxc_span::Span,
         construct: &str,
-        affected_place_keys: Vec<String>,
-        action: ConservativeAction,
+        pair: (Vec<String>, ConservativeAction),
     ) {
+        let (affected_place_keys, action) = pair;
         let unsupported_id = UnsupportedId(unsupported.len() as u64);
         let operation_id = MirOpId(operations.len() as u64);
         let source_evidence = source_text(self.source, span)
@@ -3199,18 +3698,22 @@ impl<'source> FunctionLowering<'source> {
             conservative_action: action,
         }));
         operations.push(OperationDraft::new(
+            interner,
             operation_id,
             self.body,
             self.stable_context.body_key(),
             span.start_byte,
             span,
-            OperationKindDraft::Unsupported { unsupported_id },
-            MirStatus::Unsupported,
+            (
+                OperationKindDraft::Unsupported { unsupported_id },
+                MirStatus::Unsupported,
+            ),
         ));
     }
 
     fn push_operation(
         &self,
+        interner: &crate::core::StableKeyInterner,
         operations: &mut Vec<OperationDraft>,
         span: oxc_span::Span,
         kind: OperationKindDraft,
@@ -3218,13 +3721,13 @@ impl<'source> FunctionLowering<'source> {
     ) {
         let id = MirOpId(operations.len() as u64);
         operations.push(OperationDraft::new(
+            interner,
             id,
             self.body,
             self.stable_context.body_key(),
             span.start,
             span_from_oxc(self.file, self.source, span),
-            kind,
-            status,
+            (kind, status),
         ));
     }
 }
@@ -3250,15 +3753,16 @@ struct OperationDraft {
 
 impl OperationDraft {
     fn new(
+        interner: &crate::core::StableKeyInterner,
         id: MirOpId,
         body: MirBodyId,
         body_stable_key: &str,
         ordinal: u32,
         span: Span,
-        kind: OperationKindDraft,
-        status: MirStatus,
+        pair: (OperationKindDraft, MirStatus),
     ) -> Self {
-        let stable_key = operation_stable_key(body_stable_key, ordinal, &span, &kind);
+        let (kind, status) = pair;
+        let stable_key = operation_stable_key(interner, body_stable_key, ordinal, &span, &kind);
         Self {
             id,
             body,
@@ -3581,7 +4085,11 @@ impl UnsupportedDraft {
         }
     }
 
-    fn to_fact(&self, place_ids: &BTreeMap<String, PlaceId>) -> UnsupportedSemanticFact {
+    fn to_fact(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        place_ids: &BTreeMap<String, PlaceId>,
+    ) -> UnsupportedSemanticFact {
         UnsupportedSemanticFact {
             id: self.id,
             body: self.body,
@@ -3607,7 +4115,7 @@ impl UnsupportedDraft {
             conservative_action: self.conservative_action,
             precision: UnsupportedPrecision::Unsupported,
             status: MirStatus::Unsupported,
-            stable_key: unsupported_stable_key(self),
+            stable_key: unsupported_stable_key(interner, self),
         }
     }
 }
@@ -3667,6 +4175,7 @@ fn unsupported_domains_for(construct: &str) -> Vec<UnsupportedDomain> {
 }
 
 fn operation_stable_key(
+    interner: &crate::core::StableKeyInterner,
     body_stable_key: &str,
     ordinal: u32,
     span: &Span,
@@ -3687,7 +4196,7 @@ fn operation_stable_key(
         .iter()
         .map(|(label, value)| (*label, value.clone()))
         .collect::<Vec<_>>();
-    semantic_stable_key(FactFamily::MirOperation, &borrowed).into_string()
+    semantic_stable_key(interner, FactFamily::MirOperation, &borrowed).into_string()
 }
 
 fn operation_place_label(index: usize) -> &'static str {
@@ -3700,8 +4209,12 @@ fn operation_place_label(index: usize) -> &'static str {
     }
 }
 
-fn unsupported_stable_key(draft: &UnsupportedDraft) -> String {
+fn unsupported_stable_key(
+    interner: &crate::core::StableKeyInterner,
+    draft: &UnsupportedDraft,
+) -> String {
     semantic_stable_key(
+        interner,
         FactFamily::UnsupportedSemantic,
         &[
             ("language", language_label(draft.language).to_string()),
@@ -3822,8 +4335,13 @@ fn span_contains(outer: &Span, inner: &Span) -> bool {
     outer.start_byte <= inner.start_byte && outer.end_byte >= inner.end_byte
 }
 
-fn owner_stable_key(file: &SourceFile, function: &FunctionFact) -> String {
+fn owner_stable_key(
+    interner: &crate::core::StableKeyInterner,
+    file: &SourceFile,
+    function: &FunctionFact,
+) -> String {
     semantic_stable_key(
+        interner,
         FactFamily::Function,
         &[
             ("language", language_label(file.language).to_string()),

@@ -344,12 +344,18 @@ fn go_rta_solver_output_is_byte_identical_under_permuted_fact_insertion_order() 
         let constraints = db.semantic_constraints().to_vec();
         let engine = SolverEngine::new(
             vec![
-                Box::new(GoRtaPolicy::new(GoRtaInputs::from_db(db))),
+                Box::new(GoRtaPolicy::new(GoRtaInputs::from_db(
+                    &crate::core::AnalysisDb::new().stable_key_interner(),
+                    db,
+                ))),
                 Box::new(TsPointsToPolicy::new(TsPointsToInputs::from_db(db))),
             ],
             budget,
         );
-        let solver_output = engine.run_to_solver_output(&constraints);
+        let solver_output = engine.run_to_solver_output(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &constraints,
+        );
         serde_json::to_string(&(&solver_output.derived_edges, solver_output.budget_status))
             .expect("serialize solver output")
     };
@@ -396,7 +402,11 @@ fn ts_points_to_solver_is_deterministic_and_non_vacuous() {
     let output = run_kernel_for_repo_for_test(temp.path()).expect("kernel runs");
     let inputs = TsPointsToInputs::from_db(&output.db);
     let solver_json = || -> String {
-        let result = solve_ts_points_to(&inputs, &SolverBudget::default());
+        let result = solve_ts_points_to(
+            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &inputs,
+            &SolverBudget::default(),
+        );
         serde_json::to_string(&result.derived_edges).expect("serialize TS points-to edges")
     };
     let canonical = solver_json();
