@@ -1143,7 +1143,9 @@ struct ControlOrder {
     line: u32,
     col: u32,
     byte: u32,
-    stable_key: String,
+    /// Resolved callsite identity text used only for deterministic ordering.
+    /// Never a StableKeyId — allocation order must not affect control order.
+    stable_key_text: String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1311,7 +1313,7 @@ fn control_order(
         line: site.span.start_line,
         col: site.span.start_col,
         byte: site.span.start_byte,
-        stable_key: db.resolve_stable_key(site.stable_key).to_string(),
+        stable_key_text: db.resolve_stable_key(site.stable_key).to_string(),
     }
 }
 

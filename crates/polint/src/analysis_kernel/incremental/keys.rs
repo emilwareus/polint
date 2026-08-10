@@ -90,7 +90,8 @@ pub(crate) struct QueryKey {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) struct SummaryKey {
-    pub(crate) callable_stable_key: String,
+    #[serde(rename = "callable_stable_key")]
+    pub(crate) callable_stable_key_text: String,
     pub(crate) summary_domain: String,
     pub(crate) summary_version: String,
     pub(crate) body_shape_digest: Digest,
@@ -840,7 +841,7 @@ impl QueryKey {
 
 impl SummaryKey {
     pub(crate) fn new(
-        callable_stable_key: impl Into<String>,
+        callable_stable_key_text: impl Into<String>,
         summary_domain: impl Into<String>,
         summary_version: impl Into<String>,
         body_shape_digest: Digest,
@@ -848,7 +849,7 @@ impl SummaryKey {
         extension_digest: Digest,
     ) -> Self {
         Self {
-            callable_stable_key: callable_stable_key.into(),
+            callable_stable_key_text: callable_stable_key_text.into(),
             summary_domain: summary_domain.into(),
             summary_version: summary_version.into(),
             body_shape_digest,

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::analysis::ids::{SummaryEventId, SummaryId};
-use crate::core::FunctionId;
+use crate::core::{FunctionId, StableKeyId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) enum SummaryDomainKind {
@@ -153,7 +153,7 @@ pub(crate) struct SummaryFlowEdge {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct SummaryFact {
     pub(crate) id: SummaryId,
-    pub(crate) callable_stable_key: String,
+    pub(crate) callable_stable_key: StableKeyId,
     pub(crate) function: FunctionId,
     pub(crate) domain: SummaryDomainKind,
     pub(crate) status: SummaryStatus,
@@ -161,20 +161,20 @@ pub(crate) struct SummaryFact {
     pub(crate) provenance: SummaryProvenance,
     pub(crate) payload_digest: String,
     pub(crate) tito_flows: Vec<SummaryFlowEdge>,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct SummaryEventFact {
     pub(crate) id: SummaryEventId,
-    pub(crate) callable_stable_key: String,
+    pub(crate) callable_stable_key: StableKeyId,
     pub(crate) function: FunctionId,
     pub(crate) domain: SummaryDomainKind,
     pub(crate) event_kind: String,
     pub(crate) reason: String,
     pub(crate) status: SummaryStatus,
     pub(crate) precision: SummaryPrecision,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
 #[cfg(test)]
@@ -266,7 +266,7 @@ mod tests {
     fn summary_fact_keeps_fields_separate() {
         let fact = SummaryFact {
             id: SummaryId(1),
-            callable_stable_key: "func::main".to_string(),
+            callable_stable_key: crate::core::stable_key_for_test("func::main"),
             function: FunctionId(10),
             domain: SummaryDomainKind::ControlEffects,
             status: SummaryStatus::Present,
@@ -274,7 +274,7 @@ mod tests {
             provenance: SummaryProvenance::NativeLocal,
             payload_digest: "abc123".to_string(),
             tito_flows: Vec::new(),
-            stable_key: "summary:control_effects:func::main".to_string(),
+            stable_key: crate::core::stable_key_for_test("summary:control_effects:func::main"),
         };
 
         assert_eq!(fact.id.0, 1);
@@ -288,14 +288,14 @@ mod tests {
     fn summary_event_fact_keeps_fields_separate() {
         let event = SummaryEventFact {
             id: SummaryEventId(1),
-            callable_stable_key: "func::main".to_string(),
+            callable_stable_key: crate::core::stable_key_for_test("func::main"),
             function: FunctionId(10),
             domain: SummaryDomainKind::CallEffects,
             event_kind: "unresolved_callee".to_string(),
             reason: "dynamic dispatch".to_string(),
             status: SummaryStatus::Unknown,
             precision: SummaryPrecision::UnknownTop,
-            stable_key: "summary_event:call_effects:func::main:0".to_string(),
+            stable_key: crate::core::stable_key_for_test("summary_event:call_effects:func::main:0"),
         };
 
         assert_eq!(event.id.0, 1);

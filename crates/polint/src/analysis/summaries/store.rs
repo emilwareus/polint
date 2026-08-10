@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use super::facts::{SummaryDomainKind, SummaryEventFact, SummaryFact};
 use crate::analysis::error::AnalysisError;
 use crate::analysis::ids::{SummaryEventId, SummaryId};
-use crate::core::FunctionId;
+use crate::core::{FunctionId, StableKeyId, StableKeyInterner};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct SummaryOutput {
@@ -16,12 +16,14 @@ impl SummaryOutput {
         Self::default()
     }
 
-    pub(crate) fn normalized(mut self) -> Self {
+    pub(crate) fn normalized(mut self, interner: &StableKeyInterner) -> Self {
         self.summaries.sort_by(|left, right| {
-            (left.stable_key.as_str(), left.id).cmp(&(right.stable_key.as_str(), right.id))
+            (interner.resolve(left.stable_key), left.id)
+                .cmp(&(interner.resolve(right.stable_key), right.id))
         });
         self.events.sort_by(|left, right| {
-            (left.stable_key.as_str(), left.id).cmp(&(right.stable_key.as_str(), right.id))
+            (interner.resolve(left.stable_key), left.id)
+                .cmp(&(interner.resolve(right.stable_key), right.id))
         });
         for (index, fact) in self.summaries.iter_mut().enumerate() {
             fact.id = SummaryId(index as u64);
@@ -36,15 +38,18 @@ impl SummaryOutput {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SummaryStore {
     output: SummaryOutput,
-    summaries_by_callable: BTreeMap<String, Vec<usize>>,
+    summaries_by_callable: BTreeMap<StableKeyId, Vec<usize>>,
     summaries_by_domain: BTreeMap<SummaryDomainKind, Vec<usize>>,
     summaries_by_function: BTreeMap<FunctionId, Vec<usize>>,
     summary_by_function_domain: BTreeMap<(FunctionId, SummaryDomainKind), usize>,
 }
 
 impl SummaryStore {
-    pub(crate) fn from_output(output: SummaryOutput) -> Result<Self, AnalysisError> {
-        Self::from_normalized_output(output.normalized())
+    pub(crate) fn from_output(
+        output: SummaryOutput,
+        interner: &StableKeyInterner,
+    ) -> Result<Self, AnalysisError> {
+        Self::from_normalized_output(output.normalized(interner))
     }
 
     pub(crate) fn from_normalized_output(output: SummaryOutput) -> Result<Self, AnalysisError> {
@@ -58,7 +63,12 @@ impl SummaryStore {
         Ok(store)
     }
 
-    pub(crate) fn merge_updates(&mut self, updated: &[SummaryFact], events: &[SummaryEventFact]) {
+    pub(crate) fn merge_updates(
+        &mut self,
+        updated: &[SummaryFact],
+        events: &[SummaryEventFact],
+        interner: &StableKeyInterner,
+    ) {
         let mut rebuild_summary_indexes = false;
 
         for fact in updated {
@@ -89,7 +99,7 @@ impl SummaryStore {
                 summaries: std::mem::take(&mut self.output.summaries),
                 events: Vec::new(),
             }
-            .normalized()
+            .normalized(interner)
             .summaries;
             self.rebuild_summary_indexes();
         }
@@ -97,7 +107,8 @@ impl SummaryStore {
         if !events.is_empty() {
             self.output.events.extend(events.iter().cloned());
             self.output.events.sort_by(|left, right| {
-                (left.stable_key.as_str(), left.id).cmp(&(right.stable_key.as_str(), right.id))
+                (interner.resolve(left.stable_key), left.id)
+                    .cmp(&(interner.resolve(right.stable_key), right.id))
             });
             for (index, fact) in self.output.events.iter_mut().enumerate() {
                 fact.id = SummaryEventId(index as u64);
@@ -105,8 +116,8 @@ impl SummaryStore {
         }
     }
 
-    pub(crate) fn summaries_by_callable(&self, callable_key: &str) -> Vec<&SummaryFact> {
-        self.summary_refs(self.summaries_by_callable.get(callable_key))
+    pub(crate) fn summaries_by_callable(&self, callable_key: StableKeyId) -> Vec<&SummaryFact> {
+        self.summary_refs(self.summaries_by_callable.get(&callable_key))
     }
 
     pub(crate) fn summaries_by_domain(&self, domain: SummaryDomainKind) -> Vec<&SummaryFact> {
@@ -150,7 +161,7 @@ impl SummaryStore {
 
         for (index, fact) in self.output.summaries.iter().enumerate() {
             self.summaries_by_callable
-                .entry(fact.callable_stable_key.clone())
+                .entry(fact.callable_stable_key)
                 .or_default()
                 .push(index);
             self.summaries_by_domain
@@ -173,6 +184,7 @@ mod tests {
     use crate::analysis::summaries::facts::{
         SummaryDomainKind, SummaryPrecision, SummaryProvenance, SummaryStatus,
     };
+    use crate::core::{stable_key_for_test, test_stable_key_interner};
 
     fn summary_fact(
         id: u64,
@@ -183,7 +195,7 @@ mod tests {
     ) -> SummaryFact {
         SummaryFact {
             id: SummaryId(id),
-            callable_stable_key: callable_key.to_string(),
+            callable_stable_key: stable_key_for_test(callable_key),
             function: FunctionId(function),
             domain,
             status: SummaryStatus::Present,
@@ -191,7 +203,7 @@ mod tests {
             provenance: SummaryProvenance::NativeLocal,
             payload_digest: format!("digest:{stable_key}"),
             tito_flows: Vec::new(),
-            stable_key: stable_key.to_string(),
+            stable_key: stable_key_for_test(stable_key),
         }
     }
 
@@ -203,19 +215,20 @@ mod tests {
     ) -> SummaryEventFact {
         SummaryEventFact {
             id: SummaryEventId(id),
-            callable_stable_key: callable_key.to_string(),
+            callable_stable_key: stable_key_for_test(callable_key),
             function: FunctionId(function),
             domain: SummaryDomainKind::CallEffects,
             event_kind: "unresolved_callee".to_string(),
             reason: "dynamic".to_string(),
             status: SummaryStatus::Unknown,
             precision: SummaryPrecision::UnknownTop,
-            stable_key: stable_key.to_string(),
+            stable_key: stable_key_for_test(stable_key),
         }
     }
 
     #[test]
     fn normalized_sorts_summaries_by_stable_key_and_reassigns_ids() {
+        let interner = test_stable_key_interner();
         let output = SummaryOutput {
             summaries: vec![
                 summary_fact(
@@ -245,54 +258,62 @@ mod tests {
                 event_fact(1, "func::a", 1, "event:a"),
             ],
         }
-        .normalized();
+        .normalized(&interner);
 
         assert_eq!(
             output
                 .summaries
                 .iter()
-                .map(|f| (f.id.0, f.stable_key.as_str()))
+                .map(|f| (f.id.0, interner.resolve(f.stable_key).to_string()))
                 .collect::<Vec<_>>(),
-            vec![(0, "summary:a"), (1, "summary:m"), (2, "summary:z")]
+            vec![
+                (0, "summary:a".to_string()),
+                (1, "summary:m".to_string()),
+                (2, "summary:z".to_string())
+            ]
         );
         assert_eq!(
             output
                 .events
                 .iter()
-                .map(|f| (f.id.0, f.stable_key.as_str()))
+                .map(|f| (f.id.0, interner.resolve(f.stable_key).to_string()))
                 .collect::<Vec<_>>(),
-            vec![(0, "event:a"), (1, "event:z")]
+            vec![(0, "event:a".to_string()), (1, "event:z".to_string())]
         );
     }
 
     #[test]
     fn from_output_builds_deterministic_indexes() {
-        let store = SummaryStore::from_output(SummaryOutput {
-            summaries: vec![
-                summary_fact(
-                    2,
-                    "func::b",
-                    2,
-                    SummaryDomainKind::ControlEffects,
-                    "summary:b-control",
-                ),
-                summary_fact(
-                    1,
-                    "func::a",
-                    1,
-                    SummaryDomainKind::ControlEffects,
-                    "summary:a-control",
-                ),
-                summary_fact(
-                    3,
-                    "func::a",
-                    1,
-                    SummaryDomainKind::MemoryEffects,
-                    "summary:a-memory",
-                ),
-            ],
-            events: vec![event_fact(1, "func::a", 1, "event:a")],
-        })
+        let interner = test_stable_key_interner();
+        let store = SummaryStore::from_output(
+            SummaryOutput {
+                summaries: vec![
+                    summary_fact(
+                        2,
+                        "func::b",
+                        2,
+                        SummaryDomainKind::ControlEffects,
+                        "summary:b-control",
+                    ),
+                    summary_fact(
+                        1,
+                        "func::a",
+                        1,
+                        SummaryDomainKind::ControlEffects,
+                        "summary:a-control",
+                    ),
+                    summary_fact(
+                        3,
+                        "func::a",
+                        1,
+                        SummaryDomainKind::MemoryEffects,
+                        "summary:a-memory",
+                    ),
+                ],
+                events: vec![event_fact(1, "func::a", 1, "event:a")],
+            },
+            &interner,
+        )
         .expect("valid output");
 
         assert_eq!(store.summary_count(), 3);
@@ -304,14 +325,31 @@ mod tests {
         assert_eq!(store.all_summaries()[2].id.0, 2);
 
         // Sorted by stable key
-        assert_eq!(store.all_summaries()[0].stable_key, "summary:a-control");
-        assert_eq!(store.all_summaries()[1].stable_key, "summary:a-memory");
-        assert_eq!(store.all_summaries()[2].stable_key, "summary:b-control");
+        assert_eq!(
+            interner
+                .resolve(store.all_summaries()[0].stable_key)
+                .as_ref(),
+            "summary:a-control"
+        );
+        assert_eq!(
+            interner
+                .resolve(store.all_summaries()[1].stable_key)
+                .as_ref(),
+            "summary:a-memory"
+        );
+        assert_eq!(
+            interner
+                .resolve(store.all_summaries()[2].stable_key)
+                .as_ref(),
+            "summary:b-control"
+        );
     }
 
     #[test]
     fn empty_output_builds_empty_store() {
-        let store = SummaryStore::from_output(SummaryOutput::empty()).expect("empty is valid");
+        let interner = test_stable_key_interner();
+        let store =
+            SummaryStore::from_output(SummaryOutput::empty(), &interner).expect("empty is valid");
 
         assert!(store.all_summaries().is_empty());
         assert!(store.all_events().is_empty());
@@ -321,48 +359,50 @@ mod tests {
 
     #[test]
     fn summaries_indexed_by_callable_and_domain() {
-        let store = SummaryStore::from_output(SummaryOutput {
-            summaries: vec![
-                summary_fact(
-                    1,
-                    "func::a",
-                    1,
-                    SummaryDomainKind::ControlEffects,
-                    "summary:a-control",
-                ),
-                summary_fact(
-                    2,
-                    "func::a",
-                    1,
-                    SummaryDomainKind::MemoryEffects,
-                    "summary:a-memory",
-                ),
-                summary_fact(
-                    3,
-                    "func::b",
-                    2,
-                    SummaryDomainKind::ControlEffects,
-                    "summary:b-control",
-                ),
-            ],
-            events: Vec::new(),
-        })
+        let interner = test_stable_key_interner();
+        let store = SummaryStore::from_output(
+            SummaryOutput {
+                summaries: vec![
+                    summary_fact(
+                        1,
+                        "func::a",
+                        1,
+                        SummaryDomainKind::ControlEffects,
+                        "summary:a-control",
+                    ),
+                    summary_fact(
+                        2,
+                        "func::a",
+                        1,
+                        SummaryDomainKind::MemoryEffects,
+                        "summary:a-memory",
+                    ),
+                    summary_fact(
+                        3,
+                        "func::b",
+                        2,
+                        SummaryDomainKind::ControlEffects,
+                        "summary:b-control",
+                    ),
+                ],
+                events: Vec::new(),
+            },
+            &interner,
+        )
         .expect("valid output");
 
         // by callable
-        let a_summaries = store.summaries_by_callable("func::a");
+        let a_key = stable_key_for_test("func::a");
+        let b_key = stable_key_for_test("func::b");
+        let a_summaries = store.summaries_by_callable(a_key);
         assert_eq!(a_summaries.len(), 2);
-        assert!(
-            a_summaries
-                .iter()
-                .all(|f| f.callable_stable_key == "func::a")
-        );
+        assert!(a_summaries.iter().all(|f| f.callable_stable_key == a_key));
 
-        let b_summaries = store.summaries_by_callable("func::b");
+        let b_summaries = store.summaries_by_callable(b_key);
         assert_eq!(b_summaries.len(), 1);
-        assert_eq!(b_summaries[0].callable_stable_key, "func::b");
+        assert_eq!(b_summaries[0].callable_stable_key, b_key);
 
-        let none = store.summaries_by_callable("func::nonexistent");
+        let none = store.summaries_by_callable(stable_key_for_test("func::nonexistent"));
         assert!(none.is_empty());
 
         // by domain
@@ -388,25 +428,29 @@ mod tests {
 
     #[test]
     fn merge_updates_replaces_existing_rows_without_reordering() {
-        let mut store = SummaryStore::from_output(SummaryOutput {
-            summaries: vec![
-                summary_fact(
-                    1,
-                    "func::a",
-                    1,
-                    SummaryDomainKind::ControlEffects,
-                    "summary:a-control",
-                ),
-                summary_fact(
-                    2,
-                    "func::b",
-                    2,
-                    SummaryDomainKind::MemoryEffects,
-                    "summary:b-memory",
-                ),
-            ],
-            events: Vec::new(),
-        })
+        let interner = test_stable_key_interner();
+        let mut store = SummaryStore::from_output(
+            SummaryOutput {
+                summaries: vec![
+                    summary_fact(
+                        1,
+                        "func::a",
+                        1,
+                        SummaryDomainKind::ControlEffects,
+                        "summary:a-control",
+                    ),
+                    summary_fact(
+                        2,
+                        "func::b",
+                        2,
+                        SummaryDomainKind::MemoryEffects,
+                        "summary:b-memory",
+                    ),
+                ],
+                events: Vec::new(),
+            },
+            &interner,
+        )
         .expect("valid output");
 
         let mut updated = summary_fact(
@@ -418,7 +462,7 @@ mod tests {
         );
         updated.payload_digest = "updated".to_string();
 
-        store.merge_updates(&[updated], &[]);
+        store.merge_updates(&[updated], &[], &interner);
 
         assert_eq!(store.all_summaries()[0].id.0, 0);
         assert_eq!(store.all_summaries()[0].payload_digest, "updated");
@@ -462,7 +506,11 @@ mod tests {
             events: Vec::new(),
         });
         assert_eq!(db.summary_facts().len(), 1);
-        assert_eq!(db.summary_facts()[0].stable_key, "summary:second");
+        assert_eq!(
+            db.resolve_stable_key(db.summary_facts()[0].stable_key)
+                .as_ref(),
+            "summary:second"
+        );
         assert!(db.summary_events().is_empty());
     }
 

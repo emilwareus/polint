@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::analysis_kernel::{FactFamily, FactPrecision, FactRef};
-use crate::core::AnalysisDb;
+use crate::core::{AnalysisDb, StableKeyInterner};
 use crate::diagnostics::{Diagnostic, TextRange};
 
 use super::facts::{
@@ -9,6 +9,7 @@ use super::facts::{
 };
 
 pub(crate) fn validate_summaries(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
+    let interner = db.stable_key_interner();
     let functions = db
         .functions()
         .iter()
@@ -21,7 +22,7 @@ pub(crate) fn validate_summaries(db: &AnalysisDb, diagnostics: &mut Vec<Diagnost
         db.summary_facts()
             .iter()
             .filter(|row| row.domain == SummaryDomainKind::ControlEffects)
-            .map(|row| row.stable_key.as_str()),
+            .map(|row| interner.resolve(row.stable_key).to_string()),
     );
     check_duplicate_stable_keys(
         diagnostics,
@@ -29,7 +30,7 @@ pub(crate) fn validate_summaries(db: &AnalysisDb, diagnostics: &mut Vec<Diagnost
         db.summary_facts()
             .iter()
             .filter(|row| row.domain == SummaryDomainKind::CallEffects)
-            .map(|row| row.stable_key.as_str()),
+            .map(|row| interner.resolve(row.stable_key).to_string()),
     );
     check_duplicate_stable_keys(
         diagnostics,
@@ -37,7 +38,7 @@ pub(crate) fn validate_summaries(db: &AnalysisDb, diagnostics: &mut Vec<Diagnost
         db.summary_facts()
             .iter()
             .filter(|row| row.domain == SummaryDomainKind::MemoryEffects)
-            .map(|row| row.stable_key.as_str()),
+            .map(|row| interner.resolve(row.stable_key).to_string()),
     );
     check_duplicate_stable_keys(
         diagnostics,
@@ -45,25 +46,25 @@ pub(crate) fn validate_summaries(db: &AnalysisDb, diagnostics: &mut Vec<Diagnost
         db.summary_facts()
             .iter()
             .filter(|row| row.domain == SummaryDomainKind::DataFlowTito)
-            .map(|row| row.stable_key.as_str()),
+            .map(|row| interner.resolve(row.stable_key).to_string()),
     );
     check_duplicate_stable_keys(
         diagnostics,
         "SummaryEvent",
         db.summary_events()
             .iter()
-            .map(|row| row.stable_key.as_str()),
+            .map(|row| interner.resolve(row.stable_key).to_string()),
     );
 
     for fact in db.summary_facts() {
-        validate_summary_fact(db, diagnostics, &functions, fact);
+        validate_summary_fact(&interner, db, diagnostics, &functions, fact);
     }
 
     for event in db.summary_events() {
-        validate_summary_event(diagnostics, &functions, event);
+        validate_summary_event(&interner, diagnostics, &functions, event);
     }
 
-    validate_scc_closure_results(db, diagnostics);
+    validate_scc_closure_results(&interner, db, diagnostics);
 
     for family in [
         FactFamily::SummaryControl,
@@ -89,7 +90,11 @@ pub(crate) fn validate_summaries(db: &AnalysisDb, diagnostics: &mut Vec<Diagnost
     }
 }
 
-fn validate_scc_closure_results(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
+fn validate_scc_closure_results(
+    interner: &StableKeyInterner,
+    db: &AnalysisDb,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     let budget_events = db
         .summary_events()
         .iter()
@@ -129,11 +134,12 @@ fn validate_scc_closure_results(db: &AnalysisDb, diagnostics: &mut Vec<Diagnosti
             || fact.status == SummaryStatus::BudgetExceeded
     }) {
         let family = summary_domain_family_label(fact.domain);
+        let stable_key = interner.resolve(fact.stable_key);
         if fact.status == SummaryStatus::BudgetExceeded && !budget_events.contains(&fact.function) {
             push_summary_diagnostic(
                 diagnostics,
                 family,
-                &fact.stable_key,
+                stable_key.as_ref(),
                 "budget_exceeded",
                 "BudgetExceeded summaries require matching budget-exceeded summary event evidence",
             );
@@ -148,7 +154,7 @@ fn validate_scc_closure_results(db: &AnalysisDb, diagnostics: &mut Vec<Diagnosti
                 push_summary_diagnostic(
                     diagnostics,
                     family,
-                    &fact.stable_key,
+                    stable_key.as_ref(),
                     "precision",
                     "interprocedural SCC summaries must not claim Exact metadata precision",
                 );
@@ -158,7 +164,7 @@ fn validate_scc_closure_results(db: &AnalysisDb, diagnostics: &mut Vec<Diagnosti
                 push_summary_diagnostic(
                     diagnostics,
                     family,
-                    &fact.stable_key,
+                    stable_key.as_ref(),
                     "provenance",
                     "interprocedural SCC summary has no resolved outgoing call evidence",
                 );
@@ -168,28 +174,30 @@ fn validate_scc_closure_results(db: &AnalysisDb, diagnostics: &mut Vec<Diagnosti
 }
 
 fn validate_summary_fact(
+    interner: &StableKeyInterner,
     db: &AnalysisDb,
     diagnostics: &mut Vec<Diagnostic>,
     functions: &BTreeSet<crate::core::FunctionId>,
     fact: &SummaryFact,
 ) {
     let family = summary_domain_family_label(fact.domain);
+    let stable_key = interner.resolve(fact.stable_key);
 
     if !functions.contains(&fact.function) {
         push_summary_diagnostic(
             diagnostics,
             family,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "function",
             "dangling function reference",
         );
     }
 
-    if fact.callable_stable_key.trim().is_empty() {
+    if interner.resolve(fact.callable_stable_key).trim().is_empty() {
         push_summary_diagnostic(
             diagnostics,
             family,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "callable_stable_key",
             "callable stable key must not be empty",
         );
@@ -199,17 +207,17 @@ fn validate_summary_fact(
         push_summary_diagnostic(
             diagnostics,
             family,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "payload_digest",
             "payload digest must not be empty",
         );
     }
 
-    if fact.stable_key.trim().is_empty() {
+    if stable_key.trim().is_empty() {
         push_summary_diagnostic(
             diagnostics,
             family,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "stable_key",
             "stable key must not be empty",
         );
@@ -222,30 +230,37 @@ fn validate_summary_fact(
         expected_family,
         fact.id.0,
         family,
-        &fact.stable_key,
+        stable_key.as_ref(),
     );
 }
 
 fn validate_summary_event(
+    interner: &StableKeyInterner,
     diagnostics: &mut Vec<Diagnostic>,
     functions: &BTreeSet<crate::core::FunctionId>,
     event: &SummaryEventFact,
 ) {
+    let stable_key = interner.resolve(event.stable_key);
+
     if !functions.contains(&event.function) {
         push_summary_diagnostic(
             diagnostics,
             "SummaryEvent",
-            &event.stable_key,
+            stable_key.as_ref(),
             "function",
             "dangling function reference",
         );
     }
 
-    if event.callable_stable_key.trim().is_empty() {
+    if interner
+        .resolve(event.callable_stable_key)
+        .trim()
+        .is_empty()
+    {
         push_summary_diagnostic(
             diagnostics,
             "SummaryEvent",
-            &event.stable_key,
+            stable_key.as_ref(),
             "callable_stable_key",
             "callable stable key must not be empty",
         );
@@ -255,7 +270,7 @@ fn validate_summary_event(
         push_summary_diagnostic(
             diagnostics,
             "SummaryEvent",
-            &event.stable_key,
+            stable_key.as_ref(),
             "event_kind",
             "event kind must not be empty",
         );
@@ -265,17 +280,17 @@ fn validate_summary_event(
         push_summary_diagnostic(
             diagnostics,
             "SummaryEvent",
-            &event.stable_key,
+            stable_key.as_ref(),
             "reason",
             "event reason must not be empty",
         );
     }
 
-    if event.stable_key.trim().is_empty() {
+    if stable_key.trim().is_empty() {
         push_summary_diagnostic(
             diagnostics,
             "SummaryEvent",
-            &event.stable_key,
+            stable_key.as_ref(),
             "stable_key",
             "stable key must not be empty",
         );
@@ -322,18 +337,18 @@ fn check_metadata(
     }
 }
 
-fn check_duplicate_stable_keys<'a>(
+fn check_duplicate_stable_keys(
     diagnostics: &mut Vec<Diagnostic>,
     family: &'static str,
-    keys: impl Iterator<Item = &'a str>,
+    keys: impl Iterator<Item = String>,
 ) {
     let mut seen = BTreeSet::new();
     for key in keys {
-        if !seen.insert(key) {
+        if !seen.insert(key.clone()) {
             push_summary_diagnostic(
                 diagnostics,
                 family,
-                key,
+                &key,
                 "stable_key",
                 "duplicate stable key",
             );
@@ -399,7 +414,9 @@ mod tests {
     use crate::analysis_kernel::{
         FactConfidence, FactFamily, FactMeta, FactPrecision, FactRef, ValidationStatus,
     };
-    use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, Span};
+    use crate::core::{
+        AnalysisDb, FileId, FunctionFact, FunctionId, Language, Span, stable_key_for_test,
+    };
     use std::path::PathBuf;
 
     fn base_db() -> AnalysisDb {
@@ -444,7 +461,7 @@ mod tests {
     ) -> SummaryFact {
         SummaryFact {
             id: SummaryId(id),
-            callable_stable_key: callable_key.to_string(),
+            callable_stable_key: stable_key_for_test(callable_key),
             function: FunctionId(function),
             domain,
             status: SummaryStatus::Present,
@@ -452,7 +469,7 @@ mod tests {
             provenance: SummaryProvenance::NativeLocal,
             payload_digest: format!("digest:{stable_key}"),
             tito_flows: Vec::new(),
-            stable_key: stable_key.to_string(),
+            stable_key: stable_key_for_test(stable_key),
         }
     }
 
@@ -484,14 +501,14 @@ mod tests {
     ) -> SummaryEventFact {
         SummaryEventFact {
             id: SummaryEventId(id),
-            callable_stable_key: callable_key.to_string(),
+            callable_stable_key: stable_key_for_test(callable_key),
             function: FunctionId(function),
             domain: SummaryDomainKind::CallEffects,
             event_kind: "unresolved_callee".to_string(),
             reason: "dynamic".to_string(),
             status: SummaryStatus::Unknown,
             precision: SummaryPrecision::UnknownTop,
-            stable_key: stable_key.to_string(),
+            stable_key: stable_key_for_test(stable_key),
         }
     }
 

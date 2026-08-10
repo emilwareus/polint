@@ -7,9 +7,10 @@
 
         #[test]
         fn fast_summary_fact_digest_matches_generic_metadata_digest() {
+            let interner = crate::core::test_stable_key_interner();
             let fact = SummaryFact {
                 id: SummaryId(0),
-                callable_stable_key: "callable\\key".to_string(),
+                callable_stable_key: interner.intern("callable\\key"),
                 function: FunctionId(1),
                 domain: SummaryDomainKind::CallEffects,
                 status: SummaryStatus::Present,
@@ -17,51 +18,56 @@
                 provenance: SummaryProvenance::InterproceduralClosure,
                 payload_digest: "payload\\digest".to_string(),
                 tito_flows: Vec::new(),
-                stable_key: "summary:key".to_string(),
+                stable_key: interner.intern("summary:key"),
             };
 
+            let callable = interner.resolve(fact.callable_stable_key).to_string();
+            let stable_key = interner.resolve(fact.stable_key).to_string();
             let generic = metadata_payload_digest(
-                &fact.stable_key,
+                &stable_key,
                 &stable_parts([
                     ("status", fact.status.as_str().to_string()),
                     ("precision", fact.precision.as_str().to_string()),
                     ("domain", fact.domain.as_str().to_string()),
-                    ("callable", fact.callable_stable_key.clone()),
+                    ("callable", callable),
                     ("provenance", fact.provenance.as_str().to_string()),
                     ("payload_digest", fact.payload_digest.clone()),
                 ]),
             );
 
-            assert_eq!(summary_fact_payload_metadata_digest(&fact), generic);
+            assert_eq!(summary_fact_payload_metadata_digest(&interner, &fact), generic);
         }
 
         #[test]
         fn fast_summary_event_digest_matches_generic_metadata_digest() {
+            let interner = crate::core::test_stable_key_interner();
             let fact = SummaryEventFact {
                 id: SummaryEventId(0),
-                callable_stable_key: "callable\\key".to_string(),
+                callable_stable_key: interner.intern("callable\\key"),
                 function: FunctionId(1),
                 domain: SummaryDomainKind::CallEffects,
                 event_kind: "unresolved\\callee".to_string(),
                 reason: "dynamic\\target".to_string(),
                 status: SummaryStatus::Unknown,
                 precision: SummaryPrecision::UnknownTop,
-                stable_key: "summary:event:key".to_string(),
+                stable_key: interner.intern("summary:event:key"),
             };
 
+            let callable = interner.resolve(fact.callable_stable_key).to_string();
+            let stable_key = interner.resolve(fact.stable_key).to_string();
             let generic = metadata_payload_digest(
-                &fact.stable_key,
+                &stable_key,
                 &stable_parts([
                     ("status", fact.status.as_str().to_string()),
                     ("precision", fact.precision.as_str().to_string()),
                     ("domain", fact.domain.as_str().to_string()),
-                    ("callable", fact.callable_stable_key.clone()),
+                    ("callable", callable),
                     ("event_kind", fact.event_kind.clone()),
                     ("reason", fact.reason.clone()),
                 ]),
             );
 
-            assert_eq!(summary_event_payload_metadata_digest(&fact), generic);
+            assert_eq!(summary_event_payload_metadata_digest(&interner, &fact), generic);
         }
 
         #[test]

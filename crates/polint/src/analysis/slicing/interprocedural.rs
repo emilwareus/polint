@@ -29,7 +29,7 @@ pub(crate) struct InterproceduralPath {
     pub(crate) nodes: Vec<EvidenceNodeId>,
     pub(crate) edges: Vec<EvidenceEdgeId>,
     pub(crate) score: PathRankScore,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key_text: String,
 }
 
 pub(crate) fn find_interprocedural_paths(
@@ -154,7 +154,8 @@ pub(crate) fn find_interprocedural_paths(
     }
 
     paths.sort_by(|left, right| {
-        compare_scores(left.score, right.score).then_with(|| left.stable_key.cmp(&right.stable_key))
+        compare_scores(left.score, right.score)
+            .then_with(|| left.stable_key_text.cmp(&right.stable_key_text))
     });
     let status = if !omitted_regions.is_empty() {
         EvidenceStatus::BudgetExceeded
@@ -240,7 +241,7 @@ fn outgoing_edges(store: &EvidenceStore, node: EvidenceNodeId) -> Vec<&EvidenceE
 
 fn path_from_frame(store: &EvidenceStore, frame: PathFrame) -> InterproceduralPath {
     InterproceduralPath {
-        stable_key: frame
+        stable_key_text: frame
             .edges
             .iter()
             .map(|edge| {
@@ -290,7 +291,7 @@ mod tests {
             find_interprocedural_paths(&store, query(EvidenceNodeId(0), EvidenceNodeId(3)));
 
         assert_eq!(result.paths.len(), 1);
-        assert_eq!(result.paths[0].stable_key, "edge:a-in>edge:a-out");
+        assert_eq!(result.paths[0].stable_key_text, "edge:a-in>edge:a-out");
     }
 
     #[test]
@@ -360,7 +361,7 @@ mod tests {
             find_interprocedural_paths(&store, query(EvidenceNodeId(0), EvidenceNodeId(2)));
 
         assert_eq!(result.paths.len(), 1);
-        assert_eq!(result.paths[0].stable_key, "edge:a-in");
+        assert_eq!(result.paths[0].stable_key_text, "edge:a-in");
         assert_eq!(result.status, EvidenceStatus::Present);
     }
 

@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use crate::analysis::ids::{DerivedEdgeId, SemanticNodeId};
 use crate::analysis::points_to::facts::{PointsToPrecision, PointsToStatus};
 use crate::analysis_kernel::FactPrecision;
+use crate::core::StableKeyId;
 
 use super::provenance::DerivedEdgeProvenance;
 
@@ -51,7 +52,7 @@ pub(crate) struct DerivedEdgeFact {
     pub(crate) precision: PointsToPrecision,
     /// Built from the referenced endpoints + the provenance fragment, never run-local
     /// dense IDs. Populated by the solver store.
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     /// The edge's provenance (D-08): contributing facts (total-ordered by stable ID),
     /// producing constraint kind, and solver step.
     pub(crate) provenance: DerivedEdgeProvenance,
@@ -93,9 +94,11 @@ mod tests {
     use crate::analysis_kernel::FactFamily;
 
     fn provenance() -> DerivedEdgeProvenance {
+        let interner = crate::core::AnalysisDb::new().stable_key_interner();
         DerivedEdgeProvenance::new(
+            &interner,
             vec![ContributingFact::from_parts(
-                &crate::core::AnalysisDb::new().stable_key_interner(),
+                &interner,
                 FactFamily::PointsToConstraint,
                 &[("constraint", "copy".to_string())],
             )],
@@ -134,7 +137,7 @@ mod tests {
             target: SemanticNodeId(2),
             status: PointsToStatus::Present,
             precision: PointsToPrecision::FlowInsensitive,
-            stable_key: "edge|copy_edge|a".to_string(),
+            stable_key: crate::core::stable_key_for_test("edge|copy_edge|a"),
             provenance: provenance(),
         };
         assert!(edge.honors_precision_ceiling());
@@ -148,7 +151,7 @@ mod tests {
             target: SemanticNodeId(2),
             status: PointsToStatus::Present,
             precision: PointsToPrecision::FlowInsensitive,
-            stable_key: "edge|copy_edge|a".to_string(),
+            stable_key: crate::core::stable_key_for_test("edge|copy_edge|a"),
             provenance: provenance(),
         };
         let json = serde_json::to_string(&edge).expect("serialize");

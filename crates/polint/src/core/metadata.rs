@@ -338,10 +338,17 @@ pub(super) fn metadata_payload_digest(
     lower_hex_u64(hash)
 }
 
-pub(super) fn summary_fact_payload_metadata_digest(fact: &SummaryFact) -> String {
+pub(super) fn summary_fact_payload_metadata_digest(
+    interner: &crate::core::StableKeyInterner,
+    fact: &SummaryFact,
+) -> String {
     let mut hash = 0xcbf29ce484222325_u64;
-    fingerprint_part(&mut hash, fact.stable_key.as_bytes());
-    fingerprint_normalized_metadata_part(&mut hash, "callable", &fact.callable_stable_key);
+    fingerprint_part(&mut hash, interner.resolve(fact.stable_key).as_bytes());
+    fingerprint_normalized_metadata_part(
+        &mut hash,
+        "callable",
+        interner.resolve(fact.callable_stable_key).as_ref(),
+    );
     fingerprint_normalized_metadata_part(&mut hash, "domain", fact.domain.as_str());
     fingerprint_normalized_metadata_part(&mut hash, "payload_digest", &fact.payload_digest);
     fingerprint_normalized_metadata_part(&mut hash, "precision", fact.precision.as_str());
@@ -350,10 +357,17 @@ pub(super) fn summary_fact_payload_metadata_digest(fact: &SummaryFact) -> String
     lower_hex_u64(hash)
 }
 
-pub(super) fn summary_event_payload_metadata_digest(fact: &SummaryEventFact) -> String {
+pub(super) fn summary_event_payload_metadata_digest(
+    interner: &crate::core::StableKeyInterner,
+    fact: &SummaryEventFact,
+) -> String {
     let mut hash = 0xcbf29ce484222325_u64;
-    fingerprint_part(&mut hash, fact.stable_key.as_bytes());
-    fingerprint_normalized_metadata_part(&mut hash, "callable", &fact.callable_stable_key);
+    fingerprint_part(&mut hash, interner.resolve(fact.stable_key).as_bytes());
+    fingerprint_normalized_metadata_part(
+        &mut hash,
+        "callable",
+        interner.resolve(fact.callable_stable_key).as_ref(),
+    );
     fingerprint_normalized_metadata_part(&mut hash, "domain", fact.domain.as_str());
     fingerprint_normalized_metadata_part(&mut hash, "event_kind", &fact.event_kind);
     fingerprint_normalized_metadata_part(&mut hash, "precision", fact.precision.as_str());

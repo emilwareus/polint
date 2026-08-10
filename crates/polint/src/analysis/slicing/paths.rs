@@ -56,7 +56,7 @@ pub(crate) struct EvidencePath {
     pub(crate) score: PathRankScore,
     pub(crate) status: EvidenceStatus,
     pub(crate) precision: EvidencePrecision,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key_text: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -196,7 +196,8 @@ pub(crate) fn find_paths(store: &EvidenceStore, query: PathQuery) -> PathResult 
     }
 
     paths.sort_by(|left, right| {
-        compare_scores(left.score, right.score).then_with(|| left.stable_key.cmp(&right.stable_key))
+        compare_scores(left.score, right.score)
+            .then_with(|| left.stable_key_text.cmp(&right.stable_key_text))
     });
     let status = if !omitted_regions.is_empty() {
         EvidenceStatus::BudgetExceeded
@@ -262,9 +263,9 @@ pub(crate) mod summary {
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub(crate) struct EvidenceSummaryStep {
         pub(crate) edge: EvidenceEdgeId,
-        pub(crate) stable_key: String,
-        pub(crate) summary_stable_key: String,
-        pub(crate) callable_stable_key: Option<String>,
+        pub(crate) stable_key_text: String,
+        pub(crate) summary_stable_key_text: String,
+        pub(crate) callable_stable_key_text: Option<String>,
         pub(crate) domain: Option<String>,
         pub(crate) input_endpoint: EvidenceNodeId,
         pub(crate) output_endpoint: EvidenceNodeId,
@@ -284,7 +285,7 @@ pub(crate) mod summary {
             .iter()
             .filter_map(|edge| compressed_step_for_edge(store, edge.id))
             .collect::<Vec<_>>();
-        steps.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+        steps.sort_by(|left, right| left.stable_key_text.cmp(&right.stable_key_text));
         steps
     }
 
@@ -306,7 +307,7 @@ pub(crate) mod summary {
         }
         Some(EvidenceSummaryStep {
             edge: edge.id,
-            stable_key: store.resolve_stable_key(edge.stable_key).to_string(),
+            stable_key_text: store.resolve_stable_key(edge.stable_key).to_string(),
             domain: edge
                 .source_fact_stable_keys
                 .iter()
@@ -316,12 +317,12 @@ pub(crate) mod summary {
                         .as_deref()
                         .and_then(summary_domain_from_key)
                 }),
-            callable_stable_key: edge
+            callable_stable_key_text: edge
                 .source_fact_stable_keys
                 .iter()
                 .find(|key| is_callable_key(key))
                 .cloned(),
-            summary_stable_key,
+            summary_stable_key_text: summary_stable_key,
             input_endpoint: edge.from,
             output_endpoint: edge.to,
             status: edge.status,
@@ -371,8 +372,11 @@ pub(crate) mod summary {
             let steps = compressed_steps(&store);
 
             assert_eq!(steps.len(), 1);
-            assert_eq!(steps[0].summary_stable_key, "summary:tito");
-            assert_eq!(steps[0].callable_stable_key.as_deref(), Some("callable:fn"));
+            assert_eq!(steps[0].summary_stable_key_text, "summary:tito");
+            assert_eq!(
+                steps[0].callable_stable_key_text.as_deref(),
+                Some("callable:fn")
+            );
             assert_eq!(steps[0].domain.as_deref(), Some("data_flow_tito"));
             assert_eq!(steps[0].input_endpoint, EvidenceNodeId(0));
             assert_eq!(steps[0].output_endpoint, EvidenceNodeId(1));
@@ -491,7 +495,7 @@ fn path_from_frame(store: &EvidenceStore, frame: PathFrame) -> EvidencePath {
         EvidencePrecision::Heuristic
     };
     EvidencePath {
-        stable_key: frame
+        stable_key_text: frame
             .edges
             .iter()
             .map(|edge| {
@@ -650,7 +654,7 @@ mod tests {
 
         let result = find_paths(&store, path_query(4));
 
-        assert_eq!(result.paths[0].stable_key, "edge:direct");
+        assert_eq!(result.paths[0].stable_key_text, "edge:direct");
     }
 
     #[test]
@@ -662,7 +666,7 @@ mod tests {
         let result = find_paths(&store, query);
 
         assert_eq!(result.paths.len(), 1);
-        assert_eq!(result.paths[0].stable_key, "edge:direct");
+        assert_eq!(result.paths[0].stable_key_text, "edge:direct");
         assert_eq!(result.status, EvidenceStatus::BudgetExceeded);
     }
 

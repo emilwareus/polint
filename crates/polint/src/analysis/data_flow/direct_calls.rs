@@ -159,8 +159,8 @@ fn bridge_target_summaries(
                 call_site,
             );
             let summary_inputs = vec![
-                summary.stable_key.clone(),
-                summary.callable_stable_key.clone(),
+                interner.resolve(summary.stable_key).to_string(),
+                interner.resolve(summary.callable_stable_key).to_string(),
             ];
             push_edge(
                 interner,
@@ -175,7 +175,7 @@ fn bridge_target_summaries(
                     budget: None,
                     evidence: vec![
                         "direct_call_summary_input_bridge".to_string(),
-                        format!("summary={}", summary.stable_key),
+                        format!("summary={}", interner.resolve(summary.stable_key)),
                         format!("flow_from={}", super::summary_edges::root_role(flow.from)),
                     ],
                     extra_input_stable_keys: summary_inputs.clone(),
@@ -205,7 +205,7 @@ fn bridge_target_summaries(
                     budget: None,
                     evidence: vec![
                         "direct_call_summary_output_bridge".to_string(),
-                        format!("summary={}", summary.stable_key),
+                        format!("summary={}", interner.resolve(summary.stable_key)),
                         format!("flow_to={}", super::summary_edges::root_role(flow.to)),
                     ],
                     extra_input_stable_keys: summary_inputs,
@@ -418,7 +418,7 @@ fn summary_node(
         FactFamily::DataFlowNode,
         &[
             ("kind", format!("{kind:?}")),
-            ("summary", fact.stable_key.clone()),
+            ("summary", interner.resolve(fact.stable_key).to_string()),
             ("role", role.to_string()),
             (
                 "call_site",
@@ -476,7 +476,7 @@ fn push_call_summary_tito_edge(
                 "refined_call",
                 interner.resolve(edge.stable_key).to_string(),
             ),
-            ("summary", summary.stable_key.clone()),
+            ("summary", interner.resolve(summary.stable_key).to_string()),
             ("from", node_key(interner, output, from)),
             ("to", node_key(interner, output, to)),
             ("flow_from", super::summary_edges::root_role(flow.from)),
@@ -509,7 +509,7 @@ fn push_call_summary_tito_edge(
         budget: None,
         evidence: vec![
             "direct_call_summary_data_flow_tito".to_string(),
-            format!("summary={}", summary.stable_key),
+            format!("summary={}", interner.resolve(summary.stable_key)),
             format!(
                 "flow={}->{}:{:?}",
                 super::summary_edges::root_role(flow.from),
@@ -519,8 +519,8 @@ fn push_call_summary_tito_edge(
         ],
         input_stable_keys: vec![
             interner.resolve(edge.stable_key).to_string(),
-            summary.stable_key.clone(),
-            summary.callable_stable_key.clone(),
+            interner.resolve(summary.stable_key).to_string(),
+            interner.resolve(summary.callable_stable_key).to_string(),
         ],
         stable_key,
     });
@@ -675,7 +675,7 @@ mod tests {
         SummaryProvenance, SummaryStatus,
     };
     use crate::analysis::summaries::store::SummaryOutput;
-    use crate::core::{FileId, FunctionId, Language, Span};
+    use crate::core::{FileId, FunctionId, Language, Span, stable_key_for_test};
 
     #[test]
     fn resolved_refined_call_creates_role_specific_edges() {
@@ -1320,7 +1320,7 @@ mod tests {
     fn summary_fact() -> SummaryFact {
         SummaryFact {
             id: SummaryId(1),
-            callable_stable_key: "callable:target".to_string(),
+            callable_stable_key: stable_key_for_test("callable:target"),
             function: FunctionId(5),
             domain: SummaryDomainKind::DataFlowTito,
             status: SummaryStatus::Present,
@@ -1332,7 +1332,7 @@ mod tests {
                 to: FlowRoot::Return,
                 kind: FlowKind::Value,
             }],
-            stable_key: "summary:target:tito".to_string(),
+            stable_key: stable_key_for_test("summary:target:tito"),
         }
     }
 }

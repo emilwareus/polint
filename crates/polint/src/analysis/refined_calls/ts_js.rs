@@ -101,11 +101,9 @@ fn solver_resolved_site(db: &AnalysisDb, site: crate::analysis::ids::CallSiteId)
     db.solver_derived_edges().iter().any(|edge| {
         edge.status == PointsToStatus::Present
             && edge.provenance.constraint_kind == "call_constraint"
-            && edge
-                .provenance
-                .contributing_facts
-                .iter()
-                .any(|fact| constraint_keys.contains(&fact.stable_key))
+            && edge.provenance.contributing_facts.iter().any(|fact| {
+                constraint_keys.contains(db.resolve_stable_key(fact.stable_key).as_ref())
+            })
     })
 }
 

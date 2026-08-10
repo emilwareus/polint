@@ -373,7 +373,7 @@ fn solver_unknowns(db: &AnalysisDb) -> Vec<UnknownRow> {
                         precision: Some(points_to_precision_label(edge.precision).to_string()),
                         docs_path: Some("docs/facts/capability-plans.md".to_string()),
                         suggested_artifact: Some("budget_or_model".to_string()),
-                        source_stable_key: Some(edge.stable_key.clone()),
+                        source_stable_key: Some(interner.resolve(edge.stable_key).to_string()),
                     },
                 )
             }),
@@ -1278,10 +1278,11 @@ mod tests {
                 target: SemanticNodeId(1),
                 status: PointsToStatus::BudgetExceeded,
                 precision: PointsToPrecision::Unknown,
-                stable_key: "solver:budget".to_string(),
+                stable_key: interner.intern("solver:budget"),
                 provenance: DerivedEdgeProvenance::new(
+                    &interner,
                     vec![ContributingFact {
-                        stable_key: "constraint:call".to_string(),
+                        stable_key: interner.intern("constraint:call"),
                     }],
                     &ConstraintKind::CallConstraint {
                         callsite: SemanticNodeId(2),

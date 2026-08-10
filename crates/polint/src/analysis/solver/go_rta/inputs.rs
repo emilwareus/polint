@@ -16,7 +16,7 @@ use crate::analysis::ids::SemanticNodeId;
 use crate::analysis::semantic_graph::facts::NodeKind;
 use crate::analysis::stable_key::semantic_stable_key;
 use crate::analysis_kernel::FactFamily;
-use crate::core::{AnalysisDb, FileId, FunctionFact, Language, Span};
+use crate::core::{AnalysisDb, FileId, FunctionFact, Language, Span, StableKeyId};
 use crate::go::semantic::facts::{GoSemanticCallStatus, GoSemanticFunctionFact};
 
 /// One concrete Go method, indexed by its receiver type, for interface-invoke
@@ -38,7 +38,7 @@ pub(crate) struct GoRtaMethod {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GoRtaInterfaceCandidate {
     pub(crate) node: SemanticNodeId,
-    pub(crate) contributing_keys: Vec<String>,
+    pub(crate) contributing_keys: Vec<StableKeyId>,
 }
 
 /// The closed dispatch obligation for one `UnresolvedDynamic` Go callsite that maps
@@ -53,14 +53,14 @@ pub(crate) struct GoRtaCallsite {
     pub(crate) callsite_node: SemanticNodeId,
     /// The contributing callsite fact's stable key (recorded in edge provenance so
     /// the deletion-invalidation property holds — D-09).
-    pub(crate) callsite_stable_key: String,
+    pub(crate) callsite_stable_key: StableKeyId,
     /// Interface-invoke discriminant: the invoked interface method name, if any.
     pub(crate) interface_method: Option<String>,
     /// Func-value-call discriminant: the call signature, if any.
     pub(crate) signature: Option<String>,
     /// The dynamic-dispatch detail fact's stable key (a second contributing fact for
     /// the resolved edge's provenance).
-    pub(crate) dispatch_stable_key: String,
+    pub(crate) dispatch_stable_key: StableKeyId,
 }
 
 /// The closed RTA input snapshot. See the module docs for the determinism contract.
@@ -75,15 +75,15 @@ pub(crate) struct GoRtaInputs {
     /// `type_name -> method names` (the method-set input).
     pub(crate) method_sets: BTreeMap<String, BTreeSet<String>>,
     /// `type_name -> the method-set fact's stable key` (a contributing fact).
-    pub(crate) method_set_keys: BTreeMap<String, String>,
+    pub(crate) method_set_keys: BTreeMap<String, StableKeyId>,
     /// The instantiated runtime-type set (the RTA rapid-type set).
     pub(crate) instantiated: BTreeSet<String>,
     /// `type_name -> the instantiated-type fact's stable key` (a contributing fact).
-    pub(crate) instantiated_keys: BTreeMap<String, String>,
+    pub(crate) instantiated_keys: BTreeMap<String, StableKeyId>,
     /// Address-taken function identities (`qualified`) — func-value candidates.
     pub(crate) address_taken: BTreeSet<String>,
     /// `qualified -> the address-taken fact's stable key` (a contributing fact).
-    pub(crate) address_taken_keys: BTreeMap<String, String>,
+    pub(crate) address_taken_keys: BTreeMap<String, StableKeyId>,
     /// `qualified -> the function's unified semantic node` (edge endpoints).
     pub(crate) function_node: BTreeMap<String, SemanticNodeId>,
     /// `qualified -> the function's signature` (func-value matching).
@@ -204,37 +204,31 @@ impl GoRtaInputs {
 
         // Method-sets: type_name -> methods (+ contributing fact key).
         let mut method_sets: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-        let mut method_set_keys: BTreeMap<String, String> = BTreeMap::new();
+        let mut method_set_keys: BTreeMap<String, StableKeyId> = BTreeMap::new();
         for method_set in db.go_semantic_method_sets() {
             let type_name = normalize_type(&method_set.type_name);
             method_sets
                 .entry(type_name.clone())
                 .or_default()
                 .extend(method_set.methods.iter().cloned());
-            method_set_keys.insert(
-                type_name,
-                interner.resolve(method_set.stable_key).to_string(),
-            );
+            method_set_keys.insert(type_name, method_set.stable_key);
         }
 
         // Instantiated runtime types (the rapid-type set) + contributing fact key.
         let mut instantiated: BTreeSet<String> = BTreeSet::new();
-        let mut instantiated_keys: BTreeMap<String, String> = BTreeMap::new();
+        let mut instantiated_keys: BTreeMap<String, StableKeyId> = BTreeMap::new();
         for fact in db.go_semantic_instantiated_types() {
             let type_name = normalize_type(&fact.type_name);
             instantiated.insert(type_name.clone());
-            instantiated_keys.insert(type_name, interner.resolve(fact.stable_key).to_string());
+            instantiated_keys.insert(type_name, fact.stable_key);
         }
 
         // Address-taken functions (func-value candidates) + contributing fact key.
         let mut address_taken: BTreeSet<String> = BTreeSet::new();
-        let mut address_taken_keys: BTreeMap<String, String> = BTreeMap::new();
+        let mut address_taken_keys: BTreeMap<String, StableKeyId> = BTreeMap::new();
         for fact in db.go_semantic_address_taken() {
             address_taken.insert(fact.function.clone());
-            address_taken_keys.insert(
-                fact.function.clone(),
-                interner.resolve(fact.stable_key).to_string(),
-            );
+            address_taken_keys.insert(fact.function.clone(), fact.stable_key);
         }
 
         // Join dynamic-dispatch detail to its callsite by `callsite_stable_key`. Only
@@ -271,21 +265,21 @@ impl GoRtaInputs {
             callsites.push(GoRtaCallsite {
                 caller: dispatch.caller.clone(),
                 callsite_node,
-                callsite_stable_key: interner.resolve(callsite.stable_key).to_string(),
+                callsite_stable_key: callsite.stable_key,
                 interface_method: dispatch.method.clone(),
                 signature: dispatch.signature.clone(),
-                dispatch_stable_key: interner.resolve(dispatch.stable_key).to_string(),
+                dispatch_stable_key: dispatch.stable_key,
             });
         }
-        // Deterministic callsite order (by callsite stable key, then dispatch key).
+        // Deterministic callsite order (by resolved callsite stable text, then dispatch).
         callsites.sort_by(|left, right| {
             (
-                left.callsite_stable_key.as_str(),
-                left.dispatch_stable_key.as_str(),
+                interner.resolve(left.callsite_stable_key),
+                interner.resolve(left.dispatch_stable_key),
             )
                 .cmp(&(
-                    right.callsite_stable_key.as_str(),
-                    right.dispatch_stable_key.as_str(),
+                    interner.resolve(right.callsite_stable_key),
+                    interner.resolve(right.dispatch_stable_key),
                 ))
         });
 
@@ -375,8 +369,8 @@ impl GoRtaInputs {
 fn build_interface_candidate_index(
     instantiated: &BTreeSet<String>,
     method_sets: &BTreeMap<String, BTreeSet<String>>,
-    method_set_keys: &BTreeMap<String, String>,
-    instantiated_keys: &BTreeMap<String, String>,
+    method_set_keys: &BTreeMap<String, StableKeyId>,
+    instantiated_keys: &BTreeMap<String, StableKeyId>,
     methods_by_receiver: &BTreeMap<String, Vec<GoRtaMethod>>,
 ) -> BTreeMap<String, Vec<GoRtaInterfaceCandidate>> {
     let mut index: BTreeMap<String, Vec<GoRtaInterfaceCandidate>> = BTreeMap::new();
@@ -394,10 +388,10 @@ fn build_interface_candidate_index(
         // type — compute them once (the scan rebuilt the same Vec per candidate).
         let mut contributing_keys = Vec::new();
         if let Some(key) = method_set_keys.get(type_name) {
-            contributing_keys.push(key.clone());
+            contributing_keys.push(*key);
         }
         if let Some(key) = instantiated_keys.get(type_name) {
-            contributing_keys.push(key.clone());
+            contributing_keys.push(*key);
         }
         // Within a type, iterate `methods_by_receiver[type]` in its existing order — the
         // scan's inner loop — filing each concrete method under its own bare name, but

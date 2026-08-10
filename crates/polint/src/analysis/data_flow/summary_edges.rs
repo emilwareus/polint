@@ -74,10 +74,13 @@ fn project_present_tito(
                     format!("payload_digest={}", fact.payload_digest),
                     flow_evidence(flow),
                 ],
-                input_stable_keys: vec![fact.stable_key.clone(), fact.callable_stable_key.clone()],
+                input_stable_keys: vec![
+                    interner.resolve(fact.stable_key).to_string(),
+                    interner.resolve(fact.callable_stable_key).to_string(),
+                ],
                 stable_anchor: format!(
                     "{}:{}->{}:{:?}",
-                    fact.stable_key,
+                    interner.resolve(fact.stable_key),
                     root_role(flow.from),
                     root_role(flow.to),
                     flow.kind
@@ -113,7 +116,7 @@ fn project_summary_status(
             DataFlowBudgetReason::PathCount,
             1,
             2,
-            &fact.stable_key,
+            &interner.resolve(fact.stable_key),
             output,
         )
     });
@@ -142,8 +145,8 @@ fn project_summary_status(
                 format!("domain={}", fact.domain.as_str()),
                 format!("status={}", fact.status.as_str()),
             ],
-            input_stable_keys: vec![fact.stable_key.clone()],
-            stable_anchor: fact.stable_key.clone(),
+            input_stable_keys: vec![interner.resolve(fact.stable_key).to_string()],
+            stable_anchor: interner.resolve(fact.stable_key).to_string(),
         },
     );
 }
@@ -174,7 +177,7 @@ fn project_summary_event(
             DataFlowBudgetReason::PathCount,
             1,
             2,
-            &event.stable_key,
+            &interner.resolve(event.stable_key),
             output,
         )
     });
@@ -206,8 +209,8 @@ fn project_summary_event(
                 format!("event_kind={}", event.event_kind),
                 format!("reason={}", event.reason),
             ],
-            input_stable_keys: vec![event.stable_key.clone()],
-            stable_anchor: event.stable_key.clone(),
+            input_stable_keys: vec![interner.resolve(event.stable_key).to_string()],
+            stable_anchor: interner.resolve(event.stable_key).to_string(),
         },
     );
 }
@@ -281,7 +284,7 @@ fn summary_node(
         FactFamily::DataFlowNode,
         &[
             ("kind", format!("{kind:?}")),
-            ("summary", fact.stable_key.clone()),
+            ("summary", interner.resolve(fact.stable_key).to_string()),
             ("role", role.to_string()),
         ],
     );
@@ -326,7 +329,10 @@ fn event_node(
         FactFamily::DataFlowNode,
         &[
             ("kind", format!("{kind:?}")),
-            ("summary_event", event.stable_key.clone()),
+            (
+                "summary_event",
+                interner.resolve(event.stable_key).to_string(),
+            ),
             ("role", role.to_string()),
         ],
     );
@@ -405,6 +411,7 @@ mod tests {
     use crate::analysis::ids::{SummaryEventId, SummaryId};
     use crate::analysis::summaries::facts::SummaryProvenance;
     use crate::core::FunctionId;
+    use crate::core::stable_key_for_test;
 
     #[test]
     fn data_flow_tito_summary_produces_projected_edge() {
@@ -525,7 +532,7 @@ mod tests {
     fn summary(status: SummaryStatus) -> SummaryFact {
         SummaryFact {
             id: SummaryId(1),
-            callable_stable_key: "callable:identity".to_string(),
+            callable_stable_key: stable_key_for_test("callable:identity"),
             function: FunctionId(1),
             domain: SummaryDomainKind::DataFlowTito,
             status,
@@ -541,7 +548,7 @@ mod tests {
             } else {
                 Vec::new()
             },
-            stable_key: "summary:tito".to_string(),
+            stable_key: stable_key_for_test("summary:tito"),
         }
     }
 
@@ -561,14 +568,14 @@ mod tests {
     ) -> SummaryEventFact {
         SummaryEventFact {
             id: SummaryEventId(1),
-            callable_stable_key: "callable:identity".to_string(),
+            callable_stable_key: stable_key_for_test("callable:identity"),
             function: FunctionId(1),
             domain,
             event_kind: "missing_summary".to_string(),
             reason: "test".to_string(),
             status,
             precision: SummaryPrecision::UnknownTop,
-            stable_key: stable_key.to_string(),
+            stable_key: stable_key_for_test(stable_key),
         }
     }
 }

@@ -37,31 +37,36 @@ use crate::diagnostics::{Diagnostic, TextRange};
 /// holds; `node_ids` is the set of `SemanticNodeId`s the solver derived over (the
 /// edge endpoints must reference nodes that exist in the input graph).
 pub(crate) fn validate_derived_edges(
+    interner: &crate::core::StableKeyInterner,
     derived_edges: &[DerivedEdgeFact],
     node_ids: &BTreeSet<SemanticNodeId>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    // Duplicate stable keys.
-    check_duplicate_stable_keys(
-        diagnostics,
-        derived_edges.iter().map(|row| row.stable_key.as_str()),
-    );
+    let resolved_keys: Vec<String> = derived_edges
+        .iter()
+        .map(|row| interner.resolve(row.stable_key).to_string())
+        .collect();
 
-    // Dense IDs contiguous (0..n) and stable-key-sorted.
+    // Duplicate stable keys (compare by resolved text).
+    check_duplicate_stable_keys(diagnostics, resolved_keys.iter().map(String::as_str));
+
+    // Dense IDs contiguous (0..n) and stable-key-sorted by resolved text.
     check_dense_ids_sorted(
         diagnostics,
         derived_edges
             .iter()
-            .map(|row| (row.id.0, row.stable_key.as_str())),
+            .zip(resolved_keys.iter())
+            .map(|(row, key)| (row.id.0, key.as_str())),
     );
 
     for edge in derived_edges {
+        let edge_key = interner.resolve(edge.stable_key);
         // Dangling endpoint references.
         if !node_ids.is_empty() {
             if !node_ids.contains(&edge.source) {
                 push_diagnostic(
                     diagnostics,
-                    &edge.stable_key,
+                    edge_key.as_ref(),
                     "source",
                     "dangling derived edge source node reference",
                 );
@@ -69,7 +74,7 @@ pub(crate) fn validate_derived_edges(
             if !node_ids.contains(&edge.target) {
                 push_diagnostic(
                     diagnostics,
-                    &edge.stable_key,
+                    edge_key.as_ref(),
                     "target",
                     "dangling derived edge target node reference",
                 );
@@ -79,7 +84,7 @@ pub(crate) fn validate_derived_edges(
         // Precision ceiling (D-06): a derived edge must never claim Exact.
         if let Some(diagnostic) = reject_exact_precision(
             derived_edge_precision_ceiling(edge.precision),
-            &edge.stable_key,
+            edge_key.as_ref(),
         ) {
             diagnostics.push(diagnostic);
         }
@@ -352,9 +357,11 @@ mod tests {
     use crate::analysis_kernel::FactFamily;
 
     fn provenance() -> DerivedEdgeProvenance {
+        let interner = crate::core::test_stable_key_interner();
         DerivedEdgeProvenance::new(
+            &interner,
             vec![ContributingFact::from_parts(
-                &crate::core::test_stable_key_interner(),
+                &interner,
                 FactFamily::PointsToConstraint,
                 &[("constraint", "copy".to_string())],
             )],
@@ -373,7 +380,7 @@ mod tests {
             target: SemanticNodeId(target),
             status: PointsToStatus::Present,
             precision: PointsToPrecision::FlowInsensitive,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
             provenance: provenance(),
         }
     }
@@ -409,7 +416,12 @@ mod tests {
             [SemanticNodeId(0), SemanticNodeId(1)].into_iter().collect();
         let edges = vec![edge(0, 0, 1, "edge|copy_edge|a")];
         let mut diagnostics = Vec::new();
-        validate_derived_edges(&edges, &node_ids, &mut diagnostics);
+        validate_derived_edges(
+            &crate::core::test_stable_key_interner(),
+            &edges,
+            &node_ids,
+            &mut diagnostics,
+        );
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
     }
 
@@ -429,7 +441,12 @@ mod tests {
             edge(1, 0, 1, "edge|copy_edge|dup"),
         ];
         let mut diagnostics = Vec::new();
-        validate_derived_edges(&edges, &node_ids, &mut diagnostics);
+        validate_derived_edges(
+            &crate::core::test_stable_key_interner(),
+            &edges,
+            &node_ids,
+            &mut diagnostics,
+        );
         assert!(
             diagnostics
                 .iter()
@@ -444,7 +461,12 @@ mod tests {
         // target node 9 is not in the node set.
         let edges = vec![edge(0, 0, 9, "edge|copy_edge|a")];
         let mut diagnostics = Vec::new();
-        validate_derived_edges(&edges, &node_ids, &mut diagnostics);
+        validate_derived_edges(
+            &crate::core::test_stable_key_interner(),
+            &edges,
+            &node_ids,
+            &mut diagnostics,
+        );
         assert!(
             diagnostics
                 .iter()
@@ -460,7 +482,12 @@ mod tests {
         // id 5 at index 0 — not contiguous.
         let edges = vec![edge(5, 0, 1, "edge|copy_edge|a")];
         let mut diagnostics = Vec::new();
-        validate_derived_edges(&edges, &node_ids, &mut diagnostics);
+        validate_derived_edges(
+            &crate::core::test_stable_key_interner(),
+            &edges,
+            &node_ids,
+            &mut diagnostics,
+        );
         assert!(
             diagnostics
                 .iter()

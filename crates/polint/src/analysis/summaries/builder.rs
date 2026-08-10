@@ -16,8 +16,8 @@ use crate::analysis::ids::{MirBodyId, PlaceId, SummaryEventId, SummaryId};
 use crate::analysis::mir::body::MirBody;
 use crate::analysis::mir::op::{AssignMode, MirOperationKind, MirValue};
 use crate::analysis::places::PlaceRoot;
-use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
-use crate::core::{AnalysisDb, FunctionId};
+use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
+use crate::core::{AnalysisDb, FunctionId, StableKeyId};
 
 /// Computes direct (local, single-function) summaries from AnalysisDb facts.
 ///
@@ -119,7 +119,7 @@ impl DirectSummaryBuilder {
             let function_bodies = &bodies_by_function[&function];
             // Use the first body (there should typically be one per function)
             let body = function_bodies[0];
-            let callable_key = interner.resolve(body.stable_key).to_string();
+            let callable_key = body.stable_key;
             let body_ops = operations_by_body
                 .get(&body.id)
                 .map(|v| v.as_slice())
@@ -151,7 +151,7 @@ impl DirectSummaryBuilder {
 
             summaries.push(SummaryFact {
                 id: SummaryId(0),
-                callable_stable_key: callable_key.clone(),
+                callable_stable_key: callable_key,
                 function,
                 domain: SummaryDomainKind::ControlEffects,
                 status: control_status,
@@ -159,34 +159,29 @@ impl DirectSummaryBuilder {
                 provenance: control_provenance,
                 payload_digest: control_digest,
                 tito_flows: Vec::new(),
-                stable_key: stable_key_text_from_parts(
+                stable_key: summary_stable_key(
                     interner,
                     FactFamily::SummaryControl,
-                    &[
-                        ("callable", callable_key.clone()),
-                        ("domain", "control_effects".to_string()),
-                    ],
+                    callable_key,
+                    "control_effects",
                 ),
             });
 
             if has_unresolved && control.is_top() {
                 events.push(SummaryEventFact {
                     id: SummaryEventId(0),
-                    callable_stable_key: callable_key.clone(),
+                    callable_stable_key: callable_key,
                     function,
                     domain: SummaryDomainKind::ControlEffects,
                     event_kind: "unknown_top".to_string(),
                     reason: "unresolved_calls".to_string(),
                     status: SummaryStatus::Unknown,
                     precision: SummaryPrecision::UnknownTop,
-                    stable_key: stable_key_text_from_parts(
+                    stable_key: summary_event_stable_key(
                         interner,
-                        FactFamily::SummaryEvent,
-                        &[
-                            ("callable", callable_key.clone()),
-                            ("domain", "control_effects".to_string()),
-                            ("event", "unknown_top".to_string()),
-                        ],
+                        callable_key,
+                        "control_effects",
+                        "unknown_top",
                     ),
                 });
             }
@@ -201,7 +196,7 @@ impl DirectSummaryBuilder {
 
             summaries.push(SummaryFact {
                 id: SummaryId(0),
-                callable_stable_key: callable_key.clone(),
+                callable_stable_key: callable_key,
                 function,
                 domain: SummaryDomainKind::CallEffects,
                 status: call_status,
@@ -209,34 +204,29 @@ impl DirectSummaryBuilder {
                 provenance: call_provenance,
                 payload_digest: call_digest,
                 tito_flows: Vec::new(),
-                stable_key: stable_key_text_from_parts(
+                stable_key: summary_stable_key(
                     interner,
                     FactFamily::SummaryCall,
-                    &[
-                        ("callable", callable_key.clone()),
-                        ("domain", "call_effects".to_string()),
-                    ],
+                    callable_key,
+                    "call_effects",
                 ),
             });
 
             if has_unresolved {
                 events.push(SummaryEventFact {
                     id: SummaryEventId(0),
-                    callable_stable_key: callable_key.clone(),
+                    callable_stable_key: callable_key,
                     function,
                     domain: SummaryDomainKind::CallEffects,
                     event_kind: "unresolved_callee".to_string(),
                     reason: format!("{} unresolved calls", function_unresolved.len()),
                     status: SummaryStatus::Unknown,
                     precision: SummaryPrecision::UnknownTop,
-                    stable_key: stable_key_text_from_parts(
+                    stable_key: summary_event_stable_key(
                         interner,
-                        FactFamily::SummaryEvent,
-                        &[
-                            ("callable", callable_key.clone()),
-                            ("domain", "call_effects".to_string()),
-                            ("event", "unresolved_callee".to_string()),
-                        ],
+                        callable_key,
+                        "call_effects",
+                        "unresolved_callee",
                     ),
                 });
             }
@@ -249,7 +239,7 @@ impl DirectSummaryBuilder {
 
             summaries.push(SummaryFact {
                 id: SummaryId(0),
-                callable_stable_key: callable_key.clone(),
+                callable_stable_key: callable_key,
                 function,
                 domain: SummaryDomainKind::MemoryEffects,
                 status: mem_status,
@@ -257,13 +247,11 @@ impl DirectSummaryBuilder {
                 provenance: mem_provenance,
                 payload_digest: mem_digest,
                 tito_flows: Vec::new(),
-                stable_key: stable_key_text_from_parts(
+                stable_key: summary_stable_key(
                     interner,
                     FactFamily::SummaryMemory,
-                    &[
-                        ("callable", callable_key.clone()),
-                        ("domain", "memory_effects".to_string()),
-                    ],
+                    callable_key,
+                    "memory_effects",
                 ),
             });
 
@@ -278,21 +266,18 @@ impl DirectSummaryBuilder {
             {
                 events.push(SummaryEventFact {
                     id: SummaryEventId(0),
-                    callable_stable_key: callable_key.clone(),
+                    callable_stable_key: callable_key,
                     function,
                     domain: SummaryDomainKind::MemoryEffects,
                     event_kind: "may_have_external_effects".to_string(),
                     reason: "unresolved_calls".to_string(),
                     status: SummaryStatus::Unknown,
                     precision: SummaryPrecision::UnknownTop,
-                    stable_key: stable_key_text_from_parts(
+                    stable_key: summary_event_stable_key(
                         interner,
-                        FactFamily::SummaryEvent,
-                        &[
-                            ("callable", callable_key.clone()),
-                            ("domain", "memory_effects".to_string()),
-                            ("event", "may_have_external_effects".to_string()),
-                        ],
+                        callable_key,
+                        "memory_effects",
+                        "may_have_external_effects",
                     ),
                 });
             }
@@ -306,7 +291,7 @@ impl DirectSummaryBuilder {
 
             summaries.push(SummaryFact {
                 id: SummaryId(0),
-                callable_stable_key: callable_key.clone(),
+                callable_stable_key: callable_key,
                 function,
                 domain: SummaryDomainKind::DataFlowTito,
                 status: tito_status,
@@ -314,34 +299,29 @@ impl DirectSummaryBuilder {
                 provenance: tito_provenance,
                 payload_digest: tito_digest,
                 tito_flows,
-                stable_key: stable_key_text_from_parts(
+                stable_key: summary_stable_key(
                     interner,
                     FactFamily::SummaryTito,
-                    &[
-                        ("callable", callable_key.clone()),
-                        ("domain", "data_flow_tito".to_string()),
-                    ],
+                    callable_key,
+                    "data_flow_tito",
                 ),
             });
 
             if has_unresolved {
                 events.push(SummaryEventFact {
                     id: SummaryEventId(0),
-                    callable_stable_key: callable_key.clone(),
+                    callable_stable_key: callable_key,
                     function,
                     domain: SummaryDomainKind::DataFlowTito,
                     event_kind: "unknown_top".to_string(),
                     reason: "unresolved_calls".to_string(),
                     status: SummaryStatus::Unknown,
                     precision: SummaryPrecision::UnknownTop,
-                    stable_key: stable_key_text_from_parts(
+                    stable_key: summary_event_stable_key(
                         interner,
-                        FactFamily::SummaryEvent,
-                        &[
-                            ("callable", callable_key),
-                            ("domain", "data_flow_tito".to_string()),
-                            ("event", "unknown_top".to_string()),
-                        ],
+                        callable_key,
+                        "data_flow_tito",
+                        "unknown_top",
                     ),
                 });
             }
@@ -894,6 +874,39 @@ fn trace_sources(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+fn summary_stable_key(
+    interner: &crate::core::StableKeyInterner,
+    family: FactFamily,
+    callable_key: StableKeyId,
+    domain: &str,
+) -> StableKeyId {
+    stable_key_from_parts(
+        interner,
+        family,
+        &[
+            ("callable", interner.resolve(callable_key).to_string()),
+            ("domain", domain.to_string()),
+        ],
+    )
+}
+
+fn summary_event_stable_key(
+    interner: &crate::core::StableKeyInterner,
+    callable_key: StableKeyId,
+    domain: &str,
+    event: &str,
+) -> StableKeyId {
+    stable_key_from_parts(
+        interner,
+        FactFamily::SummaryEvent,
+        &[
+            ("callable", interner.resolve(callable_key).to_string()),
+            ("domain", domain.to_string()),
+            ("event", event.to_string()),
+        ],
+    )
+}
 
 trait DigestAndClassify {
     fn stable_digest_parts(&self) -> Vec<String>;

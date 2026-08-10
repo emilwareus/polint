@@ -214,21 +214,22 @@ mod ts_points_to {
     use crate::analysis::solver::budget::{BudgetStatus, SolverBudget};
     use crate::analysis::solver::facts::DerivedEdgeFact;
     use crate::analysis::solver::provenance::{ContributingFact, DerivedEdgeProvenance};
-    use crate::analysis_kernel::{FactFamily, stable_key_from_parts, stable_key_text_from_parts};
+    use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
     use crate::core::AnalysisDb;
+    use crate::core::StableKeyId;
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub(crate) struct TsPointsToCallsite {
         caller_node: SemanticNodeId,
         callsite_node: SemanticNodeId,
-        callsite_stable_key: String,
-        constraint_stable_key: String,
+        callsite_stable_key: StableKeyId,
+        constraint_stable_key: StableKeyId,
     }
 
     #[derive(Debug, Clone, Default, PartialEq, Eq)]
     pub(crate) struct TsPointsToInputs {
         constraints: Vec<ConstraintFact>,
-        callable_objects: BTreeMap<ObjectTokenId, (SemanticNodeId, String)>,
+        callable_objects: BTreeMap<ObjectTokenId, (SemanticNodeId, StableKeyId)>,
         callsites: Vec<TsPointsToCallsite>,
     }
 
@@ -253,16 +254,15 @@ mod ts_points_to {
             let node_key_by_id = db
                 .semantic_nodes()
                 .iter()
-                .map(|node| (node.id, db.resolve_stable_key(node.stable_key).to_string()))
+                .map(|node| (node.id, node.stable_key))
                 .collect::<BTreeMap<_, _>>();
             let constraint_key_by_callsite = db
                 .semantic_constraints()
                 .iter()
                 .filter_map(|constraint| match constraint.kind {
-                    ConstraintKind::CallConstraint { callsite } => Some((
-                        callsite,
-                        db.resolve_stable_key(constraint.stable_key).to_string(),
-                    )),
+                    ConstraintKind::CallConstraint { callsite } => {
+                        Some((callsite, constraint.stable_key))
+                    }
                     _ => None,
                 })
                 .collect::<BTreeMap<_, _>>();
@@ -271,10 +271,9 @@ mod ts_points_to {
                 .semantic_nodes()
                 .iter()
                 .filter_map(|node| match node.kind {
-                    NodeKind::Function(_) => Some((
-                        object_for_node(node.id),
-                        (node.id, db.resolve_stable_key(node.stable_key).to_string()),
-                    )),
+                    NodeKind::Function(_) => {
+                        Some((object_for_node(node.id), (node.id, node.stable_key)))
+                    }
                     _ => None,
                 })
                 .collect();
@@ -288,11 +287,11 @@ mod ts_points_to {
                     Some(TsPointsToCallsite {
                         caller_node,
                         callsite_node,
-                        callsite_stable_key: node_key_by_id.get(&callsite_node)?.clone(),
+                        callsite_stable_key: *node_key_by_id.get(&callsite_node)?,
                         constraint_stable_key: constraint_key_by_callsite
                             .get(&callsite_node)
-                            .cloned()
-                            .unwrap_or_else(|| db.resolve_stable_key(site.stable_key).to_string()),
+                            .copied()
+                            .unwrap_or(site.stable_key),
                     })
                 })
                 .collect();
@@ -337,18 +336,19 @@ mod ts_points_to {
                     continue;
                 };
                 let provenance = DerivedEdgeProvenance::new(
+                    interner,
                     vec![
                         ContributingFact {
-                            stable_key: callsite.constraint_stable_key.clone(),
+                            stable_key: callsite.constraint_stable_key,
                         },
                         ContributingFact {
-                            stable_key: callsite.callsite_stable_key.clone(),
+                            stable_key: callsite.callsite_stable_key,
                         },
                         ContributingFact {
-                            stable_key: target_stable_key.clone(),
+                            stable_key: *target_stable_key,
                         },
                         ContributingFact {
-                            stable_key: interner.resolve(set.stable_key).to_string(),
+                            stable_key: set.stable_key,
                         },
                     ],
                     &ConstraintKind::CallConstraint {
@@ -356,16 +356,16 @@ mod ts_points_to {
                     },
                     0,
                 );
-                let stable_key = stable_key_text_from_parts(
+                let stable_key = stable_key_from_parts(
                     interner,
                     FactFamily::SolverDerivedEdge,
                     &[
                         ("source", callsite.caller_node.0.to_string()),
                         ("target", target.0.to_string()),
-                        ("provenance", provenance.stable_key_fragment()),
+                        ("provenance", provenance.stable_key_fragment(interner)),
                     ],
                 );
-                edges.entry(stable_key.clone()).or_insert(DerivedEdgeFact {
+                edges.entry(stable_key).or_insert(DerivedEdgeFact {
                     id: DerivedEdgeId(0),
                     source: callsite.caller_node,
                     target: *target,
@@ -495,10 +495,7 @@ mod tests {
     fn ts_policy_id_is_stable() {
         let budget = SolverBudget::default();
         let ts = TsPointsToPolicy::new(TsPointsToInputs::default());
-        let ts_outcome = ts.solve(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            &budget,
-        );
+        let ts_outcome = ts.solve(&crate::core::test_stable_key_interner(), &budget);
         assert_eq!(ts.id(), "ts_points_to");
         assert!(ts_outcome.points_to.is_none());
         assert!(ts_outcome.derived_edges.is_empty());
@@ -517,6 +514,7 @@ mod tests {
 
     #[test]
     fn go_rta_policy_derives_edges_from_a_resolvable_dispatch() {
+        let interner = crate::core::test_stable_key_interner();
         // The real Go RTA policy now derives ≥1 edge from a resolvable interface
         // dispatch (an instantiated receiver whose method-set declares the method).
         let mut function_node = BTreeMap::new();
@@ -526,7 +524,7 @@ mod tests {
         let mut method_sets = BTreeMap::new();
         method_sets.insert("pkg.File".to_string(), BTreeSet::from(["Read".to_string()]));
         let mut method_set_keys = BTreeMap::new();
-        method_set_keys.insert("pkg.File".to_string(), "ms|pkg.File".to_string());
+        method_set_keys.insert("pkg.File".to_string(), interner.intern("ms|pkg.File"));
 
         let mut methods_by_receiver = BTreeMap::new();
         methods_by_receiver.insert(
@@ -539,17 +537,17 @@ mod tests {
         );
 
         let mut instantiated_keys = BTreeMap::new();
-        instantiated_keys.insert("pkg.File".to_string(), "inst|pkg.File".to_string());
+        instantiated_keys.insert("pkg.File".to_string(), interner.intern("inst|pkg.File"));
 
         let inputs = GoRtaInputs {
             roots: BTreeSet::from(["main.main".to_string()]),
             callsites: vec![GoRtaCallsite {
                 caller: "main.main".to_string(),
                 callsite_node: SemanticNodeId(2),
-                callsite_stable_key: "cs|main:read".to_string(),
+                callsite_stable_key: interner.intern("cs|main:read"),
                 interface_method: Some("Read".to_string()),
                 signature: None,
-                dispatch_stable_key: "dd|main:read".to_string(),
+                dispatch_stable_key: interner.intern("dd|main:read"),
             }],
             method_sets,
             method_set_keys,
@@ -564,7 +562,7 @@ mod tests {
         let policy = GoRtaPolicy::new(inputs);
         assert_eq!(policy.id(), "go_rta");
         let outcome = policy.solve(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &crate::core::test_stable_key_interner(),
             &SolverBudget::default(),
         );
         assert!(outcome.points_to.is_none());

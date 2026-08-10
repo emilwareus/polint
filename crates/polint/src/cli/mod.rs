@@ -2488,19 +2488,20 @@ pub(crate) struct DerivedEdgeProvenanceView {
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn explain_derived_edge_provenance(
     store: &crate::analysis::solver::store::SolverStore,
+    interner: &crate::core::StableKeyInterner,
     edge_stable_key: &str,
 ) -> Option<DerivedEdgeProvenanceView> {
     store
         .derived_edges()
         .iter()
-        .find(|edge| edge.stable_key == edge_stable_key)
+        .find(|edge| interner.resolve(edge.stable_key).as_ref() == edge_stable_key)
         .map(|edge| DerivedEdgeProvenanceView {
-            edge_stable_key: edge.stable_key.clone(),
+            edge_stable_key: interner.resolve(edge.stable_key).to_string(),
             contributing_fact_keys: edge
                 .provenance
                 .contributing_facts
                 .iter()
-                .map(|fact| fact.stable_key.clone())
+                .map(|fact| interner.resolve(fact.stable_key).to_string())
                 .collect(),
             constraint_kind: edge.provenance.constraint_kind.clone(),
             solver_step: edge.provenance.solver_step,
@@ -4274,12 +4275,9 @@ mod tests {
 
         let constraints = vec![copy("copy|a-b", 1, 2), copy("copy|b-c", 2, 3)];
         let budget = crate::analysis::solver::budget::SolverBudget::default();
-        let output = derive_edges(
-            &crate::core::test_stable_key_interner(),
-            &constraints,
-            &budget,
-        );
-        let store = SolverStore::from_output(output).expect("store");
+        let interner = crate::core::test_stable_key_interner();
+        let output = derive_edges(&interner, &constraints, &budget);
+        let store = SolverStore::from_output(output, &interner).expect("store");
 
         // Pick the transitive edge (the one with 2 contributing facts).
         let transitive = store
@@ -4288,13 +4286,19 @@ mod tests {
             .find(|e| e.provenance.contributing_facts.len() == 2)
             .expect("transitive derived edge");
 
-        let view = explain_derived_edge_provenance(&store, &transitive.stable_key)
-            .expect("provenance surfaced via private plumbing");
+        let view = explain_derived_edge_provenance(
+            &store,
+            &interner,
+            interner.resolve(transitive.stable_key).as_ref(),
+        )
+        .expect("provenance surfaced via private plumbing");
         assert_eq!(view.constraint_kind, "copy_edge");
         assert_eq!(view.contributing_fact_keys.len(), 2);
         assert!(view.solver_step > 0);
         // A missing edge key yields None (no panic, no public surface).
-        assert!(explain_derived_edge_provenance(&store, "edge|does|not|exist").is_none());
+        assert!(
+            explain_derived_edge_provenance(&store, &interner, "edge|does|not|exist").is_none()
+        );
     }
 
     #[test]

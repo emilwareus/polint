@@ -331,14 +331,16 @@ struct SccScheduleDebugSection {
 
 #[derive(Serialize)]
 struct SccDebugEntry {
-    member_stable_keys: Vec<String>,
+    #[serde(rename = "member_stable_keys")]
+    member_stable_keys_text: Vec<String>,
     is_recursive: bool,
     size: usize,
 }
 
 #[derive(Serialize)]
 struct SccIterationDebugEntry {
-    member_stable_keys: Vec<String>,
+    #[serde(rename = "member_stable_keys")]
+    member_stable_keys_text: Vec<String>,
     iterations: u32,
 }
 
@@ -361,25 +363,29 @@ struct DemandQueryDebugEntry {
 
 #[derive(Serialize)]
 struct SummaryDebugRow {
-    callable_stable_key: String,
+    #[serde(rename = "callable_stable_key")]
+    callable_stable_key_text: String,
     domain: String,
     status: String,
     precision: String,
     provenance: String,
     payload_digest: String,
     tito_flows: Vec<crate::analysis::summaries::facts::SummaryFlowEdge>,
-    stable_key: String,
+    #[serde(rename = "stable_key")]
+    stable_key_text: String,
 }
 
 #[derive(Serialize)]
 struct SummaryEventDebugRow {
-    callable_stable_key: String,
+    #[serde(rename = "callable_stable_key")]
+    callable_stable_key_text: String,
     domain: String,
     event_kind: String,
     reason: String,
     status: String,
     precision: String,
-    stable_key: String,
+    #[serde(rename = "stable_key")]
+    stable_key_text: String,
 }
 
 #[derive(Default, Serialize)]
@@ -1243,36 +1249,37 @@ fn abstract_domain_index_counts(db: &AnalysisDb) -> BTreeMap<&'static str, usize
 fn summaries_report(db: &AnalysisDb) -> SummaryDebugReport {
     use crate::analysis::summaries::facts::{SummaryDomainKind, SummaryStatus};
 
+    let interner = db.stable_key_interner();
     let mut summaries: Vec<SummaryDebugRow> = db
         .summary_facts()
         .iter()
         .map(|fact| SummaryDebugRow {
-            callable_stable_key: fact.callable_stable_key.clone(),
+            callable_stable_key_text: interner.resolve(fact.callable_stable_key).to_string(),
             domain: fact.domain.as_str().to_string(),
             status: fact.status.as_str().to_string(),
             precision: fact.precision.as_str().to_string(),
             provenance: fact.provenance.as_str().to_string(),
             payload_digest: fact.payload_digest.clone(),
             tito_flows: fact.tito_flows.clone(),
-            stable_key: fact.stable_key.clone(),
+            stable_key_text: interner.resolve(fact.stable_key).to_string(),
         })
         .collect();
-    summaries.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    summaries.sort_by(|left, right| left.stable_key_text.cmp(&right.stable_key_text));
 
     let mut events: Vec<SummaryEventDebugRow> = db
         .summary_events()
         .iter()
         .map(|event| SummaryEventDebugRow {
-            callable_stable_key: event.callable_stable_key.clone(),
+            callable_stable_key_text: interner.resolve(event.callable_stable_key).to_string(),
             domain: event.domain.as_str().to_string(),
             event_kind: event.event_kind.clone(),
             reason: event.reason.clone(),
             status: event.status.as_str().to_string(),
             precision: event.precision.as_str().to_string(),
-            stable_key: event.stable_key.clone(),
+            stable_key_text: interner.resolve(event.stable_key).to_string(),
         })
         .collect();
-    events.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    events.sort_by(|left, right| left.stable_key_text.cmp(&right.stable_key_text));
 
     let mut counts = SummaryCounts {
         total: db.summary_facts().len() as u32,
@@ -1393,7 +1400,7 @@ fn scc_schedule_report(
                 .scc_iteration_counts
                 .iter()
                 .map(|(members, iterations)| SccIterationDebugEntry {
-                    member_stable_keys: members.clone(),
+                    member_stable_keys_text: members.clone(),
                     iterations: *iterations,
                 })
                 .collect()
@@ -1410,7 +1417,11 @@ fn scc_schedule_report(
             .sccs
             .into_iter()
             .map(|scc| SccDebugEntry {
-                member_stable_keys: scc.member_stable_keys,
+                member_stable_keys_text: scc
+                    .member_stable_keys
+                    .iter()
+                    .map(|key| db.resolve_stable_key(*key).to_string())
+                    .collect(),
                 is_recursive: scc.is_recursive,
                 size: scc.size,
             })
@@ -3397,7 +3408,7 @@ mod abstract_domains_debug_json {
             summaries: vec![
                 SummaryFact {
                     id: SummaryId(0),
-                    callable_stable_key: "func::app".to_string(),
+                    callable_stable_key: crate::core::stable_key_for_test("func::app"),
                     function: FunctionId(0),
                     domain: SummaryDomainKind::ControlEffects,
                     status: SummaryStatus::Present,
@@ -3405,11 +3416,11 @@ mod abstract_domains_debug_json {
                     provenance: SummaryProvenance::NativeLocal,
                     payload_digest: "digest:control".to_string(),
             tito_flows: Vec::new(),
-                    stable_key: "summary:control:app".to_string(),
+                    stable_key: crate::core::stable_key_for_test("summary:control:app"),
                 },
                 SummaryFact {
                     id: SummaryId(1),
-                    callable_stable_key: "func::app".to_string(),
+                    callable_stable_key: crate::core::stable_key_for_test("func::app"),
                     function: FunctionId(0),
                     domain: SummaryDomainKind::MemoryEffects,
                     status: SummaryStatus::Unknown,
@@ -3417,19 +3428,19 @@ mod abstract_domains_debug_json {
                     provenance: SummaryProvenance::NativeLocal,
                     payload_digest: "digest:memory".to_string(),
             tito_flows: Vec::new(),
-                    stable_key: "summary:memory:app".to_string(),
+                    stable_key: crate::core::stable_key_for_test("summary:memory:app"),
                 },
             ],
             events: vec![SummaryEventFact {
                 id: SummaryEventId(0),
-                callable_stable_key: "func::app".to_string(),
+                callable_stable_key: crate::core::stable_key_for_test("func::app"),
                 function: FunctionId(0),
                 domain: SummaryDomainKind::CallEffects,
                 event_kind: "unresolved_callee".to_string(),
                 reason: "dynamic".to_string(),
                 status: SummaryStatus::Unknown,
                 precision: SummaryPrecision::UnknownTop,
-                stable_key: "summary_event:call:app:0".to_string(),
+                stable_key: crate::core::stable_key_for_test("summary_event:call:app:0"),
             }],
         });
 
@@ -3497,7 +3508,7 @@ mod abstract_domains_debug_json {
         db.replace_summary_facts(SummaryOutput {
             summaries: vec![SummaryFact {
                 id: SummaryId(0),
-                callable_stable_key: "func::app".to_string(),
+                callable_stable_key: crate::core::stable_key_for_test("func::app"),
                 function: FunctionId(0),
                 domain: SummaryDomainKind::ControlEffects,
                 status: SummaryStatus::Present,
@@ -3505,18 +3516,18 @@ mod abstract_domains_debug_json {
                 provenance: SummaryProvenance::NativeLocal,
                 payload_digest: "digest:control".to_string(),
             tito_flows: Vec::new(),
-                stable_key: "summary:control:app".to_string(),
+                stable_key: crate::core::stable_key_for_test("summary:control:app"),
             }],
             events: vec![SummaryEventFact {
                 id: SummaryEventId(0),
-                callable_stable_key: "func::app".to_string(),
+                callable_stable_key: crate::core::stable_key_for_test("func::app"),
                 function: FunctionId(0),
                 domain: SummaryDomainKind::CallEffects,
                 event_kind: "unresolved_callee".to_string(),
                 reason: "dynamic".to_string(),
                 status: SummaryStatus::Unknown,
                 precision: SummaryPrecision::UnknownTop,
-                stable_key: "summary_event:call:app:0".to_string(),
+                stable_key: crate::core::stable_key_for_test("summary_event:call:app:0"),
             }],
         });
 
@@ -3569,7 +3580,7 @@ mod abstract_domains_debug_json {
         db.replace_summary_facts(SummaryOutput {
             summaries: vec![SummaryFact {
                 id: SummaryId(0),
-                callable_stable_key: "func::app".to_string(),
+                callable_stable_key: crate::core::stable_key_for_test("func::app"),
                 function: FunctionId(0),
                 domain: SummaryDomainKind::ControlEffects,
                 status: SummaryStatus::Present,
@@ -3577,7 +3588,7 @@ mod abstract_domains_debug_json {
                 provenance: SummaryProvenance::NativeLocal,
                 payload_digest: "digest:control".to_string(),
             tito_flows: Vec::new(),
-                stable_key: "summary:control:app".to_string(),
+                stable_key: crate::core::stable_key_for_test("summary:control:app"),
             }],
             events: Vec::new(),
         });

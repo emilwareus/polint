@@ -85,6 +85,7 @@ pub(crate) fn derive_solver_with_cache_stats(
 
     // Step: digest over the stored stable KEYS + upstream digests + the budget.
     let output_digest = solver_output_digest(
+        interner,
         manifest,
         input_snapshot,
         &budget,
@@ -99,7 +100,7 @@ pub(crate) fn derive_solver_with_cache_stats(
     let mut diagnostics = Vec::new();
     let node_ids: BTreeSet<SemanticNodeId> =
         db.semantic_nodes().iter().map(|node| node.id).collect();
-    validate_derived_edges(&output.derived_edges, &node_ids, &mut diagnostics);
+    validate_derived_edges(interner, &output.derived_edges, &node_ids, &mut diagnostics);
     detect_solver_summary_cycle(&constraints, &mut diagnostics);
     // Surface budget exhaustion as an honest diagnostic (D-06): when the solver
     // truncated any source's closure under the per-source step budget, the run is
@@ -154,7 +155,9 @@ fn solver_policies_for_db(db: &AnalysisDb, _budget: &SolverBudget) -> Vec<Box<dy
 /// parameter digest so a budget change is unmissable, D-15), and (d) per-row stable
 /// keys + status/precision + provenance fragment, then `parts.sort()` +
 /// `Digest::from_parts`.
+#[allow(clippy::too_many_arguments)]
 fn solver_output_digest(
+    interner: &crate::core::StableKeyInterner,
     manifest: &ProviderManifest,
     _input_snapshot: &InputSnapshot,
     budget: &SolverBudget,
@@ -189,10 +192,10 @@ fn solver_output_digest(
     parts.extend(output.derived_edges.iter().map(|edge| {
         format!(
             "edge={}|status={:?}|prec={:?}|prov={}",
-            edge.stable_key,
+            interner.resolve(edge.stable_key),
             edge.status,
             edge.precision,
-            edge.provenance.stable_key_fragment(),
+            edge.provenance.stable_key_fragment(interner),
         )
     }));
     if output.derived_edges.is_empty() {
@@ -765,7 +768,9 @@ max_object_receiver_candidates_per_callsite = 127
             budget_reasons: BTreeSet::from([BudgetReason::SolverMaxSteps.as_str().to_string()]),
         };
 
+        let interner = crate::core::test_stable_key_interner();
         let within_digest = solver_output_digest(
+            &interner,
             manifest(),
             &snapshot,
             &budget,
@@ -775,6 +780,7 @@ max_object_receiver_candidates_per_callsite = 127
             &within,
         );
         let exceeded_digest = solver_output_digest(
+            &interner,
             manifest(),
             &snapshot,
             &budget,

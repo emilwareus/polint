@@ -20,7 +20,8 @@ use crate::analysis::semantic_graph::constraints::ConstraintKind;
 use crate::analysis::solver::engine::{weakest_precision, weakest_status};
 use crate::analysis::solver::facts::DerivedEdgeFact;
 use crate::analysis::solver::provenance::{ContributingFact, DerivedEdgeProvenance};
-use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
+use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
+use crate::core::StableKeyId;
 
 use super::inputs::{GoRtaCallsite, GoRtaInputs};
 
@@ -116,10 +117,10 @@ pub(crate) fn resolve_callsite(
         // (so deleting any of them does not reproduce the edge — D-09).
         let mut contributing: Vec<ContributingFact> = vec![
             ContributingFact {
-                stable_key: callsite.callsite_stable_key.clone(),
+                stable_key: callsite.callsite_stable_key,
             },
             ContributingFact {
-                stable_key: callsite.dispatch_stable_key.clone(),
+                stable_key: callsite.dispatch_stable_key,
             },
         ];
         contributing.extend(
@@ -130,19 +131,20 @@ pub(crate) fn resolve_callsite(
         );
 
         let provenance = DerivedEdgeProvenance::new(
+            interner,
             contributing,
             &ConstraintKind::CallConstraint {
                 callsite: callsite.callsite_node,
             },
             solver_step,
         );
-        let stable_key = stable_key_text_from_parts(
+        let stable_key = stable_key_from_parts(
             interner,
             FactFamily::SolverDerivedEdge,
             &[
                 ("source", caller_node.0.to_string()),
                 ("target", candidate.node.0.to_string()),
-                ("provenance", provenance.stable_key_fragment()),
+                ("provenance", provenance.stable_key_fragment(interner)),
             ],
         );
         edges.push(DerivedEdgeFact {
@@ -165,7 +167,7 @@ pub(crate) fn resolve_callsite(
 /// One resolved candidate callee with the contributing-fact keys that justified it.
 struct DispatchCandidate {
     node: crate::analysis::ids::SemanticNodeId,
-    contributing_keys: Vec<String>,
+    contributing_keys: Vec<StableKeyId>,
 }
 
 /// Interface-invoke candidates: concrete methods named `method` whose receiver type
@@ -233,7 +235,7 @@ fn collect_func_value_candidates(
         }
         let mut contributing_keys = Vec::new();
         if let Some(key) = inputs.address_taken_keys.get(function) {
-            contributing_keys.push(key.clone());
+            contributing_keys.push(*key);
         }
         candidates.push(DispatchCandidate {
             node,
@@ -255,6 +257,7 @@ mod tests {
     /// pre-cap edge (review finding #R1: edges resolved before the cap are honest).
     #[test]
     fn per_callsite_candidate_cap_latches_and_keeps_precap_edges() {
+        let interner = crate::core::test_stable_key_interner();
         let mut function_node = BTreeMap::new();
         function_node.insert("main.main".to_string(), SemanticNodeId(1));
         function_node.insert("(pkg.A).Read".to_string(), SemanticNodeId(3));
@@ -264,8 +267,8 @@ mod tests {
         method_sets.insert("pkg.A".to_string(), BTreeSet::from(["Read".to_string()]));
         method_sets.insert("pkg.B".to_string(), BTreeSet::from(["Read".to_string()]));
         let mut method_set_keys = BTreeMap::new();
-        method_set_keys.insert("pkg.A".to_string(), "ms|A".to_string());
-        method_set_keys.insert("pkg.B".to_string(), "ms|B".to_string());
+        method_set_keys.insert("pkg.A".to_string(), interner.intern("ms|A"));
+        method_set_keys.insert("pkg.B".to_string(), interner.intern("ms|B"));
 
         let mut methods_by_receiver = BTreeMap::new();
         methods_by_receiver.insert(
@@ -286,8 +289,8 @@ mod tests {
         );
 
         let mut instantiated_keys = BTreeMap::new();
-        instantiated_keys.insert("pkg.A".to_string(), "inst|A".to_string());
-        instantiated_keys.insert("pkg.B".to_string(), "inst|B".to_string());
+        instantiated_keys.insert("pkg.A".to_string(), interner.intern("inst|A"));
+        instantiated_keys.insert("pkg.B".to_string(), interner.intern("inst|B"));
 
         let inputs = GoRtaInputs {
             method_sets,
@@ -302,14 +305,14 @@ mod tests {
         let callsite = GoRtaCallsite {
             caller: "main.main".to_string(),
             callsite_node: SemanticNodeId(2),
-            callsite_stable_key: "cs|main".to_string(),
+            callsite_stable_key: interner.intern("cs|main"),
             interface_method: Some("Read".to_string()),
             signature: None,
-            dispatch_stable_key: "dd|main".to_string(),
+            dispatch_stable_key: interner.intern("dd|main"),
         };
 
         let resolution = resolve_callsite(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &crate::core::test_stable_key_interner(),
             &callsite,
             &inputs,
             &BTreeSet::new(),
@@ -329,17 +332,18 @@ mod tests {
     /// No caller node => no honest edge anchor (the source endpoint is missing).
     #[test]
     fn missing_caller_node_resolves_nothing() {
+        let interner = crate::core::test_stable_key_interner();
         let inputs = GoRtaInputs::default();
         let callsite = GoRtaCallsite {
             caller: "main.main".to_string(),
             callsite_node: SemanticNodeId(2),
-            callsite_stable_key: "cs|main".to_string(),
+            callsite_stable_key: interner.intern("cs|main"),
             interface_method: Some("Read".to_string()),
             signature: None,
-            dispatch_stable_key: "dd|main".to_string(),
+            dispatch_stable_key: interner.intern("dd|main"),
         };
         let resolution = resolve_callsite(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &crate::core::test_stable_key_interner(),
             &callsite,
             &inputs,
             &BTreeSet::new(),
@@ -356,6 +360,7 @@ mod tests {
     /// — the func-value path is gated. An interface callsite (separate test) is unaffected.
     #[test]
     fn func_value_resolution_is_suppressed_when_disabled() {
+        let interner = crate::core::test_stable_key_interner();
         let mut function_node = BTreeMap::new();
         function_node.insert("main.main".to_string(), SemanticNodeId(1));
         function_node.insert("pkg.handler".to_string(), SemanticNodeId(3));
@@ -363,7 +368,7 @@ mod tests {
         function_signature.insert("pkg.handler".to_string(), "func()".to_string());
         let address_taken = BTreeSet::from(["pkg.handler".to_string()]);
         let mut address_taken_keys = BTreeMap::new();
-        address_taken_keys.insert("pkg.handler".to_string(), "at|handler".to_string());
+        address_taken_keys.insert("pkg.handler".to_string(), interner.intern("at|handler"));
 
         let inputs = GoRtaInputs {
             function_node,
@@ -376,15 +381,15 @@ mod tests {
         let callsite = GoRtaCallsite {
             caller: "main.main".to_string(),
             callsite_node: SemanticNodeId(2),
-            callsite_stable_key: "cs|main:fv".to_string(),
+            callsite_stable_key: interner.intern("cs|main:fv"),
             interface_method: None,
             signature: Some("func()".to_string()),
-            dispatch_stable_key: "dd|main:fv".to_string(),
+            dispatch_stable_key: interner.intern("dd|main:fv"),
         };
 
         // Disabled: no edge (the signature-matching handler is NOT resolved).
         let disabled = resolve_callsite(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &crate::core::test_stable_key_interner(),
             &callsite,
             &inputs,
             &address_taken,
@@ -399,7 +404,7 @@ mod tests {
         );
         // Enabled: the same callsite resolves to the address-taken handler (control).
         let enabled = resolve_callsite(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &crate::core::test_stable_key_interner(),
             &callsite,
             &inputs,
             &address_taken,
@@ -421,7 +426,7 @@ mod tests {
         method: &str,
         inputs: &GoRtaInputs,
         max_candidates_per_callsite: usize,
-    ) -> (Vec<(SemanticNodeId, Vec<String>)>, bool) {
+    ) -> (Vec<(SemanticNodeId, Vec<crate::core::StableKeyId>)>, bool) {
         let mut candidates = Vec::new();
         let mut capped = false;
         for type_name in &inputs.instantiated {
@@ -444,10 +449,10 @@ mod tests {
                 }
                 let mut contributing_keys = Vec::new();
                 if let Some(key) = inputs.method_set_keys.get(type_name) {
-                    contributing_keys.push(key.clone());
+                    contributing_keys.push(*key);
                 }
                 if let Some(key) = inputs.instantiated_keys.get(type_name) {
-                    contributing_keys.push(key.clone());
+                    contributing_keys.push(*key);
                 }
                 candidates.push((concrete.node, contributing_keys));
             }
@@ -463,6 +468,7 @@ mod tests {
     /// set (also excluded). Byte-identity is proven by comparing against the reference oracle.
     #[test]
     fn indexed_interface_candidates_match_whole_set_scan_and_cap_prefix() {
+        let interner = crate::core::test_stable_key_interner();
         let node = |id: u64| SemanticNodeId(id);
 
         // Three instantiated implementers of `Speak`, one declared-but-not-instantiated
@@ -480,11 +486,11 @@ mod tests {
             ("pkg.Mute".to_string(), BTreeSet::from(["Hush".to_string()])),
         ]);
         let method_set_keys = BTreeMap::from([
-            ("pkg.Cat".to_string(), "ms|Cat".to_string()),
-            ("pkg.Dog".to_string(), "ms|Dog".to_string()),
-            ("pkg.Fox".to_string(), "ms|Fox".to_string()),
-            ("pkg.Zebra".to_string(), "ms|Zebra".to_string()),
-            ("pkg.Mute".to_string(), "ms|Mute".to_string()),
+            ("pkg.Cat".to_string(), interner.intern("ms|Cat")),
+            ("pkg.Dog".to_string(), interner.intern("ms|Dog")),
+            ("pkg.Fox".to_string(), interner.intern("ms|Fox")),
+            ("pkg.Zebra".to_string(), interner.intern("ms|Zebra")),
+            ("pkg.Mute".to_string(), interner.intern("ms|Mute")),
         ]);
         let method = |receiver: &str, n: &str, id: u64| GoRtaMethod {
             method_name: n.to_string(),
@@ -509,10 +515,10 @@ mod tests {
             "pkg.Mute".to_string(),
         ]);
         let instantiated_keys = BTreeMap::from([
-            ("pkg.Cat".to_string(), "inst|Cat".to_string()),
-            ("pkg.Dog".to_string(), "inst|Dog".to_string()),
-            ("pkg.Fox".to_string(), "inst|Fox".to_string()),
-            ("pkg.Mute".to_string(), "inst|Mute".to_string()),
+            ("pkg.Cat".to_string(), interner.intern("inst|Cat")),
+            ("pkg.Dog".to_string(), interner.intern("inst|Dog")),
+            ("pkg.Fox".to_string(), interner.intern("inst|Fox")),
+            ("pkg.Mute".to_string(), interner.intern("inst|Mute")),
         ]);
 
         let inputs = GoRtaInputs {
@@ -534,7 +540,7 @@ mod tests {
             let mut indexed = Vec::new();
             let mut indexed_capped = false;
             collect_interface_candidates("Speak", &inputs, cap, &mut indexed, &mut indexed_capped);
-            let indexed_pairs: Vec<(SemanticNodeId, Vec<String>)> = indexed
+            let indexed_pairs: Vec<(SemanticNodeId, Vec<crate::core::StableKeyId>)> = indexed
                 .into_iter()
                 .map(|candidate| (candidate.node, candidate.contributing_keys))
                 .collect();

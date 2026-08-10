@@ -1203,8 +1203,9 @@ impl AnalysisDb {
     }
 
     pub(crate) fn replace_summary_facts_without_metadata(&mut self, output: SummaryOutput) {
-        let store =
-            SummaryStore::from_output(output).expect("summary output should produce a valid store");
+        let interner = self.stable_key_interner();
+        let store = SummaryStore::from_output(output, &interner)
+            .expect("summary output should produce a valid store");
         *self.summary_store_mut() = store;
     }
 
@@ -1213,7 +1214,9 @@ impl AnalysisDb {
         summaries: &[SummaryFact],
         events: &[SummaryEventFact],
     ) {
-        self.summary_store_mut().merge_updates(summaries, events);
+        let interner = self.stable_key_interner();
+        self.summary_store_mut()
+            .merge_updates(summaries, events, &interner);
     }
 
     pub(crate) fn refresh_summary_metadata_after_bulk_update(&mut self) {
@@ -1433,7 +1436,8 @@ impl AnalysisDb {
         &mut self,
         output: SolverOutput,
     ) -> Result<(), AnalysisError> {
-        *self.solver_store_mut() = SolverStore::from_output(output)?;
+        let interner = self.stable_key_interner();
+        *self.solver_store_mut() = SolverStore::from_output(output, &interner)?;
         Ok(())
     }
 
@@ -2272,26 +2276,26 @@ impl AnalysisDb {
     fn summary_fact_metadata(&self, fact: &SummaryFact) -> FactMeta {
         let (precision, confidence) = summary_precision_metadata(fact.status, fact.precision);
         FactMeta {
-            stable_key: fact.stable_key.clone(),
+            stable_key: self.resolve_stable_key(fact.stable_key).to_string(),
             producer_id: POLINT_DIRECT_SUMMARIES_PROVIDER_ID,
             layer_id: POLINT_DIRECT_SUMMARIES_PROVIDER_ID,
             precision,
             confidence,
             validation: ValidationStatus::NativeTrusted,
-            payload_digest: summary_fact_payload_metadata_digest(fact),
+            payload_digest: summary_fact_payload_metadata_digest(&self.stable_keys, fact),
         }
     }
 
     fn summary_event_metadata(&self, fact: &SummaryEventFact) -> FactMeta {
         let (precision, confidence) = summary_precision_metadata(fact.status, fact.precision);
         FactMeta {
-            stable_key: fact.stable_key.clone(),
+            stable_key: self.resolve_stable_key(fact.stable_key).to_string(),
             producer_id: POLINT_DIRECT_SUMMARIES_PROVIDER_ID,
             layer_id: POLINT_DIRECT_SUMMARIES_PROVIDER_ID,
             precision,
             confidence,
             validation: ValidationStatus::NativeTrusted,
-            payload_digest: summary_event_payload_metadata_digest(fact),
+            payload_digest: summary_event_payload_metadata_digest(&self.stable_keys, fact),
         }
     }
 

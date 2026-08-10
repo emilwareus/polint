@@ -9,12 +9,13 @@ use super::facts::{
 use super::scc::{Scc, SccSchedule};
 use crate::analysis::calls::facts::CallTargetStatus;
 use crate::analysis::ids::{SummaryEventId, SummaryId};
+use crate::analysis::summaries::scc::resolved_member_keys;
 use crate::analysis_kernel::FactFamily;
 use crate::analysis_kernel::incremental::{
     DemandQueryEngine, DemandQueryResult, Digest, DigestKind, PrecisionTier, QueryKey,
 };
-use crate::analysis_kernel::stable_key_text_from_parts;
-use crate::core::{AnalysisDb, FunctionId};
+use crate::analysis_kernel::stable_key_from_parts;
+use crate::core::{AnalysisDb, FunctionId, StableKeyId};
 
 // ---------------------------------------------------------------------------
 // SccClosureConfig
@@ -68,7 +69,7 @@ struct FunctionSummaryState {
     /// Current payload digests by domain kind.
     digests: BTreeMap<SummaryDomainKind, String>,
     /// Callable stable key for this function.
-    callable_stable_key: String,
+    callable_stable_key: StableKeyId,
 }
 
 // ---------------------------------------------------------------------------
@@ -104,8 +105,12 @@ pub(crate) fn close_summaries_by_scc(
     };
     let mut summary_metadata_dirty = false;
 
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
+
     for scc in &schedule.sccs {
         result.total_sccs_processed += 1;
+        let member_key_texts = resolved_member_keys(interner, &scc.member_stable_keys);
 
         if scc.is_recursive {
             result.recursive_sccs += 1;
@@ -115,7 +120,7 @@ pub(crate) fn close_summaries_by_scc(
             result.total_iterations += iterations as usize;
             result
                 .scc_iteration_counts
-                .push((scc.member_stable_keys.clone(), iterations));
+                .push((member_key_texts.clone(), iterations));
 
             if budget_exceeded {
                 result.budget_exceeded_sccs += 1;
@@ -129,20 +134,26 @@ pub(crate) fn close_summaries_by_scc(
             }
 
             // Compute the post-merge SCC output digest for backdating.
-            let scc_digest = compute_current_scc_digest(db, scc);
+            let scc_digest = compute_current_scc_digest(interner, db, scc);
             let was_backdated = check_backdating(
                 config,
-                &scc.member_stable_keys,
+                &member_key_texts,
                 &scc_digest,
                 previous_scc_digests,
                 &mut result,
             );
             result
                 .scc_output_digests
-                .insert(scc.member_stable_keys.clone(), scc_digest.clone());
+                .insert(member_key_texts.clone(), scc_digest.clone());
 
             // Record demand query entry
-            record_scc_demand_query(demand_engine, scc, &scc_digest, iterations, was_backdated);
+            record_scc_demand_query(
+                demand_engine,
+                &member_key_texts,
+                &scc_digest,
+                iterations,
+                was_backdated,
+            );
         } else {
             result.non_recursive_sccs += 1;
             let (scc_summaries, scc_events) = process_non_recursive_scc(db, scc);
@@ -155,20 +166,26 @@ pub(crate) fn close_summaries_by_scc(
             }
 
             // Compute the post-merge SCC output digest for backdating.
-            let scc_digest = compute_current_scc_digest(db, scc);
+            let scc_digest = compute_current_scc_digest(interner, db, scc);
             let was_backdated = check_backdating(
                 config,
-                &scc.member_stable_keys,
+                &member_key_texts,
                 &scc_digest,
                 previous_scc_digests,
                 &mut result,
             );
             result
                 .scc_output_digests
-                .insert(scc.member_stable_keys.clone(), scc_digest.clone());
+                .insert(member_key_texts.clone(), scc_digest.clone());
 
             // Record demand query entry
-            record_scc_demand_query(demand_engine, scc, &scc_digest, 1, was_backdated);
+            record_scc_demand_query(
+                demand_engine,
+                &member_key_texts,
+                &scc_digest,
+                1,
+                was_backdated,
+            );
         }
     }
 
@@ -191,7 +208,7 @@ fn process_non_recursive_scc(
     let interner = &interner_handle;
     debug_assert_eq!(scc.members.len(), 1);
     let function = scc.members[0];
-    let callable_key = &scc.member_stable_keys[0];
+    let callable_key = scc.member_stable_keys[0];
 
     // Get the function's existing direct summaries
     let existing_summaries: Vec<SummaryFact> = match db.summary_store() {
@@ -255,7 +272,7 @@ fn process_recursive_scc(
             func_id,
             FunctionSummaryState {
                 digests,
-                callable_stable_key: scc.member_stable_keys[i].clone(),
+                callable_stable_key: scc.member_stable_keys[i],
             },
         );
     }
@@ -291,7 +308,7 @@ fn process_recursive_scc(
                 .cloned()
                 .unwrap_or_else(|| FunctionSummaryState {
                     digests: BTreeMap::new(),
-                    callable_stable_key: String::new(),
+                    callable_stable_key: StableKeyId(0),
                 });
 
             let new_digests = join_callee_digests_into(&old_state.digests, &effective_callee_info);
@@ -355,7 +372,7 @@ fn process_recursive_scc(
 
             result_summaries.push(SummaryFact {
                 id: SummaryId(0),
-                callable_stable_key: state.callable_stable_key.clone(),
+                callable_stable_key: state.callable_stable_key,
                 function: func_id,
                 domain: fact.domain,
                 status,
@@ -363,14 +380,14 @@ fn process_recursive_scc(
                 provenance,
                 payload_digest: new_digest,
                 tito_flows,
-                stable_key: fact.stable_key.clone(),
+                stable_key: fact.stable_key,
             });
         }
 
         if budget_exceeded {
             result_events.push(SummaryEventFact {
                 id: SummaryEventId(0),
-                callable_stable_key: state.callable_stable_key.clone(),
+                callable_stable_key: state.callable_stable_key,
                 function: func_id,
                 domain: SummaryDomainKind::ControlEffects,
                 event_kind: "budget_exceeded".to_string(),
@@ -380,11 +397,14 @@ fn process_recursive_scc(
                 ),
                 status: SummaryStatus::BudgetExceeded,
                 precision: SummaryPrecision::UnknownTop,
-                stable_key: stable_key_text_from_parts(
+                stable_key: stable_key_from_parts(
                     interner,
                     FactFamily::SummaryEvent,
                     &[
-                        ("callable", state.callable_stable_key.clone()),
+                        (
+                            "callable",
+                            interner.resolve(state.callable_stable_key).to_string(),
+                        ),
                         ("domain", "scc_closure".to_string()),
                         ("event", "budget_exceeded".to_string()),
                     ],
@@ -467,7 +487,7 @@ fn apply_callee_effects(
     interner: &crate::core::StableKeyInterner,
     existing_summaries: &[SummaryFact],
     callee_info: &[CalleeInfo],
-    callable_key: &str,
+    callable_key: StableKeyId,
     function: FunctionId,
     events: &mut Vec<SummaryEventFact>,
 ) -> Vec<SummaryFact> {
@@ -578,18 +598,18 @@ fn apply_callee_effects(
     if has_unresolved_callee || has_callee_with_no_summary {
         events.push(SummaryEventFact {
             id: SummaryEventId(0),
-            callable_stable_key: callable_key.to_string(),
+            callable_stable_key: callable_key,
             function,
             domain: SummaryDomainKind::CallEffects,
             event_kind: "unresolved_callee_in_closure".to_string(),
             reason: "callee has no summary or is unresolved".to_string(),
             status: SummaryStatus::Unknown,
             precision: SummaryPrecision::UnknownTop,
-            stable_key: stable_key_text_from_parts(
+            stable_key: stable_key_from_parts(
                 interner,
                 FactFamily::SummaryEvent,
                 &[
-                    ("callable", callable_key.to_string()),
+                    ("callable", interner.resolve(callable_key).to_string()),
                     ("domain", "scc_closure".to_string()),
                     ("event", "unresolved_callee_in_closure".to_string()),
                 ],
@@ -641,13 +661,17 @@ fn join_callee_digests_into(
 // SCC output digest computation
 // ---------------------------------------------------------------------------
 
-fn compute_scc_digest(member_keys: &[String], summaries: &[SummaryFact]) -> String {
+fn compute_scc_digest(
+    interner: &crate::core::StableKeyInterner,
+    member_keys: &[String],
+    summaries: &[SummaryFact],
+) -> String {
     let mut digest_parts: Vec<String> = summaries
         .iter()
         .map(|s| {
             format!(
                 "{}:{}:{}:{:?}",
-                s.callable_stable_key,
+                interner.resolve(s.callable_stable_key),
                 s.domain.as_str(),
                 s.payload_digest,
                 s.tito_flows
@@ -660,7 +684,11 @@ fn compute_scc_digest(member_keys: &[String], summaries: &[SummaryFact]) -> Stri
     format!("scc_digest:{}:{}", member_keys.join(","), combined)
 }
 
-fn compute_current_scc_digest(db: &AnalysisDb, scc: &Scc) -> String {
+fn compute_current_scc_digest(
+    interner: &crate::core::StableKeyInterner,
+    db: &AnalysisDb,
+    scc: &Scc,
+) -> String {
     let summaries = db
         .summary_store()
         .map(|store| {
@@ -671,7 +699,8 @@ fn compute_current_scc_digest(db: &AnalysisDb, scc: &Scc) -> String {
         })
         .unwrap_or_default();
 
-    compute_scc_digest(&scc.member_stable_keys, &summaries)
+    let member_keys = resolved_member_keys(interner, &scc.member_stable_keys);
+    compute_scc_digest(interner, &member_keys, &summaries)
 }
 
 // ---------------------------------------------------------------------------
@@ -704,16 +733,12 @@ fn check_backdating(
 
 fn record_scc_demand_query(
     demand_engine: &mut DemandQueryEngine,
-    scc: &Scc,
+    member_keys: &[String],
     scc_digest: &str,
     iterations: u32,
     was_backdated: bool,
 ) {
-    let param_parts: Vec<String> = scc
-        .member_stable_keys
-        .iter()
-        .map(|k| format!("member:{k}"))
-        .collect();
+    let param_parts: Vec<String> = member_keys.iter().map(|k| format!("member:{k}")).collect();
     let param_refs: Vec<&str> = param_parts.iter().map(|s| s.as_str()).collect();
 
     let parameter_digest =
@@ -781,7 +806,7 @@ mod tests {
     use crate::analysis::ids::{CallSiteId, CallTargetId, MirBodyId, MirOpId};
     use crate::analysis::summaries::scc::compute_scc_schedule;
     use crate::analysis::summaries::store::SummaryOutput;
-    use crate::core::{FileId, Language, Span};
+    use crate::core::{FileId, Language, Span, stable_key_for_test};
 
     // -----------------------------------------------------------------------
     // Test helpers
@@ -798,7 +823,7 @@ mod tests {
     ) -> SummaryFact {
         SummaryFact {
             id: SummaryId(0),
-            callable_stable_key: callable_key.to_string(),
+            callable_stable_key: stable_key_for_test(callable_key),
             function: FunctionId(function_id),
             domain,
             status: SummaryStatus::Present,
@@ -806,14 +831,14 @@ mod tests {
             provenance: SummaryProvenance::NativeLocal,
             payload_digest: format!("digest:{callable_key}:{}", domain.as_str()),
             tito_flows: Vec::new(),
-            stable_key: format!("summary:{}:{callable_key}", domain.as_str()),
+            stable_key: stable_key_for_test(&format!("summary:{}:{callable_key}", domain.as_str())),
         }
     }
 
     fn control_summary_with_throw(function_id: u64, callable_key: &str) -> SummaryFact {
         SummaryFact {
             id: SummaryId(0),
-            callable_stable_key: callable_key.to_string(),
+            callable_stable_key: stable_key_for_test(callable_key),
             function: FunctionId(function_id),
             domain: SummaryDomainKind::ControlEffects,
             status: SummaryStatus::Present,
@@ -821,7 +846,7 @@ mod tests {
             provenance: SummaryProvenance::NativeLocal,
             payload_digest: "exit:Throws;async:Sync;cleanup:false".to_string(),
             tito_flows: Vec::new(),
-            stable_key: format!("summary:control_effects:{callable_key}"),
+            stable_key: stable_key_for_test(&format!("summary:control_effects:{callable_key}")),
         }
     }
 

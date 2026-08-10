@@ -18,7 +18,7 @@ use crate::analysis_kernel::incremental::{
     InputSnapshot,
 };
 use crate::cache::{Cache, CacheKey};
-use crate::core::AnalysisDb;
+use crate::core::{AnalysisDb, StableKeyId};
 use crate::diagnostics::Diagnostic;
 
 #[derive(Debug, Clone, Default)]
@@ -55,6 +55,7 @@ pub(crate) fn derive_direct_summaries_with_cache_stats(
         &symbol_graph_output_digest,
         &module_topology_output_digest,
         &upstream_syntax_output_digests,
+        interner,
         &callable_keys,
         &output,
     );
@@ -236,7 +237,8 @@ pub(crate) fn direct_summaries_output_digest(
     symbol_graph_output_digest: &Digest,
     module_topology_output_digest: &Digest,
     upstream_syntax_output_digests: &[Digest],
-    callable_keys: &std::collections::BTreeMap<MirBodyId, String>,
+    interner: &crate::core::StableKeyInterner,
+    callable_keys: &std::collections::BTreeMap<MirBodyId, StableKeyId>,
     output: &SummaryOutput,
 ) -> Digest {
     let mut parts = vec![
@@ -274,13 +276,14 @@ pub(crate) fn direct_summaries_output_digest(
             .map(|digest| format!("upstream_syntax={digest}")),
     );
     parts.extend(output.summaries.iter().map(|row| {
+        let callable = callable_keys
+            .get(&MirBodyId(row.function.0))
+            .copied()
+            .unwrap_or(row.callable_stable_key);
         format!(
             "summary={} callable={} domain={:?} status={:?} precision={:?} provenance={:?} payload={} tito_flows={:?}",
-            row.stable_key,
-            callable_keys
-                .get(&MirBodyId(row.function.0))
-                .cloned()
-                .unwrap_or_else(|| row.callable_stable_key.clone()),
+            interner.resolve(row.stable_key),
+            interner.resolve(callable),
             row.domain,
             row.status,
             row.precision,
@@ -290,13 +293,14 @@ pub(crate) fn direct_summaries_output_digest(
         )
     }));
     parts.extend(output.events.iter().map(|row| {
+        let callable = callable_keys
+            .get(&MirBodyId(row.function.0))
+            .copied()
+            .unwrap_or(row.callable_stable_key);
         format!(
             "event={} callable={} domain={:?} kind={} status={:?} precision={:?} reason={}",
-            row.stable_key,
-            callable_keys
-                .get(&MirBodyId(row.function.0))
-                .cloned()
-                .unwrap_or_else(|| row.callable_stable_key.clone()),
+            interner.resolve(row.stable_key),
+            interner.resolve(callable),
             row.domain,
             row.event_kind,
             row.status,
@@ -324,10 +328,10 @@ fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[I
 
 pub(crate) fn callable_stable_key_map(
     db: &AnalysisDb,
-) -> std::collections::BTreeMap<MirBodyId, String> {
+) -> std::collections::BTreeMap<MirBodyId, StableKeyId> {
     db.mir_bodies()
         .iter()
-        .map(|body| (body.id, db.resolve_stable_key(body.stable_key).to_string()))
+        .map(|body| (body.id, body.stable_key))
         .collect()
 }
 
@@ -444,7 +448,7 @@ mod scc_closure_provider {
     };
     use crate::analysis::summaries::store::SummaryOutput;
     use crate::cache::Cache;
-    use crate::core::{FileId, FunctionId, Language, Span};
+    use crate::core::{FileId, FunctionId, Language, Span, stable_key_for_test};
 
     fn span() -> Span {
         Span::point(FileId(1), 1, 1)
@@ -453,7 +457,7 @@ mod scc_closure_provider {
     fn summary_fact(function_id: u64, callable_key: &str) -> SummaryFact {
         SummaryFact {
             id: SummaryId(0),
-            callable_stable_key: callable_key.to_string(),
+            callable_stable_key: stable_key_for_test(callable_key),
             function: FunctionId(function_id),
             domain: SummaryDomainKind::ControlEffects,
             status: SummaryStatus::Present,
@@ -461,7 +465,7 @@ mod scc_closure_provider {
             provenance: SummaryProvenance::NativeLocal,
             payload_digest: format!("digest:{callable_key}"),
             tito_flows: Vec::new(),
-            stable_key: format!("summary:control_effects:{callable_key}"),
+            stable_key: stable_key_for_test(&format!("summary:control_effects:{callable_key}")),
         }
     }
 

@@ -45,7 +45,7 @@ fn edge_from_summary(
         db,
         FactFamily::SummaryCall,
         summary.id.0,
-        &summary.stable_key,
+        &db.resolve_stable_key(summary.stable_key),
     );
     let target_key = metadata_key(
         db,
@@ -247,7 +247,7 @@ mod tests {
     fn summary(status: SummaryStatus, domain: SummaryDomainKind) -> SummaryFact {
         SummaryFact {
             id: SummaryId(0),
-            callable_stable_key: "function:caller".to_string(),
+            callable_stable_key: crate::core::stable_key_for_test("function:caller"),
             function: FunctionId(0),
             domain,
             status,
@@ -255,7 +255,7 @@ mod tests {
             provenance: SummaryProvenance::NativeLocal,
             payload_digest: "digest".to_string(),
             tito_flows: Vec::new(),
-            stable_key: "summary:caller:call".to_string(),
+            stable_key: crate::core::stable_key_for_test("summary:caller:call"),
         }
     }
 

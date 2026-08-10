@@ -832,7 +832,7 @@
       "attempts": 1,
       "slice": null,
       "fact_family_locks": [],
-      "note": "rest-small-facts MERGED@15aaf817; remaining rest families still open (summaries/solver/slicing/residuals); T-INTERN-B not complete",
+      "note": "rest-solver-summaries commit pending; fact_family lock released; T-INTERN-B not complete",
       "slices_done": [
         "symbols",
         "mir",
@@ -842,13 +842,18 @@
         "rest-frontends",
         "rest-module-graph",
         "rest-analysis-mid",
-        "rest-small-facts"
+        "rest-small-facts",
+        "rest-solver-summaries"
       ],
-      "updated_at": "2026-08-10T23:04:25+02:00",
+      "updated_at": "2026-08-10T23:38:30+02:00",
       "slices": {
         "rest-small-facts": {
           "commit": "15aaf817",
           "merged_at": "2026-08-10T23:04:25+02:00"
+        },
+        "rest-solver-summaries": {
+          "commit": "PENDING",
+          "merged_at": "2026-08-10T23:38:30+02:00"
         }
       }
     },
@@ -935,7 +940,7 @@
   },
   "integration_branch": "static-analysis-architecture-review",
   "never_merge_to_main": true,
-  "integration_head": "15aaf817",
+  "integration_head": "0c6dc64d",
   "m0_gate": {
     "status": "PASS",
     "completed_at": "2026-08-08T11:52:00+02:00",
@@ -1028,7 +1033,10 @@
     "2026-08-08T16:19:49+02:00: W2.3 ESCALATE confirmed HELD (no-measurable-win); measurement @ 7f988fc5 on tip; FF integration to fae8e614; W2.5 must not assume interning; W2.4 continues; main untouched",
     "2026-08-08T16:28:48+02:00: W2.3 MERGED-NOOP (ESCALATE no RTA win); W2.4 steps1-4 landed @ 8fd7c456; tip advanced; W2.5 blocked (interning model wrong); main untouched",
     "2026-08-08T18:54:16+02:00: W2.5 progress tip 8a42a69d; AnalysisDb fields 102\u219259; no ts_/go_semantic_ flats; main untouched",
-    "2026-08-08T18:57:24+02:00: W2.5 IdentityStore landed @ 85a316fb; AnalysisDb fields=57; main untouched"
+    "2026-08-08T18:57:24+02:00: W2.5 IdentityStore landed @ 85a316fb; AnalysisDb fields=57; main untouched",
+    "2026-08-10T23:16:28+02:00: T-INTERN-B claimed fact_family:solver_summaries_slicing for rest-solver-summaries slice",
+    "2026-08-10T23:37:59+02:00: T-INTERN-B rest-solver-summaries slice complete; released fact_family:solver_summaries_slicing; T-INTERN-B remains open",
+    "2026-08-10T23:38:15+02:00: T-INTERN-B rest-solver-summaries landed @0c6dc64d; fact_family lock released; T-INTERN-B remains open"
   ],
   "events": [
     "2026-08-08T15:10:20+02:00: W2.2d+e landed FF @271ccd15; core/mod.rs 8739 LOC; capability+rule extracted; main untouched",
@@ -1092,6 +1100,11 @@
       "at": "2026-08-10T23:04:10+02:00",
       "event": "T-INTERN-B rest-small-facts MERGED",
       "commit": "15aaf817"
+    },
+    {
+      "at": "2026-08-10T23:38:15+02:00",
+      "event": "T-INTERN-B rest-solver-summaries MERGED",
+      "commit": "0c6dc64d"
     }
   ],
   "ready": [],

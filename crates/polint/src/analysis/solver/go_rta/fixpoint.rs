@@ -119,7 +119,7 @@ pub(crate) fn solve_go_rta(
     // stable keys; the same callee resolved in different rounds yields an identical
     // stable key, so we keep the first occurrence — its `solver_step` is the earliest,
     // a stable monotonic witness).
-    let mut edges_by_key: BTreeMap<String, DerivedEdgeFact> = BTreeMap::new();
+    let mut edges_by_key: BTreeMap<crate::core::StableKeyId, DerivedEdgeFact> = BTreeMap::new();
 
     let mut budget_exceeded = false;
     let mut budget_reasons = BTreeSet::new();
@@ -174,7 +174,7 @@ pub(crate) fn solve_go_rta(
                     if solver_step > budget.go.max_worklist_steps as u64 {
                         budget_reasons
                             .insert(BudgetReason::GoMaxWorklistSteps.as_str().to_string());
-                        return finish(edges_by_key, true, budget_reasons);
+                        return finish(interner, edges_by_key, true, budget_reasons);
                     }
                     if !reachable.contains(callee) {
                         newly_reachable.insert(callee.clone());
@@ -205,7 +205,7 @@ pub(crate) fn solve_go_rta(
                 if solver_step > budget.go.max_worklist_steps as u64 {
                     // Edges resolved before the cap keep their honest status (R1).
                     budget_reasons.insert(BudgetReason::GoMaxWorklistSteps.as_str().to_string());
-                    return finish(edges_by_key, true, budget_reasons);
+                    return finish(interner, edges_by_key, true, budget_reasons);
                 }
 
                 let callsite = &inputs.callsites[index];
@@ -243,7 +243,7 @@ pub(crate) fn solve_go_rta(
                     {
                         newly_reachable.insert(callee.to_string());
                     }
-                    edges_by_key.entry(edge.stable_key.clone()).or_insert(edge);
+                    edges_by_key.entry(edge.stable_key).or_insert(edge);
                 }
             }
         }
@@ -261,13 +261,14 @@ pub(crate) fn solve_go_rta(
         frontier = newly_reachable;
     }
 
-    finish(edges_by_key, budget_exceeded, budget_reasons)
+    finish(interner, edges_by_key, budget_exceeded, budget_reasons)
 }
 
 /// Assemble the normalized output from the deduplicated edge accumulator + the
 /// run-level budget status.
 fn finish(
-    edges_by_key: BTreeMap<String, DerivedEdgeFact>,
+    interner: &crate::core::StableKeyInterner,
+    edges_by_key: BTreeMap<crate::core::StableKeyId, DerivedEdgeFact>,
     budget_exceeded: bool,
     budget_reasons: BTreeSet<String>,
 ) -> SolverOutput {
@@ -281,7 +282,7 @@ fn finish(
         budget_status,
         budget_reasons,
     }
-    .normalized()
+    .normalized(interner)
 }
 
 #[cfg(test)]
@@ -299,6 +300,7 @@ mod tests {
     ///
     /// Nodes: main=1, callsite=2, File.Read=3, Buf.Read=4.
     fn interface_scenario(instantiated_types: &[&str]) -> GoRtaInputs {
+        let interner = crate::core::test_stable_key_interner();
         let mut function_node = BTreeMap::new();
         function_node.insert("main.main".to_string(), SemanticNodeId(1));
         function_node.insert("(pkg.File).Read".to_string(), SemanticNodeId(3));
@@ -312,8 +314,8 @@ mod tests {
         method_sets.insert("pkg.Buf".to_string(), BTreeSet::from(["Read".to_string()]));
 
         let mut method_set_keys = BTreeMap::new();
-        method_set_keys.insert("pkg.File".to_string(), "ms|pkg.File".to_string());
-        method_set_keys.insert("pkg.Buf".to_string(), "ms|pkg.Buf".to_string());
+        method_set_keys.insert("pkg.File".to_string(), interner.intern("ms|pkg.File"));
+        method_set_keys.insert("pkg.Buf".to_string(), interner.intern("ms|pkg.Buf"));
 
         let mut methods_by_receiver = BTreeMap::new();
         methods_by_receiver.insert(
@@ -337,7 +339,10 @@ mod tests {
         let mut instantiated_keys = BTreeMap::new();
         for type_name in instantiated_types {
             instantiated.insert((*type_name).to_string());
-            instantiated_keys.insert((*type_name).to_string(), format!("inst|{type_name}"));
+            instantiated_keys.insert(
+                (*type_name).to_string(),
+                interner.intern(format!("inst|{type_name}")),
+            );
         }
 
         GoRtaInputs {
@@ -345,10 +350,10 @@ mod tests {
             callsites: vec![GoRtaCallsite {
                 caller: "main.main".to_string(),
                 callsite_node: SemanticNodeId(2),
-                callsite_stable_key: "cs|main:read".to_string(),
+                callsite_stable_key: interner.intern("cs|main:read"),
                 interface_method: Some("Read".to_string()),
                 signature: None,
-                dispatch_stable_key: "dd|main:read".to_string(),
+                dispatch_stable_key: interner.intern("dd|main:read"),
             }],
             method_sets,
             method_set_keys,
@@ -369,7 +374,7 @@ mod tests {
         // is NOT instantiated → no Buf.Read edge (the RTA filter, D-06).
         let inputs = interface_scenario(&["pkg.File"]);
         let output = solve_go_rta(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &crate::core::test_stable_key_interner(),
             &inputs,
             &SolverBudget::default(),
         );
@@ -406,6 +411,7 @@ mod tests {
 
     #[test]
     fn static_call_edge_brings_non_root_caller_into_worklist_resolving_its_dispatch() {
+        let interner = crate::core::test_stable_key_interner();
         // FINDING 1: `main` (the only root) makes a DIRECT (static) call to `run`, a
         // non-root helper. The interface invoke `s.Speak()` lives in `run`, not in main.
         // RTA reachability must close over the static main -> run edge so run enters the
@@ -419,7 +425,7 @@ mod tests {
         let mut method_sets = BTreeMap::new();
         method_sets.insert("pkg.File".to_string(), BTreeSet::from(["Read".to_string()]));
         let mut method_set_keys = BTreeMap::new();
-        method_set_keys.insert("pkg.File".to_string(), "ms|pkg.File".to_string());
+        method_set_keys.insert("pkg.File".to_string(), interner.intern("ms|pkg.File"));
 
         let mut methods_by_receiver = BTreeMap::new();
         methods_by_receiver.insert(
@@ -433,7 +439,7 @@ mod tests {
 
         let instantiated = BTreeSet::from(["pkg.File".to_string()]);
         let mut instantiated_keys = BTreeMap::new();
-        instantiated_keys.insert("pkg.File".to_string(), "inst|pkg.File".to_string());
+        instantiated_keys.insert("pkg.File".to_string(), interner.intern("inst|pkg.File"));
 
         // The dispatch obligation belongs to `run` (NOT main); main only statically calls run.
         let mut static_call_targets = BTreeMap::new();
@@ -447,10 +453,10 @@ mod tests {
             callsites: vec![GoRtaCallsite {
                 caller: "main.run".to_string(),
                 callsite_node: SemanticNodeId(2),
-                callsite_stable_key: "cs|run:read".to_string(),
+                callsite_stable_key: interner.intern("cs|run:read"),
                 interface_method: Some("Read".to_string()),
                 signature: None,
-                dispatch_stable_key: "dd|run:read".to_string(),
+                dispatch_stable_key: interner.intern("dd|run:read"),
             }],
             method_sets,
             method_set_keys,
@@ -464,7 +470,7 @@ mod tests {
         .finalize_indexes();
 
         let output = solve_go_rta(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &crate::core::test_stable_key_interner(),
             &inputs,
             &SolverBudget::default(),
         );
@@ -490,6 +496,7 @@ mod tests {
 
     #[test]
     fn deep_static_chain_with_bottom_dispatch_converges_at_default_budget() {
+        let interner = crate::core::test_stable_key_interner();
         // FIX 1 (HIGH): the round cap must bound only GENUINE dispatch re-iteration, NOT
         // static-call-graph DEPTH. A deep first-party STATIC chain
         // main -> s1 -> s2 -> ... -> s200 whose BOTTOM function does a dynamic dispatch
@@ -530,7 +537,7 @@ mod tests {
         let mut method_sets = BTreeMap::new();
         method_sets.insert("pkg.File".to_string(), BTreeSet::from(["Read".to_string()]));
         let mut method_set_keys = BTreeMap::new();
-        method_set_keys.insert("pkg.File".to_string(), "ms|pkg.File".to_string());
+        method_set_keys.insert("pkg.File".to_string(), interner.intern("ms|pkg.File"));
 
         let mut methods_by_receiver = BTreeMap::new();
         methods_by_receiver.insert(
@@ -544,7 +551,7 @@ mod tests {
 
         let instantiated = BTreeSet::from(["pkg.File".to_string()]);
         let mut instantiated_keys = BTreeMap::new();
-        instantiated_keys.insert("pkg.File".to_string(), "inst|pkg.File".to_string());
+        instantiated_keys.insert("pkg.File".to_string(), interner.intern("inst|pkg.File"));
 
         let inputs = GoRtaInputs {
             roots: BTreeSet::from(["main.main".to_string()]),
@@ -552,10 +559,10 @@ mod tests {
             callsites: vec![GoRtaCallsite {
                 caller: qualified(CHAIN),
                 callsite_node: SemanticNodeId(900_000),
-                callsite_stable_key: "cs|deep:read".to_string(),
+                callsite_stable_key: interner.intern("cs|deep:read"),
                 interface_method: Some("Read".to_string()),
                 signature: None,
-                dispatch_stable_key: "dd|deep:read".to_string(),
+                dispatch_stable_key: interner.intern("dd|deep:read"),
             }],
             method_sets,
             method_set_keys,
@@ -571,7 +578,7 @@ mod tests {
         // THE DEFAULT BUDGET — no inflated `max_rta_rounds`. The default `max_rta_rounds`
         // (32) is far below the chain depth (200); the fix is what lets this converge.
         let output = solve_go_rta(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &crate::core::test_stable_key_interner(),
             &inputs,
             &SolverBudget::default(),
         );
@@ -633,7 +640,7 @@ mod tests {
         .finalize_indexes();
 
         let output = solve_go_rta(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &crate::core::test_stable_key_interner(),
             &inputs,
             &SolverBudget::default(),
         );
@@ -652,7 +659,7 @@ mod tests {
         // (honest unresolved, not a fabricated edge — D-08).
         let inputs = interface_scenario(&[]);
         let output = solve_go_rta(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &crate::core::test_stable_key_interner(),
             &inputs,
             &SolverBudget::default(),
         );
@@ -662,6 +669,7 @@ mod tests {
 
     #[test]
     fn func_value_resolves_via_address_taken_by_signature() {
+        let interner = crate::core::test_stable_key_interner();
         // A func-value callsite resolves to address-taken functions whose signature
         // matches. handler (addr-taken, sig "func()") matches; other (sig "func(int)")
         // does not.
@@ -678,18 +686,18 @@ mod tests {
         address_taken.insert("pkg.handler".to_string());
         address_taken.insert("pkg.other".to_string());
         let mut address_taken_keys = BTreeMap::new();
-        address_taken_keys.insert("pkg.handler".to_string(), "at|pkg.handler".to_string());
-        address_taken_keys.insert("pkg.other".to_string(), "at|pkg.other".to_string());
+        address_taken_keys.insert("pkg.handler".to_string(), interner.intern("at|pkg.handler"));
+        address_taken_keys.insert("pkg.other".to_string(), interner.intern("at|pkg.other"));
 
         let inputs = GoRtaInputs {
             roots: BTreeSet::from(["main.main".to_string()]),
             callsites: vec![GoRtaCallsite {
                 caller: "main.main".to_string(),
                 callsite_node: SemanticNodeId(2),
-                callsite_stable_key: "cs|main:fv".to_string(),
+                callsite_stable_key: interner.intern("cs|main:fv"),
                 interface_method: None,
                 signature: Some("func()".to_string()),
-                dispatch_stable_key: "dd|main:fv".to_string(),
+                dispatch_stable_key: interner.intern("dd|main:fv"),
             }],
             address_taken,
             address_taken_keys,
@@ -700,7 +708,7 @@ mod tests {
         .finalize_indexes();
 
         let output = solve_go_rta(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &crate::core::test_stable_key_interner(),
             &inputs,
             &SolverBudget::default(),
         );
@@ -728,7 +736,7 @@ mod tests {
         // The callsite invokes a method nobody declares.
         inputs.callsites[0].interface_method = Some("Frobnicate".to_string());
         let output = solve_go_rta(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &crate::core::test_stable_key_interner(),
             &inputs,
             &SolverBudget::default(),
         );
@@ -741,7 +749,7 @@ mod tests {
         // / method-set / callsite / dispatch facts. Removing the instantiated-type fact
         // (i.e. the type is no longer instantiated) does NOT reproduce the SAME edge.
         let baseline = solve_go_rta(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &crate::core::test_stable_key_interner(),
             &interface_scenario(&["pkg.File"]),
             &SolverBudget::default(),
         );
@@ -750,11 +758,11 @@ mod tests {
             .iter()
             .find(|e| e.target == SemanticNodeId(3))
             .expect("baseline File.Read edge");
-        let baseline_key = edge.stable_key.clone();
+        let baseline_key = edge.stable_key;
 
         // Remove pkg.File from the instantiated set (delete the contributing fact).
         let without_instantiated = solve_go_rta(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &crate::core::test_stable_key_interner(),
             &interface_scenario(&[]),
             &SolverBudget::default(),
         );
@@ -777,7 +785,7 @@ mod tests {
             .remove("Read");
         let no_method_set = no_method_set.finalize_indexes();
         let rerun = solve_go_rta(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &crate::core::test_stable_key_interner(),
             &no_method_set,
             &SolverBudget::default(),
         );
@@ -796,12 +804,12 @@ mod tests {
         // same scenario via two different instantiated-type insertion orders and assert
         // byte-identical normalized output.
         let forward = solve_go_rta(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &crate::core::test_stable_key_interner(),
             &interface_scenario(&["pkg.File", "pkg.Buf"]),
             &SolverBudget::default(),
         );
         let reversed = solve_go_rta(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &crate::core::test_stable_key_interner(),
             &interface_scenario(&["pkg.Buf", "pkg.File"]),
             &SolverBudget::default(),
         );
@@ -815,6 +823,7 @@ mod tests {
 
     #[test]
     fn runaway_dispatch_latches_budget_exceeded_not_unbounded() {
+        let interner = crate::core::test_stable_key_interner();
         // A deliberately tight round cap forces the fixpoint to latch BudgetExceeded
         // rather than loop unbounded (D-13). Build a reachable chain main -> a -> b so
         // resolution needs more than one round, then cap rounds at 1.
@@ -827,8 +836,8 @@ mod tests {
         method_sets.insert("pkg.A".to_string(), BTreeSet::from(["Step".to_string()]));
         method_sets.insert("pkg.B".to_string(), BTreeSet::from(["Step".to_string()]));
         let mut method_set_keys = BTreeMap::new();
-        method_set_keys.insert("pkg.A".to_string(), "ms|A".to_string());
-        method_set_keys.insert("pkg.B".to_string(), "ms|B".to_string());
+        method_set_keys.insert("pkg.A".to_string(), interner.intern("ms|A"));
+        method_set_keys.insert("pkg.B".to_string(), interner.intern("ms|B"));
 
         let mut methods_by_receiver = BTreeMap::new();
         methods_by_receiver.insert(
@@ -850,8 +859,8 @@ mod tests {
 
         let instantiated = BTreeSet::from(["pkg.A".to_string(), "pkg.B".to_string()]);
         let mut instantiated_keys = BTreeMap::new();
-        instantiated_keys.insert("pkg.A".to_string(), "inst|A".to_string());
-        instantiated_keys.insert("pkg.B".to_string(), "inst|B".to_string());
+        instantiated_keys.insert("pkg.A".to_string(), interner.intern("inst|A"));
+        instantiated_keys.insert("pkg.B".to_string(), interner.intern("inst|B"));
 
         let inputs = GoRtaInputs {
             roots: BTreeSet::from(["main.main".to_string()]),
@@ -860,19 +869,19 @@ mod tests {
                 GoRtaCallsite {
                     caller: "main.main".to_string(),
                     callsite_node: SemanticNodeId(2),
-                    callsite_stable_key: "cs|main".to_string(),
+                    callsite_stable_key: interner.intern("cs|main"),
                     interface_method: Some("Step".to_string()),
                     signature: None,
-                    dispatch_stable_key: "dd|main".to_string(),
+                    dispatch_stable_key: interner.intern("dd|main"),
                 },
                 // A.Step -> B.Step (only reachable in round 2)
                 GoRtaCallsite {
                     caller: "(pkg.A).Step".to_string(),
                     callsite_node: SemanticNodeId(4),
-                    callsite_stable_key: "cs|a".to_string(),
+                    callsite_stable_key: interner.intern("cs|a"),
                     interface_method: Some("Step".to_string()),
                     signature: None,
-                    dispatch_stable_key: "dd|a".to_string(),
+                    dispatch_stable_key: interner.intern("dd|a"),
                 },
             ],
             method_sets,
@@ -887,11 +896,7 @@ mod tests {
 
         let mut budget = SolverBudget::default();
         budget.go.max_rta_rounds = 1;
-        let output = solve_go_rta(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            &inputs,
-            &budget,
-        );
+        let output = solve_go_rta(&crate::core::test_stable_key_interner(), &inputs, &budget);
         // The cap is hit before the second round resolves A.Step's callsite, so the
         // run latches BudgetExceeded honestly rather than looping.
         assert_eq!(output.budget_status, BudgetStatus::BudgetExceeded);
@@ -899,6 +904,7 @@ mod tests {
 
     #[test]
     fn address_taken_threshold_suppresses_only_func_value_not_interface_dispatch() {
+        let interner = crate::core::test_stable_key_interner();
         // FINDING 7: a pathologically large address-taken (func-value) surface must
         // disable only FUNC-VALUE (signature) resolution; pure INTERFACE dispatch (which
         // does not consult the address-taken set) must still resolve. `main` has an
@@ -916,7 +922,7 @@ mod tests {
         let mut method_sets = BTreeMap::new();
         method_sets.insert("pkg.File".to_string(), BTreeSet::from(["Read".to_string()]));
         let mut method_set_keys = BTreeMap::new();
-        method_set_keys.insert("pkg.File".to_string(), "ms|pkg.File".to_string());
+        method_set_keys.insert("pkg.File".to_string(), interner.intern("ms|pkg.File"));
 
         let mut methods_by_receiver = BTreeMap::new();
         methods_by_receiver.insert(
@@ -930,14 +936,14 @@ mod tests {
 
         let instantiated = BTreeSet::from(["pkg.File".to_string()]);
         let mut instantiated_keys = BTreeMap::new();
-        instantiated_keys.insert("pkg.File".to_string(), "inst|pkg.File".to_string());
+        instantiated_keys.insert("pkg.File".to_string(), interner.intern("inst|pkg.File"));
 
         // Two address-taken func() handlers; threshold = 1, so the func-value surface is
         // "too large" and func-value resolution is suppressed.
         let address_taken = BTreeSet::from(["pkg.h1".to_string(), "pkg.h2".to_string()]);
         let mut address_taken_keys = BTreeMap::new();
-        address_taken_keys.insert("pkg.h1".to_string(), "at|h1".to_string());
-        address_taken_keys.insert("pkg.h2".to_string(), "at|h2".to_string());
+        address_taken_keys.insert("pkg.h1".to_string(), interner.intern("at|h1"));
+        address_taken_keys.insert("pkg.h2".to_string(), interner.intern("at|h2"));
         let mut function_signature = BTreeMap::new();
         function_signature.insert("pkg.h1".to_string(), "func()".to_string());
         function_signature.insert("pkg.h2".to_string(), "func()".to_string());
@@ -949,19 +955,19 @@ mod tests {
                 GoRtaCallsite {
                     caller: "main.main".to_string(),
                     callsite_node: SemanticNodeId(2),
-                    callsite_stable_key: "cs|main:read".to_string(),
+                    callsite_stable_key: interner.intern("cs|main:read"),
                     interface_method: Some("Read".to_string()),
                     signature: None,
-                    dispatch_stable_key: "dd|main:read".to_string(),
+                    dispatch_stable_key: interner.intern("dd|main:read"),
                 },
                 // Func-value call of func() (must be suppressed under the threshold).
                 GoRtaCallsite {
                     caller: "main.main".to_string(),
                     callsite_node: SemanticNodeId(4),
-                    callsite_stable_key: "cs|main:fv".to_string(),
+                    callsite_stable_key: interner.intern("cs|main:fv"),
                     interface_method: None,
                     signature: Some("func()".to_string()),
-                    dispatch_stable_key: "dd|main:fv".to_string(),
+                    dispatch_stable_key: interner.intern("dd|main:fv"),
                 },
             ],
             method_sets,
@@ -979,11 +985,7 @@ mod tests {
 
         let mut budget = SolverBudget::default();
         budget.go.address_taken_threshold = 1;
-        let output = solve_go_rta(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            &inputs,
-            &budget,
-        );
+        let output = solve_go_rta(&crate::core::test_stable_key_interner(), &inputs, &budget);
 
         // Interface dispatch still resolves despite the large address-taken set.
         assert!(
@@ -1008,6 +1010,7 @@ mod tests {
 
     #[test]
     fn large_address_taken_with_no_func_value_callsite_stays_within_budget() {
+        let interner = crate::core::test_stable_key_interner();
         // FIX 2 (MEDIUM): an oversized address-taken (func-value) surface must latch
         // BudgetExceeded ONLY when func-value resolution is actually NEEDED — i.e. at
         // least one reachable callsite is a func-value (signature-bearing) callsite.
@@ -1027,19 +1030,15 @@ mod tests {
             "pkg.h3".to_string(),
         ]);
         inputs.address_taken_keys = BTreeMap::from([
-            ("pkg.h1".to_string(), "at|h1".to_string()),
-            ("pkg.h2".to_string(), "at|h2".to_string()),
-            ("pkg.h3".to_string(), "at|h3".to_string()),
+            ("pkg.h1".to_string(), interner.intern("at|h1")),
+            ("pkg.h2".to_string(), interner.intern("at|h2")),
+            ("pkg.h3".to_string(), interner.intern("at|h3")),
         ]);
         debug_assert!(inputs.callsites.iter().all(|c| c.signature.is_none()));
 
         let mut budget = SolverBudget::default();
         budget.go.address_taken_threshold = 1;
-        let output = solve_go_rta(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            &inputs,
-            &budget,
-        );
+        let output = solve_go_rta(&crate::core::test_stable_key_interner(), &inputs, &budget);
 
         // Interface dispatch still resolves: main(1) -> (pkg.File).Read(3).
         assert!(
@@ -1062,6 +1061,7 @@ mod tests {
 
     #[test]
     fn large_address_taken_with_only_unreachable_func_value_callsite_stays_within_budget() {
+        let interner = crate::core::test_stable_key_interner();
         // A signature-bearing func-value callsite that is NOT reachable from any RTA root
         // must not latch BudgetExceeded. The threshold signal is about skipped reachable
         // work, not dormant obligations in disconnected functions.
@@ -1083,22 +1083,22 @@ mod tests {
             .insert("pkg.h2".to_string(), "func()".to_string());
         inputs.address_taken = BTreeSet::from(["pkg.h1".to_string(), "pkg.h2".to_string()]);
         inputs.address_taken_keys = BTreeMap::from([
-            ("pkg.h1".to_string(), "at|h1".to_string()),
-            ("pkg.h2".to_string(), "at|h2".to_string()),
+            ("pkg.h1".to_string(), interner.intern("at|h1")),
+            ("pkg.h2".to_string(), interner.intern("at|h2")),
         ]);
         inputs.callsites.push(GoRtaCallsite {
             caller: "pkg.unreachable".to_string(),
             callsite_node: SemanticNodeId(53),
-            callsite_stable_key: "cs|unreachable:fv".to_string(),
+            callsite_stable_key: interner.intern("cs|unreachable:fv"),
             interface_method: None,
             signature: Some("func()".to_string()),
-            dispatch_stable_key: "dd|unreachable:fv".to_string(),
+            dispatch_stable_key: interner.intern("dd|unreachable:fv"),
         });
 
         let mut budget = SolverBudget::default();
         budget.go.address_taken_threshold = 1;
         let output = solve_go_rta(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &crate::core::test_stable_key_interner(),
             &inputs.finalize_indexes(),
             &budget,
         );
@@ -1127,6 +1127,7 @@ mod tests {
 
     #[test]
     fn convergence_at_round_boundary_with_no_pending_work_stays_within_budget() {
+        let interner = crate::core::test_stable_key_interner();
         // FINDING 6: at the `max_rta_rounds` boundary the cap must latch BudgetExceeded
         // ONLY when there is genuinely pending dispatch work. Here `main` (root) invokes
         // `Step`, resolving to (pkg.A).Step in round 1; (pkg.A).Step has NO callsites
@@ -1142,7 +1143,7 @@ mod tests {
         let mut method_sets = BTreeMap::new();
         method_sets.insert("pkg.A".to_string(), BTreeSet::from(["Step".to_string()]));
         let mut method_set_keys = BTreeMap::new();
-        method_set_keys.insert("pkg.A".to_string(), "ms|A".to_string());
+        method_set_keys.insert("pkg.A".to_string(), interner.intern("ms|A"));
 
         let mut methods_by_receiver = BTreeMap::new();
         methods_by_receiver.insert(
@@ -1156,7 +1157,7 @@ mod tests {
 
         let instantiated = BTreeSet::from(["pkg.A".to_string()]);
         let mut instantiated_keys = BTreeMap::new();
-        instantiated_keys.insert("pkg.A".to_string(), "inst|A".to_string());
+        instantiated_keys.insert("pkg.A".to_string(), interner.intern("inst|A"));
 
         let inputs = GoRtaInputs {
             roots: BTreeSet::from(["main.main".to_string()]),
@@ -1166,10 +1167,10 @@ mod tests {
             callsites: vec![GoRtaCallsite {
                 caller: "main.main".to_string(),
                 callsite_node: SemanticNodeId(2),
-                callsite_stable_key: "cs|main".to_string(),
+                callsite_stable_key: interner.intern("cs|main"),
                 interface_method: Some("Step".to_string()),
                 signature: None,
-                dispatch_stable_key: "dd|main".to_string(),
+                dispatch_stable_key: interner.intern("dd|main"),
             }],
             method_sets,
             method_set_keys,
@@ -1187,11 +1188,7 @@ mod tests {
 
         let mut budget = SolverBudget::default();
         budget.go.max_rta_rounds = 1;
-        let output = solve_go_rta(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            &inputs,
-            &budget,
-        );
+        let output = solve_go_rta(&crate::core::test_stable_key_interner(), &inputs, &budget);
         // The single resolvable edge is derived AND the run is WithinBudget (converged at
         // the boundary, no pending work the cap prevented).
         assert!(
@@ -1210,6 +1207,7 @@ mod tests {
 
     #[test]
     fn static_only_expansion_after_dispatch_round_cap_stays_within_budget() {
+        let interner = crate::core::test_stable_key_interner();
         // The dispatch round cap is a dynamic-dispatch cap, not a static reachability
         // cap. Round 1 resolves main -> A dynamically. At the cap boundary, A has only
         // a static call to B, so the analysis must still close over B without latching
@@ -1222,7 +1220,7 @@ mod tests {
         let mut method_sets = BTreeMap::new();
         method_sets.insert("pkg.A".to_string(), BTreeSet::from(["Step".to_string()]));
         let mut method_set_keys = BTreeMap::new();
-        method_set_keys.insert("pkg.A".to_string(), "ms|A".to_string());
+        method_set_keys.insert("pkg.A".to_string(), interner.intern("ms|A"));
 
         let mut methods_by_receiver = BTreeMap::new();
         methods_by_receiver.insert(
@@ -1239,15 +1237,15 @@ mod tests {
             callsites: vec![GoRtaCallsite {
                 caller: "main.main".to_string(),
                 callsite_node: SemanticNodeId(2),
-                callsite_stable_key: "cs|main".to_string(),
+                callsite_stable_key: interner.intern("cs|main"),
                 interface_method: Some("Step".to_string()),
                 signature: None,
-                dispatch_stable_key: "dd|main".to_string(),
+                dispatch_stable_key: interner.intern("dd|main"),
             }],
             method_sets,
             method_set_keys,
             instantiated: BTreeSet::from(["pkg.A".to_string()]),
-            instantiated_keys: BTreeMap::from([("pkg.A".to_string(), "inst|A".to_string())]),
+            instantiated_keys: BTreeMap::from([("pkg.A".to_string(), interner.intern("inst|A"))]),
             methods_by_receiver,
             function_node,
             static_call_targets: BTreeMap::from([(
@@ -1261,11 +1259,7 @@ mod tests {
         let mut budget = SolverBudget::default();
         budget.go.max_rta_rounds = 1;
 
-        let output = solve_go_rta(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            &inputs,
-            &budget,
-        );
+        let output = solve_go_rta(&crate::core::test_stable_key_interner(), &inputs, &budget);
 
         assert!(
             output
@@ -1301,6 +1295,7 @@ mod tests {
     /// callsite-visits. With N = 80 (> 64) the old step cap would trip mid-chain.
     #[test]
     fn deep_multi_round_chain_exceeding_64_visits_stays_within_budget() {
+        let interner = crate::core::test_stable_key_interner();
         const CHAIN: usize = 80;
 
         let mut function_node = BTreeMap::new();
@@ -1329,7 +1324,10 @@ mod tests {
             let type_name = format!("pkg.S{i}");
             let method = format!("M{i}");
             method_sets.insert(type_name.clone(), BTreeSet::from([method.clone()]));
-            method_set_keys.insert(type_name.clone(), format!("ms|{type_name}"));
+            method_set_keys.insert(
+                type_name.clone(),
+                interner.intern(format!("ms|{type_name}")),
+            );
             methods_by_receiver.insert(
                 type_name.clone(),
                 vec![GoRtaMethod {
@@ -1339,7 +1337,10 @@ mod tests {
                 }],
             );
             instantiated.insert(type_name.clone());
-            instantiated_keys.insert(type_name.clone(), format!("inst|{type_name}"));
+            instantiated_keys.insert(
+                type_name.clone(),
+                interner.intern(format!("inst|{type_name}")),
+            );
         }
         // Caller step.i (for i in 0..CHAIN) invokes M{i+1}, reaching step.{i+1}.
         for i in 0..CHAIN {
@@ -1347,10 +1348,10 @@ mod tests {
             callsites.push(GoRtaCallsite {
                 caller: qualified(i),
                 callsite_node: SemanticNodeId((1000 + i) as u64),
-                callsite_stable_key: format!("cs|{i}"),
+                callsite_stable_key: interner.intern(format!("cs|{i}")),
                 interface_method: Some(format!("M{next}")),
                 signature: None,
-                dispatch_stable_key: format!("dd|{i}"),
+                dispatch_stable_key: interner.intern(format!("dd|{i}")),
             });
         }
 
@@ -1379,11 +1380,7 @@ mod tests {
             budget.max_outer_iterations
         );
 
-        let output = solve_go_rta(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            &inputs,
-            &budget,
-        );
+        let output = solve_go_rta(&crate::core::test_stable_key_interner(), &inputs, &budget);
 
         // The fixpoint converges honestly — NOT a spurious BudgetExceeded.
         assert_eq!(
@@ -1418,6 +1415,7 @@ mod tests {
     /// candidate-cap path; this pins the step-cap path).
     #[test]
     fn worklist_step_cap_still_latches_budget_exceeded_when_genuinely_exceeded() {
+        let interner = crate::core::test_stable_key_interner();
         let mut function_node = BTreeMap::new();
         function_node.insert("main.main".to_string(), SemanticNodeId(1));
         function_node.insert("(pkg.A).Step".to_string(), SemanticNodeId(3));
@@ -1427,8 +1425,8 @@ mod tests {
         method_sets.insert("pkg.A".to_string(), BTreeSet::from(["Step".to_string()]));
         method_sets.insert("pkg.B".to_string(), BTreeSet::from(["Step".to_string()]));
         let mut method_set_keys = BTreeMap::new();
-        method_set_keys.insert("pkg.A".to_string(), "ms|A".to_string());
-        method_set_keys.insert("pkg.B".to_string(), "ms|B".to_string());
+        method_set_keys.insert("pkg.A".to_string(), interner.intern("ms|A"));
+        method_set_keys.insert("pkg.B".to_string(), interner.intern("ms|B"));
 
         let mut methods_by_receiver = BTreeMap::new();
         methods_by_receiver.insert(
@@ -1450,8 +1448,8 @@ mod tests {
 
         let instantiated = BTreeSet::from(["pkg.A".to_string(), "pkg.B".to_string()]);
         let mut instantiated_keys = BTreeMap::new();
-        instantiated_keys.insert("pkg.A".to_string(), "inst|A".to_string());
-        instantiated_keys.insert("pkg.B".to_string(), "inst|B".to_string());
+        instantiated_keys.insert("pkg.A".to_string(), interner.intern("inst|A"));
+        instantiated_keys.insert("pkg.B".to_string(), interner.intern("inst|B"));
 
         let inputs = GoRtaInputs {
             roots: BTreeSet::from(["main.main".to_string()]),
@@ -1459,18 +1457,18 @@ mod tests {
                 GoRtaCallsite {
                     caller: "main.main".to_string(),
                     callsite_node: SemanticNodeId(2),
-                    callsite_stable_key: "cs|main".to_string(),
+                    callsite_stable_key: interner.intern("cs|main"),
                     interface_method: Some("Step".to_string()),
                     signature: None,
-                    dispatch_stable_key: "dd|main".to_string(),
+                    dispatch_stable_key: interner.intern("dd|main"),
                 },
                 GoRtaCallsite {
                     caller: "(pkg.A).Step".to_string(),
                     callsite_node: SemanticNodeId(4),
-                    callsite_stable_key: "cs|a".to_string(),
+                    callsite_stable_key: interner.intern("cs|a"),
                     interface_method: Some("Step".to_string()),
                     signature: None,
-                    dispatch_stable_key: "dd|a".to_string(),
+                    dispatch_stable_key: interner.intern("dd|a"),
                 },
             ],
             method_sets,
@@ -1487,11 +1485,7 @@ mod tests {
         // chain truncates and the run latches BudgetExceeded honestly.
         let mut budget = SolverBudget::default();
         budget.go.max_worklist_steps = 1;
-        let output = solve_go_rta(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            &inputs,
-            &budget,
-        );
+        let output = solve_go_rta(&crate::core::test_stable_key_interner(), &inputs, &budget);
         assert_eq!(output.budget_status, BudgetStatus::BudgetExceeded);
     }
 }

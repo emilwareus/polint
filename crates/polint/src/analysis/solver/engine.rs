@@ -25,7 +25,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use crate::analysis::ids::DerivedEdgeId;
 use crate::analysis::points_to::facts::{PointsToPrecision, PointsToStatus};
 use crate::analysis::semantic_graph::constraints::{ConstraintFact, ConstraintKind};
-use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
+use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
+use crate::core::StableKeyId;
 
 use super::budget::{BudgetReason, BudgetStatus, SolverBudget};
 use super::facts::DerivedEdgeFact;
@@ -215,7 +216,7 @@ impl SolverEngine {
             budget_status,
             budget_reasons,
         }
-        .normalized()
+        .normalized(interner)
     }
 }
 
@@ -283,7 +284,7 @@ pub(crate) fn derive_edges(
     // constraints asserting it (#4 — never launder an untrusted hop). BTree-ordered
     // for determinism.
     let mut adjacency: BTreeMap<SemanticNodeRef, BTreeSet<SemanticNodeRef>> = BTreeMap::new();
-    let mut hop_keys: BTreeMap<(SemanticNodeRef, SemanticNodeRef), BTreeSet<String>> =
+    let mut hop_keys: BTreeMap<(SemanticNodeRef, SemanticNodeRef), BTreeSet<StableKeyId>> =
         BTreeMap::new();
     let mut hop_meta: BTreeMap<
         (SemanticNodeRef, SemanticNodeRef),
@@ -296,7 +297,7 @@ pub(crate) fn derive_edges(
             hop_keys
                 .entry((src, dst))
                 .or_default()
-                .insert(interner.resolve(constraint.stable_key).to_string());
+                .insert(constraint.stable_key);
             let meta = hop_meta
                 .entry((src, dst))
                 .or_insert((PointsToStatus::Present, PointsToPrecision::FlowInsensitive));
@@ -408,22 +409,23 @@ pub(crate) fn derive_edges(
                 continue;
             }
             let provenance = DerivedEdgeProvenance::new(
-                meta.keys.iter().map(|key| ContributingFact {
-                    stable_key: key.clone(),
-                }),
+                interner,
+                meta.keys
+                    .iter()
+                    .map(|&key| ContributingFact { stable_key: key }),
                 &ConstraintKind::CopyEdge {
                     dst: crate::analysis::ids::SemanticNodeId(node),
                     src: crate::analysis::ids::SemanticNodeId(start),
                 },
                 meta.step,
             );
-            let stable_key = stable_key_text_from_parts(
+            let stable_key = stable_key_from_parts(
                 interner,
                 FactFamily::SolverDerivedEdge,
                 &[
                     ("source", start.to_string()),
                     ("target", node.to_string()),
-                    ("provenance", provenance.stable_key_fragment()),
+                    ("provenance", provenance.stable_key_fragment(interner)),
                 ],
             );
             edges.push(DerivedEdgeFact {
@@ -451,7 +453,7 @@ pub(crate) fn derive_edges(
         budget_status,
         budget_reasons,
     }
-    .normalized()
+    .normalized(interner)
 }
 
 fn model_edges(
@@ -520,19 +522,20 @@ fn model_edges(
         *expansions += 1;
         source_targets.insert(target.0);
         let provenance = DerivedEdgeProvenance::new(
+            interner,
             [ContributingFact {
-                stable_key: interner.resolve(constraint.stable_key).to_string(),
+                stable_key: constraint.stable_key,
             }],
             &constraint.kind,
             0,
         );
-        let stable_key = stable_key_text_from_parts(
+        let stable_key = stable_key_from_parts(
             interner,
             FactFamily::SolverDerivedEdge,
             &[
                 ("source", source.0.to_string()),
                 ("target", target.0.to_string()),
-                ("provenance", provenance.stable_key_fragment()),
+                ("provenance", provenance.stable_key_fragment(interner)),
             ],
         );
         edges.push(DerivedEdgeFact {
@@ -560,7 +563,7 @@ type SemanticNodeRef = u64;
 /// keep the first. `BTreeSet` keeps the contributing keys totally ordered (byte-stable).
 #[derive(Debug, Clone)]
 struct PathMeta {
-    keys: BTreeSet<String>,
+    keys: BTreeSet<StableKeyId>,
     status: PointsToStatus,
     precision: PointsToPrecision,
     /// The global monotonic `solver_step` at which this node's adopted derivation
@@ -812,11 +815,13 @@ mod tests {
     }
 
     fn policy_edge(stable_key: &str, source: u64, target: u64) -> DerivedEdgeFact {
+        let interner = crate::core::test_stable_key_interner();
         let source = SemanticNodeId(source);
         let target = SemanticNodeId(target);
         let provenance = DerivedEdgeProvenance::new(
+            &interner,
             [ContributingFact::from_parts(
-                &crate::core::test_stable_key_interner(),
+                &interner,
                 FactFamily::ExtensionFact,
                 &[("constraint", stable_key.to_string())],
             )],
@@ -836,7 +841,7 @@ mod tests {
             target,
             status: PointsToStatus::Present,
             precision: PointsToPrecision::Heuristic,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
             provenance,
         }
     }
@@ -957,11 +962,14 @@ mod tests {
             .expect("model edge derived");
         assert_eq!(edge.provenance.constraint_kind, "model_edge");
         assert_eq!(edge.provenance.contributing_len(), 1);
+        let interner = crate::core::test_stable_key_interner();
         assert_eq!(
-            edge.provenance.contributing_facts[0].stable_key,
+            interner
+                .resolve(edge.provenance.contributing_facts[0].stable_key)
+                .as_ref(),
             "model|register"
         );
-        assert!(edge.stable_key.contains("model_edge"));
+        assert!(interner.resolve(edge.stable_key).contains("model_edge"));
     }
 
     #[test]
@@ -1078,15 +1086,16 @@ mod tests {
             .iter()
             .find(|e| e.source == SemanticNodeId(1) && e.target == SemanticNodeId(3))
             .expect("transitive a -> c derived");
-        let keys: Vec<&str> = edge
+        let interner = crate::core::test_stable_key_interner();
+        let keys: Vec<String> = edge
             .provenance
             .contributing_facts
             .iter()
-            .map(|f| f.stable_key.as_str())
+            .map(|f| interner.resolve(f.stable_key).to_string())
             .collect();
-        assert!(keys.contains(&"copy|a-b#1"), "{keys:?}");
-        assert!(keys.contains(&"copy|a-b#2"), "{keys:?}");
-        assert!(keys.contains(&"copy|b-c"), "{keys:?}");
+        assert!(keys.iter().any(|k| k == "copy|a-b#1"), "{keys:?}");
+        assert!(keys.iter().any(|k| k == "copy|a-b#2"), "{keys:?}");
+        assert!(keys.iter().any(|k| k == "copy|b-c"), "{keys:?}");
     }
 
     #[test]
@@ -1155,15 +1164,16 @@ mod tests {
             .filter(|e| e.source == SemanticNodeId(1) && e.target == SemanticNodeId(4))
             .collect();
         assert_eq!(ad.len(), 1, "exactly one a -> d edge");
-        let witness_key = ad[0].stable_key.clone();
-        let witness: Vec<&str> = ad[0]
+        let interner = crate::core::test_stable_key_interner();
+        let witness_key = ad[0].stable_key;
+        let witness: Vec<String> = ad[0]
             .provenance
             .contributing_facts
             .iter()
-            .map(|f| f.stable_key.as_str())
+            .map(|f| interner.resolve(f.stable_key).to_string())
             .collect();
         assert!(
-            witness.contains(&"copy|a-b") && witness.contains(&"copy|b-d"),
+            witness.iter().any(|k| k == "copy|a-b") && witness.iter().any(|k| k == "copy|b-d"),
             "deterministic witness path is a-b -> b-d: {witness:?}"
         );
 
@@ -1287,14 +1297,15 @@ mod tests {
         assert_eq!(edge.precision, PointsToPrecision::Unknown);
         // Provenance must JUSTIFY the downgraded status: the adopted derivation is the
         // untrusted path, so its contributing facts are recorded (not the clean witness).
-        let keys: Vec<&str> = edge
+        let interner = crate::core::test_stable_key_interner();
+        let keys: Vec<String> = edge
             .provenance
             .contributing_facts
             .iter()
-            .map(|f| f.stable_key.as_str())
+            .map(|f| interner.resolve(f.stable_key).to_string())
             .collect();
         assert!(
-            keys.contains(&"copy|a-c") && keys.contains(&"copy|c-d"),
+            keys.iter().any(|k| k == "copy|a-c") && keys.iter().any(|k| k == "copy|c-d"),
             "provenance must list the untrusted derivation that set the status: {keys:?}"
         );
     }
@@ -1448,6 +1459,7 @@ mod tests {
 
     #[test]
     fn run_to_solver_output_still_surfaces_go_rta_budget_exhaustion() {
+        let interner = crate::core::test_stable_key_interner();
         // FINDING 3 honesty floor: excluding the DISCARDED points-to fold must not mask a
         // policy whose edges DO enter the output. A Go RTA policy that latches
         // BudgetExceeded (tight round cap on a multi-round chain) must still surface at run
@@ -1463,8 +1475,8 @@ mod tests {
         method_sets.insert("pkg.A".to_string(), BTreeSet::from(["Step".to_string()]));
         method_sets.insert("pkg.B".to_string(), BTreeSet::from(["Step".to_string()]));
         let mut method_set_keys = BTreeMap::new();
-        method_set_keys.insert("pkg.A".to_string(), "ms|A".to_string());
-        method_set_keys.insert("pkg.B".to_string(), "ms|B".to_string());
+        method_set_keys.insert("pkg.A".to_string(), interner.intern("ms|A"));
+        method_set_keys.insert("pkg.B".to_string(), interner.intern("ms|B"));
         let mut methods_by_receiver = BTreeMap::new();
         methods_by_receiver.insert(
             "pkg.A".to_string(),
@@ -1484,26 +1496,26 @@ mod tests {
         );
         let instantiated = BTreeSet::from(["pkg.A".to_string(), "pkg.B".to_string()]);
         let mut instantiated_keys = BTreeMap::new();
-        instantiated_keys.insert("pkg.A".to_string(), "inst|A".to_string());
-        instantiated_keys.insert("pkg.B".to_string(), "inst|B".to_string());
+        instantiated_keys.insert("pkg.A".to_string(), interner.intern("inst|A"));
+        instantiated_keys.insert("pkg.B".to_string(), interner.intern("inst|B"));
         let go_inputs = GoRtaInputs {
             roots: BTreeSet::from(["main.main".to_string()]),
             callsites: vec![
                 GoRtaCallsite {
                     caller: "main.main".to_string(),
                     callsite_node: SemanticNodeId(2),
-                    callsite_stable_key: "cs|main".to_string(),
+                    callsite_stable_key: interner.intern("cs|main"),
                     interface_method: Some("Step".to_string()),
                     signature: None,
-                    dispatch_stable_key: "dd|main".to_string(),
+                    dispatch_stable_key: interner.intern("dd|main"),
                 },
                 GoRtaCallsite {
                     caller: "(pkg.A).Step".to_string(),
                     callsite_node: SemanticNodeId(4),
-                    callsite_stable_key: "cs|a".to_string(),
+                    callsite_stable_key: interner.intern("cs|a"),
                     interface_method: Some("Step".to_string()),
                     signature: None,
-                    dispatch_stable_key: "dd|a".to_string(),
+                    dispatch_stable_key: interner.intern("dd|a"),
                 },
             ],
             method_sets,

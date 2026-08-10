@@ -6,7 +6,7 @@ use petgraph::visit::EdgeRef;
 use serde::Serialize;
 
 use crate::analysis::calls::facts::CallTargetStatus;
-use crate::core::{AnalysisDb, FunctionId};
+use crate::core::{AnalysisDb, FunctionId, StableKeyId, StableKeyInterner};
 
 // ---------------------------------------------------------------------------
 // SCC types for summary scheduling from direct call targets
@@ -19,10 +19,10 @@ use crate::core::{AnalysisDb, FunctionId};
 /// otherwise a single pass suffices (D-05).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct Scc {
-    /// Function IDs in this SCC, sorted by stable key.
+    /// Function IDs in this SCC, sorted by resolved stable-key text.
     pub(crate) members: Vec<FunctionId>,
-    /// Stable keys corresponding to each member, sorted.
-    pub(crate) member_stable_keys: Vec<String>,
+    /// Stable keys corresponding to each member, sorted by resolved text.
+    pub(crate) member_stable_keys: Vec<StableKeyId>,
     /// True if the SCC has mutual recursion or a self-call.
     pub(crate) is_recursive: bool,
     /// Number of members in this SCC.
@@ -62,13 +62,13 @@ pub(crate) struct SccScheduleDebug {
     pub(crate) max_scc_size: usize,
     /// Sizes of each SCC in processing order.
     pub(crate) scc_sizes: Vec<usize>,
-    /// Stable keys of members in each SCC, in processing order.
+    /// Resolved stable-key text of members in each SCC, in processing order.
     pub(crate) processing_order: Vec<Vec<String>>,
 }
 
 impl SccSchedule {
     /// Extracts debug/trace summary statistics per D-14.
-    pub(crate) fn debug_info(&self) -> SccScheduleDebug {
+    pub(crate) fn debug_info(&self, interner: &StableKeyInterner) -> SccScheduleDebug {
         SccScheduleDebug {
             total_sccs: self.total_sccs,
             total_functions: self.total_functions,
@@ -78,10 +78,19 @@ impl SccSchedule {
             processing_order: self
                 .sccs
                 .iter()
-                .map(|scc| scc.member_stable_keys.clone())
+                .map(|scc| resolved_member_keys(interner, &scc.member_stable_keys))
                 .collect(),
         }
     }
+}
+
+pub(crate) fn resolved_member_keys(
+    interner: &StableKeyInterner,
+    keys: &[StableKeyId],
+) -> Vec<String> {
+    keys.iter()
+        .map(|key| interner.resolve(*key).to_string())
+        .collect()
 }
 
 /// Computes the SCC schedule from direct call target facts in the AnalysisDb.
@@ -90,9 +99,10 @@ impl SccSchedule {
 /// 1. Collect functions that have at least one SummaryFact.
 /// 2. Build a DiGraph from CallStore outgoing edges between those functions.
 /// 3. Run Tarjan's SCC on the graph.
-/// 4. Sort members within each SCC by stable key (D-17).
+/// 4. Sort members within each SCC by resolved stable-key text (D-17).
 /// 5. Classify recursive vs non-recursive SCCs.
 pub(crate) fn compute_scc_schedule(db: &AnalysisDb) -> SccSchedule {
+    let interner = db.stable_key_interner();
     // Step 1: Collect functions with direct summaries.
     let summary_store = match db.summary_store() {
         Some(store) => store,
@@ -109,11 +119,11 @@ pub(crate) fn compute_scc_schedule(db: &AnalysisDb) -> SccSchedule {
 
     // Collect unique FunctionIds that have summaries, along with their
     // callable_stable_key for deterministic ordering.
-    let mut function_stable_keys: BTreeMap<FunctionId, String> = BTreeMap::new();
+    let mut function_stable_keys: BTreeMap<FunctionId, StableKeyId> = BTreeMap::new();
     for fact in summary_store.all_summaries() {
         function_stable_keys
             .entry(fact.function)
-            .or_insert_with(|| fact.callable_stable_key.clone());
+            .or_insert(fact.callable_stable_key);
     }
 
     if function_stable_keys.is_empty() {
@@ -176,25 +186,29 @@ pub(crate) fn compute_scc_schedule(db: &AnalysisDb) -> SccSchedule {
     let mut max_scc_size = 0_usize;
 
     for raw_scc in &raw_sccs {
-        // Collect (stable_key, FunctionId) pairs for sorting.
-        let mut members_with_keys: Vec<(String, FunctionId)> = raw_scc
+        // Collect (resolved text, StableKeyId, FunctionId) for sorting.
+        let mut members_with_keys: Vec<(String, StableKeyId, FunctionId)> = raw_scc
             .iter()
             .map(|&node_idx| {
                 let func_id = graph[node_idx];
                 let stable_key = function_stable_keys
                     .get(&func_id)
-                    .cloned()
-                    .unwrap_or_else(|| format!("<unknown:{}>", func_id.0));
-                (stable_key, func_id)
+                    .copied()
+                    .unwrap_or_else(|| interner.intern(format!("<unknown:{}>", func_id.0)));
+                (
+                    interner.resolve(stable_key).to_string(),
+                    stable_key,
+                    func_id,
+                )
             })
             .collect();
 
-        // Sort by stable key for determinism (D-17).
+        // Sort by resolved stable-key text for determinism (D-17).
         members_with_keys.sort_by(|a, b| a.0.cmp(&b.0));
 
-        let member_stable_keys: Vec<String> =
-            members_with_keys.iter().map(|(k, _)| k.clone()).collect();
-        let members: Vec<FunctionId> = members_with_keys.iter().map(|(_, id)| *id).collect();
+        let member_stable_keys: Vec<StableKeyId> =
+            members_with_keys.iter().map(|(_, key, _)| *key).collect();
+        let members: Vec<FunctionId> = members_with_keys.iter().map(|(_, _, id)| *id).collect();
 
         let size = members.len();
 
@@ -217,7 +231,7 @@ pub(crate) fn compute_scc_schedule(db: &AnalysisDb) -> SccSchedule {
         });
     }
 
-    let sccs = sorted_sccs_by_rank_and_stable_key(&graph, &sccs);
+    let sccs = sorted_sccs_by_rank_and_stable_key(&interner, &graph, &sccs);
 
     SccSchedule {
         total_sccs: sccs.len(),
@@ -228,7 +242,11 @@ pub(crate) fn compute_scc_schedule(db: &AnalysisDb) -> SccSchedule {
     }
 }
 
-fn sorted_sccs_by_rank_and_stable_key(graph: &DiGraph<FunctionId, ()>, sccs: &[Scc]) -> Vec<Scc> {
+fn sorted_sccs_by_rank_and_stable_key(
+    interner: &StableKeyInterner,
+    graph: &DiGraph<FunctionId, ()>,
+    sccs: &[Scc],
+) -> Vec<Scc> {
     let mut scc_by_function = BTreeMap::new();
     for (index, scc) in sccs.iter().enumerate() {
         for function in &scc.members {
@@ -265,7 +283,13 @@ fn sorted_sccs_by_rank_and_stable_key(graph: &DiGraph<FunctionId, ()>, sccs: &[S
         .iter()
         .cloned()
         .enumerate()
-        .map(|(index, scc)| (ranks[index], scc.member_stable_keys.clone(), scc))
+        .map(|(index, scc)| {
+            (
+                ranks[index],
+                resolved_member_keys(interner, &scc.member_stable_keys),
+                scc,
+            )
+        })
         .collect::<Vec<_>>();
     ordered.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
     ordered.into_iter().map(|(_, _, scc)| scc).collect()
@@ -285,7 +309,7 @@ mod tests {
         SummaryDomainKind, SummaryPrecision, SummaryProvenance, SummaryStatus,
     };
     use crate::analysis::summaries::store::SummaryOutput;
-    use crate::core::{FileId, Language, Span};
+    use crate::core::{FileId, Language, Span, stable_key_for_test};
 
     // -----------------------------------------------------------------------
     // Test helpers
@@ -302,7 +326,7 @@ mod tests {
     ) -> crate::analysis::summaries::facts::SummaryFact {
         crate::analysis::summaries::facts::SummaryFact {
             id: SummaryId(0),
-            callable_stable_key: callable_key.to_string(),
+            callable_stable_key: stable_key_for_test(callable_key),
             function: FunctionId(function_id),
             domain: SummaryDomainKind::ControlEffects,
             status: SummaryStatus::Present,
@@ -310,7 +334,7 @@ mod tests {
             provenance: SummaryProvenance::NativeLocal,
             payload_digest: format!("digest:{callable_key}"),
             tito_flows: Vec::new(),
-            stable_key: format!("summary:control_effects:{callable_key}"),
+            stable_key: stable_key_for_test(&format!("summary:control_effects:{callable_key}")),
         }
     }
 
@@ -381,6 +405,10 @@ mod tests {
         db
     }
 
+    fn member_texts(interner: &StableKeyInterner, scc: &Scc) -> Vec<String> {
+        resolved_member_keys(interner, &scc.member_stable_keys)
+    }
+
     // -----------------------------------------------------------------------
     // Test (a): Empty AnalysisDb produces SccSchedule with 0 SCCs
     // -----------------------------------------------------------------------
@@ -421,6 +449,7 @@ mod tests {
         ];
 
         let db = build_db(summaries, sites, targets);
+        let interner = db.stable_key_interner();
         let schedule = compute_scc_schedule(&db);
 
         assert_eq!(schedule.total_sccs, 3);
@@ -429,9 +458,9 @@ mod tests {
         assert_eq!(schedule.max_scc_size, 1);
 
         // Verify reverse topological order: C first, then B, then A
-        assert_eq!(schedule.sccs[0].member_stable_keys, vec!["func::c"]);
-        assert_eq!(schedule.sccs[1].member_stable_keys, vec!["func::b"]);
-        assert_eq!(schedule.sccs[2].member_stable_keys, vec!["func::a"]);
+        assert_eq!(member_texts(&interner, &schedule.sccs[0]), vec!["func::c"]);
+        assert_eq!(member_texts(&interner, &schedule.sccs[1]), vec!["func::b"]);
+        assert_eq!(member_texts(&interner, &schedule.sccs[2]), vec!["func::a"]);
 
         // None are recursive
         for scc in &schedule.sccs {
@@ -452,6 +481,7 @@ mod tests {
         let targets = vec![call_target(1, 1, 1, 1)]; // self-call
 
         let db = build_db(summaries, sites, targets);
+        let interner = db.stable_key_interner();
         let schedule = compute_scc_schedule(&db);
 
         assert_eq!(schedule.total_sccs, 1);
@@ -462,7 +492,7 @@ mod tests {
         let scc = &schedule.sccs[0];
         assert!(scc.is_recursive);
         assert_eq!(scc.size, 1);
-        assert_eq!(scc.member_stable_keys, vec!["func::recursive"]);
+        assert_eq!(member_texts(&interner, scc), vec!["func::recursive"]);
     }
 
     // -----------------------------------------------------------------------
@@ -480,21 +510,26 @@ mod tests {
         ];
 
         let db = build_db(summaries, Vec::new(), Vec::new());
+        let interner = db.stable_key_interner();
         let schedule = compute_scc_schedule(&db);
 
         assert_eq!(schedule.total_sccs, 3);
         assert_eq!(schedule.total_functions, 3);
         assert_eq!(schedule.recursive_scc_count, 0);
 
-        let keys: Vec<&str> = schedule
+        let keys: Vec<String> = schedule
             .sccs
             .iter()
-            .map(|scc| scc.member_stable_keys[0].as_str())
+            .map(|scc| member_texts(&interner, scc)[0].clone())
             .collect();
 
         assert_eq!(
             keys,
-            vec!["func::alpha", "func::middle", "func::zebra"],
+            vec![
+                "func::alpha".to_string(),
+                "func::middle".to_string(),
+                "func::zebra".to_string()
+            ],
             "independent SCCs must be sorted by stable key"
         );
     }
@@ -524,8 +559,9 @@ mod tests {
         ];
 
         let db = build_db(summaries, sites, targets);
+        let interner = db.stable_key_interner();
         let schedule = compute_scc_schedule(&db);
-        let debug = schedule.debug_info();
+        let debug = schedule.debug_info(&interner);
 
         assert_eq!(debug.total_sccs, schedule.total_sccs);
         assert_eq!(debug.total_functions, 4);
@@ -536,7 +572,7 @@ mod tests {
 
         // Each processing_order entry should have the stable keys
         for (i, keys) in debug.processing_order.iter().enumerate() {
-            assert_eq!(keys, &schedule.sccs[i].member_stable_keys);
+            assert_eq!(keys, &member_texts(&interner, &schedule.sccs[i]));
         }
     }
 
@@ -557,6 +593,7 @@ mod tests {
         ];
 
         let db = build_db(summaries, sites, targets);
+        let interner = db.stable_key_interner();
         let schedule = compute_scc_schedule(&db);
 
         assert_eq!(schedule.total_sccs, 1);
@@ -568,7 +605,7 @@ mod tests {
         assert!(scc.is_recursive);
         assert_eq!(scc.size, 2);
         // Members sorted by stable key
-        assert_eq!(scc.member_stable_keys, vec!["func::a", "func::b"]);
+        assert_eq!(member_texts(&interner, scc), vec!["func::a", "func::b"]);
     }
 
     // -----------------------------------------------------------------------
@@ -605,6 +642,7 @@ mod tests {
         let targets = vec![call_target(1, 1, 1, 2)]; // A -> B, but B has no summary
 
         let db = build_db(summaries, sites, targets);
+        let interner = db.stable_key_interner();
         let schedule = compute_scc_schedule(&db);
 
         assert_eq!(schedule.total_sccs, 1);
@@ -613,7 +651,7 @@ mod tests {
 
         let scc = &schedule.sccs[0];
         assert!(!scc.is_recursive);
-        assert_eq!(scc.member_stable_keys, vec!["func::a"]);
+        assert_eq!(member_texts(&interner, scc), vec!["func::a"]);
     }
 
     // -----------------------------------------------------------------------
@@ -624,14 +662,13 @@ mod tests {
     fn schedule_serializes_to_json() {
         let summaries = vec![summary_fact(1, "func::a"), summary_fact(2, "func::b")];
         let db = build_db(summaries, Vec::new(), Vec::new());
+        let interner = db.stable_key_interner();
         let schedule = compute_scc_schedule(&db);
 
-        let json = serde_json::to_string(&schedule).expect("schedule should serialize");
-        assert!(json.contains("func::a"));
-        assert!(json.contains("func::b"));
-
         let debug_json =
-            serde_json::to_string(&schedule.debug_info()).expect("debug should serialize");
+            serde_json::to_string(&schedule.debug_info(&interner)).expect("debug should serialize");
+        assert!(debug_json.contains("func::a"));
+        assert!(debug_json.contains("func::b"));
         assert!(debug_json.contains("total_sccs"));
     }
 }

@@ -183,7 +183,7 @@ fn refined_edge_from_solver_edge(
     }
     let caller = index.function_by_node.get(&edge.source).copied()?;
     let target_function = index.function_by_node.get(&edge.target).copied()?;
-    let site = index.callsite_for_solver_edge(edge)?;
+    let site = index.callsite_for_solver_edge(interner, edge)?;
     if site.caller != caller {
         return None;
     }
@@ -207,7 +207,7 @@ fn refined_edge_from_solver_edge(
         validation: RefinedCallValidation::ReferentiallyValidated,
         confidence: confidence_for_solver_edge(edge.status),
         evidence: solver_evidence(edge),
-        input_stable_keys: solver_input_stable_keys(edge),
+        input_stable_keys: solver_input_stable_keys(interner, edge),
         stable_key: stable_refined_call_key_from_solver_edge(interner, site, edge),
     })
 }
@@ -278,11 +278,16 @@ impl<'a> SolverProjectionIndex<'a> {
         }
     }
 
-    fn callsite_for_solver_edge(&self, edge: &DerivedEdgeFact) -> Option<&'a CallSiteFact> {
-        edge.provenance
-            .contributing_facts
-            .iter()
-            .find_map(|fact| self.callsite_by_stable_key.get(&fact.stable_key).copied())
+    fn callsite_for_solver_edge(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        edge: &DerivedEdgeFact,
+    ) -> Option<&'a CallSiteFact> {
+        edge.provenance.contributing_facts.iter().find_map(|fact| {
+            self.callsite_by_stable_key
+                .get(interner.resolve(fact.stable_key).as_ref())
+                .copied()
+        })
     }
 }
 
@@ -458,13 +463,16 @@ fn solver_evidence(edge: &DerivedEdgeFact) -> Vec<String> {
     ]
 }
 
-fn solver_input_stable_keys(edge: &DerivedEdgeFact) -> Vec<String> {
-    let mut keys = vec![edge.stable_key.clone()];
+fn solver_input_stable_keys(
+    interner: &crate::core::StableKeyInterner,
+    edge: &DerivedEdgeFact,
+) -> Vec<String> {
+    let mut keys = vec![interner.resolve(edge.stable_key).to_string()];
     keys.extend(
         edge.provenance
             .contributing_facts
             .iter()
-            .map(|fact| fact.stable_key.clone()),
+            .map(|fact| interner.resolve(fact.stable_key).to_string()),
     );
     keys
 }
@@ -479,7 +487,7 @@ fn stable_refined_call_key_from_solver_edge(
         FactFamily::RefinedCallEdge,
         &[
             ("tier", format!("{:?}", RefinedCallTier::PointsToAssisted)),
-            ("solver_edge", edge.stable_key.clone()),
+            ("solver_edge", interner.resolve(edge.stable_key).to_string()),
             ("site", interner.resolve(site.stable_key).to_string()),
         ],
     )
@@ -798,6 +806,7 @@ mod solver_projection_tests {
 
     fn db_with_solver_edge() -> AnalysisDb {
         let mut db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
         let file = db.add_file(
             "app.ts".into(),
             "app.ts".to_string(),
@@ -831,7 +840,7 @@ mod solver_projection_tests {
                 result: None,
                 status: CallTargetStatus::Resolved,
                 precision: CallPrecision::SetupAware,
-                stable_key: crate::core::StableKeyId(0),
+                stable_key: interner.intern("call-site:callee"),
             }],
             targets: Vec::new(),
             unresolved: Vec::new(),
@@ -860,12 +869,13 @@ mod solver_projection_tests {
         let caller_node = function_node(&db, FunctionId(0));
         let callee_node = function_node(&db, FunctionId(1));
         let provenance = DerivedEdgeProvenance::new(
+            &interner,
             vec![
                 ContributingFact {
-                    stable_key: "call-site:callee".to_string(),
+                    stable_key: interner.intern("call-site:callee"),
                 },
                 ContributingFact {
-                    stable_key: "constraint:call".to_string(),
+                    stable_key: interner.intern("constraint:call"),
                 },
             ],
             &ConstraintKind::CallConstraint {
@@ -880,7 +890,7 @@ mod solver_projection_tests {
                 target: callee_node,
                 status: PointsToStatus::Present,
                 precision: PointsToPrecision::FlowInsensitive,
-                stable_key: "solver-edge:caller-callee".to_string(),
+                stable_key: interner.intern("solver-edge:caller-callee"),
                 provenance,
             }],
             budget_status: BudgetStatus::WithinBudget,
@@ -925,7 +935,7 @@ mod solver_projection_tests {
                 result: None,
                 status: CallTargetStatus::Resolved,
                 precision: CallPrecision::SetupAware,
-                stable_key: crate::core::StableKeyId(0),
+                stable_key: db.stable_key_interner().intern("call-site:go-callee"),
             }],
             targets: Vec::new(),
             unresolved: Vec::new(),
@@ -970,9 +980,11 @@ mod solver_projection_tests {
         let caller_node = function_node(&db, FunctionId(0));
         let callee_node = function_node(&db, FunctionId(1));
         let callsite_node = callsite_node(&db, CallSiteId(0));
+        let interner = db.stable_key_interner();
         let provenance = DerivedEdgeProvenance::new(
+            &interner,
             vec![ContributingFact {
-                stable_key: "constraint:go-semantic-callsite".to_string(),
+                stable_key: interner.intern("constraint:go-semantic-callsite"),
             }],
             &ConstraintKind::CallConstraint {
                 callsite: callsite_node,
@@ -986,7 +998,7 @@ mod solver_projection_tests {
                 target: callee_node,
                 status: PointsToStatus::Present,
                 precision: PointsToPrecision::FlowInsensitive,
-                stable_key: "solver-edge:go-caller-callee".to_string(),
+                stable_key: interner.intern("solver-edge:go-caller-callee"),
                 provenance,
             }],
             budget_status: BudgetStatus::WithinBudget,
@@ -1043,8 +1055,9 @@ mod solver_projection_tests {
         let callee_node = function_node(&db, FunctionId(1));
         let callsite_node = callsite_node(&db, CallSiteId(0));
         let provenance = DerivedEdgeProvenance::new(
+            &interner,
             vec![ContributingFact {
-                stable_key: "go-semantic-callsite:caller-callee".to_string(),
+                stable_key: interner.intern("go-semantic-callsite:caller-callee"),
             }],
             &ConstraintKind::CallConstraint {
                 callsite: callsite_node,
@@ -1058,7 +1071,7 @@ mod solver_projection_tests {
                 target: callee_node,
                 status: PointsToStatus::Present,
                 precision: PointsToPrecision::FlowInsensitive,
-                stable_key: "solver-edge:go-semantic-caller-callee".to_string(),
+                stable_key: interner.intern("solver-edge:go-semantic-caller-callee"),
                 provenance,
             }],
             budget_status: BudgetStatus::WithinBudget,
@@ -1123,7 +1136,7 @@ mod solver_projection_tests {
                     result: None,
                     status: CallTargetStatus::Unresolved,
                     precision: CallPrecision::Conservative,
-                    stable_key: crate::core::StableKeyId(1),
+                    stable_key: interner.intern("call-site:handler-speak"),
                 },
                 CallSiteFact {
                     in_throw: false,
@@ -1145,7 +1158,7 @@ mod solver_projection_tests {
                     result: None,
                     status: CallTargetStatus::Unresolved,
                     precision: CallPrecision::Conservative,
-                    stable_key: crate::core::StableKeyId(0),
+                    stable_key: interner.intern("call-site:other-speak"),
                 },
             ],
             targets: Vec::new(),
@@ -1212,8 +1225,9 @@ mod solver_projection_tests {
         let caller_node = function_node(&db, FunctionId(0));
         let callee_node = function_node(&db, FunctionId(1));
         let provenance = DerivedEdgeProvenance::new(
+            &interner,
             vec![ContributingFact {
-                stable_key: "go-semantic-callsite:method-dispatch".to_string(),
+                stable_key: interner.intern("go-semantic-callsite:method-dispatch"),
             }],
             &ConstraintKind::CallConstraint {
                 callsite: SemanticNodeId(99),
@@ -1227,7 +1241,7 @@ mod solver_projection_tests {
                 target: callee_node,
                 status: PointsToStatus::Present,
                 precision: PointsToPrecision::FlowInsensitive,
-                stable_key: "solver-edge:method-dispatch".to_string(),
+                stable_key: interner.intern("solver-edge:method-dispatch"),
                 provenance,
             }],
             budget_status: BudgetStatus::WithinBudget,

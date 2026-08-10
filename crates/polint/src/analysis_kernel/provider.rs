@@ -468,6 +468,7 @@ impl Provider for DirectSummariesProvider {
             ctx.dependency_digest("polint.go.syntax"),
             ctx.dependency_digest("polint.ts.syntax"),
         ];
+        let interner = ctx.db.stable_key_interner();
         let output_digest = crate::analysis::summaries::provider::direct_summaries_output_digest(
             self.manifest(),
             ctx.input_snapshot,
@@ -478,6 +479,7 @@ impl Provider for DirectSummariesProvider {
             &ctx.dependency_digest("polint.symbol_graph"),
             &ctx.dependency_digest("polint.module_topology"),
             &go_ts,
+            &interner,
             &crate::analysis::summaries::provider::callable_stable_key_map(ctx.db),
             &final_direct_summaries_output,
         );

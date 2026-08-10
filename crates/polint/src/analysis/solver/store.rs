@@ -17,6 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::analysis::error::AnalysisError;
 use crate::analysis::ids::DerivedEdgeId;
+use crate::core::{StableKeyId, StableKeyInterner};
 
 use super::budget::{BudgetReason, BudgetStatus};
 use super::facts::DerivedEdgeFact;
@@ -37,12 +38,13 @@ pub(crate) struct SolverOutput {
 }
 
 impl SolverOutput {
-    /// Sorts derived edges by `(stable_key, id)` THEN reassigns dense
+    /// Sorts derived edges by `(resolved stable_key text, id)` THEN reassigns dense
     /// [`DerivedEdgeId`]s sequentially by index (dense IDs only after the stable-key
     /// sort, D-08). Shuffling the input rows yields byte-identical normalized output.
-    pub(crate) fn normalized(mut self) -> Self {
+    pub(crate) fn normalized(mut self, interner: &StableKeyInterner) -> Self {
         self.derived_edges.sort_by(|left, right| {
-            (left.stable_key.as_str(), left.id).cmp(&(right.stable_key.as_str(), right.id))
+            (interner.resolve(left.stable_key), left.id)
+                .cmp(&(interner.resolve(right.stable_key), right.id))
         });
         for (index, edge) in self.derived_edges.iter_mut().enumerate() {
             edge.id = DerivedEdgeId(index as u64);
@@ -80,29 +82,35 @@ impl SolverStore {
     /// duplicate stable keys and precision-ceiling violations (D-06: derived edges
     /// reject the exact tier) are surfaced as [`AnalysisError::InvalidFact`] rather
     /// than silently accepted.
-    pub(crate) fn from_output(output: SolverOutput) -> Result<Self, AnalysisError> {
-        let output = output.normalized();
+    pub(crate) fn from_output(
+        output: SolverOutput,
+        interner: &StableKeyInterner,
+    ) -> Result<Self, AnalysisError> {
+        let output = output.normalized(interner);
         validate_budget_evidence(
             output.budget_status,
             &output.budget_reasons,
             output.derived_edges.is_empty(),
         )?;
 
-        let mut seen_keys: BTreeSet<&str> = BTreeSet::new();
+        let mut seen_keys: BTreeSet<StableKeyId> = BTreeSet::new();
         for edge in &output.derived_edges {
             if !edge.honors_precision_ceiling() {
                 return Err(AnalysisError::InvalidFact {
                     provider: SOLVER_PROVIDER_ID,
                     reason: format!(
                         "derived edge `{}` claims exact precision (precision ceiling violated, D-06)",
-                        edge.stable_key
+                        interner.resolve(edge.stable_key)
                     ),
                 });
             }
-            if !seen_keys.insert(edge.stable_key.as_str()) {
+            if !seen_keys.insert(edge.stable_key) {
                 return Err(AnalysisError::InvalidFact {
                     provider: SOLVER_PROVIDER_ID,
-                    reason: format!("duplicate derived-edge stable key `{}`", edge.stable_key),
+                    reason: format!(
+                        "duplicate derived-edge stable key `{}`",
+                        interner.resolve(edge.stable_key)
+                    ),
                 });
             }
         }
@@ -200,10 +208,12 @@ mod tests {
     use crate::analysis_kernel::FactFamily;
 
     fn provenance(constraints: &[&str], step: u64) -> DerivedEdgeProvenance {
+        let interner = crate::core::test_stable_key_interner();
         DerivedEdgeProvenance::new(
+            &interner,
             constraints.iter().map(|c| {
                 ContributingFact::from_parts(
-                    &crate::core::AnalysisDb::new().stable_key_interner(),
+                    &interner,
                     FactFamily::PointsToConstraint,
                     &[("constraint", (*c).to_string())],
                 )
@@ -229,7 +239,7 @@ mod tests {
             target: SemanticNodeId(target),
             status: PointsToStatus::Present,
             precision: PointsToPrecision::FlowInsensitive,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
             provenance: prov,
         }
     }
@@ -252,12 +262,18 @@ mod tests {
 
     #[test]
     fn normalized_assigns_dense_ids_after_stable_key_sort() {
-        let normalized = sample_output().normalized();
+        let normalized = sample_output().normalized(&crate::core::test_stable_key_interner());
         // "edge|copy_edge|a" < "edge|copy_edge|b", so it sorts first and gets dense
         // id 0 regardless of its larger pre-sort id (9).
-        assert_eq!(normalized.derived_edges[0].stable_key, "edge|copy_edge|a");
+        assert_eq!(
+            normalized.derived_edges[0].stable_key,
+            crate::core::stable_key_for_test("edge|copy_edge|a")
+        );
         assert_eq!(normalized.derived_edges[0].id, DerivedEdgeId(0));
-        assert_eq!(normalized.derived_edges[1].stable_key, "edge|copy_edge|b");
+        assert_eq!(
+            normalized.derived_edges[1].stable_key,
+            crate::core::stable_key_for_test("edge|copy_edge|b")
+        );
         assert_eq!(normalized.derived_edges[1].id, DerivedEdgeId(1));
     }
 
@@ -267,8 +283,8 @@ mod tests {
         let mut shuffled = base.clone();
         shuffled.derived_edges.reverse();
 
-        let a = base.normalized();
-        let b = shuffled.normalized();
+        let a = base.normalized(&crate::core::test_stable_key_interner());
+        let b = shuffled.normalized(&crate::core::test_stable_key_interner());
 
         // Byte-identical serialized output under shuffle (dense `id` is
         // `#[serde(skip)]`, so this captures endpoints/status/precision/stable_key/
@@ -285,7 +301,9 @@ mod tests {
 
     #[test]
     fn from_output_builds_constraint_kind_index() {
-        let store = SolverStore::from_output(sample_output()).expect("store");
+        let store =
+            SolverStore::from_output(sample_output(), &crate::core::test_stable_key_interner())
+                .expect("store");
         assert_eq!(store.derived_edges().len(), 2);
         assert_eq!(store.budget_status(), BudgetStatus::WithinBudget);
         assert!(store.budget_reasons().is_empty());
@@ -303,7 +321,8 @@ mod tests {
             ..SolverOutput::default()
         };
 
-        let store = SolverStore::from_output(output).expect("store");
+        let store = SolverStore::from_output(output, &crate::core::test_stable_key_interner())
+            .expect("store");
 
         assert!(store.derived_edges().is_empty());
         assert_eq!(store.budget_status(), BudgetStatus::BudgetExceeded);
@@ -321,7 +340,8 @@ mod tests {
             ..SolverOutput::default()
         };
 
-        let error = SolverStore::from_output(output).expect_err("inconsistent budget rejected");
+        let error = SolverStore::from_output(output, &crate::core::test_stable_key_interner())
+            .expect_err("inconsistent budget rejected");
 
         assert!(
             error
@@ -338,7 +358,8 @@ mod tests {
             ..SolverOutput::default()
         };
 
-        let store = SolverStore::from_output(output).expect("not-run store");
+        let store = SolverStore::from_output(output, &crate::core::test_stable_key_interner())
+            .expect("not-run store");
 
         assert_eq!(store.budget_status(), BudgetStatus::NotRun);
         assert!(store.budget_reasons().is_empty());
@@ -358,7 +379,8 @@ mod tests {
             ..SolverOutput::default()
         };
 
-        let error = SolverStore::from_output(output).expect_err("not-run edge rejected");
+        let error = SolverStore::from_output(output, &crate::core::test_stable_key_interner())
+            .expect_err("not-run edge rejected");
 
         assert!(
             error
@@ -375,7 +397,8 @@ mod tests {
             ..SolverOutput::default()
         };
 
-        let error = SolverStore::from_output(output).expect_err("missing budget reason rejected");
+        let error = SolverStore::from_output(output, &crate::core::test_stable_key_interner())
+            .expect_err("missing budget reason rejected");
 
         assert!(
             error
@@ -393,7 +416,8 @@ mod tests {
             ..SolverOutput::default()
         };
 
-        let error = SolverStore::from_output(output).expect_err("unknown reason rejected");
+        let error = SolverStore::from_output(output, &crate::core::test_stable_key_interner())
+            .expect_err("unknown reason rejected");
 
         assert!(
             error
@@ -412,7 +436,8 @@ mod tests {
             ],
             ..SolverOutput::default()
         };
-        let error = SolverStore::from_output(output).expect_err("duplicate rejected");
+        let error = SolverStore::from_output(output, &crate::core::test_stable_key_interner())
+            .expect_err("duplicate rejected");
         assert!(
             error
                 .to_string()
@@ -427,7 +452,9 @@ mod tests {
         // `derived_edge_precision_ceiling` never returns Exact for any
         // PointsToPrecision, we assert the validation path holds for all variants by
         // checking the honest mapping directly (the store accepts every legal edge).
-        let store = SolverStore::from_output(sample_output()).expect("store");
+        let store =
+            SolverStore::from_output(sample_output(), &crate::core::test_stable_key_interner())
+                .expect("store");
         assert!(
             store
                 .derived_edges()

@@ -98,6 +98,7 @@ fn skipped_direct_summaries_result(
         summaries: db.summary_facts().to_vec(),
         events: db.summary_events().to_vec(),
     };
+    let interner = db.stable_key_interner();
     let output_digest = crate::analysis::summaries::provider::direct_summaries_output_digest(
         AnalysisKernel::provider_manifest("polint.direct_summaries"),
         input_snapshot,
@@ -108,6 +109,7 @@ fn skipped_direct_summaries_result(
         &absent("polint.symbol_graph"),
         &absent("polint.module_topology"),
         &go_ts,
+        &interner,
         &crate::analysis::summaries::provider::callable_stable_key_map(db),
         &final_output,
     );
