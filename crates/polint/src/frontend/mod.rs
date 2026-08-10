@@ -108,14 +108,24 @@ impl LanguageFrontend for GoFrontend {
 
     fn analyze(&self, ctx: &mut ProviderCtx<'_>, unit: &AnalysisUnit<'_>) -> ProviderRunResult {
         let _ = unit.root;
+        let config_digest = ctx.config_digest;
+        let rule_digest = ctx.rule_digest;
+        let parallel = ctx.parallel;
+        let db = polint_analysis_api::FactDatabase::as_any_mut(ctx.facts)
+            .downcast_mut::<crate::core::AnalysisDb>()
+            .expect("facade AnalysisDb host");
+        let (cache, plan) =
+            crate::analysis_kernel::host::with_provider_host_session_mut(|session| {
+                (session.cache.clone(), session.plan.clone())
+            });
         crate::go::analyze_files_with_plan_options_and_cache_stats(
-            ctx.db,
+            db,
             unit.files,
-            ctx.cache,
-            ctx.config_digest,
-            ctx.rule_digest,
-            ctx.plan,
-            ctx.parallel,
+            &cache,
+            config_digest,
+            rule_digest,
+            &plan,
+            parallel,
         )
     }
 }
@@ -145,14 +155,24 @@ impl LanguageFrontend for TsJsFrontend {
 
     fn analyze(&self, ctx: &mut ProviderCtx<'_>, unit: &AnalysisUnit<'_>) -> ProviderRunResult {
         let _ = unit.root;
+        let config_digest = ctx.config_digest;
+        let rule_digest = ctx.rule_digest;
+        let parallel = ctx.parallel;
+        let db = polint_analysis_api::FactDatabase::as_any_mut(ctx.facts)
+            .downcast_mut::<crate::core::AnalysisDb>()
+            .expect("facade AnalysisDb host");
+        let (cache, plan) =
+            crate::analysis_kernel::host::with_provider_host_session_mut(|session| {
+                (session.cache.clone(), session.plan.clone())
+            });
         crate::ts::analyze_files_with_plan_options_and_cache_stats(
-            ctx.db,
+            db,
             unit.files,
-            ctx.cache,
-            ctx.config_digest,
-            ctx.rule_digest,
-            ctx.plan,
-            ctx.parallel,
+            &cache,
+            config_digest,
+            rule_digest,
+            &plan,
+            parallel,
         )
     }
 }
@@ -271,8 +291,8 @@ mod tests {
             plan.digest(),
             AnalysisKernel::provider_manifests(),
         );
-        let mut capability_support = plan.support_view().clone();
-        let mut scc_closure = None;
+        let capability_support = plan.support_view().clone();
+        let scc_closure = None;
         let upstream_digests = BTreeMap::new();
 
         let owned: Vec<crate::core::SourceFile> = db
@@ -292,18 +312,26 @@ mod tests {
             files: &files,
             root: temp.path(),
         };
+        crate::analysis_kernel::host::install_provider_host_session(
+            crate::analysis_kernel::host::ProviderHostSession {
+                cache,
+                loaded,
+                input_snapshot,
+                plan,
+                capability_support,
+                scc_closure,
+            },
+        );
+        let mut host_services = crate::analysis_kernel::host::FacadeHostServices;
+        let mut host_attachment = crate::analysis_kernel::host::FacadeHostAttachment::default();
         let mut ctx = ProviderCtx {
-            db: &mut db,
-            cache: &cache,
-            loaded: &loaded,
-            input_snapshot: &input_snapshot,
+            facts: &mut db,
+            host: &mut host_services,
             config_digest: "config",
             rule_digest: "rules",
-            plan: &plan,
             parallel: false,
             upstream_digests: &upstream_digests,
-            capability_support: &mut capability_support,
-            scc_closure: &mut scc_closure,
+            host_attachment: &mut host_attachment,
         };
         let result = scheduled[0].analyze(&mut ctx, &unit);
         assert_eq!(analyze_calls.load(Ordering::SeqCst), 1);

@@ -6,7 +6,6 @@
 
 use std::any::Any;
 use std::collections::BTreeMap;
-use std::fmt;
 
 use crate::analysis::access_paths::store::AccessPathStore;
 use crate::analysis::adaptation::facts::{AcceptedModelFact, RejectedModelFact};
@@ -55,45 +54,7 @@ use crate::symbol_graph::semantic::{
 };
 use crate::ts::object_model::store::TsObjectModelStore;
 
-/// Erased provider-owned fact container. Not public — rule authors use SDK views.
-pub(crate) trait FactStore: Any + Send + Sync {
-    fn family(&self) -> FactFamily;
-    fn clear(&mut self);
-    fn as_any(&self) -> &dyn Any;
-    fn as_any_mut(&mut self) -> &mut dyn Any;
-    fn clone_box(&self) -> Box<dyn FactStore>;
-}
-
-/// Cloneable / debug wrapper so [`super::AnalysisDb`] can keep `derive(Clone, Debug)`.
-pub(crate) struct FactStoreEntry(Box<dyn FactStore>);
-
-impl FactStoreEntry {
-    pub(crate) fn new(store: impl FactStore + 'static) -> Self {
-        Self(Box::new(store))
-    }
-
-    pub(crate) fn as_store(&self) -> &dyn FactStore {
-        self.0.as_ref()
-    }
-
-    pub(crate) fn as_store_mut(&mut self) -> &mut dyn FactStore {
-        self.0.as_mut()
-    }
-}
-
-impl Clone for FactStoreEntry {
-    fn clone(&self) -> Self {
-        Self(self.0.clone_box())
-    }
-}
-
-impl fmt::Debug for FactStoreEntry {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("FactStoreEntry")
-            .field("family", &self.0.family())
-            .finish_non_exhaustive()
-    }
-}
+pub(crate) use polint_analysis_api::{FactStore, FactStoreEntry};
 
 /// Syntax facts produced by `polint.go.syntax` (and shared `functions` /
 /// `imports` rows also written by `polint.ts.syntax` through the same accessors).

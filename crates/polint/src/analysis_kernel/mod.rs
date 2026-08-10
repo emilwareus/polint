@@ -6,6 +6,7 @@ use crate::diagnostics::Diagnostic;
 
 #[rustfmt::skip]
 #[cfg(test)] mod debug;
+pub(crate) mod host;
 pub(crate) mod incremental;
 mod metadata;
 mod provider;
@@ -132,24 +133,31 @@ fn run_scheduled_providers<'a>(
     Option<crate::analysis::summaries::provider::SccClosureProviderOutput>,
 ) {
     let mut upstream_digests = std::collections::BTreeMap::new();
-    let mut capability_support = input.plan.support_view().clone();
-    let mut scc_closure = None;
+    let capability_support = input.plan.support_view().clone();
+    crate::analysis_kernel::host::install_provider_host_session(
+        crate::analysis_kernel::host::ProviderHostSession {
+            cache: input.cache.clone(),
+            loaded: input.loaded.clone(),
+            input_snapshot: input_snapshot.clone(),
+            plan: input.plan.clone(),
+            capability_support,
+            scc_closure: None,
+        },
+    );
+    let mut host_services = crate::analysis_kernel::host::FacadeHostServices;
+    let mut host_attachment = crate::analysis_kernel::host::FacadeHostAttachment::default();
     // Emit a provider_outputs row for every manifest entry (historical identity),
     // but only execute providers selected by capability closure.
     for provider_id in scheduled_order() {
         let result = if enabled_providers.contains(provider_id) {
             let mut ctx = ProviderCtx {
-                db: &mut *db,
-                cache: input.cache,
-                loaded: input.loaded,
-                input_snapshot,
+                facts: &mut *db,
+                host: &mut host_services,
                 config_digest: input.config_digest,
                 rule_digest: input.rule_digest,
-                plan: input.plan,
                 parallel: input.parallel,
                 upstream_digests: &upstream_digests,
-                capability_support: &mut capability_support,
-                scc_closure: &mut scc_closure,
+                host_attachment: &mut host_attachment,
             };
             run_named_provider(provider_id, &mut ctx)
         } else if provider_id == "polint.direct_summaries" {
@@ -178,7 +186,9 @@ fn run_scheduled_providers<'a>(
             output_digest,
         ));
     }
-    (capability_support, scc_closure)
+    let session =
+        crate::analysis_kernel::host::take_provider_host_session().expect("provider host session");
+    (session.capability_support, session.scc_closure)
 }
 
 pub(crate) struct AnalysisKernel;

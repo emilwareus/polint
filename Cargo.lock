@@ -1173,6 +1173,7 @@ dependencies = [
  "oxc_semantic",
  "oxc_span",
  "petgraph",
+ "polint-analysis-api",
  "polint-core",
  "polint-ir",
  "polint-macros",
@@ -1190,6 +1191,16 @@ dependencies = [
  "tracing-subscriber",
  "tree-sitter",
  "tree-sitter-go",
+]
+
+[[package]]
+name = "polint-analysis-api"
+version = "0.1.17"
+dependencies = [
+ "polint-core",
+ "polint-ir",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

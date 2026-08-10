@@ -1,60 +1,83 @@
+use super::host;
 use super::incremental::{CacheStats, Digest, DigestKind, InputSnapshot};
+use crate::analysis::summaries::provider::SccClosureProviderOutput;
 use crate::analysis_plan::AnalysisPlan;
 use crate::cache::Cache;
 use crate::config::LoadedConfig;
 use crate::core::{AnalysisDb, CapabilitySupportView};
-use crate::diagnostics::Diagnostic;
 use crate::frontend::{LanguageIdRegistryExt, LanguageRegistryExt};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ProviderManifest {
-    pub(crate) id: &'static str,
-    pub(crate) kind: ProviderKind,
-    pub(crate) inputs: &'static [&'static str],
-    pub(crate) outputs: &'static [&'static str],
-    pub(crate) language_ids: &'static [crate::frontend::LanguageId],
-    pub(crate) cache_policy: CachePolicy,
-    pub(crate) schema_versions: &'static [SchemaVersion],
-    pub(crate) precision_ceiling: PrecisionCeiling,
+pub(crate) use polint_analysis_api::{
+    CachePolicy, PrecisionCeiling, Provider, ProviderCtx, ProviderKind, ProviderManifest,
+    ProviderRunResult, SchemaVersion,
+};
+
+/// Facade-local view over [`ProviderCtx`] for providers that still live in this crate.
+struct CtxHandle<'a> {
+    db: &'a mut AnalysisDb,
+    cache: Cache,
+    loaded: LoadedConfig,
+    input_snapshot: InputSnapshot,
+    config_digest: &'a str,
+    rule_digest: &'a str,
+    plan: AnalysisPlan,
+    #[allow(dead_code)]
+    parallel: bool,
+    upstream_digests: &'a BTreeMap<&'static str, Digest>,
+    capability_support: CapabilitySupportView,
+    scc_closure: Option<SccClosureProviderOutput>,
 }
 
-/// Result of running a single analysis provider stage.
-pub(crate) struct ProviderRunResult {
-    pub(crate) diagnostics: Vec<Diagnostic>,
-    pub(crate) cache_stats: CacheStats,
-    pub(crate) output_digest: Option<Digest>,
-}
+impl<'a> CtxHandle<'a> {
+    fn from_ctx(ctx: &'a mut ProviderCtx<'_>) -> Self {
+        let config_digest = ctx.config_digest;
+        let rule_digest = ctx.rule_digest;
+        let parallel = ctx.parallel;
+        let upstream_digests = ctx.upstream_digests;
+        let db = polint_analysis_api::FactDatabase::as_any_mut(ctx.facts)
+            .downcast_mut::<AnalysisDb>()
+            .expect("facade AnalysisDb host");
+        let (cache, loaded, input_snapshot, plan, capability_support, scc_closure) =
+            host::with_provider_host_session_mut(|session| {
+                (
+                    session.cache.clone(),
+                    session.loaded.clone(),
+                    session.input_snapshot.clone(),
+                    session.plan.clone(),
+                    session.capability_support.clone(),
+                    session.scc_closure.take(),
+                )
+            });
+        Self {
+            db,
+            cache,
+            loaded,
+            input_snapshot,
+            config_digest,
+            rule_digest,
+            plan,
+            parallel,
+            upstream_digests,
+            capability_support,
+            scc_closure,
+        }
+    }
 
-pub(crate) trait Provider: Send + Sync {
-    fn manifest(&self) -> &'static ProviderManifest;
-    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult;
-}
-
-pub(crate) struct ProviderCtx<'a> {
-    pub(crate) db: &'a mut AnalysisDb,
-    pub(crate) cache: &'a Cache,
-    pub(crate) loaded: &'a LoadedConfig,
-    pub(crate) input_snapshot: &'a InputSnapshot,
-    pub(crate) config_digest: &'a str,
-    pub(crate) rule_digest: &'a str,
-    pub(crate) plan: &'a AnalysisPlan,
-    pub(crate) parallel: bool,
-    /// Output digests of already-run providers, keyed by provider id.
-    pub(crate) upstream_digests: &'a BTreeMap<&'static str, Digest>,
-    /// Accumulated capability support overrides from providers that emit them.
-    pub(crate) capability_support: &'a mut CapabilitySupportView,
-    /// Filled by `DirectSummariesProvider` for kernel run-report plumbing.
-    pub(crate) scc_closure:
-        &'a mut Option<crate::analysis::summaries::provider::SccClosureProviderOutput>,
-}
-
-impl ProviderCtx<'_> {
-    pub(crate) fn dependency_digest(&self, provider_id: &'static str) -> Digest {
+    fn dependency_digest(&self, provider_id: &'static str) -> Digest {
         self.upstream_digests
             .get(provider_id)
             .cloned()
             .unwrap_or_else(|| Digest::absent(DigestKind::ProviderOutput, provider_id))
+    }
+}
+
+impl Drop for CtxHandle<'_> {
+    fn drop(&mut self) {
+        host::with_provider_host_session_mut(|session| {
+            session.capability_support = self.capability_support.clone();
+            session.scc_closure = self.scc_closure.take();
+        });
     }
 }
 
@@ -73,6 +96,7 @@ impl Provider for SourceProvider {
     }
 
     fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let ctx = CtxHandle::from_ctx(ctx);
         // Source discovery has no provider-output dependencies; the map is empty here.
         debug_assert!(ctx.upstream_digests.is_empty());
         // Source files are already loaded into the db before providers run;
@@ -130,9 +154,11 @@ fn run_registered_frontend_syntax(
         frontend.profile().precision_ceiling,
         frontend_id.to_public_language(),
     );
-    // Clone matching files so AnalysisUnit does not borrow `ctx.db` across `analyze`.
-    let owned: Vec<crate::core::SourceFile> = ctx
-        .db
+    // Clone matching files so AnalysisUnit does not borrow the fact DB across `analyze`.
+    let db = polint_analysis_api::FactDatabase::as_any_mut(ctx.facts)
+        .downcast_mut::<AnalysisDb>()
+        .expect("facade AnalysisDb host");
+    let owned: Vec<crate::core::SourceFile> = db
         .files()
         .iter()
         .filter(|file| file.language.id() == frontend_id)
@@ -146,7 +172,7 @@ fn run_registered_frontend_syntax(
         "Language::id selection must agree with scheduled_for"
     );
     let files: Vec<&crate::core::SourceFile> = owned.iter().collect();
-    let root = ctx.loaded.root.clone();
+    let root = host::with_provider_host_session_mut(|session| session.loaded.root.clone());
     let unit = crate::frontend::AnalysisUnit {
         files: &files,
         root: &root,
@@ -162,20 +188,21 @@ impl Provider for ModuleGraphProvider {
     }
 
     fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let mut ctx = CtxHandle::from_ctx(ctx);
         let derivation = crate::module_graph::derive_requested_module_graph_with_cache_stats(
             ctx.db,
-            ctx.loaded,
-            ctx.plan,
-            ctx.cache,
-            ctx.input_snapshot,
+            &ctx.loaded,
+            &ctx.plan,
+            &ctx.cache,
+            &ctx.input_snapshot,
             self.manifest(),
             vec![
                 ctx.dependency_digest("polint.go.syntax"),
                 ctx.dependency_digest("polint.ts.syntax"),
             ],
         );
-        let updated = derivation.support_view(ctx.capability_support);
-        *ctx.capability_support = updated;
+        let updated = derivation.support_view(&ctx.capability_support);
+        ctx.capability_support = updated;
         ProviderRunResult {
             diagnostics: derivation.diagnostics,
             cache_stats: derivation.cache_stats,
@@ -192,12 +219,13 @@ impl Provider for SymbolGraphProvider {
     }
 
     fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let mut ctx = CtxHandle::from_ctx(ctx);
         let derivation = crate::symbol_graph::derive_requested_symbols_with_cache_stats(
             ctx.db,
-            ctx.loaded,
-            ctx.plan,
-            ctx.cache,
-            ctx.input_snapshot,
+            &ctx.loaded,
+            &ctx.plan,
+            &ctx.cache,
+            &ctx.input_snapshot,
             self.manifest(),
             ctx.dependency_digest("polint.module_graph"),
             vec![
@@ -205,8 +233,8 @@ impl Provider for SymbolGraphProvider {
                 ctx.dependency_digest("polint.ts.syntax"),
             ],
         );
-        let updated = derivation.support_view(ctx.capability_support);
-        *ctx.capability_support = updated;
+        let updated = derivation.support_view(&ctx.capability_support);
+        ctx.capability_support = updated;
         ProviderRunResult {
             diagnostics: derivation.diagnostics,
             cache_stats: derivation.cache_stats,
@@ -223,10 +251,11 @@ impl Provider for ModuleTopologyProvider {
     }
 
     fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let ctx = CtxHandle::from_ctx(ctx);
         let derivation = crate::module_graph::derive_module_topology_with_cache_stats(
             ctx.db,
-            ctx.cache,
-            ctx.input_snapshot,
+            &ctx.cache,
+            &ctx.input_snapshot,
             self.manifest(),
             ctx.dependency_digest("polint.module_graph"),
             ctx.dependency_digest("polint.symbol_graph"),
@@ -247,9 +276,10 @@ impl Provider for SemanticMirProvider {
     }
 
     fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let ctx = CtxHandle::from_ctx(ctx);
         let derivation = crate::analysis::provider::derive_semantic_mir_with_cache_stats(
             ctx.db,
-            ctx.input_snapshot,
+            &ctx.input_snapshot,
             self.manifest(),
             ctx.dependency_digest("polint.module_topology"),
             ctx.dependency_digest("polint.symbol_graph"),
@@ -274,9 +304,10 @@ impl Provider for CfgProvider {
     }
 
     fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let ctx = CtxHandle::from_ctx(ctx);
         let derivation = crate::analysis::cfg::provider::derive_cfg_with_cache_stats(
             ctx.db,
-            ctx.input_snapshot,
+            &ctx.input_snapshot,
             self.manifest(),
             ctx.dependency_digest("polint.semantic_mir"),
             vec![
@@ -300,11 +331,12 @@ impl Provider for CallsProvider {
     }
 
     fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let ctx = CtxHandle::from_ctx(ctx);
         // Capability-closure only schedules this provider when the deep stack runs;
         // SEMANTIC/CFG/FULL triggers are identical, so the call-sites-only path is gone.
         let derivation = crate::analysis::calls::provider::derive_calls_with_cache_stats(
             ctx.db,
-            ctx.input_snapshot,
+            &ctx.input_snapshot,
             self.manifest(),
             ctx.dependency_digest("polint.semantic_mir"),
             ctx.dependency_digest("polint.cfg"),
@@ -331,10 +363,11 @@ impl Provider for GoSemanticProvider {
     }
 
     fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let ctx = CtxHandle::from_ctx(ctx);
         let derivation = crate::go::semantic::provider::derive_go_semantic_with_cache_stats(
             ctx.db,
-            ctx.loaded,
-            ctx.input_snapshot,
+            &ctx.loaded,
+            &ctx.input_snapshot,
             self.manifest(),
             ctx.dependency_digest("polint.go.syntax"),
         );
@@ -354,9 +387,10 @@ impl Provider for IdentityProvider {
     }
 
     fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let ctx = CtxHandle::from_ctx(ctx);
         let derivation = crate::analysis::identity::provider::derive_identity_with_cache_stats(
             ctx.db,
-            ctx.input_snapshot,
+            &ctx.input_snapshot,
             self.manifest(),
             ctx.dependency_digest("polint.calls"),
             ctx.dependency_digest("polint.go.semantic"),
@@ -377,6 +411,7 @@ impl Provider for AbstractDomainsProvider {
     }
 
     fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let ctx = CtxHandle::from_ctx(ctx);
         let compact_domain_materialization = ctx.plan.rules().iter().any(|rule| {
             rule.requested_capabilities
                 .iter()
@@ -388,7 +423,7 @@ impl Provider for AbstractDomainsProvider {
         });
         let derivation = if compact_domain_materialization {
             crate::analysis::domains::provider::derive_summary_input_abstract_domains_with_cache_stats(ctx.db,
-                ctx.input_snapshot,
+                &ctx.input_snapshot,
                 self.manifest(),
                 ctx.dependency_digest("polint.semantic_mir"),
                 ctx.dependency_digest("polint.cfg"),
@@ -403,7 +438,7 @@ impl Provider for AbstractDomainsProvider {
         } else {
             crate::analysis::domains::provider::derive_abstract_domains_with_cache_stats(
                 ctx.db,
-                ctx.input_snapshot,
+                &ctx.input_snapshot,
                 self.manifest(),
                 ctx.dependency_digest("polint.semantic_mir"),
                 ctx.dependency_digest("polint.cfg"),
@@ -432,10 +467,11 @@ impl Provider for DirectSummariesProvider {
     }
 
     fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let mut ctx = CtxHandle::from_ctx(ctx);
         let derivation =
             crate::analysis::summaries::provider::derive_direct_summaries_with_cache_stats(
                 ctx.db,
-                ctx.input_snapshot,
+                &ctx.input_snapshot,
                 self.manifest(),
                 ctx.dependency_digest("polint.semantic_mir"),
                 ctx.dependency_digest("polint.cfg"),
@@ -453,13 +489,13 @@ impl Provider for DirectSummariesProvider {
 
         let scc_closure = crate::analysis::summaries::provider::run_scc_closure_with_cache(
             ctx.db,
-            ctx.cache,
+            &ctx.cache,
             ctx.config_digest,
             ctx.rule_digest,
             ctx.plan.digest(),
         );
         diagnostics.extend(scc_closure.diagnostics.clone());
-        *ctx.scc_closure = Some(scc_closure);
+        ctx.scc_closure = Some(scc_closure);
 
         let final_direct_summaries_output = crate::analysis::summaries::store::SummaryOutput {
             summaries: ctx.db.summary_facts().to_vec(),
@@ -472,7 +508,7 @@ impl Provider for DirectSummariesProvider {
         let interner = ctx.db.stable_key_interner();
         let output_digest = crate::analysis::summaries::provider::direct_summaries_output_digest(
             self.manifest(),
-            ctx.input_snapshot,
+            &ctx.input_snapshot,
             &ctx.dependency_digest("polint.semantic_mir"),
             &ctx.dependency_digest("polint.cfg"),
             &ctx.dependency_digest("polint.calls"),
@@ -500,10 +536,11 @@ impl Provider for EntrypointsProvider {
     }
 
     fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let ctx = CtxHandle::from_ctx(ctx);
         let derivation =
             crate::analysis::entrypoints::provider::derive_entrypoints_with_cache_stats(
                 ctx.db,
-                ctx.input_snapshot,
+                &ctx.input_snapshot,
                 self.manifest(),
                 ctx.dependency_digest("polint.semantic_mir"),
                 ctx.dependency_digest("polint.cfg"),
@@ -531,10 +568,11 @@ impl Provider for ReachabilityProvider {
     }
 
     fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let ctx = CtxHandle::from_ctx(ctx);
         let derivation =
             crate::analysis::reachability::provider::derive_reachability_with_cache_stats(
                 ctx.db,
-                ctx.input_snapshot,
+                &ctx.input_snapshot,
                 self.manifest(),
                 &ctx.loaded.config.reachability.roots,
                 ctx.dependency_digest("polint.calls"),
@@ -559,10 +597,11 @@ impl Provider for ExtensionsProvider {
     }
 
     fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let ctx = CtxHandle::from_ctx(ctx);
         let derivation = crate::analysis::extensions::provider::derive_extension_provider_outputs_with_cache_stats(
             ctx.db,
             &ctx.loaded.root,
-            ctx.input_snapshot,
+            &ctx.input_snapshot,
             self.manifest(),
         );
         ProviderRunResult {
@@ -590,9 +629,10 @@ impl Provider for TypeValueAliasProvider {
     }
 
     fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let ctx = CtxHandle::from_ctx(ctx);
         let derivation = crate::analysis::types::provider::derive_type_value_alias_with_cache_stats(
             ctx.db,
-            ctx.input_snapshot,
+            &ctx.input_snapshot,
             self.manifest(),
             ctx.dependency_digest("polint.semantic_mir"),
             ctx.dependency_digest("polint.cfg"),
@@ -624,13 +664,14 @@ impl Provider for SemanticGraphProvider {
     }
 
     fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
-        let solver_budget = solver_budget_from_loaded(ctx.loaded);
+        let ctx = CtxHandle::from_ctx(ctx);
+        let solver_budget = solver_budget_from_loaded(&ctx.loaded);
         let derivation =
             crate::analysis::semantic_graph::provider::derive_semantic_graph_with_cache_stats(
                 ctx.db,
-                ctx.loaded,
+                &ctx.loaded,
                 solver_budget.adaptation,
-                ctx.input_snapshot,
+                &ctx.input_snapshot,
                 self.manifest(),
                 ctx.dependency_digest("polint.calls"),
                 ctx.dependency_digest("polint.identity"),
@@ -661,11 +702,12 @@ impl Provider for SolverProvider {
     }
 
     fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let ctx = CtxHandle::from_ctx(ctx);
         let derivation = crate::analysis::solver::provider::derive_solver_with_cache_stats(
             ctx.db,
-            ctx.input_snapshot,
+            &ctx.input_snapshot,
             self.manifest(),
-            solver_budget_from_loaded(ctx.loaded),
+            solver_budget_from_loaded(&ctx.loaded),
             ctx.dependency_digest("polint.semantic_graph"),
             ctx.dependency_digest("polint.type_value_alias"),
             ctx.dependency_digest("polint.go.semantic"),
@@ -686,10 +728,11 @@ impl Provider for RefinedCallsProvider {
     }
 
     fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let ctx = CtxHandle::from_ctx(ctx);
         let derivation =
             crate::analysis::refined_calls::provider::derive_refined_calls_with_cache_stats(
                 ctx.db,
-                ctx.input_snapshot,
+                &ctx.input_snapshot,
                 self.manifest(),
                 ctx.dependency_digest("polint.calls"),
                 ctx.dependency_digest("polint.entrypoints"),
@@ -714,9 +757,10 @@ impl Provider for DataFlowProvider {
     }
 
     fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let ctx = CtxHandle::from_ctx(ctx);
         let derivation = crate::analysis::data_flow::provider::derive_data_flow_with_cache_stats(
             ctx.db,
-            ctx.input_snapshot,
+            &ctx.input_snapshot,
             self.manifest(),
             ctx.dependency_digest("polint.semantic_mir"),
             ctx.dependency_digest("polint.cfg"),
@@ -743,9 +787,10 @@ impl Provider for EvidenceProvider {
     }
 
     fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let ctx = CtxHandle::from_ctx(ctx);
         let derivation = crate::analysis::evidence::provider::derive_evidence_with_cache_stats(
             ctx.db,
-            ctx.input_snapshot,
+            &ctx.input_snapshot,
             self.manifest(),
             ctx.dependency_digest("polint.semantic_mir"),
             ctx.dependency_digest("polint.cfg"),
@@ -773,11 +818,12 @@ impl Provider for MetricsProvider {
     }
 
     fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let ctx = CtxHandle::from_ctx(ctx);
         let derivation = crate::metrics::derive_requested_metrics_with_cache_stats(
             ctx.db,
-            ctx.plan,
-            ctx.cache,
-            ctx.input_snapshot,
+            &ctx.plan,
+            &ctx.cache,
+            &ctx.input_snapshot,
             self.manifest(),
             vec![
                 ctx.dependency_digest("polint.go.syntax"),
@@ -1018,69 +1064,6 @@ pub(crate) fn scheduled_order_for(
         .into_iter()
         .filter(|id| enabled.contains(id))
         .collect()
-}
-
-impl ProviderManifest {
-    pub(crate) fn provider_version(&self) -> &'static str {
-        env!("CARGO_PKG_VERSION")
-    }
-
-    pub(crate) fn primary_schema_label(&self) -> String {
-        let mut labels = self
-            .schema_versions
-            .iter()
-            .map(|schema| format!("{}:{}", schema.name, schema.version))
-            .collect::<Vec<_>>();
-        labels.sort();
-        labels.join(",")
-    }
-
-    pub(crate) fn language_scope_label(&self) -> &'static str {
-        match self.language_ids {
-            [] => "workspace",
-            [id] if *id == crate::frontend::LanguageId::GO => "go",
-            [id] if *id == crate::frontend::LanguageId::TS => "typescript_javascript",
-            _ => "multi_language",
-        }
-    }
-
-    pub(crate) fn cache_policy_label(&self) -> String {
-        match self.cache_policy {
-            CachePolicy::NoCache => "no_cache".to_string(),
-            CachePolicy::ExistingFileFactCache { schema } => {
-                format!("existing_file_fact_cache:{schema}")
-            }
-            CachePolicy::InMemoryDerived => "in_memory_derived".to_string(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ProviderKind {
-    SourceDiscovery,
-    LanguageSyntax,
-    WholeRepoDerived,
-    MetricsDerived,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CachePolicy {
-    NoCache,
-    ExistingFileFactCache { schema: &'static str },
-    InMemoryDerived,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct SchemaVersion {
-    pub(crate) name: &'static str,
-    pub(crate) version: u32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PrecisionCeiling {
-    Exact,
-    Syntax,
-    SetupAware,
 }
 
 pub(crate) fn provider_manifests() -> &'static [ProviderManifest] {

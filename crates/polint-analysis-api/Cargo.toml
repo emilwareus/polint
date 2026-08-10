@@ -1,0 +1,21 @@
+[package]
+name = "polint-analysis-api"
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+description = "Provider, FactStore, and cross-crate analysis contracts for polint"
+
+[dependencies]
+polint-core.workspace = true
+polint-ir.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true
