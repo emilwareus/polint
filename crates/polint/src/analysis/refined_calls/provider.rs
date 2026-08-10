@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::fmt::Debug;
 
 use super::cache_key::{
     refined_calls_provider_parameter_digest, refined_calls_provider_parameter_digest_for_snapshot,
@@ -20,8 +19,9 @@ use crate::analysis_kernel::incremental::{
     CacheStats, Digest, DigestKind, InputComponent, InputSnapshot,
 };
 use crate::analysis_kernel::{FactFamily, FactRef, ProviderManifest, stable_key_from_parts};
-use crate::core::AnalysisDb;
+use crate::core::{AnalysisDb, StableKeyInterner};
 use crate::diagnostics::Diagnostic;
+use serde::Serialize;
 
 pub(crate) const REFINED_CALLS_PROVIDER_ID: &str = "polint.refined_calls";
 
@@ -572,12 +572,12 @@ fn refined_calls_output_digest(
     extend_component_parts(&mut parts, "model", &input_snapshot.models);
     extend_component_parts(&mut parts, "extension", &input_snapshot.extensions);
     extend_component_parts(&mut parts, "tool", &input_snapshot.tool_invocations);
-    parts.extend(
-        output
-            .edges
-            .iter()
-            .map(|edge| format!("refined_call_edge={}", stable_fact_payload(interner, edge))),
-    );
+    parts.extend(output.edges.iter().map(|edge| {
+        format!(
+            "refined_call_edge={}",
+            refined_call_edge_payload(interner, edge)
+        )
+    }));
     if output.edges.is_empty() {
         parts.push("refined_calls_output=empty".to_string());
     }
@@ -600,37 +600,54 @@ fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[I
     }));
 }
 
-fn stable_fact_payload<T>(interner: &crate::core::StableKeyInterner, fact: &T) -> String
-where
-    T: Debug,
-{
-    resolve_stable_key_ids(interner, &format!("{fact:?}"))
+fn refined_call_edge_payload(interner: &StableKeyInterner, edge: &RefinedCallEdgeFact) -> String {
+    serde_json::to_string(&RefinedCallEdgeDigest {
+        id: edge.id,
+        site: edge.site,
+        base_target: edge.base_target,
+        caller: edge.caller,
+        target_function: edge.target_function,
+        target_symbol: edge.target_symbol,
+        synthetic_target: edge.synthetic_target.as_deref(),
+        language: edge.language,
+        edge_kind: edge.edge_kind,
+        algorithm: edge.algorithm,
+        tier: edge.tier,
+        status: edge.status,
+        reason: edge.reason,
+        provenance: edge.provenance,
+        precision: edge.precision,
+        validation: edge.validation,
+        confidence: edge.confidence,
+        evidence: &edge.evidence,
+        input_stable_keys: &edge.input_stable_keys,
+        stable_key: interner.resolve(edge.stable_key).as_ref(),
+    })
+    .unwrap_or_else(|_| "{}".to_string())
 }
 
-fn resolve_stable_key_ids(interner: &crate::core::StableKeyInterner, payload: &str) -> String {
-    let mut resolved = String::with_capacity(payload.len());
-    let mut remaining = payload;
-    while let Some(start) = remaining.find("StableKeyId(") {
-        resolved.push_str(&remaining[..start]);
-        let id_start = start + "StableKeyId(".len();
-        let Some(relative_end) = remaining[id_start..].find(')') else {
-            resolved.push_str(&remaining[start..]);
-            return resolved;
-        };
-        let id_end = id_start + relative_end;
-        let Ok(id) = remaining[id_start..id_end].parse::<u32>() else {
-            resolved.push_str(&remaining[start..=id_end]);
-            remaining = &remaining[id_end + 1..];
-            continue;
-        };
-        resolved.push_str(&format!(
-            "{:?}",
-            interner.resolve(crate::core::StableKeyId(id))
-        ));
-        remaining = &remaining[id_end + 1..];
-    }
-    resolved.push_str(remaining);
-    resolved
+#[derive(Serialize)]
+struct RefinedCallEdgeDigest<'a> {
+    id: crate::analysis::ids::RefinedCallEdgeId,
+    site: crate::analysis::ids::CallSiteId,
+    base_target: Option<crate::analysis::ids::CallTargetId>,
+    caller: crate::core::FunctionId,
+    target_function: Option<crate::core::FunctionId>,
+    target_symbol: Option<crate::core::SymbolId>,
+    synthetic_target: Option<&'a str>,
+    language: crate::core::Language,
+    edge_kind: CallEdgeKind,
+    algorithm: CallAlgorithm,
+    tier: RefinedCallTier,
+    status: CallTargetStatus,
+    reason: Option<UnresolvedCallReason>,
+    provenance: CallProvenance,
+    precision: CallPrecision,
+    validation: RefinedCallValidation,
+    confidence: RefinedCallConfidence,
+    evidence: &'a [String],
+    input_stable_keys: &'a [String],
+    stable_key: &'a str,
 }
 
 #[cfg(test)]

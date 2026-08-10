@@ -1,15 +1,15 @@
-use std::fmt::Debug;
-
 use crate::analysis::ids::ReachabilityRootId;
 use crate::analysis::reachability::cache_key::reachability_provider_parameter_digest;
 use crate::analysis::reachability::discover::discover_reachability_roots;
+use crate::analysis::reachability::facts::ReachabilityRootFact;
 use crate::analysis::reachability::store::{REACHABILITY_PROVIDER_ID, ReachabilityProviderOutput};
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
     CacheStats, Digest, DigestKind, InputComponent, InputSnapshot,
 };
-use crate::core::AnalysisDb;
+use crate::core::{AnalysisDb, StableKeyInterner};
 use crate::diagnostics::{Diagnostic, TextRange};
+use serde::Serialize;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ReachabilityProviderRunOutput {
@@ -64,8 +64,8 @@ pub(crate) fn derive_reachability_with_cache_stats(
         .collect();
     // Step: normalize the storable roots. The digest is computed over exactly this
     // set so it certifies what actually lands in the db;
-    // `ReachabilityRootFact.id` carries `#[serde(skip)]`, so the digest payload
-    // never folds in run-local dense IDs (D-06/D-19).
+    // `reachability_root_payload` omits dense `id` (matching `#[serde(skip)]`) so
+    // digests never fold in run-local dense IDs (D-06/D-19).
     let mut storable = ReachabilityProviderOutput { roots: real_roots }.normalized(interner);
     // Step: digest over the stored stable payloads, plus a dedicated stable-key
     // part for configured-unresolvable roots so the cache invalidates when they
@@ -169,7 +169,7 @@ fn reachability_output_digest(
         output
             .roots
             .iter()
-            .map(|root| format!("root={}", stable_fact_payload(interner, root))),
+            .map(|root| format!("root={}", reachability_root_payload(interner, root))),
     );
     // Configured-unresolvable roots are NOT stored and NOT serialized as `root=`
     // facts (that would fold dense IDs / a non-stored superset into the digest,
@@ -198,37 +198,39 @@ fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[I
     }));
 }
 
-fn stable_fact_payload<T>(interner: &crate::core::StableKeyInterner, fact: &T) -> String
-where
-    T: Debug,
-{
-    resolve_stable_key_ids(interner, &format!("{fact:?}"))
+/// Stable digest payload for a reachability root: resolved key text, no dense `id`.
+fn reachability_root_payload(interner: &StableKeyInterner, root: &ReachabilityRootFact) -> String {
+    serde_json::to_string(&ReachabilityRootDigest {
+        kind: root.kind,
+        language: root.language,
+        target_function: root.target_function,
+        target_symbol: root.target_symbol,
+        originating_entrypoint: root.originating_entrypoint,
+        file: root.file,
+        span: &root.span,
+        precision: root.precision,
+        provenance: root.provenance,
+        status: root.status,
+        provider_id: root.provider_id.as_str(),
+        stable_key: interner.resolve(root.stable_key).as_ref(),
+    })
+    .unwrap_or_else(|_| "{}".to_string())
 }
 
-fn resolve_stable_key_ids(interner: &crate::core::StableKeyInterner, payload: &str) -> String {
-    let mut resolved = String::with_capacity(payload.len());
-    let mut remaining = payload;
-    while let Some(start) = remaining.find("StableKeyId(") {
-        resolved.push_str(&remaining[..start]);
-        let id_start = start + "StableKeyId(".len();
-        let Some(relative_end) = remaining[id_start..].find(')') else {
-            resolved.push_str(&remaining[start..]);
-            return resolved;
-        };
-        let id_end = id_start + relative_end;
-        let Ok(id) = remaining[id_start..id_end].parse::<u32>() else {
-            resolved.push_str(&remaining[start..=id_end]);
-            remaining = &remaining[id_end + 1..];
-            continue;
-        };
-        resolved.push_str(&format!(
-            "{:?}",
-            interner.resolve(crate::core::StableKeyId(id))
-        ));
-        remaining = &remaining[id_end + 1..];
-    }
-    resolved.push_str(remaining);
-    resolved
+#[derive(Serialize)]
+struct ReachabilityRootDigest<'a> {
+    kind: crate::analysis::reachability::facts::RootKind,
+    language: crate::core::Language,
+    target_function: crate::core::FunctionId,
+    target_symbol: Option<crate::core::SymbolId>,
+    originating_entrypoint: Option<crate::analysis::ids::EntrypointId>,
+    file: crate::core::FileId,
+    span: &'a crate::core::Span,
+    precision: crate::analysis::reachability::facts::RootPrecision,
+    provenance: crate::analysis::reachability::facts::RootProvenance,
+    status: crate::analysis::reachability::facts::RootStatus,
+    provider_id: &'a str,
+    stable_key: &'a str,
 }
 
 fn provider_error_diagnostic(message: String) -> Diagnostic {

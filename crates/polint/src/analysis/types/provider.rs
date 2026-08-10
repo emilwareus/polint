@@ -2,14 +2,19 @@ use super::cache_key::{
     type_value_alias_provider_parameter_digest,
     type_value_alias_provider_parameter_digest_for_snapshot,
 };
+use super::facts::{NarrowedTypeFact, TypeFact};
 use super::store::TypeValueAliasOutput;
+use crate::analysis::access_paths::facts::AccessPathFact;
+use crate::analysis::aliases::facts::AliasAnswerFact;
+use crate::analysis::points_to::facts::{PointsToConstraintFact, PointsToSetFact};
+use crate::analysis::values::facts::{AllocationTokenFact, ValueFact};
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
     CacheStats, Digest, DigestKind, InputComponent, InputSnapshot,
 };
-use crate::core::AnalysisDb;
+use crate::core::{AnalysisDb, StableKeyInterner};
 use crate::diagnostics::Diagnostic;
-use std::fmt::Debug;
+use serde::Serialize;
 
 pub(crate) const TYPE_VALUE_ALIAS_PROVIDER_ID: &str = "polint.type_value_alias";
 
@@ -190,40 +195,39 @@ fn type_value_alias_output_digest(
             .types
             .types
             .iter()
-            .map(|row| format!("type={}", stable_fact_payload(interner, row))),
+            .map(|row| format!("type={}", type_fact_payload(interner, row))),
     );
-    parts.extend(
-        output
-            .types
-            .narrowed
-            .iter()
-            .map(|row| format!("narrowed_type={}", stable_fact_payload(interner, row))),
-    );
+    parts.extend(output.types.narrowed.iter().map(|row| {
+        format!(
+            "narrowed_type={}",
+            narrowed_type_fact_payload(interner, row)
+        )
+    }));
     parts.extend(
         output
             .values
             .values
             .iter()
-            .map(|row| format!("value={}", stable_fact_payload(interner, row))),
+            .map(|row| format!("value={}", value_fact_payload(interner, row))),
     );
     parts.extend(
         output
             .values
             .allocations
             .iter()
-            .map(|row| format!("allocation={}", stable_fact_payload(interner, row))),
+            .map(|row| format!("allocation={}", allocation_fact_payload(interner, row))),
     );
     parts.extend(
         output
             .access_paths
             .access_paths
             .iter()
-            .map(|row| format!("access_path={}", stable_fact_payload(interner, row))),
+            .map(|row| format!("access_path={}", access_path_fact_payload(interner, row))),
     );
     parts.extend(output.points_to.constraints.iter().map(|row| {
         format!(
             "points_to_constraint={}",
-            stable_fact_payload(interner, row)
+            points_to_constraint_payload(interner, row)
         )
     }));
     parts.extend(
@@ -231,14 +235,14 @@ fn type_value_alias_output_digest(
             .points_to
             .sets
             .iter()
-            .map(|row| format!("points_to_set={}", stable_fact_payload(interner, row))),
+            .map(|row| format!("points_to_set={}", points_to_set_payload(interner, row))),
     );
     parts.extend(
         output
             .aliases
             .answers
             .iter()
-            .map(|row| format!("alias_answer={}", stable_fact_payload(interner, row))),
+            .map(|row| format!("alias_answer={}", alias_answer_payload(interner, row))),
     );
     if output.types.types.is_empty()
         && output.types.narrowed.is_empty()
@@ -270,37 +274,251 @@ fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[I
     }));
 }
 
-fn stable_fact_payload<T>(interner: &crate::core::StableKeyInterner, fact: &T) -> String
-where
-    T: Debug,
-{
-    resolve_stable_key_ids(interner, &format!("{fact:?}"))
+fn type_fact_payload(interner: &StableKeyInterner, fact: &TypeFact) -> String {
+    stable_json_payload(TypeFactDigest {
+        id: fact.id,
+        subject: &fact.subject,
+        type_set: fact.type_set,
+        shape: &fact.shape,
+        phase: fact.phase,
+        language: fact.language,
+        file: fact.file,
+        function: fact.function,
+        body: fact.body,
+        place: fact.place,
+        cfg_block: fact.cfg_block,
+        operation: fact.operation,
+        precision: fact.precision,
+        confidence: fact.confidence,
+        status: fact.status,
+        provenance: &fact.provenance,
+        stable_key: interner.resolve(fact.stable_key).as_ref(),
+    })
 }
 
-fn resolve_stable_key_ids(interner: &crate::core::StableKeyInterner, payload: &str) -> String {
-    let mut resolved = String::with_capacity(payload.len());
-    let mut remaining = payload;
-    while let Some(start) = remaining.find("StableKeyId(") {
-        resolved.push_str(&remaining[..start]);
-        let id_start = start + "StableKeyId(".len();
-        let Some(relative_end) = remaining[id_start..].find(')') else {
-            resolved.push_str(&remaining[start..]);
-            return resolved;
-        };
-        let id_end = id_start + relative_end;
-        let Ok(id) = remaining[id_start..id_end].parse::<u32>() else {
-            resolved.push_str(&remaining[start..=id_end]);
-            remaining = &remaining[id_end + 1..];
-            continue;
-        };
-        resolved.push_str(&format!(
-            "{:?}",
-            interner.resolve(crate::core::StableKeyId(id))
-        ));
-        remaining = &remaining[id_end + 1..];
-    }
-    resolved.push_str(remaining);
-    resolved
+fn narrowed_type_fact_payload(interner: &StableKeyInterner, fact: &NarrowedTypeFact) -> String {
+    stable_json_payload(NarrowedTypeFactDigest {
+        id: fact.id,
+        place: fact.place,
+        type_set: fact.type_set,
+        cfg_block: fact.cfg_block,
+        operation: fact.operation,
+        predicate: fact.predicate,
+        evidence: fact.evidence.as_str(),
+        language: fact.language,
+        file: fact.file,
+        function: fact.function,
+        body: fact.body,
+        precision: fact.precision,
+        status: fact.status,
+        stable_key: interner.resolve(fact.stable_key).as_ref(),
+    })
+}
+
+fn value_fact_payload(interner: &StableKeyInterner, fact: &ValueFact) -> String {
+    stable_json_payload(ValueFactDigest {
+        id: fact.id,
+        subject: &fact.subject,
+        value: fact.value,
+        kind: &fact.kind,
+        language: fact.language,
+        file: fact.file,
+        function: fact.function,
+        body: fact.body,
+        precision: fact.precision,
+        status: fact.status,
+        provenance: &fact.provenance,
+        stable_key: interner.resolve(fact.stable_key).as_ref(),
+    })
+}
+
+fn allocation_fact_payload(interner: &StableKeyInterner, fact: &AllocationTokenFact) -> String {
+    stable_json_payload(AllocationFactDigest {
+        id: fact.id,
+        kind: fact.kind,
+        language: fact.language,
+        file: fact.file,
+        function: fact.function,
+        body: fact.body,
+        source_place: fact.source_place,
+        source_operation: fact.source_operation,
+        span: fact.span.as_ref(),
+        provenance: &fact.provenance,
+        stable_key: interner.resolve(fact.stable_key).as_ref(),
+    })
+}
+
+fn access_path_fact_payload(interner: &StableKeyInterner, fact: &AccessPathFact) -> String {
+    stable_json_payload(AccessPathFactDigest {
+        id: fact.id,
+        base: fact.base,
+        projections: &fact.projections,
+        depth: fact.depth,
+        language: fact.language,
+        file: fact.file,
+        function: fact.function,
+        body: fact.body,
+        status: fact.status,
+        stable_key: interner.resolve(fact.stable_key).as_ref(),
+    })
+}
+
+fn points_to_constraint_payload(
+    interner: &StableKeyInterner,
+    fact: &PointsToConstraintFact,
+) -> String {
+    stable_json_payload(PointsToConstraintDigest {
+        id: fact.id,
+        kind: &fact.kind,
+        status: fact.status,
+        precision: fact.precision,
+        stable_key: interner.resolve(fact.stable_key).as_ref(),
+    })
+}
+
+fn points_to_set_payload(interner: &StableKeyInterner, fact: &PointsToSetFact) -> String {
+    stable_json_payload(PointsToSetDigest {
+        id: fact.id,
+        variable: fact.variable,
+        objects: &fact.objects,
+        status: fact.status,
+        precision: fact.precision,
+        budget: fact.budget,
+        stable_key: interner.resolve(fact.stable_key).as_ref(),
+    })
+}
+
+fn alias_answer_payload(interner: &StableKeyInterner, fact: &AliasAnswerFact) -> String {
+    stable_json_payload(AliasAnswerDigest {
+        id: fact.id,
+        left: fact.left,
+        right: fact.right,
+        status: fact.status,
+        reason: &fact.reason,
+        evidence: &fact.evidence,
+        precision: fact.precision,
+        stable_key: interner.resolve(fact.stable_key).as_ref(),
+    })
+}
+
+fn stable_json_payload<T: Serialize>(payload: T) -> String {
+    serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string())
+}
+
+#[derive(Serialize)]
+struct TypeFactDigest<'a> {
+    id: crate::analysis::ids::TypeFactId,
+    subject: &'a super::facts::TypeSubject,
+    type_set: crate::analysis::ids::TypeSetId,
+    shape: &'a super::facts::TypeShape,
+    phase: super::facts::TypePhase,
+    language: crate::core::Language,
+    file: Option<crate::core::FileId>,
+    function: Option<crate::core::FunctionId>,
+    body: Option<crate::analysis::ids::MirBodyId>,
+    place: Option<crate::analysis::ids::PlaceId>,
+    cfg_block: Option<crate::analysis::cfg::ids::BasicBlockId>,
+    operation: Option<crate::analysis::ids::MirOpId>,
+    precision: super::facts::TypePrecision,
+    confidence: super::facts::TypeConfidence,
+    status: super::facts::TypeStatus,
+    provenance: &'a super::facts::TypeProvenance,
+    stable_key: &'a str,
+}
+
+#[derive(Serialize)]
+struct NarrowedTypeFactDigest<'a> {
+    id: crate::analysis::ids::NarrowedTypeId,
+    place: crate::analysis::ids::PlaceId,
+    type_set: crate::analysis::ids::TypeSetId,
+    cfg_block: Option<crate::analysis::cfg::ids::BasicBlockId>,
+    operation: Option<crate::analysis::ids::MirOpId>,
+    predicate: Option<crate::analysis::ids::PlaceId>,
+    evidence: &'a str,
+    language: crate::core::Language,
+    file: Option<crate::core::FileId>,
+    function: Option<crate::core::FunctionId>,
+    body: Option<crate::analysis::ids::MirBodyId>,
+    precision: super::facts::TypePrecision,
+    status: super::facts::TypeStatus,
+    stable_key: &'a str,
+}
+
+#[derive(Serialize)]
+struct ValueFactDigest<'a> {
+    id: crate::analysis::ids::ValueFactId,
+    subject: &'a crate::analysis::values::facts::ValueSubject,
+    value: crate::analysis::ids::AbstractValueId,
+    kind: &'a crate::analysis::values::facts::ValueKind,
+    language: crate::core::Language,
+    file: Option<crate::core::FileId>,
+    function: Option<crate::core::FunctionId>,
+    body: Option<crate::analysis::ids::MirBodyId>,
+    precision: crate::analysis::values::facts::ValuePrecision,
+    status: crate::analysis::values::facts::ValueStatus,
+    provenance: &'a crate::analysis::values::facts::ValueProvenance,
+    stable_key: &'a str,
+}
+
+#[derive(Serialize)]
+struct AllocationFactDigest<'a> {
+    id: crate::analysis::ids::AllocationTokenId,
+    kind: crate::analysis::values::facts::AllocationKind,
+    language: crate::core::Language,
+    file: Option<crate::core::FileId>,
+    function: Option<crate::core::FunctionId>,
+    body: Option<crate::analysis::ids::MirBodyId>,
+    source_place: Option<crate::analysis::ids::PlaceId>,
+    source_operation: Option<crate::analysis::ids::MirOpId>,
+    span: Option<&'a crate::core::Span>,
+    provenance: &'a crate::analysis::values::facts::ValueProvenance,
+    stable_key: &'a str,
+}
+
+#[derive(Serialize)]
+struct AccessPathFactDigest<'a> {
+    id: crate::analysis::ids::AccessPathId,
+    base: crate::analysis::ids::PlaceId,
+    projections: &'a [crate::analysis::access_paths::facts::AccessPathProjection],
+    depth: u32,
+    language: crate::core::Language,
+    file: Option<crate::core::FileId>,
+    function: Option<crate::core::FunctionId>,
+    body: Option<crate::analysis::ids::MirBodyId>,
+    status: crate::analysis::access_paths::facts::AccessPathStatus,
+    stable_key: &'a str,
+}
+
+#[derive(Serialize)]
+struct PointsToConstraintDigest<'a> {
+    id: crate::analysis::ids::PointsToConstraintId,
+    kind: &'a crate::analysis::points_to::facts::PointsToConstraintKind,
+    status: crate::analysis::points_to::facts::PointsToStatus,
+    precision: crate::analysis::points_to::facts::PointsToPrecision,
+    stable_key: &'a str,
+}
+
+#[derive(Serialize)]
+struct PointsToSetDigest<'a> {
+    id: crate::analysis::ids::PointsToSetId,
+    variable: crate::analysis::ids::PtVarId,
+    objects: &'a [crate::analysis::ids::ObjectTokenId],
+    status: crate::analysis::points_to::facts::PointsToStatus,
+    precision: crate::analysis::points_to::facts::PointsToPrecision,
+    budget: crate::analysis::points_to::facts::PointsToBudgetStatus,
+    stable_key: &'a str,
+}
+
+#[derive(Serialize)]
+struct AliasAnswerDigest<'a> {
+    id: crate::analysis::ids::AliasAnswerId,
+    left: crate::analysis::aliases::facts::AliasOperand,
+    right: crate::analysis::aliases::facts::AliasOperand,
+    status: crate::analysis::aliases::facts::AliasStatus,
+    reason: &'a crate::analysis::aliases::facts::AliasReason,
+    evidence: &'a [String],
+    precision: crate::analysis::aliases::facts::AliasPrecision,
+    stable_key: &'a str,
 }
 
 #[cfg(test)]

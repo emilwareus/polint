@@ -98,7 +98,7 @@ fn merge_extension_type_value_alias_facts_with_filter(
 ) -> ExtensionTypeValueAliasMerge {
     let mut diagnostics = Vec::new();
     let mut stable_keys = native_stable_keys(&output);
-    let extension_refs = ExtensionRefMaps::from_output(&output, extension_facts);
+    let extension_refs = ExtensionRefMaps::from_output(interner, &output, extension_facts);
     for fact in extension_facts {
         if !include_family(fact.fact_family.as_str()) {
             continue;
@@ -351,6 +351,7 @@ struct ExtensionLocalRef {
 
 impl ExtensionRefMaps {
     fn from_output(
+        interner: &crate::core::StableKeyInterner,
         output: &TypeValueAliasOutput,
         extension_facts: &[AcceptedExtensionFact],
     ) -> Self {
@@ -375,6 +376,7 @@ impl ExtensionRefMaps {
 
         let mut maps = Self::default();
         maps.record_family_refs(
+            interner,
             extension_facts,
             TYPE_VALUE_ALIAS_ACCESS_PATH_FAMILY,
             &access_path_ids_by_stable_key,
@@ -383,6 +385,7 @@ impl ExtensionRefMaps {
             },
         );
         maps.record_family_refs(
+            interner,
             extension_facts,
             TYPE_VALUE_ALIAS_ALLOCATION_FAMILY,
             &allocation_ids_by_stable_key,
@@ -391,6 +394,7 @@ impl ExtensionRefMaps {
             },
         );
         maps.record_family_refs(
+            interner,
             extension_facts,
             TYPE_VALUE_ALIAS_VALUE_FAMILY,
             &value_ids_by_stable_key,
@@ -403,6 +407,7 @@ impl ExtensionRefMaps {
 
     fn record_family_refs<T: Copy>(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         extension_facts: &[AcceptedExtensionFact],
         family: &str,
         ids_by_stable_key: &BTreeMap<StableKeyId, T>,
@@ -413,16 +418,18 @@ impl ExtensionRefMaps {
             .iter()
             .filter(|fact| fact.fact_family == family)
             .collect::<Vec<_>>();
+        // Local IDs are ordinals over text-sorted stable keys so relation payloads
+        // stay deterministic even when interning order differs from lexical order.
         facts.sort_by(|left, right| {
             (
                 left.extension_id.as_str(),
                 left.provider_id.as_str(),
-                left.stable_key,
+                interner.resolve(left.stable_key),
             )
                 .cmp(&(
                     right.extension_id.as_str(),
                     right.provider_id.as_str(),
-                    right.stable_key,
+                    interner.resolve(right.stable_key),
                 ))
         });
 
@@ -1006,6 +1013,72 @@ mod tests {
                             )
             )
         }));
+    }
+
+    #[test]
+    fn extension_local_ids_follow_resolved_text_order_not_allocation_order() {
+        let interner = crate::core::StableKeyInterner::default();
+        // Intern reverse-lexically so StableKeyId Ord disagrees with text Ord.
+        let key_z = interner.intern("allocation:z-extension".to_string());
+        let key_a = interner.intern("allocation:a-extension".to_string());
+        let key_pt = interner.intern("pt:extension".to_string());
+        assert!(
+            key_z.0 < key_a.0,
+            "precondition: allocation order must put z before a"
+        );
+        assert!(
+            interner.resolve(key_a).as_ref() < interner.resolve(key_z).as_ref(),
+            "precondition: resolved text order must put a before z"
+        );
+
+        let mut fact_z = accepted(
+            TYPE_VALUE_ALIAS_ALLOCATION_FAMILY,
+            "allocation:z-extension",
+            &["kind=object"],
+        );
+        fact_z.stable_key = key_z;
+        let mut fact_a = accepted(
+            TYPE_VALUE_ALIAS_ALLOCATION_FAMILY,
+            "allocation:a-extension",
+            &["kind=object"],
+        );
+        fact_a.stable_key = key_a;
+        let mut constraint = accepted(
+            TYPE_VALUE_ALIAS_POINTS_TO_CONSTRAINT_FAMILY,
+            "pt:extension",
+            &["kind=address_of", "dst=allocation:0", "object=allocation:0"],
+        );
+        constraint.stable_key = key_pt;
+
+        let merged = merge_extension_type_value_alias_facts(
+            &interner,
+            TypeValueAliasOutput::default(),
+            &[fact_z, fact_a, constraint],
+        );
+        let lexical_first = merged
+            .values
+            .allocations
+            .iter()
+            .find(|allocation| {
+                interner.resolve(allocation.stable_key).as_ref() == "allocation:a-extension"
+            })
+            .expect("lexically-first allocation should be present")
+            .id;
+
+        assert!(
+            merged.points_to.constraints.iter().any(|constraint| {
+                matches!(
+                    constraint.kind,
+                    PointsToConstraintKind::AddressOf { dst, object }
+                        if dst == crate::analysis::points_to::vars::allocation_var(lexical_first)
+                            && object
+                                == crate::analysis::points_to::vars::allocation_object(
+                                    lexical_first
+                                )
+                )
+            }),
+            "allocation:0 must resolve to text-first allocation:a-extension, not allocation-order first"
+        );
     }
 
     fn accepted_alias(stable_key: &str, status: &str) -> AcceptedExtensionFact {

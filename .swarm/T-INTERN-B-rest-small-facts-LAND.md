@@ -50,6 +50,29 @@ Scoped family owning declarations are gone except
   peak RSS effectively flat. Required retry: PASS with diagnostics still
   identical. Cost baselines not regenerated (DECISION Q6.2).
 
+## Audit fix (post-land review)
+
+Read-only review of `d7dafb90..60b471b8` found two defects; both fixed on tip:
+
+1. `ExtensionRefMaps::record_family_refs` sorted by raw `StableKeyId` Ord
+   (allocation order). Now sorts by `interner.resolve(...)` text. Regression:
+   `extension_local_ids_follow_resolved_text_order_not_allocation_order`.
+2. `types` / `reachability` / `refined_calls` provider digests used
+   Debug-format + `StableKeyId(N)` string rewrite. Replaced with explicit
+   serde digest structs carrying resolved stable-key text; reachability still
+   omits dense `id` (prior `#[serde(skip)]` semantics).
+
+Audit-fix verification:
+
+- `cargo fmt --all -- --check` — PASS
+- `cargo check -p polint --all-targets --all-features --locked` — PASS
+- `cargo clippy -p polint --all-targets --all-features --locked -- -D warnings` — PASS
+- `cargo test -p polint --lib analysis::types::validate --locked` — PASS (5)
+- `cargo test -p polint --lib analysis::types::provider:: --locked` — PASS (5)
+- `cargo test -p polint --lib analysis::reachability::provider:: --locked` — PASS (8)
+- `cargo test -p polint --lib eval::determinism_gate --locked` — PASS (12)
+- Removed leftover untracked `target-intern-b/` (prior worker artifact).
+
 ## Next
 
 T-INTERN-B still open for remaining rest families (summaries/solver/slicing and
