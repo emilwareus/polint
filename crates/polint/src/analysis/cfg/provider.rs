@@ -446,15 +446,7 @@ mod cfg_provider {
     use tempfile::tempdir;
 
     fn span() -> Span {
-        Span {
-            file: FileId(1),
-            start_byte: 1,
-            end_byte: 2,
-            start_line: 1,
-            start_col: 1,
-            end_line: 1,
-            end_col: 2,
-        }
+        Span::new(FileId(1), 1, 2, 1, 1, 1, 2)
     }
 
     fn body(interner: &crate::core::StableKeyInterner) -> MirBody {

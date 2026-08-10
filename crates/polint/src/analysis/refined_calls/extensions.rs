@@ -164,14 +164,14 @@ fn parse_function_ref(value: &str) -> Option<FunctionId> {
     value
         .strip_prefix("function:")
         .and_then(|id| id.parse::<u64>().ok())
-        .map(FunctionId)
+        .map(FunctionId::from_raw)
 }
 
 fn parse_symbol_ref(value: &str) -> Option<SymbolId> {
     value
         .strip_prefix("symbol:")
         .and_then(|id| id.parse::<u64>().ok())
-        .map(SymbolId)
+        .map(SymbolId::from_raw)
 }
 
 fn extension_algorithm(value: &str) -> CallAlgorithm {

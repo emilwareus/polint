@@ -397,15 +397,15 @@ pub(crate) fn span_from_byte_range(
     let end_byte = end_byte.min(source.len()).max(start_byte);
     let (start_line, start_col) = line_col(source, start_byte);
     let (end_line, end_col) = line_col(source, end_byte);
-    Span {
+    Span::new(
         file,
-        start_byte: start_byte as u32,
-        end_byte: end_byte as u32,
+        start_byte as u32,
+        end_byte as u32,
         start_line,
         start_col,
         end_line,
         end_col,
-    }
+    )
 }
 
 pub(crate) fn line_col(source: &str, byte_offset: usize) -> (u32, u32) {

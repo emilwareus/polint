@@ -180,9 +180,9 @@ impl<'a> Solver<'a> {
 
     fn propagate_field_load(&mut self, var: PtVarId, delta: &BTreeSet<ObjectTokenId>) {
         let loads = self.field_loads.get(&var).cloned().unwrap_or_default();
-        for (field, dst) in loads {
+        for (field, dst) in loads.into_iter() {
             for object in delta {
-                let field_var = self.object_slot(*object, &field);
+                let field_var = self.object_slot(*object, field.as_str());
                 self.add_copy_edge(field_var, dst);
             }
         }
@@ -190,9 +190,9 @@ impl<'a> Solver<'a> {
 
     fn propagate_field_store(&mut self, var: PtVarId, delta: &BTreeSet<ObjectTokenId>) {
         let stores = self.field_stores.get(&var).cloned().unwrap_or_default();
-        for (field, src) in stores {
+        for (field, src) in stores.into_iter() {
             for object in delta {
-                let field_var = self.object_slot(*object, &field);
+                let field_var = self.object_slot(*object, field.as_str());
                 self.add_copy_edge(src, field_var);
             }
         }

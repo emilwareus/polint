@@ -1121,6 +1121,7 @@ fn language_label(language: Language) -> &'static str {
         Language::JavaScript => "javascript",
         Language::Jsx => "jsx",
         Language::Go | Language::Unknown => "unknown",
+        _ => unreachable!(),
     }
 }
 

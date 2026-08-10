@@ -402,15 +402,7 @@ mod tests {
         let mut db = base_db();
         db.replace_entrypoint_facts(EntrypointOutput {
             entrypoints: vec![EntrypointFact {
-                registration_span: Span {
-                    file: FileId(0),
-                    start_byte: 100,
-                    end_byte: 1,
-                    start_line: 1,
-                    start_col: 1,
-                    end_line: 1,
-                    end_col: 2,
-                },
+                registration_span: Span::new(FileId(0), 100, 1, 1, 1, 1, 2),
                 ..entrypoint(0, "ep:bad-span")
             }],
             trust_boundaries: Vec::new(),

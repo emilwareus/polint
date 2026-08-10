@@ -765,24 +765,8 @@ mod tests {
         a.stable_key = interner.intern("dup");
         b.stable_key = interner.intern("dup");
         // Same stable_key, different span → conflicting duplicate.
-        a.span = Some(Span {
-            file: FileId(0),
-            start_byte: 10,
-            end_byte: 20,
-            start_line: 1,
-            start_col: 1,
-            end_line: 1,
-            end_col: 11,
-        });
-        b.span = Some(Span {
-            file: FileId(0),
-            start_byte: 30,
-            end_byte: 40,
-            start_line: 2,
-            start_col: 1,
-            end_line: 2,
-            end_col: 11,
-        });
+        a.span = Some(Span::new(FileId(0), 10, 20, 1, 1, 1, 11));
+        b.span = Some(Span::new(FileId(0), 30, 40, 2, 1, 2, 11));
         let output = GoSemanticFactsOutput {
             functions: vec![a, b],
             ..GoSemanticFactsOutput::default()

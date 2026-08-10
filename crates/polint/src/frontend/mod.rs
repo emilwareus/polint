@@ -157,18 +157,24 @@ impl LanguageFrontend for TsJsFrontend {
     }
 }
 
-impl Language {
-    /// Registry language id for this public language, when a frontend handles it.
-    pub(crate) fn id(self) -> LanguageId {
+pub(crate) trait LanguageRegistryExt {
+    fn id(self) -> LanguageId;
+}
+
+impl LanguageRegistryExt for Language {
+    fn id(self) -> LanguageId {
         frontend_registry()
             .id_for_public_language(self)
             .unwrap_or(LanguageId::UNREGISTERED)
     }
 }
 
-impl LanguageId {
-    /// Representative public [`Language`] for this registry id (TS family → TypeScript).
-    pub(crate) fn to_public_language(self) -> Language {
+pub(crate) trait LanguageIdRegistryExt {
+    fn to_public_language(self) -> Language;
+}
+
+impl LanguageIdRegistryExt for LanguageId {
+    fn to_public_language(self) -> Language {
         frontend_registry()
             .public_language_for(self)
             .unwrap_or(Language::Unknown)
@@ -178,6 +184,7 @@ impl LanguageId {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::{LanguageIdRegistryExt, LanguageRegistryExt};
     use crate::analysis_kernel::incremental::{CacheStats, InputSnapshot};
     use crate::analysis_kernel::{AnalysisKernel, ProviderCtx, ProviderRunResult};
     use crate::analysis_plan::AnalysisPlan;

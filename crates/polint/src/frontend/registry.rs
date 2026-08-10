@@ -1,24 +1,9 @@
 use super::{FAMILY_GO, FAMILY_TYPESCRIPT_JAVASCRIPT, GoFrontend, LanguageFrontend, TsJsFrontend};
 use crate::core::Language;
 
-/// Opaque registry-assigned language id. Never sort by this value — use the
-/// frontend's stable profile name instead.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub(crate) struct LanguageId(u16);
-
-impl LanguageId {
-    /// Sentinel for public languages with no registered frontend (e.g. Unknown).
-    pub(crate) const UNREGISTERED: Self = Self(u16::MAX);
-    /// Stable id matching default registration order for Go.
-    pub(crate) const GO: Self = Self(0);
-    /// Stable id matching default registration order for TypeScript/JavaScript.
-    pub(crate) const TS: Self = Self(1);
-}
-
-pub(crate) const LANGUAGE_IDS_NONE: &[LanguageId] = &[];
-pub(crate) const LANGUAGE_IDS_GO: &[LanguageId] = &[LanguageId::GO];
-pub(crate) const LANGUAGE_IDS_TS: &[LanguageId] = &[LanguageId::TS];
-pub(crate) const LANGUAGE_IDS_GO_AND_TS: &[LanguageId] = &[LanguageId::GO, LanguageId::TS];
+pub(crate) use polint_core::{
+    LANGUAGE_IDS_GO, LANGUAGE_IDS_GO_AND_TS, LANGUAGE_IDS_NONE, LANGUAGE_IDS_TS, LanguageId,
+};
 
 /// Composition root for language frontends.
 pub(crate) struct FrontendRegistry {
@@ -37,7 +22,7 @@ impl FrontendRegistry {
     where
         F: FnOnce(LanguageId) -> Box<dyn LanguageFrontend>,
     {
-        let id = LanguageId(
+        let id = LanguageId::from_raw(
             u16::try_from(self.frontends.len()).expect("language frontend registry overflow"),
         );
         self.frontends.push(make(id));
@@ -46,7 +31,7 @@ impl FrontendRegistry {
 
     pub(crate) fn get(&self, id: LanguageId) -> Option<&dyn LanguageFrontend> {
         self.frontends
-            .get(usize::from(id.0))
+            .get(usize::from(id.raw()))
             .map(|frontend| frontend.as_ref())
     }
 
@@ -76,6 +61,7 @@ impl FrontendRegistry {
                 std::path::Path::new("x.ts")
             }
             Language::Unknown => return None,
+            _ => return None,
         };
         self.scheduled_for(path)
             .first()

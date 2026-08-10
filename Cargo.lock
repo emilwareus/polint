@@ -1173,6 +1173,7 @@ dependencies = [
  "oxc_semantic",
  "oxc_span",
  "petgraph",
+ "polint-core",
  "polint-macros",
  "predicates",
  "proptest",
@@ -1196,6 +1197,14 @@ version = "0.1.17"
 dependencies = [
  "anyhow",
  "polint",
+]
+
+[[package]]
+name = "polint-core"
+version = "0.1.17"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -280,15 +280,15 @@ fn lower_optional_file_span(
 }
 
 fn to_span(file: FileId, span: &GoSemanticSpan) -> Span {
-    Span {
+    Span::new(
         file,
-        start_byte: span.start_byte,
-        end_byte: span.end_byte,
-        start_line: span.start_line,
-        start_col: span.start_col,
-        end_line: span.end_line,
-        end_col: span.end_col,
-    }
+        span.start_byte,
+        span.end_byte,
+        span.start_line,
+        span.start_col,
+        span.end_line,
+        span.end_col,
+    )
 }
 
 /// The sidecar-provided `stable_key` for an RTA-signal harvest row (`method_set` /

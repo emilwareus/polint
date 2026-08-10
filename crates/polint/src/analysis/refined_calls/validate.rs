@@ -8,7 +8,7 @@ use crate::analysis::refined_calls::facts::RefinedCallTier;
 use crate::analysis::refined_calls::facts::{RefinedCallEdgeFact, RefinedCallValidation};
 use crate::analysis_kernel::FactFamily;
 use crate::core::AnalysisDb;
-use crate::diagnostics::{Diagnostic, Severity, TextRange, fingerprint};
+use crate::diagnostics::{Diagnostic, TextRange, fingerprint};
 
 pub(crate) fn validate_refined_calls(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
     validate_refined_call_edges(db, db.refined_call_edges(), diagnostics);
@@ -169,21 +169,17 @@ fn valid_synthetic_target(target: &str) -> bool {
 }
 
 fn invalid_refined_call_diagnostic(stable_key: &str, reason: String) -> Diagnostic {
-    Diagnostic {
-        rule_id: "polint/internal".to_string(),
-        severity: Severity::Error,
-        message: format!("invalid refined call fact `{stable_key}`: {reason}"),
-        file: "<workspace>".to_string(),
-        range: TextRange::point(1, 1),
-        labels: Vec::new(),
-        help: None,
-        evidence: Vec::new(),
-        evidence_v1: None,
-        evidence_bundle: None,
-        suggestions: Vec::new(),
-        fix: None,
-        stable_fingerprint: fingerprint(&["polint.refined_calls.validate", stable_key, &reason]),
-    }
+    Diagnostic::error(
+        "polint/internal",
+        "<workspace>",
+        TextRange::point(1, 1),
+        format!("invalid refined call fact `{stable_key}`: {reason}"),
+    )
+    .with_fingerprint(fingerprint(&[
+        "polint.refined_calls.validate",
+        stable_key,
+        &reason,
+    ]))
 }
 
 #[cfg(test)]

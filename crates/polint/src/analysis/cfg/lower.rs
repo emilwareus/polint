@@ -578,6 +578,7 @@ fn language_label(language: Language) -> &'static str {
         Language::Jsx => "jsx",
         Language::Go => "go",
         Language::Unknown => "unknown",
+        _ => "unknown",
     }
 }
 
@@ -596,15 +597,15 @@ mod tests {
     use crate::core::{AnalysisDb, FileId, FunctionId, Language, Span};
 
     fn span(start: usize, end: usize) -> Span {
-        Span {
-            file: FileId(1),
-            start_byte: start as u32,
-            end_byte: end as u32,
-            start_line: 1,
-            start_col: start as u32 + 1,
-            end_line: 1,
-            end_col: end as u32 + 1,
-        }
+        Span::new(
+            FileId(1),
+            start as u32,
+            end as u32,
+            1,
+            start as u32 + 1,
+            1,
+            end as u32 + 1,
+        )
     }
 
     fn body(interner: &crate::core::StableKeyInterner, language: Language) -> MirBody {

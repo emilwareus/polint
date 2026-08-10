@@ -269,6 +269,7 @@ fn language_tag(language: Language) -> Option<LanguageTag> {
         Language::TypeScript | Language::Tsx => Some(LanguageTag::TypeScript),
         Language::JavaScript | Language::Jsx => Some(LanguageTag::JavaScript),
         Language::Unknown => None,
+        _ => None,
     }
 }
 

@@ -930,6 +930,7 @@ fn language_cache_label(language: Language) -> &'static str {
         Language::JavaScript => "javascript",
         Language::Jsx => "jsx",
         Language::Unknown => "unknown",
+        _ => "unknown",
     }
 }
 
@@ -1178,6 +1179,7 @@ fn language_name(language: Language) -> &'static str {
         Language::JavaScript => "JavaScript",
         Language::Jsx => "JSX",
         Language::Unknown => "unknown",
+        _ => "unknown",
     }
 }
 

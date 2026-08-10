@@ -334,14 +334,6 @@ mod tests {
     }
 
     fn span() -> Span {
-        Span {
-            file: FileId(1),
-            start_byte: 1,
-            end_byte: 4,
-            start_line: 1,
-            start_col: 1,
-            end_line: 1,
-            end_col: 4,
-        }
+        Span::new(FileId(1), 1, 4, 1, 1, 1, 4)
     }
 }

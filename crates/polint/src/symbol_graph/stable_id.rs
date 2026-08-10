@@ -283,6 +283,7 @@ fn language_key(language: Language) -> &'static str {
         Language::JavaScript => "javascript",
         Language::Jsx => "jsx",
         Language::Unknown => "unknown",
+        _ => "unknown",
     }
 }
 

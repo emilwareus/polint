@@ -920,6 +920,7 @@ fn language_name(language: Language) -> &'static str {
         Language::JavaScript => "javascript",
         Language::Jsx => "jsx",
         Language::Unknown => "unknown",
+        _ => "unknown",
     }
 }
 

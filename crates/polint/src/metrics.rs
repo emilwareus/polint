@@ -528,6 +528,7 @@ fn language_cache_label(language: crate::core::Language) -> &'static str {
         crate::core::Language::JavaScript => "javascript",
         crate::core::Language::Jsx => "jsx",
         crate::core::Language::Unknown => "unknown",
+        _ => unreachable!(),
     }
 }
 

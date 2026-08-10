@@ -491,6 +491,7 @@ pub(super) fn language_label(language: Language) -> &'static str {
         Language::JavaScript => "javascript",
         Language::Jsx => "jsx",
         Language::Unknown => "unknown",
+        _ => "unknown",
     }
 }
 

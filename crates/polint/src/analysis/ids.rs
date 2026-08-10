@@ -132,8 +132,7 @@ pub(crate) struct EvidenceNodeId(pub(crate) u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) struct EvidenceEdgeId(pub(crate) u64);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub(crate) struct EvidenceBundleId(pub(crate) u64);
+pub(crate) use polint_core::EvidenceBundleId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) struct EvidencePathId(pub(crate) u64);

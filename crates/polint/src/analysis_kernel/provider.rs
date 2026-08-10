@@ -4,6 +4,7 @@ use crate::cache::Cache;
 use crate::config::LoadedConfig;
 use crate::core::{AnalysisDb, CapabilitySupportView};
 use crate::diagnostics::Diagnostic;
+use crate::frontend::{LanguageIdRegistryExt, LanguageRegistryExt};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

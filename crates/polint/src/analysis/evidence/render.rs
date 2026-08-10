@@ -181,10 +181,7 @@ pub(crate) fn scalar_evidence_for_bundle_json(value: &Value) -> Vec<Evidence> {
             bundle
                 .get(label)
                 .and_then(Value::as_str)
-                .map(|value| Evidence {
-                    label: format!("evidence_{label}"),
-                    value: value.to_string(),
-                })
+                .map(|value| Evidence::new(format!("evidence_{label}"), value.to_string()))
         })
         .collect()
 }
@@ -275,12 +272,12 @@ fn sarif_location_from_edge(edge: &Value) -> Option<EvidenceSarifLocation> {
     let range = location.get("range")?.as_object()?;
     Some(EvidenceSarifLocation {
         uri,
-        range: TextRange {
-            start_line: range.get("start_line")?.as_u64()?.try_into().ok()?,
-            start_col: range.get("start_col")?.as_u64()?.try_into().ok()?,
-            end_line: range.get("end_line")?.as_u64()?.try_into().ok()?,
-            end_col: range.get("end_col")?.as_u64()?.try_into().ok()?,
-        },
+        range: TextRange::new(
+            range.get("start_line")?.as_u64()?.try_into().ok()?,
+            range.get("start_col")?.as_u64()?.try_into().ok()?,
+            range.get("end_line")?.as_u64()?.try_into().ok()?,
+            range.get("end_col")?.as_u64()?.try_into().ok()?,
+        ),
     })
 }
 

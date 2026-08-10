@@ -183,15 +183,7 @@ mod tests {
         container: &str,
     ) -> IdentityRecord {
         let language = LanguageTag::Go;
-        let span = Span {
-            file: FileId(file),
-            start_byte: start,
-            end_byte: start + 4,
-            start_line: 1,
-            start_col: start + 1,
-            end_line: 1,
-            end_col: start + 5,
-        };
+        let span = Span::new(FileId(file), start, start + 4, 1, start + 1, 1, start + 5);
         IdentityRecord {
             id: IdentityRecordId(0),
             kind,

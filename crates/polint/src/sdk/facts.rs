@@ -1172,24 +1172,8 @@ mod tests {
         );
         let route_function = FunctionId(0);
         let panel_function = FunctionId(1);
-        let route_span = Span {
-            file: go_file,
-            start_byte: 12,
-            end_byte: 27,
-            start_line: 2,
-            start_col: 1,
-            end_line: 2,
-            end_col: 16,
-        };
-        let panel_span = Span {
-            file: ts_file,
-            start_byte: 0,
-            end_byte: 26,
-            start_line: 1,
-            start_col: 1,
-            end_line: 1,
-            end_col: 27,
-        };
+        let route_span = Span::new(go_file, 12, 27, 2, 1, 2, 16);
+        let panel_span = Span::new(ts_file, 0, 26, 1, 1, 1, 27);
 
         db.replace_metric_facts(
             vec![

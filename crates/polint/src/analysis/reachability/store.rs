@@ -193,7 +193,7 @@ mod tests {
     }
 
     fn function_ids(ids: &[u64]) -> BTreeSet<FunctionId> {
-        ids.iter().copied().map(FunctionId).collect()
+        ids.iter().copied().map(FunctionId::from_raw).collect()
     }
 
     #[test]

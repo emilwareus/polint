@@ -143,15 +143,7 @@ mod tests {
     fn record(file: u32, stable_key: &str, digest_zero: bool, bad_span: bool) -> IdentityRecord {
         let language = LanguageTag::Go;
         let span = if bad_span {
-            Span {
-                file: FileId(file),
-                start_byte: 10,
-                end_byte: 1,
-                start_line: 1,
-                start_col: 11,
-                end_line: 1,
-                end_col: 2,
-            }
+            Span::new(FileId(file), 10, 1, 1, 11, 1, 2)
         } else {
             Span::point(FileId(file), 1, 1)
         };
