@@ -830,17 +830,17 @@
       "branch": "swarm/T-INTERN-B-calls / swarm/T-INTERN-B-cfg",
       "dispatched_at": "2026-08-10T15:00:54+02:00",
       "attempts": 1,
-      "slice": "calls+cfg",
+      "slice": "calls",
       "fact_family_locks": [
-        "calls",
-        "cfg"
+        "calls"
       ],
-      "note": "MIR MERGED@2e2178bb; dispatching calls+cfg parallel",
+      "note": "CFG MERGED@38d30482; calls still in flight \u2014 rebase onto tip after DONE",
       "slices_done": [
         "symbols",
-        "mir"
+        "mir",
+        "cfg"
       ],
-      "updated_at": "2026-08-10T14:23:48+02:00"
+      "updated_at": "2026-08-10T15:29:26+02:00"
     },
     "T-INTERN-C": {
       "state": "BLOCKED",
@@ -875,10 +875,6 @@
     "golden": null,
     "fact_family": {},
     "fact_family:calls": {
-      "holder": "T-INTERN-B",
-      "at": "2026-08-10T15:00:54+02:00"
-    },
-    "fact_family:cfg": {
       "holder": "T-INTERN-B",
       "at": "2026-08-10T15:00:54+02:00"
     }
@@ -933,7 +929,7 @@
   },
   "integration_branch": "static-analysis-architecture-review",
   "never_merge_to_main": true,
-  "integration_head": "2e2178bb",
+  "integration_head": "38d30482",
   "m0_gate": {
     "status": "PASS",
     "completed_at": "2026-08-08T11:52:00+02:00",
@@ -1055,6 +1051,11 @@
       "at": "2026-08-10T15:00:54+02:00",
       "event": "T-INTERN-B mir MERGED",
       "commit": "2e2178bb"
+    },
+    {
+      "at": "2026-08-10T15:29:26+02:00",
+      "event": "T-INTERN-B cfg MERGED",
+      "commit": "38d30482"
     }
   ],
   "ready": [],
