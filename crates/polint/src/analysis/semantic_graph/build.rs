@@ -35,7 +35,7 @@ use crate::analysis::semantic_graph::store::SemanticGraphOutput;
 use crate::analysis::stable_key::semantic_stable_key;
 use crate::analysis::values::facts::{ValueKind, ValueSubject};
 use crate::analysis_kernel::FactFamily;
-use crate::core::{AnalysisDb, FileId, SourceFile, Span};
+use crate::core::{AnalysisDb, FileId, SourceFile, Span, StableKeyId};
 use crate::go::semantic::facts::{GoSemanticCallStatus, GoSemanticCallsiteFact};
 use crate::ts::binding::direct::{
     TsDirectBindingModuleFile, TsDirectBindingModuleInput, resolve_direct_bindings_with_modules,
@@ -383,10 +383,10 @@ struct GraphBuilder {
     next_node: u64,
     /// node stable key -> pre-sort SemanticNodeId, so a node identity is projected
     /// at most once and edges/constraints can resolve their endpoints.
-    node_by_key: BTreeMap<String, SemanticNodeId>,
+    node_by_key: BTreeMap<StableKeyId, SemanticNodeId>,
     /// pre-sort SemanticNodeId (as index) -> node stable key, the O(1) reverse of
     /// `node_by_key` so `node_key_for` (called twice per edge) never linear-scans.
-    key_by_node: Vec<String>,
+    key_by_node: Vec<StableKeyId>,
 }
 
 impl GraphBuilder {
@@ -398,23 +398,24 @@ impl GraphBuilder {
         kind: NodeKind,
         stable_key: String,
     ) -> SemanticNodeId {
+        let stable_key = interner.intern(stable_key);
         if let Some(&id) = self.node_by_key.get(&stable_key) {
             return id;
         }
         let id = SemanticNodeId(self.next_node);
         self.next_node += 1;
-        self.node_by_key.insert(stable_key.clone(), id);
+        self.node_by_key.insert(stable_key, id);
         // key_by_node is index-aligned with the sequential pre-sort id, so id.0 ==
         // key_by_node.len() at the moment of the push.
         debug_assert_eq!(id.0 as usize, self.key_by_node.len());
-        self.key_by_node.push(stable_key.clone());
+        self.key_by_node.push(stable_key);
         self.nodes.push(SemanticNodeFact {
             id,
             kind,
             // Conservative: graph rows are derived/aggregated, never `ResolvedStatic`
             // (the Exact-equivalent ceiling). Plan 03 validates the ceiling.
             precision: SemanticPrecision::Conservative,
-            stable_key: interner.intern(stable_key),
+            stable_key,
         });
         id
     }
@@ -437,8 +438,8 @@ impl GraphBuilder {
                 FactFamily::Reference,
                 &[
                     ("edge_kind", kind.as_str().to_string()),
-                    ("source", source_key),
-                    ("target", target_key),
+                    ("source", interner.resolve(source_key).to_string()),
+                    ("target", interner.resolve(target_key).to_string()),
                 ],
             )
             .into_string(),
@@ -485,10 +486,10 @@ impl GraphBuilder {
     /// index-aligned `key_by_node` sidecar. `push_edge` only ever receives ids
     /// returned by `intern_node`, so the index is always in range; an out-of-range
     /// id is a builder invariant violation, not an expected empty-key fallback.
-    fn node_key_for(&self, id: SemanticNodeId) -> String {
+    fn node_key_for(&self, id: SemanticNodeId) -> StableKeyId {
         self.key_by_node
             .get(id.0 as usize)
-            .cloned()
+            .copied()
             .expect("edge endpoint must reference an interned node")
     }
 
@@ -524,7 +525,7 @@ impl GraphBuilder {
         function: &crate::core::FunctionFact,
     ) -> Option<SemanticNodeId> {
         let key = function_node_key(interner, db, function);
-        self.node_by_key.get(&key).copied()
+        self.node_by_key.get(&interner.intern(key)).copied()
     }
 
     // -- call edges + call constraints --------------------------------------
@@ -546,7 +547,7 @@ impl GraphBuilder {
         for site in db.call_sites() {
             let site_key =
                 node_key_from_identity(interner, "callsite", &interner.resolve(site.stable_key));
-            let Some(&callsite_node) = self.node_by_key.get(&site_key) else {
+            let Some(&callsite_node) = self.node_by_key.get(&interner.intern(site_key)) else {
                 continue;
             };
             // Call edge: caller function node -> callsite node, only where the caller
@@ -810,7 +811,7 @@ impl GraphBuilder {
                 "callsite",
                 &interner.resolve(core_callsite.stable_key),
             );
-            let Some(&callsite_node) = self.node_by_key.get(&site_key) else {
+            let Some(&callsite_node) = self.node_by_key.get(&interner.intern(site_key)) else {
                 continue;
             };
             self.push_constraint(
@@ -850,8 +851,8 @@ impl GraphBuilder {
         for accepted in adaptation_models.accepted() {
             let fact = &accepted.fact;
             let (Some(&source), Some(&target)) = (
-                self.node_by_key.get(&fact.source_pattern),
-                self.node_by_key.get(&fact.target_pattern),
+                self.node_by_key.get(&interner.intern(&fact.source_pattern)),
+                self.node_by_key.get(&interner.intern(&fact.target_pattern)),
             ) else {
                 continue;
             };
@@ -882,7 +883,9 @@ impl GraphBuilder {
             .iter()
             .filter_map(|package| {
                 let key = package_node_key(db, package);
-                self.node_by_key.get(&key).map(|&id| (package.id, id))
+                self.node_by_key
+                    .get(&interner.intern(key))
+                    .map(|&id| (package.id, id))
             })
             .collect();
 
@@ -892,7 +895,7 @@ impl GraphBuilder {
             };
             let scope_key =
                 node_key_from_identity(interner, "scope", &interner.resolve(scope.stable_key));
-            let Some(&scope_node) = self.node_by_key.get(&scope_key) else {
+            let Some(&scope_node) = self.node_by_key.get(&interner.intern(scope_key)) else {
                 continue;
             };
             if let Some(&package_node) = pkg_node.get(&package_id) {
@@ -1650,7 +1653,7 @@ impl<'a> TsDirectBindingNodeContext<'a> {
                     "callsite",
                     &interner.resolve(site.stable_key),
                 );
-                let node = builder.node_by_key.get(&key).copied()?;
+                let node = builder.node_by_key.get(&interner.intern(key)).copied()?;
                 Some(((site.file, site.span.start_byte, site.span.end_byte), node))
             })
             .collect();
@@ -1659,7 +1662,7 @@ impl<'a> TsDirectBindingNodeContext<'a> {
             BTreeMap::<(FileId, u32, u32), Vec<(String, SemanticNodeId)>>::new();
         for function in db.functions() {
             let key = function_node_key(interner, db, function);
-            let Some(node) = builder.node_by_key.get(&key).copied() else {
+            let Some(node) = builder.node_by_key.get(&interner.intern(key)).copied() else {
                 continue;
             };
             function_nodes_by_location
