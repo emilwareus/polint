@@ -39,7 +39,8 @@ pub(crate) struct EvidenceDebugStatuses {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct EvidenceDebugOmittedRegion {
-    pub(crate) stable_key: String,
+    #[serde(rename = "stable_key")]
+    pub(crate) stable_key_text: String,
     pub(crate) reason: String,
     pub(crate) hidden_node_count: u32,
     pub(crate) hidden_edge_count: u32,
@@ -105,13 +106,13 @@ pub(crate) fn evidence_debug_report(
         .omitted_regions()
         .iter()
         .map(|region| EvidenceDebugOmittedRegion {
-            stable_key: interner.resolve(region.stable_key).to_string(),
+            stable_key_text: interner.resolve(region.stable_key).to_string(),
             reason: format!("{:?}", region.reason),
             hidden_node_count: region.hidden_node_count,
             hidden_edge_count: region.hidden_edge_count,
         })
         .collect::<Vec<_>>();
-    omitted_regions.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    omitted_regions.sort_by(|left, right| left.stable_key_text.cmp(&right.stable_key_text));
 
     let budget_caps =
         store

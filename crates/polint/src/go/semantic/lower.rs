@@ -217,7 +217,7 @@ fn lower_dynamic_dispatch(
         package_id: row.package_id.clone(),
         package_path: row.package_path.clone(),
         caller: row.caller.clone(),
-        callsite_stable_key: interner.intern(row.callsite_stable_key.clone()),
+        callsite_stable_key: interner.intern(row.callsite_stable_key_text.clone()),
         interface_type: non_empty(row.interface_type.as_str()),
         method: non_empty(row.method.as_str()),
         signature: non_empty(row.signature.as_str()),
@@ -306,7 +306,7 @@ fn harvest_stable_key(
     interner: &crate::core::StableKeyInterner,
     row: &GoSemanticRawFrame,
 ) -> crate::core::StableKeyId {
-    interner.intern(row.stable_key.clone())
+    interner.intern(row.stable_key_text.clone())
 }
 
 fn row_stable_key(
@@ -314,8 +314,8 @@ fn row_stable_key(
     row: &GoSemanticRawFrame,
     kind: &str,
 ) -> crate::core::StableKeyId {
-    if !row.stable_key.is_empty() {
-        return interner.intern(row.stable_key.clone());
+    if !row.stable_key_text.is_empty() {
+        return interner.intern(row.stable_key_text.clone());
     }
     interner.intern(
         semantic_stable_key(

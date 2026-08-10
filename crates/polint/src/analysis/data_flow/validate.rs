@@ -9,7 +9,7 @@ use super::store::DataFlowOutput;
 )]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DataFlowValidationIssue {
-    pub(crate) stable_key: String,
+    pub(crate) stable_key_text: String,
     pub(crate) reason: String,
 }
 
@@ -42,7 +42,7 @@ pub(crate) fn validate_output(
     for node in &output.nodes {
         if !stable_keys.insert(("node", node.stable_key)) {
             issues.push(DataFlowValidationIssue {
-                stable_key: interner.resolve(node.stable_key).to_string(),
+                stable_key_text: interner.resolve(node.stable_key).to_string(),
                 reason: "duplicate node stable key".to_string(),
             });
         }
@@ -50,13 +50,13 @@ pub(crate) fn validate_output(
     for edge in &output.edges {
         if !stable_keys.insert(("edge", edge.stable_key)) {
             issues.push(DataFlowValidationIssue {
-                stable_key: interner.resolve(edge.stable_key).to_string(),
+                stable_key_text: interner.resolve(edge.stable_key).to_string(),
                 reason: "duplicate edge stable key".to_string(),
             });
         }
         if !nodes.contains(&edge.from) || !nodes.contains(&edge.to) {
             issues.push(DataFlowValidationIssue {
-                stable_key: interner.resolve(edge.stable_key).to_string(),
+                stable_key_text: interner.resolve(edge.stable_key).to_string(),
                 reason: "dangling edge endpoint".to_string(),
             });
         }
@@ -67,13 +67,13 @@ pub(crate) fn validate_output(
                 .all(|key| key.trim().is_empty())
         {
             issues.push(DataFlowValidationIssue {
-                stable_key: interner.resolve(edge.stable_key).to_string(),
+                stable_key_text: interner.resolve(edge.stable_key).to_string(),
                 reason: "summary-projected edge missing summary stable-key evidence".to_string(),
             });
         }
         if edge.status == DataFlowStatus::BudgetExceeded && edge.budget.is_none() {
             issues.push(DataFlowValidationIssue {
-                stable_key: interner.resolve(edge.stable_key).to_string(),
+                stable_key_text: interner.resolve(edge.stable_key).to_string(),
                 reason: "budget-exceeded edge missing budget row".to_string(),
             });
         }
@@ -81,7 +81,7 @@ pub(crate) fn validate_output(
             && !budgets.contains(&budget)
         {
             issues.push(DataFlowValidationIssue {
-                stable_key: interner.resolve(edge.stable_key).to_string(),
+                stable_key_text: interner.resolve(edge.stable_key).to_string(),
                 reason: "edge references missing budget row".to_string(),
             });
         }
@@ -91,7 +91,7 @@ pub(crate) fn validate_output(
         ) && edge.evidence.is_empty()
         {
             issues.push(DataFlowValidationIssue {
-                stable_key: interner.resolve(edge.stable_key).to_string(),
+                stable_key_text: interner.resolve(edge.stable_key).to_string(),
                 reason: "uncertainty edge missing evidence".to_string(),
             });
         }
@@ -101,7 +101,7 @@ pub(crate) fn validate_output(
             && model.validation == DataFlowValidation::Rejected
         {
             issues.push(DataFlowValidationIssue {
-                stable_key: interner.resolve(model.stable_key).to_string(),
+                stable_key_text: interner.resolve(model.stable_key).to_string(),
                 reason: "present model cannot be rejected".to_string(),
             });
         }
@@ -111,7 +111,7 @@ pub(crate) fn validate_output(
             && !models.contains(&model)
         {
             issues.push(DataFlowValidationIssue {
-                stable_key: interner.resolve(node.stable_key).to_string(),
+                stable_key_text: interner.resolve(node.stable_key).to_string(),
                 reason: "node references missing model".to_string(),
             });
         }

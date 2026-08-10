@@ -26,7 +26,7 @@ pub(crate) fn data_flow_debug_json_for_test(db: &AnalysisDb) -> Value {
             .iter()
             .map(|node| DataFlowNodeDebugRow {
                 family: "DataFlowNode",
-                stable_key: db.resolve_stable_key(node.stable_key).to_string(),
+                stable_key_text: db.resolve_stable_key(node.stable_key).to_string(),
                 producer_id: "polint.data_flow",
                 kind: format!("{:?}", node.kind),
                 status: "present".to_string(),
@@ -42,7 +42,7 @@ pub(crate) fn data_flow_debug_json_for_test(db: &AnalysisDb) -> Value {
             .iter()
             .map(|edge| DataFlowEdgeDebugRow {
                 family: "DataFlowEdge",
-                stable_key: db.resolve_stable_key(edge.stable_key).to_string(),
+                stable_key_text: db.resolve_stable_key(edge.stable_key).to_string(),
                 producer_id: "polint.data_flow",
                 kind: format!("{:?}", edge.kind),
                 algorithm: format!("{:?}", edge.algorithm),
@@ -59,7 +59,7 @@ pub(crate) fn data_flow_debug_json_for_test(db: &AnalysisDb) -> Value {
             .iter()
             .map(|model| DataFlowModelDebugRow {
                 family: "DataFlowModel",
-                stable_key: db.resolve_stable_key(model.stable_key).to_string(),
+                stable_key_text: db.resolve_stable_key(model.stable_key).to_string(),
                 producer_id: "polint.data_flow",
                 kind: format!("{:?}", model.kind),
                 status: format!("{:?}", model.status),
@@ -72,7 +72,7 @@ pub(crate) fn data_flow_debug_json_for_test(db: &AnalysisDb) -> Value {
             .iter()
             .map(|budget| DataFlowBudgetDebugRow {
                 family: "DataFlowBudget",
-                stable_key: db.resolve_stable_key(budget.stable_key).to_string(),
+                stable_key_text: db.resolve_stable_key(budget.stable_key).to_string(),
                 producer_id: "polint.data_flow",
                 reason: format!("{:?}", budget.reason),
                 limit: budget.limit,
@@ -135,7 +135,8 @@ struct DataFlowDebugReport {
 #[derive(Serialize)]
 struct DataFlowNodeDebugRow {
     family: &'static str,
-    stable_key: String,
+    #[serde(rename = "stable_key")]
+    stable_key_text: String,
     producer_id: &'static str,
     kind: String,
     status: String,
@@ -146,7 +147,8 @@ struct DataFlowNodeDebugRow {
 #[derive(Serialize)]
 struct DataFlowEdgeDebugRow {
     family: &'static str,
-    stable_key: String,
+    #[serde(rename = "stable_key")]
+    stable_key_text: String,
     producer_id: &'static str,
     kind: String,
     algorithm: String,
@@ -161,7 +163,8 @@ struct DataFlowEdgeDebugRow {
 #[derive(Serialize)]
 struct DataFlowModelDebugRow {
     family: &'static str,
-    stable_key: String,
+    #[serde(rename = "stable_key")]
+    stable_key_text: String,
     producer_id: &'static str,
     kind: String,
     status: String,
@@ -172,7 +175,8 @@ struct DataFlowModelDebugRow {
 #[derive(Serialize)]
 struct DataFlowBudgetDebugRow {
     family: &'static str,
-    stable_key: String,
+    #[serde(rename = "stable_key")]
+    stable_key_text: String,
     producer_id: &'static str,
     reason: String,
     limit: u64,

@@ -74,7 +74,8 @@ pub(crate) struct ExtensionProtocolEvidence {
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) struct ExtensionFactCandidateWire {
     pub(crate) fact_family: String,
-    pub(crate) stable_key: String,
+    #[serde(rename = "stable_key")]
+    pub(crate) stable_key_text: String,
     pub(crate) binding_refs: Vec<String>,
     #[serde(default)]
     pub(crate) span: Option<ExtensionSpanWire>,

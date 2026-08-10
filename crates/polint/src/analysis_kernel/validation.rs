@@ -136,7 +136,7 @@ fn validate_data_flow(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
     for issue in validate_data_flow_output(&output, &db.stable_key_interner()) {
         diagnostics.push(internal_diagnostic(format!(
             "Data-flow validation issue for `{}`: {}",
-            issue.stable_key, issue.reason
+            issue.stable_key_text, issue.reason
         )));
     }
 }

@@ -64,8 +64,8 @@ pub(crate) struct GoSemanticRawFrame {
     pub(crate) qualified: String,
     #[serde(default)]
     pub(crate) signature: String,
-    #[serde(default)]
-    pub(crate) stable_key: String,
+    #[serde(default, rename = "stable_key")]
+    pub(crate) stable_key_text: String,
     #[serde(default)]
     pub(crate) receiver: String,
     #[serde(default)]
@@ -90,8 +90,8 @@ pub(crate) struct GoSemanticRawFrame {
     pub(crate) function: String,
     #[serde(default)]
     pub(crate) interface_type: String,
-    #[serde(default)]
-    pub(crate) callsite_stable_key: String,
+    #[serde(default, rename = "callsite_stable_key")]
+    pub(crate) callsite_stable_key_text: String,
     #[serde(default)]
     pub(crate) message: String,
     #[serde(default)]

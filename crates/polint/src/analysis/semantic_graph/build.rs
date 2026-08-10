@@ -417,9 +417,9 @@ impl GraphBuilder {
         &mut self,
         interner: &crate::core::StableKeyInterner,
         kind: NodeKind,
-        stable_key: String,
+        stable_key_text: String,
     ) -> SemanticNodeId {
-        let stable_key = interner.intern(stable_key);
+        let stable_key = interner.intern(stable_key_text);
         if let Some(&id) = self.node_by_key.get(&stable_key) {
             return id;
         }
@@ -670,11 +670,12 @@ impl GraphBuilder {
         flow: &TsTokenSourceFlow,
         context: &TsDirectBindingNodeContext<'_>,
     ) {
-        let Some(source_node) = context.function_node_for_binding(&flow.source_function_stable_key)
+        let Some(source_node) =
+            context.function_node_for_binding(&flow.source_function_stable_key_text)
         else {
             return;
         };
-        let Some(callsite_node) = context.callsite_node_for_binding(&flow.callsite_stable_key)
+        let Some(callsite_node) = context.callsite_node_for_binding(&flow.callsite_stable_key_text)
         else {
             return;
         };
@@ -684,7 +685,7 @@ impl GraphBuilder {
                 dst: callsite_node,
                 src: source_node,
             },
-            &flow.stable_key,
+            &flow.stable_key_text,
         );
     }
 
@@ -1029,9 +1030,9 @@ fn direct_binding_emits_copy_edge(kind: TsDirectBindingKind) -> bool {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct TsTokenSourceFlow {
-    source_function_stable_key: String,
-    callsite_stable_key: String,
-    stable_key: String,
+    source_function_stable_key_text: String,
+    callsite_stable_key_text: String,
+    stable_key_text: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1051,7 +1052,7 @@ impl TsTokenSourceFlowKind {
 
 #[derive(Debug, Clone)]
 struct TsFunctionInventoryRef {
-    stable_key: String,
+    stable_key_text: String,
     display_name: Option<String>,
 }
 
@@ -1123,14 +1124,14 @@ impl TsTokenSourceFlowIndex {
         for function in &inventory.functions {
             let key = (function.span.start_byte, function.span.end_byte);
             let reference = TsFunctionInventoryRef {
-                stable_key: interner.resolve(function.stable_key).to_string(),
+                stable_key_text: interner.resolve(function.stable_key).to_string(),
                 display_name: function.display_name.clone(),
             };
             if let Some(display_name) = &reference.display_name {
                 insert_unique(
                     &mut index.unique_function_key_by_name,
                     display_name.clone(),
-                    reference.stable_key.clone(),
+                    reference.stable_key_text.clone(),
                 );
             }
             index.function_by_span.insert(key, reference);
@@ -1421,7 +1422,7 @@ impl TsTokenSourceFlowIndex {
                 .or_else(|| {
                     self.function_by_span
                         .get(&(function.span.start, function.span.end))
-                        .map(|reference| reference.stable_key.clone())
+                        .map(|reference| reference.stable_key_text.clone())
                 }),
             Expression::ParenthesizedExpression(expression) => {
                 self.function_key_from_return_argument(enclosing_function, &expression.expression)
@@ -1492,9 +1493,9 @@ fn ts_token_source_flow(
     evidence: &str,
 ) -> TsTokenSourceFlow {
     TsTokenSourceFlow {
-        source_function_stable_key: source_function_stable_key.to_string(),
-        callsite_stable_key: callsite_stable_key.to_string(),
-        stable_key: semantic_stable_key(
+        source_function_stable_key_text: source_function_stable_key.to_string(),
+        callsite_stable_key_text: callsite_stable_key.to_string(),
+        stable_key_text: semantic_stable_key(
             interner,
             FactFamily::PointsToConstraint,
             &[

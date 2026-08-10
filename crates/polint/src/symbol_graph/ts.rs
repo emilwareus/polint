@@ -829,7 +829,7 @@ fn add_alias_row(
     interner: &crate::core::StableKeyInterner,
     builder: &mut SemanticIndexBuilder,
     file: &SourceFile,
-    source_symbol_stable_key: String,
+    source_symbol_stable_key_text: String,
     target_symbol_stable_keys: Vec<String>,
     kind: AliasKind,
     status: SemanticStatus,
@@ -837,7 +837,7 @@ fn add_alias_row(
     let stable_key = ts_alias_stable_key(
         interner,
         file,
-        &source_symbol_stable_key,
+        &source_symbol_stable_key_text,
         &target_symbol_stable_keys,
         kind,
         status,
@@ -850,7 +850,7 @@ fn add_alias_row(
             file: Some(file.id),
             package: None,
             module: None,
-            source_symbol_stable_key: interner.intern(source_symbol_stable_key),
+            source_symbol_stable_key: interner.intern(source_symbol_stable_key_text),
             target_symbol_stable_keys: target_symbol_stable_keys
                 .into_iter()
                 .map(|key| interner.intern(key))
@@ -866,7 +866,7 @@ fn add_resolution_row(
     interner: &crate::core::StableKeyInterner,
     builder: &mut SemanticIndexBuilder,
     file: &SourceFile,
-    source_stable_key: String,
+    source_stable_key_text: String,
     target_stable_keys: Vec<String>,
     step: ResolutionStepKind,
     status: SemanticStatus,
@@ -874,7 +874,7 @@ fn add_resolution_row(
     let stable_key = ts_resolution_stable_key(
         interner,
         file,
-        &source_stable_key,
+        &source_stable_key_text,
         &target_stable_keys,
         step,
         status,
@@ -887,7 +887,7 @@ fn add_resolution_row(
             file: Some(file.id),
             package: None,
             module: None,
-            source_stable_key: interner.intern(source_stable_key),
+            source_stable_key: interner.intern(source_stable_key_text),
             target_stable_keys: target_stable_keys
                 .into_iter()
                 .map(|key| interner.intern(key))

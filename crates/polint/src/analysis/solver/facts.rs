@@ -67,7 +67,8 @@ pub(crate) struct DerivedEdgeStablePayload {
     pub(crate) target: SemanticNodeId,
     pub(crate) status: PointsToStatus,
     pub(crate) precision: PointsToPrecision,
-    pub(crate) stable_key: String,
+    #[serde(rename = "stable_key")]
+    pub(crate) stable_key_text: String,
     pub(crate) provenance: DerivedEdgeProvenanceStablePayload,
 }
 
@@ -85,7 +86,7 @@ impl DerivedEdgeFact {
             target: self.target,
             status: self.status,
             precision: self.precision,
-            stable_key: interner.resolve(self.stable_key).to_string(),
+            stable_key_text: interner.resolve(self.stable_key).to_string(),
             provenance: self.provenance.stable_payload(interner),
         }
     }

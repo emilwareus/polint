@@ -47,14 +47,16 @@ struct SemanticGraphCounts {
 struct NodeRow {
     kind: String,
     precision: String,
-    stable_key: String,
+    #[serde(rename = "stable_key")]
+    stable_key_text: String,
 }
 
 #[derive(Serialize)]
 struct EdgeRow {
     kind: String,
     precision: String,
-    stable_key: String,
+    #[serde(rename = "stable_key")]
+    stable_key_text: String,
 }
 
 #[derive(Serialize)]
@@ -63,7 +65,8 @@ struct ConstraintRow {
     status: String,
     source: String,
     referenced_nodes: Vec<u64>,
-    stable_key: String,
+    #[serde(rename = "stable_key")]
+    stable_key_text: String,
 }
 
 fn counts(db: &AnalysisDb) -> SemanticGraphCounts {
@@ -93,10 +96,10 @@ fn node_rows(db: &AnalysisDb) -> Vec<NodeRow> {
         .map(|node: &SemanticNodeFact| NodeRow {
             kind: node.kind.as_str().to_string(),
             precision: node.precision.as_str().to_string(),
-            stable_key: interner.resolve(node.stable_key).to_string(),
+            stable_key_text: interner.resolve(node.stable_key).to_string(),
         })
         .collect();
-    rows.sort_by(|a, b| a.stable_key.cmp(&b.stable_key));
+    rows.sort_by(|a, b| a.stable_key_text.cmp(&b.stable_key_text));
     rows
 }
 
@@ -108,10 +111,10 @@ fn edge_rows(db: &AnalysisDb) -> Vec<EdgeRow> {
         .map(|edge: &SemanticEdgeFact| EdgeRow {
             kind: edge.kind.as_str().to_string(),
             precision: edge.precision.as_str().to_string(),
-            stable_key: interner.resolve(edge.stable_key).to_string(),
+            stable_key_text: interner.resolve(edge.stable_key).to_string(),
         })
         .collect();
-    rows.sort_by(|a, b| a.stable_key.cmp(&b.stable_key));
+    rows.sort_by(|a, b| a.stable_key_text.cmp(&b.stable_key_text));
     rows
 }
 
@@ -137,10 +140,10 @@ fn constraint_rows(db: &AnalysisDb) -> Vec<ConstraintRow> {
                 .into_iter()
                 .map(|node| node.0)
                 .collect(),
-            stable_key: interner.resolve(constraint.stable_key).to_string(),
+            stable_key_text: interner.resolve(constraint.stable_key).to_string(),
         })
         .collect();
-    rows.sort_by(|a, b| a.stable_key.cmp(&b.stable_key));
+    rows.sort_by(|a, b| a.stable_key_text.cmp(&b.stable_key_text));
     rows
 }
 

@@ -2463,7 +2463,7 @@ fn explain(root: PathBuf, args: &ExplainArgs) -> Result<u8> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DerivedEdgeProvenanceView {
     /// The derived edge's stable key.
-    pub(crate) edge_stable_key: String,
+    pub(crate) edge_stable_key_text: String,
     /// The contributing fact stable keys, totally ordered by stable ID (D-08).
     pub(crate) contributing_fact_keys: Vec<String>,
     /// The producing constraint kind (`ConstraintKind::as_str()` label).
@@ -2496,7 +2496,7 @@ pub(crate) fn explain_derived_edge_provenance(
         .iter()
         .find(|edge| interner.resolve(edge.stable_key).as_ref() == edge_stable_key)
         .map(|edge| DerivedEdgeProvenanceView {
-            edge_stable_key: interner.resolve(edge.stable_key).to_string(),
+            edge_stable_key_text: interner.resolve(edge.stable_key).to_string(),
             contributing_fact_keys: edge
                 .provenance
                 .contributing_facts

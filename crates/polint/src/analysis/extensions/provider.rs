@@ -377,7 +377,7 @@ fn extension_candidate_from_wire(
         extension_id: extension_id.to_string(),
         provider_id: provider_id.to_string(),
         fact_family: fact.fact_family,
-        stable_key: db.stable_key_interner().intern(fact.stable_key),
+        stable_key: db.stable_key_interner().intern(fact.stable_key_text),
         binding_refs: fact.binding_refs,
         span,
         precision: parse_precision(&fact.precision),
@@ -541,7 +541,7 @@ mod tests {
             "routes",
             ExtensionFactCandidateWire {
                 fact_family: "extension.routes".to_string(),
-                stable_key: "route:/a".to_string(),
+                stable_key_text: "route:/a".to_string(),
                 binding_refs: Vec::new(),
                 span: Some(ExtensionSpanWire {
                     relative_path: "src/app.ts".to_string(),

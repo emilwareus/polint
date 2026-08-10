@@ -72,7 +72,8 @@ impl ContributingFact {
 /// Resolved-text wire/cache payload for one contributing fact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct ContributingFactStablePayload {
-    pub(crate) stable_key: String,
+    #[serde(rename = "stable_key")]
+    pub(crate) stable_key_text: String,
 }
 
 /// Full provenance for one solver-derived edge (GRAPH-04, D-08).
@@ -167,7 +168,7 @@ impl DerivedEdgeProvenance {
                 .contributing_facts
                 .iter()
                 .map(|fact| ContributingFactStablePayload {
-                    stable_key: interner.resolve(fact.stable_key).to_string(),
+                    stable_key_text: interner.resolve(fact.stable_key).to_string(),
                 })
                 .collect(),
             constraint_kind: self.constraint_kind.clone(),

@@ -194,7 +194,8 @@ struct SemanticDebugReport {
 struct SemanticDebugRow {
     family: &'static str,
     run_id: u64,
-    stable_key: String,
+    #[serde(rename = "stable_key")]
+    stable_key_text: String,
     producer_id: &'static str,
     layer_id: &'static str,
     status: &'static str,
@@ -292,7 +293,8 @@ struct ExtensionFactDebugRow {
     extension_id: String,
     provider_id: String,
     fact_family: String,
-    stable_key: String,
+    #[serde(rename = "stable_key")]
+    stable_key_text: String,
     precision: String,
     confidence: String,
     evidence_count: usize,
@@ -304,7 +306,8 @@ struct ExtensionRejectedDebugRow {
     extension_id: String,
     provider_id: String,
     fact_family: String,
-    stable_key: String,
+    #[serde(rename = "stable_key")]
+    stable_key_text: String,
     reason: String,
     evidence_count: usize,
 }
@@ -402,7 +405,8 @@ struct SummaryCounts {
 #[derive(Serialize)]
 struct AbstractDomainMetadata {
     family: &'static str,
-    stable_key: String,
+    #[serde(rename = "stable_key")]
+    stable_key_text: String,
     producer_id: &'static str,
     layer_id: &'static str,
     status: String,
@@ -449,7 +453,8 @@ struct CallDebugCounts {
 #[derive(Serialize)]
 struct CallDebugMetadata {
     family: &'static str,
-    stable_key: String,
+    #[serde(rename = "stable_key")]
+    stable_key_text: String,
     producer_id: &'static str,
     layer_id: &'static str,
     status: String,
@@ -496,7 +501,8 @@ struct UnresolvedCallDebugRow {
 struct CfgDebugRow {
     family: &'static str,
     run_id: u64,
-    stable_key: String,
+    #[serde(rename = "stable_key")]
+    stable_key_text: String,
     producer_id: &'static str,
     layer_id: &'static str,
     status: &'static str,
@@ -512,7 +518,8 @@ struct CfgDebugRow {
 struct SemanticMirDebugRow {
     family: &'static str,
     run_id: u64,
-    stable_key: String,
+    #[serde(rename = "stable_key")]
+    stable_key_text: String,
     producer_id: &'static str,
     layer_id: &'static str,
     status: String,
@@ -859,7 +866,7 @@ fn mir_body_rows(db: &AnalysisDb) -> Vec<SemanticMirDebugRow> {
                 SemanticMirDebugRow {
                     family: FactFamily::MirBody.label(),
                     run_id: body.id.0,
-                    stable_key: db.resolve_stable_key(body.stable_key).to_string(),
+                    stable_key_text: db.resolve_stable_key(body.stable_key).to_string(),
                     producer_id: metadata.producer_id,
                     layer_id: metadata.layer_id,
                     status: mir_status_label(body.status).to_string(),
@@ -893,7 +900,7 @@ fn mir_operation_rows(db: &AnalysisDb) -> Vec<SemanticMirDebugRow> {
                 SemanticMirDebugRow {
                     family: FactFamily::MirOperation.label(),
                     run_id: operation.id.0,
-                    stable_key: db.resolve_stable_key(operation.stable_key).to_string(),
+                    stable_key_text: db.resolve_stable_key(operation.stable_key).to_string(),
                     producer_id: metadata.producer_id,
                     layer_id: metadata.layer_id,
                     status: mir_status_label(operation.status).to_string(),
@@ -925,7 +932,7 @@ fn mir_place_rows(db: &AnalysisDb) -> Vec<SemanticMirDebugRow> {
                 SemanticMirDebugRow {
                     family: FactFamily::Place.label(),
                     run_id: place.id.0,
-                    stable_key: db.resolve_stable_key(place.stable_key).to_string(),
+                    stable_key_text: db.resolve_stable_key(place.stable_key).to_string(),
                     producer_id: metadata.producer_id,
                     layer_id: metadata.layer_id,
                     status: place_status_label(place.status).to_string(),
@@ -959,7 +966,7 @@ fn mir_unsupported_rows(db: &AnalysisDb) -> Vec<SemanticMirDebugRow> {
                 SemanticMirDebugRow {
                     family: FactFamily::UnsupportedSemantic.label(),
                     run_id: row.id.0,
-                    stable_key: db.resolve_stable_key(row.stable_key).to_string(),
+                    stable_key_text: db.resolve_stable_key(row.stable_key).to_string(),
                     producer_id: metadata.producer_id,
                     layer_id: metadata.layer_id,
                     status: mir_status_label(row.status).to_string(),
@@ -1109,7 +1116,7 @@ fn abstract_domain_metadata_row(
     let meta = db.metadata_for(FactRef::new(family, run_id))?;
     Some(AbstractDomainMetadata {
         family: family.label(),
-        stable_key: stable_key.to_string(),
+        stable_key_text: stable_key.to_string(),
         producer_id: meta.producer_id,
         layer_id: meta.layer_id,
         status: status.to_string(),
@@ -1123,7 +1130,7 @@ fn abstract_domain_metadata_order(row: &AbstractDomainMetadata) -> (&str, u32, &
     (
         row.path.as_deref().unwrap_or(""),
         span_start(row.span),
-        row.stable_key.as_str(),
+        row.stable_key_text.as_str(),
     )
 }
 
@@ -1351,14 +1358,14 @@ fn extensions_report(db: &AnalysisDb) -> ExtensionDebugReport {
             extension_id: fact.extension_id.clone(),
             provider_id: fact.provider_id.clone(),
             fact_family: fact.fact_family.clone(),
-            stable_key: interner.resolve(fact.stable_key).to_string(),
+            stable_key_text: interner.resolve(fact.stable_key).to_string(),
             precision: format!("{:?}", fact.precision),
             confidence: format!("{:?}", fact.confidence),
             evidence_count: fact.evidence.len(),
             payload_digest: fact.payload_digest.clone(),
         })
         .collect::<Vec<_>>();
-    accepted.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    accepted.sort_by(|left, right| left.stable_key_text.cmp(&right.stable_key_text));
 
     let mut rejected = db
         .rejected_extension_facts()
@@ -1367,12 +1374,12 @@ fn extensions_report(db: &AnalysisDb) -> ExtensionDebugReport {
             extension_id: fact.extension_id.clone(),
             provider_id: fact.provider_id.clone(),
             fact_family: fact.fact_family.clone(),
-            stable_key: interner.resolve(fact.stable_key).to_string(),
+            stable_key_text: interner.resolve(fact.stable_key).to_string(),
             reason: format!("{:?}", fact.reason),
             evidence_count: fact.evidence.len(),
         })
         .collect::<Vec<_>>();
-    rejected.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    rejected.sort_by(|left, right| left.stable_key_text.cmp(&right.stable_key_text));
 
     ExtensionDebugReport {
         counts: ExtensionDebugCounts {
@@ -1601,7 +1608,7 @@ fn call_metadata_row(
     let meta = db.metadata_for(FactRef::new(family, run_id))?;
     Some(CallDebugMetadata {
         family: family.label(),
-        stable_key: stable_key.to_string(),
+        stable_key_text: stable_key.to_string(),
         producer_id: meta.producer_id,
         layer_id: meta.layer_id,
         status: status.to_string(),
@@ -1615,7 +1622,7 @@ fn call_metadata_order(row: &CallDebugMetadata) -> (&str, u32, &str) {
     (
         row.path.as_deref().unwrap_or(""),
         span_start(row.span),
-        row.stable_key.as_str(),
+        row.stable_key_text.as_str(),
     )
 }
 
@@ -1773,7 +1780,7 @@ fn cfg_function_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
             cfg_metadata_row(db, FactFamily::CfgFunction, row.id.0).map(|metadata| CfgDebugRow {
                 family: FactFamily::CfgFunction.label(),
                 run_id: row.id.0,
-                stable_key: db.resolve_stable_key(row.stable_key).to_string(),
+                stable_key_text: db.resolve_stable_key(row.stable_key).to_string(),
                 producer_id: metadata.producer_id,
                 layer_id: metadata.layer_id,
                 status: cfg_status_label(row.status),
@@ -1798,7 +1805,7 @@ fn cfg_node_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
             cfg_metadata_row(db, FactFamily::CfgNode, row.id.0).map(|metadata| CfgDebugRow {
                 family: FactFamily::CfgNode.label(),
                 run_id: row.id.0,
-                stable_key: db.resolve_stable_key(row.stable_key).to_string(),
+                stable_key_text: db.resolve_stable_key(row.stable_key).to_string(),
                 producer_id: metadata.producer_id,
                 layer_id: metadata.layer_id,
                 status: cfg_status_label(row.status),
@@ -1823,7 +1830,7 @@ fn cfg_block_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
             cfg_metadata_row(db, FactFamily::BasicBlock, row.id.0).map(|metadata| CfgDebugRow {
                 family: FactFamily::BasicBlock.label(),
                 run_id: row.id.0,
-                stable_key: db.resolve_stable_key(row.stable_key).to_string(),
+                stable_key_text: db.resolve_stable_key(row.stable_key).to_string(),
                 producer_id: metadata.producer_id,
                 layer_id: metadata.layer_id,
                 status: cfg_status_label(row.status),
@@ -1848,7 +1855,7 @@ fn cfg_edge_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
             cfg_metadata_row(db, FactFamily::CfgEdge, row.id.0).map(|metadata| CfgDebugRow {
                 family: FactFamily::CfgEdge.label(),
                 run_id: row.id.0,
-                stable_key: db.resolve_stable_key(row.stable_key).to_string(),
+                stable_key_text: db.resolve_stable_key(row.stable_key).to_string(),
                 producer_id: metadata.producer_id,
                 layer_id: metadata.layer_id,
                 status: cfg_status_label(row.status),
@@ -1873,7 +1880,7 @@ fn cfg_reachability_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
         cfg_metadata_row(db, FactFamily::CfgReachability, row.id.0).map(|metadata| CfgDebugRow {
             family: FactFamily::CfgReachability.label(),
             run_id: row.id.0,
-            stable_key: db.resolve_stable_key(row.stable_key).to_string(),
+            stable_key_text: db.resolve_stable_key(row.stable_key).to_string(),
             producer_id: metadata.producer_id,
             layer_id: metadata.layer_id,
             status: cfg_status_label(row.status),
@@ -1894,7 +1901,7 @@ fn cfg_dominator_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
         cfg_metadata_row(db, FactFamily::CfgDominator, row.id.0).map(|metadata| CfgDebugRow {
             family: FactFamily::CfgDominator.label(),
             run_id: row.id.0,
-            stable_key: db.resolve_stable_key(row.stable_key).to_string(),
+            stable_key_text: db.resolve_stable_key(row.stable_key).to_string(),
             producer_id: metadata.producer_id,
             layer_id: metadata.layer_id,
             status: cfg_status_label(row.status),
@@ -1915,7 +1922,7 @@ fn cfg_postdominator_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
         cfg_metadata_row(db, FactFamily::CfgPostDominator, row.id.0).map(|metadata| CfgDebugRow {
             family: FactFamily::CfgPostDominator.label(),
             run_id: row.id.0,
-            stable_key: db.resolve_stable_key(row.stable_key).to_string(),
+            stable_key_text: db.resolve_stable_key(row.stable_key).to_string(),
             producer_id: metadata.producer_id,
             layer_id: metadata.layer_id,
             status: cfg_status_label(row.status),
@@ -1936,7 +1943,7 @@ fn cfg_control_dependence_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
         cfg_metadata_row(db, FactFamily::CfgControlDependence, row.id.0).map(|metadata| CfgDebugRow {
             family: FactFamily::CfgControlDependence.label(),
             run_id: row.id.0,
-            stable_key: db.resolve_stable_key(row.stable_key).to_string(),
+            stable_key_text: db.resolve_stable_key(row.stable_key).to_string(),
             producer_id: metadata.producer_id,
             layer_id: metadata.layer_id,
             status: cfg_status_label(row.status),
@@ -1957,7 +1964,7 @@ fn cfg_unsupported_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
         cfg_metadata_row(db, FactFamily::UnsupportedControlFlow, row.id.0).map(|metadata| CfgDebugRow {
             family: FactFamily::UnsupportedControlFlow.label(),
             run_id: row.id.0,
-            stable_key: db.resolve_stable_key(row.stable_key).to_string(),
+            stable_key_text: db.resolve_stable_key(row.stable_key).to_string(),
             producer_id: metadata.producer_id,
             layer_id: metadata.layer_id,
             status: cfg_status_label(row.status),
@@ -2007,7 +2014,7 @@ fn semantic_row(
     Some(SemanticDebugRow {
         family: family.label(),
         run_id,
-        stable_key: stable_key.to_string(),
+        stable_key_text: stable_key.to_string(),
         producer_id: meta.producer_id,
         layer_id: meta.layer_id,
         status: semantic_status_label(status),
@@ -2039,7 +2046,7 @@ fn sort_semantic_rows(rows: &mut [SemanticDebugRow]) {
             left.name.as_deref().unwrap_or(""),
             left.export_name.as_deref().unwrap_or(""),
             left.status,
-            left.stable_key.as_str(),
+            left.stable_key_text.as_str(),
             left.run_id,
         )
             .cmp(&(
@@ -2048,7 +2055,7 @@ fn sort_semantic_rows(rows: &mut [SemanticDebugRow]) {
                 right.name.as_deref().unwrap_or(""),
                 right.export_name.as_deref().unwrap_or(""),
                 right.status,
-                right.stable_key.as_str(),
+                right.stable_key_text.as_str(),
                 right.run_id,
             ))
     });
@@ -2059,13 +2066,13 @@ fn sort_mir_rows(rows: &mut [SemanticMirDebugRow]) {
         (
             left.path.as_deref().unwrap_or(""),
             span_start(left.span),
-            left.stable_key.as_str(),
+            left.stable_key_text.as_str(),
             left.run_id,
         )
             .cmp(&(
                 right.path.as_deref().unwrap_or(""),
                 span_start(right.span),
-                right.stable_key.as_str(),
+                right.stable_key_text.as_str(),
                 right.run_id,
             ))
     });
@@ -2078,7 +2085,7 @@ fn sort_cfg_rows(rows: &mut [CfgDebugRow]) {
             span_start(left.span),
             left.function,
             left.view.unwrap_or(""),
-            left.stable_key.as_str(),
+            left.stable_key_text.as_str(),
             left.run_id,
         )
             .cmp(&(
@@ -2086,7 +2093,7 @@ fn sort_cfg_rows(rows: &mut [CfgDebugRow]) {
                 span_start(right.span),
                 right.function,
                 right.view.unwrap_or(""),
-                right.stable_key.as_str(),
+                right.stable_key_text.as_str(),
                 right.run_id,
             ))
     });

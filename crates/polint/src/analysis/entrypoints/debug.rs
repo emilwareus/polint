@@ -72,15 +72,18 @@ struct EntrypointDetailRow {
     trigger_summary: String,
     precision: String,
     status: String,
-    stable_key: String,
+    #[serde(rename = "stable_key")]
+    stable_key_text: String,
 }
 
 #[derive(Serialize)]
 struct TrustBoundaryDetailRow {
-    entrypoint_stable_key: String,
+    #[serde(rename = "entrypoint_stable_key")]
+    entrypoint_stable_key_text: String,
     source_kind: String,
     precision: String,
-    stable_key: String,
+    #[serde(rename = "stable_key")]
+    stable_key_text: String,
 }
 
 #[derive(Serialize)]
@@ -88,7 +91,8 @@ struct DispatchEdgeDetailRow {
     from_source: String,
     edge_kind: String,
     precision: String,
-    stable_key: String,
+    #[serde(rename = "stable_key")]
+    stable_key_text: String,
 }
 
 #[derive(Serialize)]
@@ -97,7 +101,8 @@ struct UnresolvedDetailRow {
     reason: String,
     evidence: String,
     relative_path: String,
-    stable_key: String,
+    #[serde(rename = "stable_key")]
+    stable_key_text: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -172,11 +177,11 @@ fn entrypoint_detail_rows(db: &AnalysisDb) -> Vec<EntrypointDetailRow> {
                 trigger_summary,
                 precision: precision_label(ep.precision).to_string(),
                 status: status_label(ep.status).to_string(),
-                stable_key: db.resolve_stable_key(ep.stable_key).to_string(),
+                stable_key_text: db.resolve_stable_key(ep.stable_key).to_string(),
             }
         })
         .collect();
-    rows.sort_by(|a, b| a.stable_key.cmp(&b.stable_key));
+    rows.sort_by(|a, b| a.stable_key_text.cmp(&b.stable_key_text));
     rows
 }
 
@@ -193,14 +198,14 @@ fn trust_boundary_detail_rows(db: &AnalysisDb) -> Vec<TrustBoundaryDetailRow> {
             };
 
             TrustBoundaryDetailRow {
-                entrypoint_stable_key: truncated_key,
+                entrypoint_stable_key_text: truncated_key,
                 source_kind: source_kind_label(tb.source_kind).to_string(),
                 precision: precision_label(tb.precision).to_string(),
-                stable_key: db.resolve_stable_key(tb.stable_key).to_string(),
+                stable_key_text: db.resolve_stable_key(tb.stable_key).to_string(),
             }
         })
         .collect();
-    rows.sort_by(|a, b| a.stable_key.cmp(&b.stable_key));
+    rows.sort_by(|a, b| a.stable_key_text.cmp(&b.stable_key_text));
     rows
 }
 
@@ -212,10 +217,10 @@ fn dispatch_edge_detail_rows(db: &AnalysisDb) -> Vec<DispatchEdgeDetailRow> {
             from_source: de.from_source.clone(),
             edge_kind: edge_kind_label(de.edge_kind).to_string(),
             precision: precision_label(de.precision).to_string(),
-            stable_key: db.resolve_stable_key(de.stable_key).to_string(),
+            stable_key_text: db.resolve_stable_key(de.stable_key).to_string(),
         })
         .collect();
-    rows.sort_by(|a, b| a.stable_key.cmp(&b.stable_key));
+    rows.sort_by(|a, b| a.stable_key_text.cmp(&b.stable_key_text));
     rows
 }
 
@@ -230,11 +235,11 @@ fn unresolved_detail_rows(db: &AnalysisDb) -> Vec<UnresolvedDetailRow> {
                 reason: unresolved_reason_label(uf.reason).to_string(),
                 evidence: uf.evidence.clone(),
                 relative_path,
-                stable_key: db.resolve_stable_key(uf.stable_key).to_string(),
+                stable_key_text: db.resolve_stable_key(uf.stable_key).to_string(),
             }
         })
         .collect();
-    rows.sort_by(|a, b| a.stable_key.cmp(&b.stable_key));
+    rows.sort_by(|a, b| a.stable_key_text.cmp(&b.stable_key_text));
     rows
 }
 

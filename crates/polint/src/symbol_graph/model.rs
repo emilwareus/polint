@@ -526,34 +526,34 @@ impl SymbolGraphBuilder {
         id
     }
 
-    fn insert_symbol(&mut self, stable_key: String, fact: SymbolFact) {
-        if let Some(existing) = self.symbols.get(&stable_key) {
+    fn insert_symbol(&mut self, stable_key_text: String, fact: SymbolFact) {
+        if let Some(existing) = self.symbols.get(&stable_key_text) {
             if !same_symbol_fact(existing, &fact) {
-                self.record_duplicate_diagnostic("symbol", fact.id.0, &stable_key);
+                self.record_duplicate_diagnostic("symbol", fact.id.0, &stable_key_text);
             }
             return;
         }
-        self.symbols.insert(stable_key, fact);
+        self.symbols.insert(stable_key_text, fact);
     }
 
-    fn insert_definition(&mut self, stable_key: String, fact: DefinitionFact) {
-        if let Some(existing) = self.definitions.get(&stable_key) {
+    fn insert_definition(&mut self, stable_key_text: String, fact: DefinitionFact) {
+        if let Some(existing) = self.definitions.get(&stable_key_text) {
             if !same_definition_fact(existing, &fact) {
-                self.record_duplicate_diagnostic("definition", fact.id.0, &stable_key);
+                self.record_duplicate_diagnostic("definition", fact.id.0, &stable_key_text);
             }
             return;
         }
-        self.definitions.insert(stable_key, fact);
+        self.definitions.insert(stable_key_text, fact);
     }
 
-    fn insert_reference(&mut self, stable_key: String, fact: ReferenceFact) {
-        if let Some(existing) = self.references.get(&stable_key) {
+    fn insert_reference(&mut self, stable_key_text: String, fact: ReferenceFact) {
+        if let Some(existing) = self.references.get(&stable_key_text) {
             if !same_reference_fact(existing, &fact) {
-                self.record_duplicate_diagnostic("reference", fact.id.0, &stable_key);
+                self.record_duplicate_diagnostic("reference", fact.id.0, &stable_key_text);
             }
             return;
         }
-        self.references.insert(stable_key, fact);
+        self.references.insert(stable_key_text, fact);
     }
 
     fn record_id_key(&mut self, family: IdFamily, id: u64, stable_key: &str) {
