@@ -4,9 +4,8 @@ use crate::analysis::entrypoints::facts::{
 use crate::analysis::entrypoints::provider::ENTRYPOINTS_PROVIDER_ID;
 use crate::analysis::ids::TrustBoundaryId;
 use crate::analysis::places::{PlaceFact, PlaceRoot};
-use crate::analysis::stable_key::semantic_stable_key;
-use crate::analysis_kernel::FactFamily;
-use crate::core::{AnalysisDb, Language};
+use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
+use crate::core::{AnalysisDb, Language, StableKeyId};
 
 /// Derive trust boundary facts from recognized entrypoints.
 ///
@@ -28,14 +27,14 @@ pub(crate) fn derive_trust_boundaries(
         for source_kind in source_kinds {
             let stable_key = trust_boundary_stable_key(
                 interner,
-                &entrypoint.stable_key,
+                entrypoint.stable_key,
                 source_kind,
                 entrypoint.language,
             );
 
             boundaries.push(TrustBoundaryFact {
                 id: TrustBoundaryId(0), // Reassigned during normalization
-                entrypoint_stable_key: entrypoint.stable_key.clone(),
+                entrypoint_stable_key: entrypoint.stable_key,
                 source_kind,
                 target_parameter: Some(entrypoint.target_function),
                 target_parameter_index: target_parameter_index_for_entrypoint(db, entrypoint),
@@ -51,7 +50,7 @@ pub(crate) fn derive_trust_boundaries(
         }
     }
 
-    boundaries.sort_by(|a, b| a.stable_key.cmp(&b.stable_key));
+    boundaries.sort_by_key(|boundary| interner.resolve(boundary.stable_key));
     boundaries
 }
 
@@ -273,20 +272,22 @@ fn protocol_for_kind(kind: EntrypointKind) -> Option<String> {
 /// semantic_stable_key(FactFamily::TrustBoundary, ...).
 fn trust_boundary_stable_key(
     interner: &crate::core::StableKeyInterner,
-    entrypoint_key: &str,
+    entrypoint_key: StableKeyId,
     source_kind: TrustBoundarySourceKind,
     language: crate::core::Language,
-) -> String {
-    semantic_stable_key(
+) -> StableKeyId {
+    stable_key_from_parts(
         interner,
         FactFamily::TrustBoundary,
         &[
-            ("entrypoint_key", entrypoint_key.to_string()),
+            (
+                "entrypoint_key",
+                interner.resolve(entrypoint_key).to_string(),
+            ),
             ("source_kind", format!("{source_kind:?}")),
             ("language", format!("{language:?}")),
         ],
     )
-    .into_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -334,7 +335,7 @@ mod tests {
             confidence: EntrypointConfidence::High,
             status: EntrypointStatus::Resolved,
             provider_id: ENTRYPOINTS_PROVIDER_ID.to_string(),
-            stable_key: format!("ep-{kind:?}-{method:?}"),
+            stable_key: crate::core::stable_key_for_test(&format!("ep-{kind:?}-{method:?}")),
         }
     }
 
@@ -679,7 +680,7 @@ mod tests {
         let boundaries = derive_trust_boundaries(&db, &[ep]);
 
         assert!(!boundaries.is_empty());
-        let key = &boundaries[0].stable_key;
+        let key = db.resolve_stable_key(boundaries[0].stable_key);
         assert!(
             key.contains("13:TrustBoundary"),
             "stable key should contain FactFamily::TrustBoundary; got: {key}"

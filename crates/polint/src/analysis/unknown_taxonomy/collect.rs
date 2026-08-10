@@ -531,7 +531,7 @@ fn data_flow_edge_unknown(db: &AnalysisDb, edge: &DataFlowEdgeFact) -> UnknownRo
             precision: Some(data_flow_precision_label(edge.precision).to_string()),
             docs_path: Some("docs/facts/data-flow.md".to_string()),
             suggested_artifact: Some(data_flow_status_artifact(edge.status).to_string()),
-            source_stable_key: Some(edge.stable_key.clone()),
+            source_stable_key: Some(interner.resolve(edge.stable_key).to_string()),
         },
     )
 }
@@ -559,7 +559,7 @@ fn data_flow_budget_unknown(
             precision: Some("unknown".to_string()),
             docs_path: Some("docs/facts/data-flow.md".to_string()),
             suggested_artifact: Some("budget_or_model".to_string()),
-            source_stable_key: Some(budget.stable_key.clone()),
+            source_stable_key: Some(interner.resolve(budget.stable_key).to_string()),
         },
     )
 }
@@ -586,7 +586,7 @@ fn evidence_unknown_for_data_flow(
             precision: Some("unknown".to_string()),
             docs_path: Some("docs/facts/evidence.md".to_string()),
             suggested_artifact: Some("model_or_budget".to_string()),
-            source_stable_key: Some(unknown.stable_key.clone()),
+            source_stable_key: Some(interner.resolve(unknown.stable_key).to_string()),
         },
     )
 }
@@ -1161,7 +1161,7 @@ mod tests {
                 budget: None,
                 evidence: vec!["dynamic_property".to_string()],
                 input_stable_keys: Vec::new(),
-                stable_key: "df:unknown".to_string(),
+                stable_key: crate::core::stable_key_for_test("df:unknown"),
             }],
             models: Vec::new(),
             budgets: vec![DataFlowBudgetFact {
@@ -1170,7 +1170,7 @@ mod tests {
                 limit: 4,
                 observed: 5,
                 status: DataFlowStatus::BudgetExceeded,
-                stable_key: "df:budget".to_string(),
+                stable_key: crate::core::stable_key_for_test("df:budget"),
             }],
         })
         .expect("data-flow facts");
@@ -1183,7 +1183,7 @@ mod tests {
                 reason: EvidenceUnknownReason::OpaqueSummary,
                 message: "summary expansion omitted".to_string(),
                 source_fact_stable_keys: Vec::new(),
-                stable_key: "ev:unknown".to_string(),
+                stable_key: crate::core::stable_key_for_test("ev:unknown"),
             }],
             ..EvidenceOutput::empty()
         })
@@ -1487,7 +1487,7 @@ mod tests {
             call_site: None,
             model: None,
             span: Some(Span::point(file, line, 1)),
-            stable_key: format!("df:node:{id}"),
+            stable_key: crate::core::stable_key_for_test(&format!("df:node:{id}")),
         }
     }
 

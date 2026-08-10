@@ -172,7 +172,7 @@ fn entrypoint_detail_rows(db: &AnalysisDb) -> Vec<EntrypointDetailRow> {
                 trigger_summary,
                 precision: precision_label(ep.precision).to_string(),
                 status: status_label(ep.status).to_string(),
-                stable_key: ep.stable_key.clone(),
+                stable_key: db.resolve_stable_key(ep.stable_key).to_string(),
             }
         })
         .collect();
@@ -185,17 +185,18 @@ fn trust_boundary_detail_rows(db: &AnalysisDb) -> Vec<TrustBoundaryDetailRow> {
         .trust_boundary_facts()
         .iter()
         .map(|tb| {
-            let truncated_key = if tb.entrypoint_stable_key.len() > 40 {
-                format!("{}...", &tb.entrypoint_stable_key[..40])
+            let entrypoint_stable_key = db.resolve_stable_key(tb.entrypoint_stable_key);
+            let truncated_key = if entrypoint_stable_key.len() > 40 {
+                format!("{}...", &entrypoint_stable_key[..40])
             } else {
-                tb.entrypoint_stable_key.clone()
+                entrypoint_stable_key.to_string()
             };
 
             TrustBoundaryDetailRow {
                 entrypoint_stable_key: truncated_key,
                 source_kind: source_kind_label(tb.source_kind).to_string(),
                 precision: precision_label(tb.precision).to_string(),
-                stable_key: tb.stable_key.clone(),
+                stable_key: db.resolve_stable_key(tb.stable_key).to_string(),
             }
         })
         .collect();
@@ -211,7 +212,7 @@ fn dispatch_edge_detail_rows(db: &AnalysisDb) -> Vec<DispatchEdgeDetailRow> {
             from_source: de.from_source.clone(),
             edge_kind: edge_kind_label(de.edge_kind).to_string(),
             precision: precision_label(de.precision).to_string(),
-            stable_key: de.stable_key.clone(),
+            stable_key: db.resolve_stable_key(de.stable_key).to_string(),
         })
         .collect();
     rows.sort_by(|a, b| a.stable_key.cmp(&b.stable_key));
@@ -229,7 +230,7 @@ fn unresolved_detail_rows(db: &AnalysisDb) -> Vec<UnresolvedDetailRow> {
                 reason: unresolved_reason_label(uf.reason).to_string(),
                 evidence: uf.evidence.clone(),
                 relative_path,
-                stable_key: uf.stable_key.clone(),
+                stable_key: db.resolve_stable_key(uf.stable_key).to_string(),
             }
         })
         .collect();
@@ -431,12 +432,12 @@ mod tests {
             confidence: EntrypointConfidence::High,
             status: EntrypointStatus::Resolved,
             provider_id: "polint.entrypoints".to_string(),
-            stable_key: "entrypoint:express:get:/api/users".to_string(),
+            stable_key: crate::core::stable_key_for_test("entrypoint:express:get:/api/users"),
         };
 
         let trust_boundary = TrustBoundaryFact {
             id: TrustBoundaryId(0),
-            entrypoint_stable_key: entrypoint.stable_key.clone(),
+            entrypoint_stable_key: entrypoint.stable_key,
             source_kind: TrustBoundarySourceKind::QueryString,
             target_parameter: Some(function),
             target_parameter_index: Some(0),
@@ -447,12 +448,14 @@ mod tests {
             span: Span::point(file, 1, 1),
             precision: EntrypointPrecision::ResolvedStatic,
             provider_id: "polint.entrypoints".to_string(),
-            stable_key: "trust-boundary:express:get:/api/users:QueryString".to_string(),
+            stable_key: crate::core::stable_key_for_test(
+                "trust-boundary:express:get:/api/users:QueryString",
+            ),
         };
 
         let dispatch_edge = FrameworkDispatchEdgeFact {
             id: DispatchEdgeId(0),
-            from_source: entrypoint.stable_key.clone(),
+            from_source: db.resolve_stable_key(entrypoint.stable_key).to_string(),
             to_target: function,
             to_symbol: Some(SymbolId(0)),
             edge_kind: DispatchEdgeKind::RouteDispatch,
@@ -463,7 +466,7 @@ mod tests {
             span: Span::point(file, 1, 1),
             precision: EntrypointPrecision::ResolvedStatic,
             provider_id: "polint.entrypoints".to_string(),
-            stable_key: "dispatch:express:get:/api/users".to_string(),
+            stable_key: crate::core::stable_key_for_test("dispatch:express:get:/api/users"),
         };
 
         let unresolved = UnresolvedFrameworkFact {
@@ -477,7 +480,7 @@ mod tests {
             scope_description: "fastify server".to_string(),
             precision: EntrypointPrecision::Conservative,
             provider_id: "polint.entrypoints".to_string(),
-            stable_key: "unresolved:fastify:file".to_string(),
+            stable_key: crate::core::stable_key_for_test("unresolved:fastify:file"),
         };
 
         let output = EntrypointOutput {

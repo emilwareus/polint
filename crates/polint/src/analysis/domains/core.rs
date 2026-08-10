@@ -547,7 +547,7 @@ mod tests {
 
     fn loop_site() -> WidenSite {
         WidenSite {
-            stable_key: "body:test:block:loop".to_string(),
+            stable_key: crate::core::stable_key_for_test("body:test:block:loop"),
         }
     }
 

@@ -114,6 +114,7 @@ fn derive_abstract_domains_with_materialization(
         &block_keys,
         &operation_keys,
         &place_keys,
+        interner,
         &output,
         materialization,
     );
@@ -142,6 +143,7 @@ fn abstract_domains_output_digest(
     block_keys: &std::collections::BTreeMap<BasicBlockId, String>,
     operation_keys: &std::collections::BTreeMap<MirOpId, String>,
     place_keys: &std::collections::BTreeMap<PlaceId, String>,
+    interner: &crate::core::StableKeyInterner,
     output: &DomainOutput,
     materialization: DomainMaterialization,
 ) -> Digest {
@@ -182,7 +184,7 @@ fn abstract_domains_output_digest(
     parts.extend(output.observations.iter().map(|row| {
         format!(
             "observation={} body={} block={} operation={} place={} slot={:?} location={:?} status={:?} precision={:?} value={:?}",
-            row.stable_key,
+            interner.resolve(row.stable_key),
             stable_body_key(body_keys, row.body),
             row.block
                 .and_then(|block| block_keys.get(&block).cloned())
@@ -203,7 +205,7 @@ fn abstract_domains_output_digest(
     parts.extend(output.events.iter().map(|row| {
         format!(
             "event={} body={} block={} operation={} slot={:?} status={:?} precision={:?} reason={}",
-            row.stable_key,
+            interner.resolve(row.stable_key),
             stable_body_key(body_keys, row.body),
             row.block
                 .and_then(|block| block_keys.get(&block).cloned())

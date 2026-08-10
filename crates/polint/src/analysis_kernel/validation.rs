@@ -133,7 +133,7 @@ fn validate_data_flow(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
         models: db.data_flow_models().to_vec(),
         budgets: db.data_flow_budgets().to_vec(),
     };
-    for issue in validate_data_flow_output(&output) {
+    for issue in validate_data_flow_output(&output, &db.stable_key_interner()) {
         diagnostics.push(internal_diagnostic(format!(
             "Data-flow validation issue for `{}`: {}",
             issue.stable_key, issue.reason
@@ -1156,7 +1156,7 @@ mod abstract_domains {
                     block: Some(BasicBlockId(99)),
                     operation: Some(MirOpId(99)),
                     place: Some(PlaceId(99)),
-                    stable_key: "domain:dup".to_string(),
+                    stable_key: crate::core::stable_key_for_test("domain:dup"),
                     ..observation(
                         1,
                         "domain:bad",
@@ -1174,7 +1174,7 @@ mod abstract_domains {
                 status: DomainStatus::BudgetExceeded,
                 precision: DomainPrecision::Unknown,
                 reason: "unknown_value".to_string(),
-                stable_key: "domain:event:bad".to_string(),
+                stable_key: crate::core::stable_key_for_test("domain:event:bad"),
             }],
         });
 
@@ -1367,7 +1367,7 @@ mod abstract_domains {
             value,
             status,
             precision: DomainPrecision::ExactLocal,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
@@ -5898,7 +5898,7 @@ mod tests {
             confidence: EvidenceConfidence::High,
             compact_label: None,
             source_fact_stable_keys: Vec::new(),
-            stable_key: format!("evidence:node:{id}"),
+            stable_key: crate::core::stable_key_for_test(&format!("evidence:node:{id}")),
         }
     }
 

@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::ops::{BitOr, BitOrAssign};
 
+use crate::core::StableKeyId;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Changed {
     Yes,
@@ -60,7 +61,7 @@ impl TopReason {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct WidenSite {
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

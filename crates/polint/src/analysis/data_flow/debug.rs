@@ -26,7 +26,7 @@ pub(crate) fn data_flow_debug_json_for_test(db: &AnalysisDb) -> Value {
             .iter()
             .map(|node| DataFlowNodeDebugRow {
                 family: "DataFlowNode",
-                stable_key: node.stable_key.clone(),
+                stable_key: db.resolve_stable_key(node.stable_key).to_string(),
                 producer_id: "polint.data_flow",
                 kind: format!("{:?}", node.kind),
                 status: "present".to_string(),
@@ -42,7 +42,7 @@ pub(crate) fn data_flow_debug_json_for_test(db: &AnalysisDb) -> Value {
             .iter()
             .map(|edge| DataFlowEdgeDebugRow {
                 family: "DataFlowEdge",
-                stable_key: edge.stable_key.clone(),
+                stable_key: db.resolve_stable_key(edge.stable_key).to_string(),
                 producer_id: "polint.data_flow",
                 kind: format!("{:?}", edge.kind),
                 algorithm: format!("{:?}", edge.algorithm),
@@ -59,7 +59,7 @@ pub(crate) fn data_flow_debug_json_for_test(db: &AnalysisDb) -> Value {
             .iter()
             .map(|model| DataFlowModelDebugRow {
                 family: "DataFlowModel",
-                stable_key: model.stable_key.clone(),
+                stable_key: db.resolve_stable_key(model.stable_key).to_string(),
                 producer_id: "polint.data_flow",
                 kind: format!("{:?}", model.kind),
                 status: format!("{:?}", model.status),
@@ -72,7 +72,7 @@ pub(crate) fn data_flow_debug_json_for_test(db: &AnalysisDb) -> Value {
             .iter()
             .map(|budget| DataFlowBudgetDebugRow {
                 family: "DataFlowBudget",
-                stable_key: budget.stable_key.clone(),
+                stable_key: db.resolve_stable_key(budget.stable_key).to_string(),
                 producer_id: "polint.data_flow",
                 reason: format!("{:?}", budget.reason),
                 limit: budget.limit,

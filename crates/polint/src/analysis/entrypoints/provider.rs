@@ -7,7 +7,6 @@ use crate::analysis_kernel::incremental::{
 };
 use crate::core::AnalysisDb;
 use crate::diagnostics::{Diagnostic, TextRange};
-use serde::Serialize;
 use std::fmt::Debug;
 
 pub(crate) const ENTRYPOINTS_PROVIDER_ID: &str = "polint.entrypoints";
@@ -33,7 +32,8 @@ pub(crate) fn derive_entrypoints_with_cache_stats(
 ) -> EntrypointsProviderOutput {
     debug_assert_eq!(manifest.id, ENTRYPOINTS_PROVIDER_ID);
     // Run Go and TS/JS recognizers, derive trust boundaries, dispatch edges, merge unresolved
-    let output = extract_entrypoints(db).normalized();
+    let interner = db.stable_key_interner();
+    let output = extract_entrypoints(db).normalized(&interner);
     let output_digest = entrypoints_output_digest(
         db,
         manifest,
@@ -108,30 +108,30 @@ fn entrypoints_output_digest(
             .map(|digest| format!("upstream_syntax={digest}")),
     );
 
-    parts.extend(
-        output
-            .entrypoints
-            .iter()
-            .map(|ep| format!("entrypoint={}", stable_fact_payload(ep))),
-    );
-    parts.extend(
-        output
-            .trust_boundaries
-            .iter()
-            .map(|tb| format!("trust_boundary={}", stable_fact_payload(tb))),
-    );
-    parts.extend(
-        output
-            .dispatch_edges
-            .iter()
-            .map(|de| format!("dispatch_edge={}", stable_fact_payload(de))),
-    );
-    parts.extend(
-        output
-            .unresolved
-            .iter()
-            .map(|ur| format!("unresolved_framework={}", stable_fact_payload(ur))),
-    );
+    parts.extend(output.entrypoints.iter().map(|ep| {
+        format!(
+            "entrypoint={}",
+            stable_fact_payload(&_db.stable_key_interner(), ep)
+        )
+    }));
+    parts.extend(output.trust_boundaries.iter().map(|tb| {
+        format!(
+            "trust_boundary={}",
+            stable_fact_payload(&_db.stable_key_interner(), tb)
+        )
+    }));
+    parts.extend(output.dispatch_edges.iter().map(|de| {
+        format!(
+            "dispatch_edge={}",
+            stable_fact_payload(&_db.stable_key_interner(), de)
+        )
+    }));
+    parts.extend(output.unresolved.iter().map(|ur| {
+        format!(
+            "unresolved_framework={}",
+            stable_fact_payload(&_db.stable_key_interner(), ur)
+        )
+    }));
     if output.entrypoints.is_empty()
         && output.trust_boundaries.is_empty()
         && output.dispatch_edges.is_empty()
@@ -164,11 +164,37 @@ fn provider_error_diagnostic(message: String) -> Diagnostic {
     )
 }
 
-fn stable_fact_payload<T>(fact: &T) -> String
+fn stable_fact_payload<T>(interner: &crate::core::StableKeyInterner, fact: &T) -> String
 where
-    T: Serialize + Debug,
+    T: Debug,
 {
-    serde_json::to_string(fact).unwrap_or_else(|_| format!("{fact:?}"))
+    resolve_stable_key_ids(interner, &format!("{fact:?}"))
+}
+
+fn resolve_stable_key_ids(interner: &crate::core::StableKeyInterner, payload: &str) -> String {
+    let mut resolved = String::with_capacity(payload.len());
+    let mut remaining = payload;
+    while let Some(start) = remaining.find("StableKeyId(") {
+        resolved.push_str(&remaining[..start]);
+        let id_start = start + "StableKeyId(".len();
+        let Some(relative_end) = remaining[id_start..].find(')') else {
+            resolved.push_str(&remaining[start..]);
+            return resolved;
+        };
+        let id_end = id_start + relative_end;
+        let Ok(id) = remaining[id_start..id_end].parse::<u32>() else {
+            resolved.push_str(&remaining[start..=id_end]);
+            remaining = &remaining[id_end + 1..];
+            continue;
+        };
+        resolved.push_str(&format!(
+            "{:?}",
+            interner.resolve(crate::core::StableKeyId(id))
+        ));
+        remaining = &remaining[id_end + 1..];
+    }
+    resolved.push_str(remaining);
+    resolved
 }
 
 #[cfg(test)]
@@ -272,13 +298,13 @@ mod entrypoints_provider {
                 confidence: EntrypointConfidence::High,
                 status: EntrypointStatus::Resolved,
                 provider_id: "polint.entrypoints".to_string(),
-                stable_key: "ep-test".to_string(),
+                stable_key: crate::core::stable_key_for_test("ep-test"),
             }],
             trust_boundaries: Vec::new(),
             dispatch_edges: Vec::new(),
             unresolved: Vec::new(),
         }
-        .normalized();
+        .normalized(&crate::core::test_stable_key_interner());
 
         let digest = super::entrypoints_output_digest(
             &db,
@@ -337,7 +363,8 @@ mod entrypoints_provider {
         let upstream_topology =
             Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["a"]);
 
-        let empty_output = EntrypointOutput::empty().normalized();
+        let empty_output =
+            EntrypointOutput::empty().normalized(&crate::core::test_stable_key_interner());
         let empty_digest = super::entrypoints_output_digest(
             &db,
             manifest,
@@ -368,13 +395,13 @@ mod entrypoints_provider {
                 confidence: EntrypointConfidence::High,
                 status: EntrypointStatus::Resolved,
                 provider_id: "polint.entrypoints".to_string(),
-                stable_key: "ep-test".to_string(),
+                stable_key: crate::core::stable_key_for_test("ep-test"),
             }],
             trust_boundaries: Vec::new(),
             dispatch_edges: Vec::new(),
             unresolved: Vec::new(),
         }
-        .normalized();
+        .normalized(&crate::core::test_stable_key_interner());
         let populated_digest = super::entrypoints_output_digest(
             &db,
             manifest,
@@ -448,13 +475,13 @@ mod entrypoints_provider {
                     confidence: EntrypointConfidence::High,
                     status: EntrypointStatus::Resolved,
                     provider_id: "polint.entrypoints".to_string(),
-                    stable_key: "ep-test".to_string(),
+                    stable_key: crate::core::stable_key_for_test("ep-test"),
                 }],
                 trust_boundaries: Vec::new(),
                 dispatch_edges: Vec::new(),
                 unresolved: Vec::new(),
             }
-            .normalized()
+            .normalized(&crate::core::test_stable_key_interner())
         };
 
         let upstream_mir = Digest::from_parts(DigestKind::ProviderOutput, "semantic_mir", &["a"]);
@@ -550,13 +577,13 @@ mod entrypoints_provider {
                     confidence: EntrypointConfidence::High,
                     status: EntrypointStatus::Resolved,
                     provider_id: "polint.entrypoints".to_string(),
-                    stable_key: "ep-route".to_string(),
+                    stable_key: crate::core::stable_key_for_test("ep-route"),
                 }],
                 trust_boundaries: Vec::new(),
                 dispatch_edges: Vec::new(),
                 unresolved: Vec::new(),
             }
-            .normalized()
+            .normalized(&crate::core::test_stable_key_interner())
         };
 
         let upstream_mir = Digest::from_parts(DigestKind::ProviderOutput, "semantic_mir", &["a"]);

@@ -12,7 +12,7 @@ use crate::analysis::ifds::{Icfg, IcfgEdgeKind};
 use crate::analysis::mir::body::MirBody;
 use crate::analysis::mir::op::{MirOperation, MirOperationKind, MirValue};
 use crate::analysis::places::PlaceRoot;
-use crate::core::{AnalysisDb, FunctionId};
+use crate::core::{AnalysisDb, FunctionId, StableKeyId, StableKeyInterner};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SolverInput<'a> {
@@ -31,9 +31,10 @@ pub(crate) struct SolverPolicy {
     pub(crate) reduction_rounds: u32,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub(crate) struct SolverResult {
     results: DomainResults,
+    interner: StableKeyInterner,
 }
 
 #[derive(Clone, Debug)]
@@ -56,7 +57,7 @@ struct ExplodedPoint {
 struct IdeMaterialization {
     block_entries: BTreeMap<BasicBlockId, ProductState>,
     block_exits: BTreeMap<BasicBlockId, ProductState>,
-    operation_states: BTreeMap<MirOpId, (BasicBlockId, String, ProductState, ProductState)>,
+    operation_states: BTreeMap<MirOpId, (BasicBlockId, StableKeyId, ProductState, ProductState)>,
     statuses: BTreeMap<MirBodyId, SolverStatus>,
 }
 
@@ -112,7 +113,7 @@ impl IdeDomainSolver {
         let mut block_entries = BTreeMap::<BasicBlockId, ProductState>::new();
         let mut block_exits = BTreeMap::<BasicBlockId, ProductState>::new();
         let mut operation_states =
-            BTreeMap::<MirOpId, (BasicBlockId, String, ProductState, ProductState)>::new();
+            BTreeMap::<MirOpId, (BasicBlockId, StableKeyId, ProductState, ProductState)>::new();
         let mut statuses = facts
             .functions
             .iter()
@@ -282,7 +283,10 @@ impl IdeDomainSolver {
                             Some(node.block),
                             None,
                             TopReason::Widened,
-                            format!("body={};block={};reason=widened", body.id.0, node.block.0),
+                            facts.interner.intern(format!(
+                                "body={};block={};reason=widened",
+                                body.id.0, node.block.0
+                            )),
                         );
                     } else {
                         widening_fuel -= 1;
@@ -304,7 +308,10 @@ impl IdeDomainSolver {
             output_mode,
             &mut results,
         );
-        SolverResult { results }
+        SolverResult {
+            results,
+            interner: facts.interner.clone(),
+        }
     }
 }
 
@@ -558,7 +565,7 @@ impl SolverResult {
     }
 
     pub(crate) fn stable_digest_parts(&self) -> Vec<String> {
-        self.results.stable_digest_parts()
+        self.results.stable_digest_parts(&self.interner)
     }
 }
 
@@ -621,8 +628,8 @@ fn join_state<K: Ord + Copy>(
 }
 
 fn join_operation_state(
-    interner: &crate::core::StableKeyInterner,
-    states: &mut BTreeMap<MirOpId, (BasicBlockId, String, ProductState, ProductState)>,
+    _interner: &crate::core::StableKeyInterner,
+    states: &mut BTreeMap<MirOpId, (BasicBlockId, StableKeyId, ProductState, ProductState)>,
     block: BasicBlockId,
     operation: &MirOperation,
     before: &ProductState,
@@ -631,7 +638,7 @@ fn join_operation_state(
     let row = states.entry(operation.id).or_insert_with(|| {
         (
             block,
-            interner.resolve(operation.stable_key).to_string(),
+            operation.stable_key,
             ProductState::bottom(),
             ProductState::bottom(),
         )
@@ -664,10 +671,10 @@ fn mark_ide_budget_exceeded(
         Some(cfg_node.block),
         None,
         TopReason::BudgetExceeded,
-        format!(
+        facts.interner.intern(format!(
             "body={};block={};reason=budget_exceeded",
             function.body.0, cfg_node.block.0
-        ),
+        )),
     );
 }
 
@@ -685,10 +692,10 @@ fn materialize_results(
                 entry.join_into(&facts.visible_state(function.function, state));
             }
         }
-        let body_key = facts.body_by_id.get(&function.body).map_or_else(
-            || facts.interner.resolve(function.stable_key).to_string(),
-            |body| facts.interner.resolve(body.stable_key).to_string(),
-        );
+        let body_key = facts
+            .body_by_id
+            .get(&function.body)
+            .map_or(function.stable_key, |body| body.stable_key);
         results.insert_function(
             function.body,
             body_key,
@@ -708,7 +715,7 @@ fn materialize_results(
         results.insert_block_state(
             function.body,
             block.id,
-            facts.interner.resolve(block.stable_key).to_string(),
+            block.stable_key,
             materialization
                 .block_entries
                 .get(&block.id)

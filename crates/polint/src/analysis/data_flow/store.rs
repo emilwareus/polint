@@ -8,7 +8,7 @@ use crate::analysis::error::AnalysisError;
 use crate::analysis::ids::{
     CallSiteId, DataFlowBudgetId, DataFlowEdgeId, DataFlowModelId, DataFlowNodeId, MirOpId, PlaceId,
 };
-use crate::core::FunctionId;
+use crate::core::{FunctionId, StableKeyId, StableKeyInterner};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct DataFlowOutput {
@@ -23,10 +23,10 @@ impl DataFlowOutput {
         Self::default()
     }
 
-    pub(crate) fn normalized(mut self) -> Self {
+    pub(crate) fn normalized(mut self, interner: &StableKeyInterner) -> Self {
         self.nodes.sort_by(|left, right| {
-            (left.stable_key.as_str(), left.kind, left.id).cmp(&(
-                right.stable_key.as_str(),
+            (interner.resolve(left.stable_key), left.kind, left.id).cmp(&(
+                interner.resolve(right.stable_key),
                 right.kind,
                 right.id,
             ))
@@ -37,15 +37,15 @@ impl DataFlowOutput {
             .map(DataFlowModelFact::normalized)
             .collect();
         self.models.sort_by(|left, right| {
-            (left.stable_key.as_str(), left.kind, left.id).cmp(&(
-                right.stable_key.as_str(),
+            (interner.resolve(left.stable_key), left.kind, left.id).cmp(&(
+                interner.resolve(right.stable_key),
                 right.kind,
                 right.id,
             ))
         });
         self.budgets.sort_by(|left, right| {
-            (left.stable_key.as_str(), left.reason, left.id).cmp(&(
-                right.stable_key.as_str(),
+            (interner.resolve(left.stable_key), left.reason, left.id).cmp(&(
+                interner.resolve(right.stable_key),
                 right.reason,
                 right.id,
             ))
@@ -105,7 +105,7 @@ impl DataFlowOutput {
             .collect();
         self.edges.sort_by(|left, right| {
             (
-                left.stable_key.as_str(),
+                interner.resolve(left.stable_key),
                 left.from,
                 left.to,
                 left.kind,
@@ -113,7 +113,7 @@ impl DataFlowOutput {
                 left.id,
             )
                 .cmp(&(
-                    right.stable_key.as_str(),
+                    interner.resolve(right.stable_key),
                     right.from,
                     right.to,
                     right.kind,
@@ -145,27 +145,31 @@ pub(crate) struct DataFlowStore {
 }
 
 impl DataFlowStore {
-    pub(crate) fn from_output(output: DataFlowOutput) -> Result<Self, AnalysisError> {
-        validate_references(&output)?;
-        let output = output.normalized();
-        validate_references(&output)?;
+    pub(crate) fn from_output(
+        output: DataFlowOutput,
+        interner: &StableKeyInterner,
+    ) -> Result<Self, AnalysisError> {
+        validate_references(&output, interner)?;
+        let output = output.normalized(interner);
+        validate_references(&output, interner)?;
         reject_duplicates(
-            output.nodes.iter().map(|node| node.stable_key.as_str()),
+            interner,
+            output.nodes.iter().map(|node| node.stable_key),
             "data-flow node stable key",
         )?;
         reject_duplicates(
-            output.edges.iter().map(|edge| edge.stable_key.as_str()),
+            interner,
+            output.edges.iter().map(|edge| edge.stable_key),
             "data-flow edge stable key",
         )?;
         reject_duplicates(
-            output.models.iter().map(|model| model.stable_key.as_str()),
+            interner,
+            output.models.iter().map(|model| model.stable_key),
             "data-flow model stable key",
         )?;
         reject_duplicates(
-            output
-                .budgets
-                .iter()
-                .map(|budget| budget.stable_key.as_str()),
+            interner,
+            output.budgets.iter().map(|budget| budget.stable_key),
             "data-flow budget stable key",
         )?;
 
@@ -292,7 +296,10 @@ impl DataFlowStore {
     }
 }
 
-fn validate_references(output: &DataFlowOutput) -> Result<(), AnalysisError> {
+fn validate_references(
+    output: &DataFlowOutput,
+    interner: &StableKeyInterner,
+) -> Result<(), AnalysisError> {
     reject_duplicate_ids(output.nodes.iter().map(|node| node.id), "data-flow node id")?;
     reject_duplicate_ids(
         output.models.iter().map(|model| model.id),
@@ -327,7 +334,7 @@ fn validate_references(output: &DataFlowOutput) -> Result<(), AnalysisError> {
                 provider: "polint.data_flow",
                 reason: format!(
                     "data-flow node `{}` references missing model",
-                    node.stable_key
+                    interner.resolve(node.stable_key)
                 ),
             });
         }
@@ -339,7 +346,7 @@ fn validate_references(output: &DataFlowOutput) -> Result<(), AnalysisError> {
                 provider: "polint.data_flow",
                 reason: format!(
                     "data-flow edge `{}` references missing endpoint",
-                    edge.stable_key
+                    interner.resolve(edge.stable_key)
                 ),
             });
         }
@@ -350,7 +357,7 @@ fn validate_references(output: &DataFlowOutput) -> Result<(), AnalysisError> {
                 provider: "polint.data_flow",
                 reason: format!(
                     "data-flow edge `{}` references missing model",
-                    edge.stable_key
+                    interner.resolve(edge.stable_key)
                 ),
             });
         }
@@ -361,7 +368,7 @@ fn validate_references(output: &DataFlowOutput) -> Result<(), AnalysisError> {
                 provider: "polint.data_flow",
                 reason: format!(
                     "data-flow edge `{}` references missing budget",
-                    edge.stable_key
+                    interner.resolve(edge.stable_key)
                 ),
             });
         }
@@ -375,7 +382,7 @@ fn validate_references(output: &DataFlowOutput) -> Result<(), AnalysisError> {
                 provider: "polint.data_flow",
                 reason: format!(
                     "data-flow edge `{}` is budget-linked but has no budget row",
-                    edge.stable_key
+                    interner.resolve(edge.stable_key)
                 ),
             });
         }
@@ -403,16 +410,17 @@ where
     Ok(())
 }
 
-fn reject_duplicates<'a>(
-    keys: impl Iterator<Item = &'a str>,
+fn reject_duplicates(
+    interner: &StableKeyInterner,
+    keys: impl Iterator<Item = StableKeyId>,
     label: &'static str,
 ) -> Result<(), AnalysisError> {
     let mut seen = BTreeSet::new();
     for key in keys {
-        if !seen.insert(key.to_string()) {
+        if !seen.insert(key) {
             return Err(AnalysisError::InvalidFact {
                 provider: "polint.data_flow",
-                reason: format!("duplicate {label} `{key}`"),
+                reason: format!("duplicate {label} `{}`", interner.resolve(key)),
             });
         }
     }
@@ -446,15 +454,19 @@ mod tests {
 
     #[test]
     fn output_sorts_and_reassigns_ids_with_edge_endpoint_remap() {
+        let interner = crate::core::test_stable_key_interner();
         let output = DataFlowOutput {
             nodes: vec![node(9, "node:z"), node(3, "node:a")],
             edges: vec![edge(7, 9, 3, "edge:z_to_a")],
             models: Vec::new(),
             budgets: Vec::new(),
         }
-        .normalized();
+        .normalized(&interner);
 
-        assert_eq!(output.nodes[0].stable_key, "node:a");
+        assert_eq!(
+            interner.resolve(output.nodes[0].stable_key).as_ref(),
+            "node:a"
+        );
         assert_eq!(output.nodes[0].id, DataFlowNodeId(0));
         assert_eq!(output.edges[0].from, DataFlowNodeId(1));
         assert_eq!(output.edges[0].to, DataFlowNodeId(0));
@@ -463,24 +475,30 @@ mod tests {
 
     #[test]
     fn store_rejects_dangling_edge_endpoints() {
-        let result = DataFlowStore::from_output(DataFlowOutput {
-            nodes: vec![node(0, "node:a")],
-            edges: vec![edge(0, 0, 4, "edge:dangling")],
-            models: Vec::new(),
-            budgets: Vec::new(),
-        });
+        let result = DataFlowStore::from_output(
+            DataFlowOutput {
+                nodes: vec![node(0, "node:a")],
+                edges: vec![edge(0, 0, 4, "edge:dangling")],
+                models: Vec::new(),
+                budgets: Vec::new(),
+            },
+            &crate::core::test_stable_key_interner(),
+        );
 
         assert!(result.is_err());
     }
 
     #[test]
     fn store_rejects_dangling_edge_endpoint_that_collides_after_normalization() {
-        let result = DataFlowStore::from_output(DataFlowOutput {
-            nodes: vec![node(10, "node:a"), node(20, "node:b")],
-            edges: vec![edge(0, 10, 0, "edge:dangling-colliding")],
-            models: Vec::new(),
-            budgets: Vec::new(),
-        });
+        let result = DataFlowStore::from_output(
+            DataFlowOutput {
+                nodes: vec![node(10, "node:a"), node(20, "node:b")],
+                edges: vec![edge(0, 10, 0, "edge:dangling-colliding")],
+                models: Vec::new(),
+                budgets: Vec::new(),
+            },
+            &crate::core::test_stable_key_interner(),
+        );
 
         assert!(result.is_err());
     }
@@ -490,24 +508,30 @@ mod tests {
         let mut source = node(10, "node:source");
         source.model = Some(DataFlowModelId(0));
 
-        let result = DataFlowStore::from_output(DataFlowOutput {
-            nodes: vec![source],
-            edges: Vec::new(),
-            models: vec![model(10, "model:source")],
-            budgets: Vec::new(),
-        });
+        let result = DataFlowStore::from_output(
+            DataFlowOutput {
+                nodes: vec![source],
+                edges: Vec::new(),
+                models: vec![model(10, "model:source")],
+                budgets: Vec::new(),
+            },
+            &crate::core::test_stable_key_interner(),
+        );
 
         assert!(result.is_err());
     }
 
     #[test]
     fn store_rejects_duplicate_node_ids_before_endpoint_remap() {
-        let result = DataFlowStore::from_output(DataFlowOutput {
-            nodes: vec![node(10, "node:a"), node(10, "node:b")],
-            edges: vec![edge(0, 10, 10, "edge:ambiguous")],
-            models: Vec::new(),
-            budgets: Vec::new(),
-        });
+        let result = DataFlowStore::from_output(
+            DataFlowOutput {
+                nodes: vec![node(10, "node:a"), node(10, "node:b")],
+                edges: vec![edge(0, 10, 10, "edge:ambiguous")],
+                models: Vec::new(),
+                budgets: Vec::new(),
+            },
+            &crate::core::test_stable_key_interner(),
+        );
 
         assert!(result.is_err());
     }
@@ -517,12 +541,15 @@ mod tests {
         let mut source = node(10, "node:source");
         source.model = Some(DataFlowModelId(20));
 
-        let result = DataFlowStore::from_output(DataFlowOutput {
-            nodes: vec![source],
-            edges: Vec::new(),
-            models: vec![model(20, "model:a"), model(20, "model:b")],
-            budgets: Vec::new(),
-        });
+        let result = DataFlowStore::from_output(
+            DataFlowOutput {
+                nodes: vec![source],
+                edges: Vec::new(),
+                models: vec![model(20, "model:a"), model(20, "model:b")],
+                budgets: Vec::new(),
+            },
+            &crate::core::test_stable_key_interner(),
+        );
 
         assert!(result.is_err());
     }
@@ -534,12 +561,15 @@ mod tests {
         budget_edge.status = DataFlowStatus::BudgetExceeded;
         budget_edge.budget = Some(DataFlowBudgetId(5));
 
-        let store = DataFlowStore::from_output(DataFlowOutput {
-            nodes: vec![node(0, "node:a"), node(1, "node:b")],
-            edges: vec![budget_edge],
-            models: Vec::new(),
-            budgets: vec![budget(5, "budget:path-depth")],
-        })
+        let store = DataFlowStore::from_output(
+            DataFlowOutput {
+                nodes: vec![node(0, "node:a"), node(1, "node:b")],
+                edges: vec![budget_edge],
+                models: Vec::new(),
+                budgets: vec![budget(5, "budget:path-depth")],
+            },
+            &crate::core::test_stable_key_interner(),
+        )
         .expect("budget-linked store is valid");
 
         assert_eq!(store.by_status(DataFlowStatus::BudgetExceeded).len(), 1);
@@ -557,12 +587,15 @@ mod tests {
         budget_edge.kind = DataFlowEdgeKind::BudgetTruncated;
         budget_edge.status = DataFlowStatus::BudgetExceeded;
 
-        let result = DataFlowStore::from_output(DataFlowOutput {
-            nodes: vec![node(0, "node:a"), node(1, "node:b")],
-            edges: vec![budget_edge],
-            models: Vec::new(),
-            budgets: Vec::new(),
-        });
+        let result = DataFlowStore::from_output(
+            DataFlowOutput {
+                nodes: vec![node(0, "node:a"), node(1, "node:b")],
+                edges: vec![budget_edge],
+                models: Vec::new(),
+                budgets: Vec::new(),
+            },
+            &crate::core::test_stable_key_interner(),
+        );
 
         assert!(result.is_err());
     }
@@ -583,7 +616,7 @@ mod tests {
             call_site: None,
             model: None,
             span: None,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
@@ -602,7 +635,7 @@ mod tests {
             provenance: DataFlowProvenance::Native,
             evidence: Vec::new(),
             payload_labels: Vec::new(),
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
@@ -625,7 +658,7 @@ mod tests {
             budget: None,
             evidence: Vec::new(),
             input_stable_keys: Vec::new(),
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
@@ -636,7 +669,7 @@ mod tests {
             limit: 1,
             observed: 2,
             status: DataFlowStatus::BudgetExceeded,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 }

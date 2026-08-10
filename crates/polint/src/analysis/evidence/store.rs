@@ -10,6 +10,7 @@ use crate::analysis::ids::{
     EvidenceBundleId, EvidenceEdgeId, EvidenceNodeId, EvidenceOmittedRegionId, EvidencePathId,
     EvidenceSliceId,
 };
+use crate::core::{StableKeyId, StableKeyInterner};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct EvidenceOutput {
@@ -28,10 +29,10 @@ impl EvidenceOutput {
         Self::default()
     }
 
-    pub(crate) fn normalized(mut self) -> Self {
-        self.nodes = normalize_nodes(self.nodes);
-        self.omitted_regions = normalize_omitted_regions(self.omitted_regions);
-        self.bundles = normalize_bundles(self.bundles);
+    pub(crate) fn normalized(mut self, interner: &StableKeyInterner) -> Self {
+        self.nodes = normalize_nodes(self.nodes, interner);
+        self.omitted_regions = normalize_omitted_regions(self.omitted_regions, interner);
+        self.bundles = normalize_bundles(self.bundles, interner);
         self.paths = self
             .paths
             .into_iter()
@@ -96,7 +97,7 @@ impl EvidenceOutput {
             .collect();
         self.edges.sort_by(|left, right| {
             (
-                left.stable_key.as_str(),
+                interner.resolve(left.stable_key),
                 left.from,
                 left.to,
                 left.kind,
@@ -104,7 +105,7 @@ impl EvidenceOutput {
                 left.id,
             )
                 .cmp(&(
-                    right.stable_key.as_str(),
+                    interner.resolve(right.stable_key),
                     right.from,
                     right.to,
                     right.kind,
@@ -134,8 +135,8 @@ impl EvidenceOutput {
             })
             .collect();
         self.paths.sort_by(|left, right| {
-            (left.stable_key.as_str(), left.rank, left.id).cmp(&(
-                right.stable_key.as_str(),
+            (interner.resolve(left.stable_key), left.rank, left.id).cmp(&(
+                interner.resolve(right.stable_key),
                 right.rank,
                 right.id,
             ))
@@ -163,8 +164,8 @@ impl EvidenceOutput {
             })
             .collect();
         self.slices.sort_by(|left, right| {
-            (left.stable_key.as_str(), left.query_mode, left.id).cmp(&(
-                right.stable_key.as_str(),
+            (interner.resolve(left.stable_key), left.query_mode, left.id).cmp(&(
+                interner.resolve(right.stable_key),
                 right.query_mode,
                 right.id,
             ))
@@ -198,11 +199,12 @@ impl EvidenceOutput {
         }
 
         self.unknowns.sort_by(|left, right| {
-            (left.stable_key.as_str(), left.reason).cmp(&(right.stable_key.as_str(), right.reason))
+            (interner.resolve(left.stable_key), left.reason)
+                .cmp(&(interner.resolve(right.stable_key), right.reason))
         });
         self.replay_keys.sort_by(|left, right| {
-            (left.stable_key.as_str(), left.query_mode)
-                .cmp(&(right.stable_key.as_str(), right.query_mode))
+            (interner.resolve(left.stable_key), left.query_mode)
+                .cmp(&(interner.resolve(right.stable_key), right.query_mode))
         });
 
         self
@@ -212,10 +214,11 @@ impl EvidenceOutput {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct EvidenceStore {
     output: EvidenceOutput,
+    interner: StableKeyInterner,
     by_node_kind: BTreeMap<EvidenceNodeKind, Vec<usize>>,
     by_edge_kind: BTreeMap<EvidenceEdgeKind, Vec<usize>>,
     by_bundle: BTreeMap<EvidenceBundleId, Vec<usize>>,
-    by_diagnostic_stable_key: BTreeMap<String, Vec<usize>>,
+    by_diagnostic_stable_key: BTreeMap<StableKeyId, Vec<usize>>,
     by_source_fact_stable_key: BTreeMap<String, Vec<usize>>,
     by_query_mode: BTreeMap<EvidenceQueryMode, Vec<usize>>,
     by_status: BTreeMap<EvidenceStatus, Vec<usize>>,
@@ -226,57 +229,60 @@ pub(crate) struct EvidenceStore {
 }
 
 impl EvidenceStore {
-    pub(crate) fn from_output(output: EvidenceOutput) -> Result<Self, AnalysisError> {
-        validate_references(&output)?;
-        let output = output.normalized();
-        validate_references(&output)?;
+    pub(crate) fn from_output(
+        output: EvidenceOutput,
+        interner: &StableKeyInterner,
+    ) -> Result<Self, AnalysisError> {
+        validate_references(&output, interner)?;
+        let output = output.normalized(interner);
+        validate_references(&output, interner)?;
         reject_duplicates(
-            output.nodes.iter().map(|node| node.stable_key.as_str()),
+            interner,
+            output.nodes.iter().map(|node| node.stable_key),
             "evidence node stable key",
         )?;
         reject_duplicates(
-            output.edges.iter().map(|edge| edge.stable_key.as_str()),
+            interner,
+            output.edges.iter().map(|edge| edge.stable_key),
             "evidence edge stable key",
         )?;
         reject_duplicates(
-            output
-                .bundles
-                .iter()
-                .map(|bundle| bundle.stable_key.as_str()),
+            interner,
+            output.bundles.iter().map(|bundle| bundle.stable_key),
             "evidence bundle stable key",
         )?;
         reject_duplicates(
-            output.paths.iter().map(|path| path.stable_key.as_str()),
+            interner,
+            output.paths.iter().map(|path| path.stable_key),
             "evidence path stable key",
         )?;
         reject_duplicates(
-            output.slices.iter().map(|slice| slice.stable_key.as_str()),
+            interner,
+            output.slices.iter().map(|slice| slice.stable_key),
             "evidence slice stable key",
         )?;
         reject_duplicates(
+            interner,
             output
                 .omitted_regions
                 .iter()
-                .map(|omitted| omitted.stable_key.as_str()),
+                .map(|omitted| omitted.stable_key),
             "evidence omitted-region stable key",
         )?;
         reject_duplicates(
-            output
-                .unknowns
-                .iter()
-                .map(|unknown| unknown.stable_key.as_str()),
+            interner,
+            output.unknowns.iter().map(|unknown| unknown.stable_key),
             "evidence unknown stable key",
         )?;
         reject_duplicates(
-            output
-                .replay_keys
-                .iter()
-                .map(|replay| replay.stable_key.as_str()),
+            interner,
+            output.replay_keys.iter().map(|replay| replay.stable_key),
             "evidence replay key stable key",
         )?;
 
         let mut store = Self {
             output,
+            interner: interner.clone(),
             ..Self::default()
         };
         for (index, node) in store.output.nodes.iter().enumerate() {
@@ -321,7 +327,7 @@ impl EvidenceStore {
         for (index, bundle) in store.output.bundles.iter().enumerate() {
             store
                 .by_diagnostic_stable_key
-                .entry(bundle.diagnostic_stable_key.clone())
+                .entry(bundle.diagnostic_stable_key)
                 .or_default()
                 .push(index);
             store
@@ -377,6 +383,10 @@ impl EvidenceStore {
         &self.output.replay_keys
     }
 
+    pub(crate) fn resolve_stable_key(&self, key: StableKeyId) -> std::sync::Arc<str> {
+        self.interner.resolve(key)
+    }
+
     #[allow(
         dead_code,
         reason = "Private evidence query helpers are consumed by subsequent path/rendering plans."
@@ -419,14 +429,17 @@ impl EvidenceStore {
     }
 }
 
-fn normalize_nodes(mut nodes: Vec<EvidenceNodeFact>) -> Vec<EvidenceNodeFact> {
+fn normalize_nodes(
+    mut nodes: Vec<EvidenceNodeFact>,
+    interner: &StableKeyInterner,
+) -> Vec<EvidenceNodeFact> {
     nodes = nodes
         .into_iter()
         .map(EvidenceNodeFact::normalized)
         .collect();
     nodes.sort_by(|left, right| {
-        (left.stable_key.as_str(), left.kind, left.id).cmp(&(
-            right.stable_key.as_str(),
+        (interner.resolve(left.stable_key), left.kind, left.id).cmp(&(
+            interner.resolve(right.stable_key),
             right.kind,
             right.id,
         ))
@@ -436,10 +449,11 @@ fn normalize_nodes(mut nodes: Vec<EvidenceNodeFact>) -> Vec<EvidenceNodeFact> {
 
 fn normalize_omitted_regions(
     mut omitted_regions: Vec<EvidenceOmittedRegionFact>,
+    interner: &StableKeyInterner,
 ) -> Vec<EvidenceOmittedRegionFact> {
     omitted_regions.sort_by(|left, right| {
-        (left.stable_key.as_str(), left.reason, left.id).cmp(&(
-            right.stable_key.as_str(),
+        (interner.resolve(left.stable_key), left.reason, left.id).cmp(&(
+            interner.resolve(right.stable_key),
             right.reason,
             right.id,
         ))
@@ -447,14 +461,17 @@ fn normalize_omitted_regions(
     omitted_regions
 }
 
-fn normalize_bundles(bundles: Vec<EvidenceBundleFact>) -> Vec<EvidenceBundleFact> {
+fn normalize_bundles(
+    bundles: Vec<EvidenceBundleFact>,
+    interner: &StableKeyInterner,
+) -> Vec<EvidenceBundleFact> {
     let mut bundles = bundles
         .into_iter()
         .map(EvidenceBundleFact::normalized)
         .collect::<Vec<_>>();
     bundles.sort_by(|left, right| {
-        (left.stable_key.as_str(), left.query_mode, left.id).cmp(&(
-            right.stable_key.as_str(),
+        (interner.resolve(left.stable_key), left.query_mode, left.id).cmp(&(
+            interner.resolve(right.stable_key),
             right.query_mode,
             right.id,
         ))
@@ -462,7 +479,10 @@ fn normalize_bundles(bundles: Vec<EvidenceBundleFact>) -> Vec<EvidenceBundleFact
     bundles
 }
 
-fn validate_references(output: &EvidenceOutput) -> Result<(), AnalysisError> {
+fn validate_references(
+    output: &EvidenceOutput,
+    interner: &StableKeyInterner,
+) -> Result<(), AnalysisError> {
     reject_duplicate_ids(output.nodes.iter().map(|node| node.id), "evidence node id")?;
     reject_duplicate_ids(output.edges.iter().map(|edge| edge.id), "evidence edge id")?;
     reject_duplicate_ids(
@@ -514,7 +534,7 @@ fn validate_references(output: &EvidenceOutput) -> Result<(), AnalysisError> {
         if !nodes.contains(&edge.from) || !nodes.contains(&edge.to) {
             return invalid(format!(
                 "evidence edge `{}` references missing endpoint",
-                edge.stable_key
+                interner.resolve(edge.stable_key)
             ));
         }
     }
@@ -522,52 +542,88 @@ fn validate_references(output: &EvidenceOutput) -> Result<(), AnalysisError> {
         if bundle.entry_node.is_some_and(|node| !nodes.contains(&node)) {
             return invalid(format!(
                 "evidence bundle `{}` references missing entry node",
-                bundle.stable_key
+                interner.resolve(bundle.stable_key)
             ));
         }
         require_all(
             &bundle.selected_paths,
             &paths,
             "path",
-            &bundle.stable_key,
+            interner.resolve(bundle.stable_key).as_ref(),
             "bundle",
         )?;
         require_all(
             &bundle.selected_slices,
             &slices,
             "slice",
-            &bundle.stable_key,
+            interner.resolve(bundle.stable_key).as_ref(),
             "bundle",
         )?;
     }
     for path in &output.paths {
-        require_option(path.bundle, &bundles, "bundle", &path.stable_key, "path")?;
-        require_all(&path.nodes, &nodes, "node", &path.stable_key, "path")?;
-        require_all(&path.edges, &edges, "edge", &path.stable_key, "path")?;
+        require_option(
+            path.bundle,
+            &bundles,
+            "bundle",
+            interner.resolve(path.stable_key).as_ref(),
+            "path",
+        )?;
+        require_all(
+            &path.nodes,
+            &nodes,
+            "node",
+            interner.resolve(path.stable_key).as_ref(),
+            "path",
+        )?;
+        require_all(
+            &path.edges,
+            &edges,
+            "edge",
+            interner.resolve(path.stable_key).as_ref(),
+            "path",
+        )?;
         require_all(
             &path.omitted_regions,
             &omitted,
             "omitted region",
-            &path.stable_key,
+            interner.resolve(path.stable_key).as_ref(),
             "path",
         )?;
     }
     for slice in &output.slices {
-        require_option(slice.bundle, &bundles, "bundle", &slice.stable_key, "slice")?;
+        require_option(
+            slice.bundle,
+            &bundles,
+            "bundle",
+            interner.resolve(slice.stable_key).as_ref(),
+            "slice",
+        )?;
         require_all(
             &slice.root_nodes,
             &nodes,
             "root node",
-            &slice.stable_key,
+            interner.resolve(slice.stable_key).as_ref(),
             "slice",
         )?;
-        require_all(&slice.nodes, &nodes, "node", &slice.stable_key, "slice")?;
-        require_all(&slice.edges, &edges, "edge", &slice.stable_key, "slice")?;
+        require_all(
+            &slice.nodes,
+            &nodes,
+            "node",
+            interner.resolve(slice.stable_key).as_ref(),
+            "slice",
+        )?;
+        require_all(
+            &slice.edges,
+            &edges,
+            "edge",
+            interner.resolve(slice.stable_key).as_ref(),
+            "slice",
+        )?;
         require_all(
             &slice.omitted_regions,
             &omitted,
             "omitted region",
-            &slice.stable_key,
+            interner.resolve(slice.stable_key).as_ref(),
             "slice",
         )?;
     }
@@ -576,33 +632,51 @@ fn validate_references(output: &EvidenceOutput) -> Result<(), AnalysisError> {
             unknown.bundle,
             &bundles,
             "bundle",
-            &unknown.stable_key,
+            interner.resolve(unknown.stable_key).as_ref(),
             "unknown",
         )?;
-        require_option(unknown.path, &paths, "path", &unknown.stable_key, "unknown")?;
+        require_option(
+            unknown.path,
+            &paths,
+            "path",
+            interner.resolve(unknown.stable_key).as_ref(),
+            "unknown",
+        )?;
         require_option(
             unknown.slice,
             &slices,
             "slice",
-            &unknown.stable_key,
+            interner.resolve(unknown.stable_key).as_ref(),
             "unknown",
         )?;
-        require_option(unknown.edge, &edges, "edge", &unknown.stable_key, "unknown")?;
+        require_option(
+            unknown.edge,
+            &edges,
+            "edge",
+            interner.resolve(unknown.stable_key).as_ref(),
+            "unknown",
+        )?;
     }
     for region in &output.omitted_regions {
         require_option(
             region.bundle,
             &bundles,
             "bundle",
-            &region.stable_key,
+            interner.resolve(region.stable_key).as_ref(),
             "omitted",
         )?;
-        require_option(region.path, &paths, "path", &region.stable_key, "omitted")?;
+        require_option(
+            region.path,
+            &paths,
+            "path",
+            interner.resolve(region.stable_key).as_ref(),
+            "omitted",
+        )?;
         require_option(
             region.slice,
             &slices,
             "slice",
-            &region.stable_key,
+            interner.resolve(region.stable_key).as_ref(),
             "omitted",
         )?;
     }
@@ -611,7 +685,7 @@ fn validate_references(output: &EvidenceOutput) -> Result<(), AnalysisError> {
             replay.bundle,
             &bundles,
             "bundle",
-            &replay.stable_key,
+            interner.resolve(replay.stable_key).as_ref(),
             "replay",
         )?;
     }
@@ -686,14 +760,15 @@ where
     Ok(())
 }
 
-fn reject_duplicates<'a>(
-    keys: impl Iterator<Item = &'a str>,
+fn reject_duplicates(
+    interner: &StableKeyInterner,
+    keys: impl Iterator<Item = StableKeyId>,
     label: &'static str,
 ) -> Result<(), AnalysisError> {
     let mut seen = BTreeSet::new();
     for key in keys {
-        if !seen.insert(key.to_string()) {
-            return invalid(format!("duplicate {label} `{key}`"));
+        if !seen.insert(key) {
+            return invalid(format!("duplicate {label} `{}`", interner.resolve(key)));
         }
     }
     Ok(())
@@ -794,6 +869,7 @@ mod tests {
 
     #[test]
     fn output_sorts_and_reassigns_ids_with_edge_endpoint_remap() {
+        let interner = crate::core::test_stable_key_interner();
         let output = EvidenceOutput {
             nodes: vec![node(9, "node:z"), node(3, "node:a")],
             edges: vec![edge(7, 9, 3, "edge:z_to_a")],
@@ -804,9 +880,12 @@ mod tests {
             omitted_regions: Vec::new(),
             replay_keys: Vec::new(),
         }
-        .normalized();
+        .normalized(&interner);
 
-        assert_eq!(output.nodes[0].stable_key, "node:a");
+        assert_eq!(
+            interner.resolve(output.nodes[0].stable_key).as_ref(),
+            "node:a"
+        );
         assert_eq!(output.nodes[0].id, EvidenceNodeId(0));
         assert_eq!(output.edges[0].from, EvidenceNodeId(1));
         assert_eq!(output.edges[0].to, EvidenceNodeId(0));
@@ -815,69 +894,78 @@ mod tests {
 
     #[test]
     fn store_rejects_dangling_edge_endpoints() {
-        let result = EvidenceStore::from_output(EvidenceOutput {
-            nodes: vec![node(0, "node:a")],
-            edges: vec![edge(0, 0, 4, "edge:dangling")],
-            bundles: Vec::new(),
-            paths: Vec::new(),
-            slices: Vec::new(),
-            unknowns: Vec::new(),
-            omitted_regions: Vec::new(),
-            replay_keys: Vec::new(),
-        });
+        let result = EvidenceStore::from_output(
+            EvidenceOutput {
+                nodes: vec![node(0, "node:a")],
+                edges: vec![edge(0, 0, 4, "edge:dangling")],
+                bundles: Vec::new(),
+                paths: Vec::new(),
+                slices: Vec::new(),
+                unknowns: Vec::new(),
+                omitted_regions: Vec::new(),
+                replay_keys: Vec::new(),
+            },
+            &crate::core::test_stable_key_interner(),
+        );
 
         assert!(result.is_err());
     }
 
     #[test]
     fn store_rejects_duplicate_node_stable_keys() {
-        let result = EvidenceStore::from_output(EvidenceOutput {
-            nodes: vec![node(0, "node:a"), node(1, "node:a")],
-            edges: Vec::new(),
-            bundles: Vec::new(),
-            paths: Vec::new(),
-            slices: Vec::new(),
-            unknowns: Vec::new(),
-            omitted_regions: Vec::new(),
-            replay_keys: Vec::new(),
-        });
+        let result = EvidenceStore::from_output(
+            EvidenceOutput {
+                nodes: vec![node(0, "node:a"), node(1, "node:a")],
+                edges: Vec::new(),
+                bundles: Vec::new(),
+                paths: Vec::new(),
+                slices: Vec::new(),
+                unknowns: Vec::new(),
+                omitted_regions: Vec::new(),
+                replay_keys: Vec::new(),
+            },
+            &crate::core::test_stable_key_interner(),
+        );
 
         assert!(result.is_err());
     }
 
     #[test]
     fn store_rejects_duplicate_unknown_stable_keys() {
-        let result = EvidenceStore::from_output(EvidenceOutput {
-            nodes: Vec::new(),
-            edges: Vec::new(),
-            bundles: Vec::new(),
-            paths: Vec::new(),
-            slices: Vec::new(),
-            unknowns: vec![
-                EvidenceUnknownFact {
-                    bundle: None,
-                    path: None,
-                    slice: None,
-                    edge: None,
-                    reason: EvidenceUnknownReason::OpaqueSummary,
-                    message: "first".to_string(),
-                    source_fact_stable_keys: Vec::new(),
-                    stable_key: "unknown:dup".to_string(),
-                },
-                EvidenceUnknownFact {
-                    bundle: None,
-                    path: None,
-                    slice: None,
-                    edge: None,
-                    reason: EvidenceUnknownReason::BudgetExceeded,
-                    message: "second".to_string(),
-                    source_fact_stable_keys: Vec::new(),
-                    stable_key: "unknown:dup".to_string(),
-                },
-            ],
-            omitted_regions: Vec::new(),
-            replay_keys: Vec::new(),
-        });
+        let result = EvidenceStore::from_output(
+            EvidenceOutput {
+                nodes: Vec::new(),
+                edges: Vec::new(),
+                bundles: Vec::new(),
+                paths: Vec::new(),
+                slices: Vec::new(),
+                unknowns: vec![
+                    EvidenceUnknownFact {
+                        bundle: None,
+                        path: None,
+                        slice: None,
+                        edge: None,
+                        reason: EvidenceUnknownReason::OpaqueSummary,
+                        message: "first".to_string(),
+                        source_fact_stable_keys: Vec::new(),
+                        stable_key: crate::core::stable_key_for_test("unknown:dup"),
+                    },
+                    EvidenceUnknownFact {
+                        bundle: None,
+                        path: None,
+                        slice: None,
+                        edge: None,
+                        reason: EvidenceUnknownReason::BudgetExceeded,
+                        message: "second".to_string(),
+                        source_fact_stable_keys: Vec::new(),
+                        stable_key: crate::core::stable_key_for_test("unknown:dup"),
+                    },
+                ],
+                omitted_regions: Vec::new(),
+                replay_keys: Vec::new(),
+            },
+            &crate::core::test_stable_key_interner(),
+        );
 
         assert!(result.is_err());
     }
@@ -889,7 +977,7 @@ mod tests {
             edges: Vec::new(),
             bundles: vec![EvidenceBundleFact {
                 id: EvidenceBundleId(0),
-                diagnostic_stable_key: "diagnostic:a".to_string(),
+                diagnostic_stable_key: crate::core::stable_key_for_test("diagnostic:a"),
                 query_mode: EvidenceQueryMode::ThinBackward,
                 status: EvidenceStatus::Present,
                 precision: EvidencePrecision::Syntax,
@@ -900,7 +988,7 @@ mod tests {
                 selected_paths: vec![EvidencePathId(9)],
                 selected_slices: vec![EvidenceSliceId(9)],
                 replay_key: None,
-                stable_key: "bundle:a".to_string(),
+                stable_key: crate::core::stable_key_for_test("bundle:a"),
             }],
             paths: vec![EvidencePathFact {
                 id: EvidencePathId(0),
@@ -913,7 +1001,7 @@ mod tests {
                 status: EvidenceStatus::Present,
                 hidden_node_count: 0,
                 omitted_regions: vec![EvidenceOmittedRegionId(9)],
-                stable_key: "path:a".to_string(),
+                stable_key: crate::core::stable_key_for_test("path:a"),
             }],
             slices: Vec::new(),
             unknowns: Vec::new(),
@@ -921,11 +1009,16 @@ mod tests {
             replay_keys: Vec::new(),
         };
 
-        assert!(EvidenceStore::from_output(output.clone()).is_err());
+        assert!(
+            EvidenceStore::from_output(output.clone(), &crate::core::test_stable_key_interner())
+                .is_err()
+        );
 
         output.bundles[0].selected_paths.clear();
         output.bundles[0].selected_slices.clear();
-        assert!(EvidenceStore::from_output(output).is_err());
+        assert!(
+            EvidenceStore::from_output(output, &crate::core::test_stable_key_interner()).is_err()
+        );
     }
 
     fn node(id: u64, stable_key: &str) -> EvidenceNodeFact {
@@ -950,7 +1043,7 @@ mod tests {
             confidence: EvidenceConfidence::High,
             compact_label: None,
             source_fact_stable_keys: Vec::new(),
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
@@ -971,7 +1064,7 @@ mod tests {
             expansion: EvidenceExpansion::None,
             compact_label: None,
             source_fact_stable_keys: Vec::new(),
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 }

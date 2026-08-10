@@ -6,7 +6,7 @@ use crate::analysis::entrypoints::facts::{
 };
 use crate::analysis::error::AnalysisError;
 use crate::analysis::ids::{DispatchEdgeId, EntrypointId, TrustBoundaryId, UnresolvedFrameworkId};
-use crate::core::FileId;
+use crate::core::{FileId, StableKeyId, StableKeyInterner};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct EntrypointOutput {
@@ -21,10 +21,11 @@ impl EntrypointOutput {
         Self::default()
     }
 
-    pub(crate) fn normalized(mut self) -> Self {
+    pub(crate) fn normalized(mut self, interner: &StableKeyInterner) -> Self {
         // Sort entrypoints by (stable_key, id)
         self.entrypoints.sort_by(|left, right| {
-            (left.stable_key.as_str(), left.id).cmp(&(right.stable_key.as_str(), right.id))
+            (interner.resolve(left.stable_key), left.id)
+                .cmp(&(interner.resolve(right.stable_key), right.id))
         });
         // Reassign sequential IDs after sorting
         for (index, entrypoint) in self.entrypoints.iter_mut().enumerate() {
@@ -34,13 +35,13 @@ impl EntrypointOutput {
         // Sort trust_boundaries by (entrypoint_stable_key, stable_key, id)
         self.trust_boundaries.sort_by(|left, right| {
             (
-                left.entrypoint_stable_key.as_str(),
-                left.stable_key.as_str(),
+                interner.resolve(left.entrypoint_stable_key),
+                interner.resolve(left.stable_key),
                 left.id,
             )
                 .cmp(&(
-                    right.entrypoint_stable_key.as_str(),
-                    right.stable_key.as_str(),
+                    interner.resolve(right.entrypoint_stable_key),
+                    interner.resolve(right.stable_key),
                     right.id,
                 ))
         });
@@ -50,11 +51,16 @@ impl EntrypointOutput {
 
         // Sort dispatch_edges by (from_source, stable_key, id)
         self.dispatch_edges.sort_by(|left, right| {
-            (left.from_source.as_str(), left.stable_key.as_str(), left.id).cmp(&(
-                right.from_source.as_str(),
-                right.stable_key.as_str(),
-                right.id,
-            ))
+            (
+                left.from_source.as_str(),
+                interner.resolve(left.stable_key),
+                left.id,
+            )
+                .cmp(&(
+                    right.from_source.as_str(),
+                    interner.resolve(right.stable_key),
+                    right.id,
+                ))
         });
         for (index, edge) in self.dispatch_edges.iter_mut().enumerate() {
             edge.id = DispatchEdgeId(index as u64);
@@ -62,7 +68,8 @@ impl EntrypointOutput {
 
         // Sort unresolved by (stable_key, id)
         self.unresolved.sort_by(|left, right| {
-            (left.stable_key.as_str(), left.id).cmp(&(right.stable_key.as_str(), right.id))
+            (interner.resolve(left.stable_key), left.id)
+                .cmp(&(interner.resolve(right.stable_key), right.id))
         });
         for (index, fact) in self.unresolved.iter_mut().enumerate() {
             fact.id = UnresolvedFrameworkId(index as u64);
@@ -78,30 +85,35 @@ pub(crate) struct EntrypointStore {
     entrypoints_by_kind: BTreeMap<EntrypointKind, Vec<usize>>,
     entrypoints_by_file: BTreeMap<FileId, Vec<usize>>,
     entrypoints_by_framework: BTreeMap<String, Vec<usize>>,
-    trust_boundaries_by_entrypoint_key: BTreeMap<String, Vec<usize>>,
+    trust_boundaries_by_entrypoint_key: BTreeMap<StableKeyId, Vec<usize>>,
     dispatch_edges_by_entrypoint_key: BTreeMap<String, Vec<usize>>,
     unresolved_by_reason: BTreeMap<UnresolvedFrameworkReason, Vec<usize>>,
 }
 
 impl EntrypointStore {
-    pub(crate) fn from_output(output: EntrypointOutput) -> Result<Self, AnalysisError> {
-        let output = output.normalized();
+    pub(crate) fn from_output(
+        output: EntrypointOutput,
+        interner: &StableKeyInterner,
+    ) -> Result<Self, AnalysisError> {
+        let output = output.normalized(interner);
 
         // Collect valid entrypoint stable keys for referential integrity checks
-        let entrypoint_keys: BTreeSet<&str> = output
-            .entrypoints
+        let entrypoint_keys: BTreeSet<StableKeyId> =
+            output.entrypoints.iter().map(|ep| ep.stable_key).collect();
+        let entrypoint_key_texts = entrypoint_keys
             .iter()
-            .map(|ep| ep.stable_key.as_str())
-            .collect();
+            .map(|key| interner.resolve(*key))
+            .collect::<BTreeSet<_>>();
 
         // Validate: every trust boundary must reference an existing entrypoint
         for boundary in &output.trust_boundaries {
-            if !entrypoint_keys.contains(boundary.entrypoint_stable_key.as_str()) {
+            if !entrypoint_keys.contains(&boundary.entrypoint_stable_key) {
                 return Err(AnalysisError::InvalidFact {
                     provider: "polint.entrypoints",
                     reason: format!(
                         "dangling entrypoint stable key {:?} for trust boundary `{}`",
-                        boundary.entrypoint_stable_key, boundary.stable_key
+                        interner.resolve(boundary.entrypoint_stable_key),
+                        interner.resolve(boundary.stable_key)
                     ),
                 });
             }
@@ -109,12 +121,13 @@ impl EntrypointStore {
 
         // Validate: every dispatch edge must reference an existing entrypoint
         for edge in &output.dispatch_edges {
-            if !entrypoint_keys.contains(edge.from_source.as_str()) {
+            if !entrypoint_key_texts.contains(edge.from_source.as_str()) {
                 return Err(AnalysisError::InvalidFact {
                     provider: "polint.entrypoints",
                     reason: format!(
                         "dangling entrypoint stable key {:?} for dispatch edge `{}`",
-                        edge.from_source, edge.stable_key
+                        edge.from_source,
+                        interner.resolve(edge.stable_key)
                     ),
                 });
             }
@@ -147,7 +160,7 @@ impl EntrypointStore {
         for (index, boundary) in store.output.trust_boundaries.iter().enumerate() {
             store
                 .trust_boundaries_by_entrypoint_key
-                .entry(boundary.entrypoint_stable_key.clone())
+                .entry(boundary.entrypoint_stable_key)
                 .or_default()
                 .push(index);
         }
@@ -225,14 +238,14 @@ mod tests {
             confidence: EntrypointConfidence::High,
             status: EntrypointStatus::Resolved,
             provider_id: "polint.entrypoints".to_string(),
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
     fn trust_boundary(id: u64, entrypoint_key: &str, stable_key: &str) -> TrustBoundaryFact {
         TrustBoundaryFact {
             id: TrustBoundaryId(id),
-            entrypoint_stable_key: entrypoint_key.to_string(),
+            entrypoint_stable_key: crate::core::stable_key_for_test(entrypoint_key),
             source_kind: TrustBoundarySourceKind::PathParam,
             target_parameter: Some(FunctionId(10)),
             target_parameter_index: Some(0),
@@ -243,7 +256,7 @@ mod tests {
             span: span(),
             precision: EntrypointPrecision::ResolvedStatic,
             provider_id: "polint.entrypoints".to_string(),
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
@@ -261,7 +274,7 @@ mod tests {
             span: span(),
             precision: EntrypointPrecision::ResolvedStatic,
             provider_id: "polint.entrypoints".to_string(),
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
@@ -281,12 +294,13 @@ mod tests {
             scope_description: "server registration".to_string(),
             precision: EntrypointPrecision::Conservative,
             provider_id: "polint.entrypoints".to_string(),
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
     #[test]
     fn normalized_sorts_entrypoints_by_stable_key_and_reassigns_ids() {
+        let interner = crate::core::test_stable_key_interner();
         let output = EntrypointOutput {
             entrypoints: vec![
                 entrypoint(5, "ep-z"),
@@ -297,15 +311,19 @@ mod tests {
             dispatch_edges: Vec::new(),
             unresolved: Vec::new(),
         }
-        .normalized();
+        .normalized(&interner);
 
         assert_eq!(
             output
                 .entrypoints
                 .iter()
-                .map(|ep| ep.stable_key.as_str())
+                .map(|ep| interner.resolve(ep.stable_key))
                 .collect::<Vec<_>>(),
-            vec!["ep-a", "ep-m", "ep-z"]
+            vec![
+                std::sync::Arc::<str>::from("ep-a"),
+                std::sync::Arc::<str>::from("ep-m"),
+                std::sync::Arc::<str>::from("ep-z"),
+            ]
         );
         // IDs are reassigned sequentially after sorting
         assert_eq!(output.entrypoints[0].id, EntrypointId(0));
@@ -315,6 +333,7 @@ mod tests {
 
     #[test]
     fn normalized_sorts_trust_boundaries_by_entrypoint_key_then_stable_key() {
+        let interner = crate::core::test_stable_key_interner();
         let output = EntrypointOutput {
             entrypoints: Vec::new(),
             trust_boundaries: vec![
@@ -325,15 +344,33 @@ mod tests {
             dispatch_edges: Vec::new(),
             unresolved: Vec::new(),
         }
-        .normalized();
+        .normalized(&interner);
 
         assert_eq!(
             output
                 .trust_boundaries
                 .iter()
-                .map(|tb| (tb.entrypoint_stable_key.as_str(), tb.stable_key.as_str()))
+                .map(|tb| {
+                    (
+                        interner.resolve(tb.entrypoint_stable_key),
+                        interner.resolve(tb.stable_key),
+                    )
+                })
                 .collect::<Vec<_>>(),
-            vec![("ep-a", "tb-a"), ("ep-b", "tb-a"), ("ep-b", "tb-z")]
+            vec![
+                (
+                    std::sync::Arc::<str>::from("ep-a"),
+                    std::sync::Arc::<str>::from("tb-a"),
+                ),
+                (
+                    std::sync::Arc::<str>::from("ep-b"),
+                    std::sync::Arc::<str>::from("tb-a"),
+                ),
+                (
+                    std::sync::Arc::<str>::from("ep-b"),
+                    std::sync::Arc::<str>::from("tb-z"),
+                ),
+            ]
         );
         assert_eq!(output.trust_boundaries[0].id, TrustBoundaryId(0));
         assert_eq!(output.trust_boundaries[1].id, TrustBoundaryId(1));
@@ -342,25 +379,28 @@ mod tests {
 
     #[test]
     fn from_output_builds_deterministic_entrypoint_indexes() {
-        let store = EntrypointStore::from_output(EntrypointOutput {
-            entrypoints: vec![entrypoint(2, "ep-b"), {
-                let mut ep = entrypoint(1, "ep-a");
-                ep.kind = EntrypointKind::McpTool;
-                ep.registration_file = FileId(2);
-                ep.framework_id = "mcp-sdk".to_string();
-                ep
-            }],
-            trust_boundaries: vec![
-                trust_boundary(1, "ep-a", "tb-a"),
-                trust_boundary(2, "ep-b", "tb-b"),
-            ],
-            dispatch_edges: vec![dispatch_edge(1, "ep-a", "de-a")],
-            unresolved: vec![unresolved(
-                1,
-                UnresolvedFrameworkReason::UnrecognizedPattern,
-                "ur-a",
-            )],
-        })
+        let store = EntrypointStore::from_output(
+            EntrypointOutput {
+                entrypoints: vec![entrypoint(2, "ep-b"), {
+                    let mut ep = entrypoint(1, "ep-a");
+                    ep.kind = EntrypointKind::McpTool;
+                    ep.registration_file = FileId(2);
+                    ep.framework_id = "mcp-sdk".to_string();
+                    ep
+                }],
+                trust_boundaries: vec![
+                    trust_boundary(1, "ep-a", "tb-a"),
+                    trust_boundary(2, "ep-b", "tb-b"),
+                ],
+                dispatch_edges: vec![dispatch_edge(1, "ep-a", "de-a")],
+                unresolved: vec![unresolved(
+                    1,
+                    UnresolvedFrameworkReason::UnrecognizedPattern,
+                    "ur-a",
+                )],
+            },
+            &crate::core::test_stable_key_interner(),
+        )
         .expect("entrypoint output should be valid");
 
         // Entrypoints
@@ -386,9 +426,13 @@ mod tests {
 
         // Trust boundaries
         assert_eq!(store.trust_boundaries().len(), 2);
-        let tb_for_a = store.trust_boundaries_by_entrypoint_key.get("ep-a");
+        let tb_for_a = store
+            .trust_boundaries_by_entrypoint_key
+            .get(&crate::core::stable_key_for_test("ep-a"));
         assert_eq!(tb_for_a.map(|v| v.len()), Some(1));
-        let tb_for_b = store.trust_boundaries_by_entrypoint_key.get("ep-b");
+        let tb_for_b = store
+            .trust_boundaries_by_entrypoint_key
+            .get(&crate::core::stable_key_for_test("ep-b"));
         assert_eq!(tb_for_b.map(|v| v.len()), Some(1));
 
         // Dispatch edges
@@ -406,12 +450,15 @@ mod tests {
 
     #[test]
     fn from_output_rejects_dangling_trust_boundary_reference() {
-        let error = EntrypointStore::from_output(EntrypointOutput {
-            entrypoints: vec![entrypoint(1, "ep-a")],
-            trust_boundaries: vec![trust_boundary(1, "ep-nonexistent", "tb-a")],
-            dispatch_edges: Vec::new(),
-            unresolved: Vec::new(),
-        })
+        let error = EntrypointStore::from_output(
+            EntrypointOutput {
+                entrypoints: vec![entrypoint(1, "ep-a")],
+                trust_boundaries: vec![trust_boundary(1, "ep-nonexistent", "tb-a")],
+                dispatch_edges: Vec::new(),
+                unresolved: Vec::new(),
+            },
+            &crate::core::test_stable_key_interner(),
+        )
         .unwrap_err();
 
         assert!(error.to_string().contains("dangling entrypoint stable key"));
@@ -420,12 +467,15 @@ mod tests {
 
     #[test]
     fn from_output_rejects_dangling_dispatch_edge_reference() {
-        let error = EntrypointStore::from_output(EntrypointOutput {
-            entrypoints: vec![entrypoint(1, "ep-a")],
-            trust_boundaries: Vec::new(),
-            dispatch_edges: vec![dispatch_edge(1, "ep-nonexistent", "de-a")],
-            unresolved: Vec::new(),
-        })
+        let error = EntrypointStore::from_output(
+            EntrypointOutput {
+                entrypoints: vec![entrypoint(1, "ep-a")],
+                trust_boundaries: Vec::new(),
+                dispatch_edges: vec![dispatch_edge(1, "ep-nonexistent", "de-a")],
+                unresolved: Vec::new(),
+            },
+            &crate::core::test_stable_key_interner(),
+        )
         .unwrap_err();
 
         assert!(error.to_string().contains("dangling entrypoint stable key"));
@@ -434,8 +484,11 @@ mod tests {
 
     #[test]
     fn empty_output_builds_empty_store() {
-        let store =
-            EntrypointStore::from_output(EntrypointOutput::empty()).expect("empty output is valid");
+        let store = EntrypointStore::from_output(
+            EntrypointOutput::empty(),
+            &crate::core::test_stable_key_interner(),
+        )
+        .expect("empty output is valid");
 
         assert!(store.entrypoints().is_empty());
         assert!(store.trust_boundaries().is_empty());
@@ -445,16 +498,26 @@ mod tests {
 
     #[test]
     fn output_accessor_returns_normalized_output() {
-        let store = EntrypointStore::from_output(EntrypointOutput {
-            entrypoints: vec![entrypoint(5, "ep-z"), entrypoint(3, "ep-a")],
-            trust_boundaries: Vec::new(),
-            dispatch_edges: Vec::new(),
-            unresolved: Vec::new(),
-        })
+        let store = EntrypointStore::from_output(
+            EntrypointOutput {
+                entrypoints: vec![entrypoint(5, "ep-z"), entrypoint(3, "ep-a")],
+                trust_boundaries: Vec::new(),
+                dispatch_edges: Vec::new(),
+                unresolved: Vec::new(),
+            },
+            &crate::core::test_stable_key_interner(),
+        )
         .expect("valid output");
 
         let output = store.output();
-        assert_eq!(output.entrypoints[0].stable_key, "ep-a");
-        assert_eq!(output.entrypoints[1].stable_key, "ep-z");
+        let interner = crate::core::test_stable_key_interner();
+        assert_eq!(
+            interner.resolve(output.entrypoints[0].stable_key).as_ref(),
+            "ep-a"
+        );
+        assert_eq!(
+            interner.resolve(output.entrypoints[1].stable_key).as_ref(),
+            "ep-z"
+        );
     }
 }

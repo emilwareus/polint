@@ -3284,7 +3284,7 @@ mod tests {
                 call_site: None,
                 model: Some(DataFlowModelId(0)),
                 span: Some(Span::point(file, 1, 1)),
-                stable_key: "node:source".to_string(),
+                stable_key: crate::core::stable_key_for_test("node:source"),
             },
             data_flow_place_node(1, file, function, PlaceId(1)),
             data_flow_place_node(2, file, function, PlaceId(2)),
@@ -3312,7 +3312,7 @@ mod tests {
             call_site: None,
             model: None,
             span: Some(Span::point(file, id as u32 + 1, 1)),
-            stable_key: format!("node:place:{id}"),
+            stable_key: crate::core::stable_key_for_test(&format!("node:place:{id}")),
         }
     }
 
@@ -3331,7 +3331,7 @@ mod tests {
             provenance: DataFlowProvenance::Native,
             evidence: vec!["trust_boundary".to_string()],
             payload_labels: vec!["source_kind=QueryString".to_string()],
-            stable_key: "model:source".to_string(),
+            stable_key: crate::core::stable_key_for_test("model:source"),
         }
     }
 
@@ -3376,7 +3376,9 @@ mod tests {
             budget: None,
             evidence,
             input_stable_keys: Vec::new(),
-            stable_key: format!("edge:{id}:{from}:{to}:{status:?}"),
+            stable_key: crate::core::stable_key_for_test(&format!(
+                "edge:{id}:{from}:{to}:{status:?}"
+            )),
         }
     }
 

@@ -331,19 +331,22 @@ mod tests {
     }
 
     fn store_with_value_and_control_edges() -> EvidenceStore {
-        EvidenceStore::from_output(EvidenceOutput {
-            nodes: vec![node(0), node(1), node(2)],
-            edges: vec![
-                edge(0, 0, 2, EvidenceEdgeKind::DataValue),
-                edge(1, 1, 2, EvidenceEdgeKind::Control),
-            ],
-            bundles: Vec::new(),
-            paths: Vec::new(),
-            slices: Vec::new(),
-            unknowns: Vec::new(),
-            omitted_regions: Vec::new(),
-            replay_keys: Vec::new(),
-        })
+        EvidenceStore::from_output(
+            EvidenceOutput {
+                nodes: vec![node(0), node(1), node(2)],
+                edges: vec![
+                    edge(0, 0, 2, EvidenceEdgeKind::DataValue),
+                    edge(1, 1, 2, EvidenceEdgeKind::Control),
+                ],
+                bundles: Vec::new(),
+                paths: Vec::new(),
+                slices: Vec::new(),
+                unknowns: Vec::new(),
+                omitted_regions: Vec::new(),
+                replay_keys: Vec::new(),
+            },
+            &crate::core::test_stable_key_interner(),
+        )
         .expect("valid evidence store")
     }
 
@@ -369,7 +372,7 @@ mod tests {
             confidence: EvidenceConfidence::High,
             compact_label: None,
             source_fact_stable_keys: Vec::new(),
-            stable_key: format!("node:{id}"),
+            stable_key: crate::core::stable_key_for_test(&format!("node:{id}")),
         }
     }
 
@@ -390,7 +393,7 @@ mod tests {
             expansion: EvidenceExpansion::None,
             compact_label: None,
             source_fact_stable_keys: Vec::new(),
-            stable_key: format!("edge:{id}"),
+            stable_key: crate::core::stable_key_for_test(&format!("edge:{id}")),
         }
     }
 }

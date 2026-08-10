@@ -1,4 +1,3 @@
-use serde::Serialize;
 use std::fmt::Debug;
 
 use super::cache_key::{
@@ -20,7 +19,7 @@ use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
     CacheStats, Digest, DigestKind, InputComponent, InputSnapshot,
 };
-use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
+use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
 use crate::core::AnalysisDb;
 use crate::diagnostics::Diagnostic;
 
@@ -52,7 +51,8 @@ pub(crate) fn derive_evidence_with_cache_stats(
     let mut output = EvidenceOutput::empty();
     derive_data_flow_evidence(db, &mut output);
     derive_control_dependence_evidence(db, &mut output);
-    let output = output.normalized();
+    let interner = db.stable_key_interner();
+    let output = output.normalized(&interner);
     let output_digest = evidence_output_digest(
         manifest,
         input_snapshot,
@@ -66,6 +66,7 @@ pub(crate) fn derive_evidence_with_cache_stats(
         &extensions_output_digest,
         &data_flow_output_digest,
         &output,
+        &interner,
     );
     let mut cache_stats = CacheStats::default();
     cache_stats.record_recompute();
@@ -135,11 +136,14 @@ fn evidence_node_from_data_flow(
         validation: EvidenceValidation::ReferentiallyValidated,
         confidence: EvidenceConfidence::High,
         compact_label: Some(format!("{:?}", node.kind)),
-        source_fact_stable_keys: vec![node.stable_key.clone()],
-        stable_key: stable_key_text_from_parts(
+        source_fact_stable_keys: vec![interner.resolve(node.stable_key).to_string()],
+        stable_key: stable_key_from_parts(
             interner,
             FactFamily::EvidenceNode,
-            &[("data_flow_node", node.stable_key.clone())],
+            &[(
+                "data_flow_node",
+                interner.resolve(node.stable_key).to_string(),
+            )],
         ),
     }
 }
@@ -167,13 +171,16 @@ fn evidence_edge_from_data_flow(
         summary_stable_key: summary_stable_key.clone(),
         expansion: evidence_expansion(edge, summary_stable_key.as_deref()),
         compact_label: Some(format!("{:?}", edge.kind)),
-        source_fact_stable_keys: std::iter::once(edge.stable_key.clone())
+        source_fact_stable_keys: std::iter::once(interner.resolve(edge.stable_key).to_string())
             .chain(edge.input_stable_keys.iter().cloned())
             .collect(),
-        stable_key: stable_key_text_from_parts(
+        stable_key: stable_key_from_parts(
             interner,
             FactFamily::EvidenceEdge,
-            &[("data_flow_edge", edge.stable_key.clone())],
+            &[(
+                "data_flow_edge",
+                interner.resolve(edge.stable_key).to_string(),
+            )],
         ),
     }
 }
@@ -232,7 +239,7 @@ fn derive_control_dependence_evidence(db: &AnalysisDb, output: &mut EvidenceOutp
                 interner.resolve(dependence.stable_key).to_string(),
                 interner.resolve(controlling_edge.stable_key).to_string(),
             ],
-            stable_key: stable_key_text_from_parts(
+            stable_key: stable_key_from_parts(
                 interner,
                 FactFamily::EvidenceNode,
                 &[
@@ -266,7 +273,7 @@ fn derive_control_dependence_evidence(db: &AnalysisDb, output: &mut EvidenceOutp
             confidence: EvidenceConfidence::High,
             compact_label: Some("controlled_block".to_string()),
             source_fact_stable_keys: vec![interner.resolve(dependence.stable_key).to_string()],
-            stable_key: stable_key_text_from_parts(
+            stable_key: stable_key_from_parts(
                 interner,
                 FactFamily::EvidenceNode,
                 &[
@@ -297,7 +304,7 @@ fn derive_control_dependence_evidence(db: &AnalysisDb, output: &mut EvidenceOutp
                 interner.resolve(dependence.stable_key).to_string(),
                 interner.resolve(controlling_edge.stable_key).to_string(),
             ],
-            stable_key: stable_key_text_from_parts(
+            stable_key: stable_key_from_parts(
                 interner,
                 FactFamily::EvidenceEdge,
                 &[(
@@ -498,6 +505,7 @@ fn evidence_output_digest(
     extensions_output_digest: &Digest,
     data_flow_output_digest: &Digest,
     output: &EvidenceOutput,
+    interner: &crate::core::StableKeyInterner,
 ) -> Digest {
     let upstream = vec![
         semantic_mir_output_digest.clone(),
@@ -546,50 +554,50 @@ fn evidence_output_digest(
         output
             .nodes
             .iter()
-            .map(|node| format!("evidence_node={}", stable_fact_payload(node))),
+            .map(|node| format!("evidence_node={}", stable_fact_payload(interner, node))),
     );
     parts.extend(
         output
             .edges
             .iter()
-            .map(|edge| format!("evidence_edge={}", stable_fact_payload(edge))),
+            .map(|edge| format!("evidence_edge={}", stable_fact_payload(interner, edge))),
     );
     parts.extend(
         output
             .bundles
             .iter()
-            .map(|bundle| format!("evidence_bundle={}", stable_fact_payload(bundle))),
+            .map(|bundle| format!("evidence_bundle={}", stable_fact_payload(interner, bundle))),
     );
     parts.extend(
         output
             .paths
             .iter()
-            .map(|path| format!("evidence_path={}", stable_fact_payload(path))),
+            .map(|path| format!("evidence_path={}", stable_fact_payload(interner, path))),
     );
     parts.extend(
         output
             .slices
             .iter()
-            .map(|slice| format!("evidence_slice={}", stable_fact_payload(slice))),
+            .map(|slice| format!("evidence_slice={}", stable_fact_payload(interner, slice))),
     );
-    parts.extend(
-        output
-            .unknowns
-            .iter()
-            .map(|unknown| format!("evidence_unknown={}", stable_fact_payload(unknown))),
-    );
-    parts.extend(
-        output
-            .omitted_regions
-            .iter()
-            .map(|omitted| format!("evidence_omitted_region={}", stable_fact_payload(omitted))),
-    );
-    parts.extend(
-        output
-            .replay_keys
-            .iter()
-            .map(|replay| format!("evidence_replay_key={}", stable_fact_payload(replay))),
-    );
+    parts.extend(output.unknowns.iter().map(|unknown| {
+        format!(
+            "evidence_unknown={}",
+            stable_fact_payload(interner, unknown)
+        )
+    }));
+    parts.extend(output.omitted_regions.iter().map(|omitted| {
+        format!(
+            "evidence_omitted_region={}",
+            stable_fact_payload(interner, omitted)
+        )
+    }));
+    parts.extend(output.replay_keys.iter().map(|replay| {
+        format!(
+            "evidence_replay_key={}",
+            stable_fact_payload(interner, replay)
+        )
+    }));
     if output.nodes.is_empty()
         && output.edges.is_empty()
         && output.bundles.is_empty()
@@ -619,11 +627,37 @@ fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[I
     }));
 }
 
-fn stable_fact_payload<T>(fact: &T) -> String
+fn stable_fact_payload<T>(interner: &crate::core::StableKeyInterner, fact: &T) -> String
 where
-    T: Serialize + Debug,
+    T: Debug,
 {
-    serde_json::to_string(fact).unwrap_or_else(|_| format!("{fact:?}"))
+    resolve_stable_key_ids(interner, &format!("{fact:?}"))
+}
+
+fn resolve_stable_key_ids(interner: &crate::core::StableKeyInterner, payload: &str) -> String {
+    let mut resolved = String::with_capacity(payload.len());
+    let mut remaining = payload;
+    while let Some(start) = remaining.find("StableKeyId(") {
+        resolved.push_str(&remaining[..start]);
+        let id_start = start + "StableKeyId(".len();
+        let Some(relative_end) = remaining[id_start..].find(')') else {
+            resolved.push_str(&remaining[start..]);
+            return resolved;
+        };
+        let id_end = id_start + relative_end;
+        let Ok(id) = remaining[id_start..id_end].parse::<u32>() else {
+            resolved.push_str(&remaining[start..=id_end]);
+            remaining = &remaining[id_end + 1..];
+            continue;
+        };
+        resolved.push_str(&format!(
+            "{:?}",
+            interner.resolve(crate::core::StableKeyId(id))
+        ));
+        remaining = &remaining[id_end + 1..];
+    }
+    resolved.push_str(remaining);
+    resolved
 }
 
 fn provider_error_diagnostic(message: String) -> Diagnostic {
@@ -869,7 +903,7 @@ mod tests {
             call_site: None,
             model: None,
             span: Some(span()),
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
@@ -892,7 +926,7 @@ mod tests {
             budget: None,
             evidence: Vec::new(),
             input_stable_keys: vec!["df:source".to_string(), "df:sink".to_string()],
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
@@ -1023,8 +1057,19 @@ mod tests {
         output: &EvidenceOutput,
     ) -> Digest {
         evidence_output_digest(
-            manifest, snapshot, upstream, upstream, upstream, upstream, upstream, upstream,
-            upstream, upstream, upstream, output,
+            manifest,
+            snapshot,
+            upstream,
+            upstream,
+            upstream,
+            upstream,
+            upstream,
+            upstream,
+            upstream,
+            upstream,
+            upstream,
+            output,
+            &crate::core::test_stable_key_interner(),
         )
     }
 
@@ -1050,7 +1095,7 @@ mod tests {
             confidence: EvidenceConfidence::High,
             compact_label: None,
             source_fact_stable_keys: Vec::new(),
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
@@ -1071,14 +1116,14 @@ mod tests {
             expansion: EvidenceExpansion::None,
             compact_label: None,
             source_fact_stable_keys: Vec::new(),
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
     fn evidence_bundle(id: u64, stable_key: &str) -> EvidenceBundleFact {
         EvidenceBundleFact {
             id: crate::analysis::ids::EvidenceBundleId(id),
-            diagnostic_stable_key: "diag:output".to_string(),
+            diagnostic_stable_key: crate::core::stable_key_for_test("diag:output"),
             query_mode: EvidenceQueryMode::ThinBackward,
             status: EvidenceStatus::Present,
             precision: EvidencePrecision::Syntax,
@@ -1089,7 +1134,7 @@ mod tests {
             selected_paths: Vec::new(),
             selected_slices: Vec::new(),
             replay_key: None,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
@@ -1105,7 +1150,7 @@ mod tests {
             status: EvidenceStatus::Present,
             hidden_node_count: 0,
             omitted_regions: Vec::new(),
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
@@ -1119,7 +1164,7 @@ mod tests {
             edges: Vec::new(),
             status: EvidenceStatus::Present,
             omitted_regions: Vec::new(),
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
@@ -1132,7 +1177,7 @@ mod tests {
             reason: EvidenceUnknownReason::OpaqueSummary,
             message: "unknown".to_string(),
             source_fact_stable_keys: Vec::new(),
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
@@ -1146,7 +1191,7 @@ mod tests {
             hidden_node_count: 1,
             hidden_edge_count: 0,
             budget_label: Some("test".to_string()),
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
@@ -1159,7 +1204,7 @@ mod tests {
             ranking: EvidenceRankingMode::DeterministicDisplay,
             renderer: EvidenceRendererMode::Debug,
             upstream_digest_keys: Vec::new(),
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 }

@@ -1,4 +1,3 @@
-use serde::Serialize;
 use std::fmt::Debug;
 
 use super::cache_key::{
@@ -18,7 +17,7 @@ use crate::analysis::places::{PlaceFact, PlaceRoot};
 use crate::analysis_kernel::incremental::{
     CacheStats, Digest, DigestKind, InputComponent, InputSnapshot,
 };
-use crate::analysis_kernel::{FactFamily, ProviderManifest, stable_key_text_from_parts};
+use crate::analysis_kernel::{FactFamily, ProviderManifest, stable_key_from_parts};
 use crate::core::AnalysisDb;
 use crate::diagnostics::Diagnostic;
 
@@ -53,7 +52,8 @@ pub(crate) fn derive_data_flow_with_cache_stats(
     super::summary_edges::derive_summary_projected_edges(db, &mut output);
     derive_source_models(db, &mut output);
     derive_extension_models(db, &mut output);
-    output = output.normalized();
+    let interner = db.stable_key_interner();
+    output = output.normalized(&interner);
 
     let output_digest = data_flow_output_digest(
         manifest,
@@ -67,6 +67,7 @@ pub(crate) fn derive_data_flow_with_cache_stats(
         &entrypoints_output_digest,
         &extensions_output_digest,
         &output,
+        &interner,
     );
     let mut cache_stats = CacheStats::default();
     cache_stats.record_recompute();
@@ -98,12 +99,15 @@ fn derive_source_models(db: &AnalysisDb, output: &mut DataFlowOutput) {
     let interner = &interner_handle;
     for boundary in db.trust_boundary_facts() {
         let model_id = next_data_flow_model_id(&output.models);
-        let stable_key = stable_key_text_from_parts(
+        let stable_key = stable_key_from_parts(
             interner,
             FactFamily::DataFlowModel,
             &[
                 ("kind", "source".to_string()),
-                ("trust_boundary", boundary.stable_key.clone()),
+                (
+                    "trust_boundary",
+                    interner.resolve(boundary.stable_key).to_string(),
+                ),
             ],
         );
         output.models.push(DataFlowModelFact {
@@ -112,7 +116,7 @@ fn derive_source_models(db: &AnalysisDb, output: &mut DataFlowOutput) {
             language: boundary.language,
             provider_id: boundary.provider_id.clone(),
             model_id: Some(format!("{:?}", boundary.source_kind)),
-            source_stable_key: Some(boundary.stable_key.clone()),
+            source_stable_key: Some(interner.resolve(boundary.stable_key).to_string()),
             status: DataFlowStatus::Present,
             precision: DataFlowPrecision::SetupAware,
             validation: DataFlowValidation::ReferentiallyValidated,
@@ -123,7 +127,7 @@ fn derive_source_models(db: &AnalysisDb, output: &mut DataFlowOutput) {
                 format!("source_kind={:?}", boundary.source_kind),
                 boundary.access_path.clone().unwrap_or_default(),
             ],
-            stable_key: stable_key.clone(),
+            stable_key,
         });
         let source_node = next_data_flow_node_id(&output.nodes);
         output.nodes.push(DataFlowNodeFact {
@@ -141,10 +145,10 @@ fn derive_source_models(db: &AnalysisDb, output: &mut DataFlowOutput) {
             call_site: None,
             model: Some(model_id),
             span: Some(boundary.span.clone()),
-            stable_key: stable_key_text_from_parts(
+            stable_key: stable_key_from_parts(
                 interner,
                 FactFamily::DataFlowNode,
-                &[("source_model", stable_key)],
+                &[("source_model", interner.resolve(stable_key).to_string())],
             ),
         });
         derive_source_introduction_edges(db, output, boundary, source_node, model_id);
@@ -219,12 +223,15 @@ fn push_source_introduction_edge(
     target_node: DataFlowNodeId,
     model_id: DataFlowModelId,
 ) {
-    let stable_key = stable_key_text_from_parts(
+    let stable_key = stable_key_from_parts(
         interner,
         FactFamily::DataFlowEdge,
         &[
             ("kind", "SourceIntroduction".to_string()),
-            ("trust_boundary", boundary.stable_key.clone()),
+            (
+                "trust_boundary",
+                interner.resolve(boundary.stable_key).to_string(),
+            ),
             ("place", interner.resolve(place.stable_key).to_string()),
         ],
     );
@@ -272,7 +279,7 @@ fn push_source_introduction_edge(
                 .unwrap_or_else(|| "target_parameter_index=unknown".to_string()),
         ],
         input_stable_keys: vec![
-            boundary.stable_key.clone(),
+            interner.resolve(boundary.stable_key).to_string(),
             interner.resolve(place.stable_key).to_string(),
         ],
         stable_key,
@@ -305,7 +312,7 @@ fn derive_extension_models(db: &AnalysisDb, output: &mut DataFlowOutput) {
             provenance: DataFlowProvenance::Extension,
             evidence: fact.evidence.clone(),
             payload_labels: fact.payload_labels.clone(),
-            stable_key: stable_key_text_from_parts(
+            stable_key: stable_key_from_parts(
                 interner,
                 FactFamily::DataFlowModel,
                 &[
@@ -363,6 +370,7 @@ fn data_flow_output_digest(
     entrypoints_output_digest: &Digest,
     extensions_output_digest: &Digest,
     output: &DataFlowOutput,
+    interner: &crate::core::StableKeyInterner,
 ) -> Digest {
     let upstream = vec![
         semantic_mir_output_digest.clone(),
@@ -405,30 +413,30 @@ fn data_flow_output_digest(
     extend_component_parts(&mut parts, "model", &input_snapshot.models);
     extend_component_parts(&mut parts, "extension", &input_snapshot.extensions);
     extend_component_parts(&mut parts, "tool", &input_snapshot.tool_invocations);
-    parts.extend(
-        output
-            .nodes
-            .iter()
-            .map(|node| format!("data_flow_node={}", stable_fact_payload(node))),
-    );
-    parts.extend(
-        output
-            .edges
-            .iter()
-            .map(|edge| format!("data_flow_edge={}", stable_fact_payload(edge))),
-    );
-    parts.extend(
-        output
-            .models
-            .iter()
-            .map(|model| format!("data_flow_model={}", stable_fact_payload(model))),
-    );
-    parts.extend(
-        output
-            .budgets
-            .iter()
-            .map(|budget| format!("data_flow_budget={}", stable_fact_payload(budget))),
-    );
+    parts.extend(output.nodes.iter().map(|node| {
+        format!(
+            "data_flow_node={}",
+            stable_fact_payload(interner, node.stable_key, node)
+        )
+    }));
+    parts.extend(output.edges.iter().map(|edge| {
+        format!(
+            "data_flow_edge={}",
+            stable_fact_payload(interner, edge.stable_key, edge)
+        )
+    }));
+    parts.extend(output.models.iter().map(|model| {
+        format!(
+            "data_flow_model={}",
+            stable_fact_payload(interner, model.stable_key, model)
+        )
+    }));
+    parts.extend(output.budgets.iter().map(|budget| {
+        format!(
+            "data_flow_budget={}",
+            stable_fact_payload(interner, budget.stable_key, budget)
+        )
+    }));
     if output.nodes.is_empty() && output.edges.is_empty() && output.models.is_empty() {
         parts.push("data_flow_output=empty".to_string());
     }
@@ -450,11 +458,41 @@ fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[I
     }));
 }
 
-fn stable_fact_payload<T>(fact: &T) -> String
+fn stable_fact_payload<T>(
+    interner: &crate::core::StableKeyInterner,
+    _stable_key: crate::core::StableKeyId,
+    fact: &T,
+) -> String
 where
-    T: Serialize + Debug,
+    T: Debug,
 {
-    serde_json::to_string(fact).unwrap_or_else(|_| format!("{fact:?}"))
+    resolve_stable_key_ids(interner, &format!("{fact:?}"))
+}
+
+fn resolve_stable_key_ids(interner: &crate::core::StableKeyInterner, payload: &str) -> String {
+    let mut resolved = String::with_capacity(payload.len());
+    let mut remaining = payload;
+    while let Some(start) = remaining.find("StableKeyId(") {
+        resolved.push_str(&remaining[..start]);
+        let id_start = start + "StableKeyId(".len();
+        let Some(relative_end) = remaining[id_start..].find(')') else {
+            resolved.push_str(&remaining[start..]);
+            return resolved;
+        };
+        let id_end = id_start + relative_end;
+        let Ok(id) = remaining[id_start..id_end].parse::<u32>() else {
+            resolved.push_str(&remaining[start..=id_end]);
+            remaining = &remaining[id_end + 1..];
+            continue;
+        };
+        resolved.push_str(&format!(
+            "{:?}",
+            interner.resolve(crate::core::StableKeyId(id))
+        ));
+        remaining = &remaining[id_end + 1..];
+    }
+    resolved.push_str(remaining);
+    resolved
 }
 
 fn provider_error_diagnostic(message: String) -> Diagnostic {
@@ -663,14 +701,14 @@ mod tests {
             confidence: EntrypointConfidence::High,
             status: EntrypointStatus::Resolved,
             provider_id: "polint.entrypoints".to_string(),
-            stable_key: "entrypoint:handler".to_string(),
+            stable_key: crate::core::stable_key_for_test("entrypoint:handler"),
         }
     }
 
     fn trust_boundary(file: FileId, function: FunctionId) -> TrustBoundaryFact {
         TrustBoundaryFact {
             id: TrustBoundaryId(0),
-            entrypoint_stable_key: "entrypoint:handler".to_string(),
+            entrypoint_stable_key: crate::core::stable_key_for_test("entrypoint:handler"),
             source_kind: TrustBoundarySourceKind::QueryString,
             target_parameter: Some(function),
             target_parameter_index: Some(0),
@@ -681,7 +719,7 @@ mod tests {
             span: Span::point(file, 1, 1),
             precision: EntrypointPrecision::ResolvedStatic,
             provider_id: "polint.entrypoints".to_string(),
-            stable_key: "trust-boundary:query".to_string(),
+            stable_key: crate::core::stable_key_for_test("trust-boundary:query"),
         }
     }
 }

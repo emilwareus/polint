@@ -577,16 +577,19 @@ mod tests {
     #[test]
     fn solver_rejects_unrealizable_path_with_mismatched_return_site() {
         let db = call_graph();
-        let store = DataFlowStore::from_output(DataFlowOutput {
-            nodes: (0..4).map(node).collect(),
-            edges: vec![
-                boundary_edge(0, 0, 1, CallSiteId(1), true),
-                local_edge(1, 1, 2),
-                boundary_edge(2, 2, 3, CallSiteId(2), false),
-            ],
-            models: Vec::new(),
-            budgets: Vec::new(),
-        })
+        let store = DataFlowStore::from_output(
+            DataFlowOutput {
+                nodes: (0..4).map(node).collect(),
+                edges: vec![
+                    boundary_edge(0, 0, 1, CallSiteId(1), true),
+                    local_edge(1, 1, 2),
+                    boundary_edge(2, 2, 3, CallSiteId(2), false),
+                ],
+                models: Vec::new(),
+                budgets: Vec::new(),
+            },
+            &crate::core::test_stable_key_interner(),
+        )
         .expect("valid data-flow store");
 
         let paths = find_taint_paths(
@@ -604,16 +607,19 @@ mod tests {
     #[test]
     fn solver_accepts_call_and_return_for_same_site() {
         let db = call_graph();
-        let store = DataFlowStore::from_output(DataFlowOutput {
-            nodes: (0..4).map(node).collect(),
-            edges: vec![
-                boundary_edge(0, 0, 1, CallSiteId(1), true),
-                local_edge(1, 1, 2),
-                boundary_edge(2, 2, 3, CallSiteId(1), false),
-            ],
-            models: Vec::new(),
-            budgets: Vec::new(),
-        })
+        let store = DataFlowStore::from_output(
+            DataFlowOutput {
+                nodes: (0..4).map(node).collect(),
+                edges: vec![
+                    boundary_edge(0, 0, 1, CallSiteId(1), true),
+                    local_edge(1, 1, 2),
+                    boundary_edge(2, 2, 3, CallSiteId(1), false),
+                ],
+                models: Vec::new(),
+                budgets: Vec::new(),
+            },
+            &crate::core::test_stable_key_interner(),
+        )
         .expect("valid data-flow store");
 
         let paths = find_taint_paths(
@@ -634,17 +640,20 @@ mod tests {
         let mut sanitizer = local_edge(0, 0, 1);
         sanitizer.kind = DataFlowEdgeKind::CallArgumentToReturn;
         sanitizer.call_site = Some(CallSiteId(7));
-        let store = DataFlowStore::from_output(DataFlowOutput {
-            nodes: (0..4).map(node).collect(),
-            edges: vec![
-                sanitizer,
-                local_edge(1, 1, 2),
-                local_edge(2, 0, 3),
-                local_edge(3, 3, 2),
-            ],
-            models: Vec::new(),
-            budgets: Vec::new(),
-        })
+        let store = DataFlowStore::from_output(
+            DataFlowOutput {
+                nodes: (0..4).map(node).collect(),
+                edges: vec![
+                    sanitizer,
+                    local_edge(1, 1, 2),
+                    local_edge(2, 0, 3),
+                    local_edge(3, 3, 2),
+                ],
+                models: Vec::new(),
+                budgets: Vec::new(),
+            },
+            &crate::core::test_stable_key_interner(),
+        )
         .expect("valid data-flow store");
 
         let paths = find_taint_paths(
@@ -667,12 +676,15 @@ mod tests {
         let mut sanitizer = local_edge(0, 0, 1);
         sanitizer.kind = DataFlowEdgeKind::CallArgumentToReturn;
         sanitizer.call_site = Some(CallSiteId(7));
-        let store = DataFlowStore::from_output(DataFlowOutput {
-            nodes: (0..3).map(node).collect(),
-            edges: vec![sanitizer, local_edge(1, 1, 2)],
-            models: Vec::new(),
-            budgets: Vec::new(),
-        })
+        let store = DataFlowStore::from_output(
+            DataFlowOutput {
+                nodes: (0..3).map(node).collect(),
+                edges: vec![sanitizer, local_edge(1, 1, 2)],
+                models: Vec::new(),
+                budgets: Vec::new(),
+            },
+            &crate::core::test_stable_key_interner(),
+        )
         .expect("valid data-flow store");
 
         let paths = find_taint_paths(
@@ -836,7 +848,7 @@ mod tests {
             call_site: None,
             model: None,
             span: None,
-            stable_key: format!("node:{id}"),
+            stable_key: crate::core::stable_key_for_test(&format!("node:{id}")),
         }
     }
 
@@ -865,7 +877,7 @@ mod tests {
             budget: None,
             evidence: vec![if call { "call" } else { "return" }.to_string()],
             input_stable_keys: Vec::new(),
-            stable_key: format!("edge:{id}"),
+            stable_key: crate::core::stable_key_for_test(&format!("edge:{id}")),
         }
     }
 

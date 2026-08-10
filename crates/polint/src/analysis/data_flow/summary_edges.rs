@@ -10,7 +10,7 @@ use crate::analysis::summaries::facts::{
     FlowKind, FlowRoot, SummaryDomainKind, SummaryEventFact, SummaryFact, SummaryFlowEdge,
     SummaryPrecision, SummaryStatus,
 };
-use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
+use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
 use crate::core::{AnalysisDb, Language};
 
 pub(crate) fn derive_summary_projected_edges(db: &AnalysisDb, output: &mut DataFlowOutput) {
@@ -231,7 +231,7 @@ fn push_edge(
     output: &mut DataFlowOutput,
     draft: SummaryEdgeDraft,
 ) {
-    let stable_key = stable_key_text_from_parts(
+    let stable_key = stable_key_from_parts(
         interner,
         FactFamily::DataFlowEdge,
         &[
@@ -276,7 +276,7 @@ fn summary_node(
     kind: DataFlowNodeKind,
     role: &str,
 ) -> DataFlowNodeId {
-    let stable_key = stable_key_text_from_parts(
+    let stable_key = stable_key_from_parts(
         interner,
         FactFamily::DataFlowNode,
         &[
@@ -321,7 +321,7 @@ fn event_node(
     kind: DataFlowNodeKind,
     role: &str,
 ) -> DataFlowNodeId {
-    let stable_key = stable_key_text_from_parts(
+    let stable_key = stable_key_from_parts(
         interner,
         FactFamily::DataFlowNode,
         &[

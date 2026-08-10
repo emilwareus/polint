@@ -5,9 +5,9 @@ use crate::analysis::ids::{
     CallSiteId, EvidenceBundleId, EvidenceEdgeId, EvidenceNodeId, EvidenceOmittedRegionId,
     EvidencePathId, EvidenceSliceId, MirBodyId, MirOpId, PlaceId,
 };
-use crate::core::{FileId, FunctionId, Language, ReferenceId, Span, SymbolId};
+use crate::core::{FileId, FunctionId, Language, ReferenceId, Span, StableKeyId, SymbolId};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EvidenceNodeFact {
     pub(crate) id: EvidenceNodeId,
     pub(crate) kind: EvidenceNodeKind,
@@ -29,10 +29,10 @@ pub(crate) struct EvidenceNodeFact {
     pub(crate) confidence: EvidenceConfidence,
     pub(crate) compact_label: Option<String>,
     pub(crate) source_fact_stable_keys: Vec<String>,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EvidenceEdgeFact {
     pub(crate) id: EvidenceEdgeId,
     pub(crate) from: EvidenceNodeId,
@@ -49,13 +49,13 @@ pub(crate) struct EvidenceEdgeFact {
     pub(crate) expansion: EvidenceExpansion,
     pub(crate) compact_label: Option<String>,
     pub(crate) source_fact_stable_keys: Vec<String>,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EvidenceBundleFact {
     pub(crate) id: EvidenceBundleId,
-    pub(crate) diagnostic_stable_key: String,
+    pub(crate) diagnostic_stable_key: StableKeyId,
     pub(crate) query_mode: EvidenceQueryMode,
     pub(crate) status: EvidenceStatus,
     pub(crate) precision: EvidencePrecision,
@@ -66,10 +66,10 @@ pub(crate) struct EvidenceBundleFact {
     pub(crate) selected_paths: Vec<EvidencePathId>,
     pub(crate) selected_slices: Vec<EvidenceSliceId>,
     pub(crate) replay_key: Option<String>,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EvidencePathFact {
     pub(crate) id: EvidencePathId,
     pub(crate) bundle: Option<EvidenceBundleId>,
@@ -81,10 +81,10 @@ pub(crate) struct EvidencePathFact {
     pub(crate) status: EvidenceStatus,
     pub(crate) hidden_node_count: u32,
     pub(crate) omitted_regions: Vec<EvidenceOmittedRegionId>,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EvidenceSliceFact {
     pub(crate) id: EvidenceSliceId,
     pub(crate) bundle: Option<EvidenceBundleId>,
@@ -94,10 +94,10 @@ pub(crate) struct EvidenceSliceFact {
     pub(crate) edges: Vec<EvidenceEdgeId>,
     pub(crate) status: EvidenceStatus,
     pub(crate) omitted_regions: Vec<EvidenceOmittedRegionId>,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EvidenceUnknownFact {
     pub(crate) bundle: Option<EvidenceBundleId>,
     pub(crate) path: Option<EvidencePathId>,
@@ -106,10 +106,10 @@ pub(crate) struct EvidenceUnknownFact {
     pub(crate) reason: EvidenceUnknownReason,
     pub(crate) message: String,
     pub(crate) source_fact_stable_keys: Vec<String>,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EvidenceOmittedRegionFact {
     pub(crate) id: EvidenceOmittedRegionId,
     pub(crate) bundle: Option<EvidenceBundleId>,
@@ -119,10 +119,10 @@ pub(crate) struct EvidenceOmittedRegionFact {
     pub(crate) hidden_node_count: u32,
     pub(crate) hidden_edge_count: u32,
     pub(crate) budget_label: Option<String>,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EvidenceReplayKeyFact {
     pub(crate) bundle: EvidenceBundleId,
     pub(crate) query_mode: EvidenceQueryMode,
@@ -131,14 +131,14 @@ pub(crate) struct EvidenceReplayKeyFact {
     pub(crate) ranking: EvidenceRankingMode,
     pub(crate) renderer: EvidenceRendererMode,
     pub(crate) upstream_digest_keys: Vec<String>,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ExtensionEvidenceCandidateFact {
     pub(crate) extension_id: String,
     pub(crate) provider_id: String,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) from: EvidenceNodeId,
     pub(crate) to: EvidenceNodeId,
     pub(crate) kind: EvidenceEdgeKind,
@@ -154,11 +154,11 @@ pub(crate) struct ExtensionEvidenceCandidateFact {
     pub(crate) evidence: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ExtensionEvidenceMergeFact {
     pub(crate) extension_id: String,
     pub(crate) provider_id: String,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) verdict: ExtensionEvidenceMergeVerdict,
     pub(crate) reason: Option<ExtensionEvidenceMergeReason>,
     pub(crate) effective_status: EvidenceStatus,
@@ -323,7 +323,7 @@ pub(crate) enum EvidenceRendererMode {
     Debug,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct EvidenceQueryBudget {
     pub(crate) max_paths: u32,
     pub(crate) max_nodes: u32,

@@ -16,7 +16,7 @@ use super::results::{DomainResults, SolverStatus};
 use super::state::ProductState;
 use crate::analysis::cfg::ids::BasicBlockId;
 use crate::analysis::ids::{DomainEventId, DomainObservationId, MirBodyId, MirOpId, PlaceId};
-use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
+use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct DomainOutput {
@@ -72,7 +72,7 @@ impl DomainOutput {
         place_stable_keys: Option<&BTreeMap<PlaceId, String>>,
     ) -> Self {
         let mut output = Self::empty();
-        for function in results.functions() {
+        for function in results.functions(interner) {
             push_state_observations(
                 interner,
                 &mut output.observations,
@@ -80,7 +80,7 @@ impl DomainOutput {
                 None,
                 None,
                 DomainLocation::FunctionEntry,
-                &function.body_stable_key,
+                interner.resolve(function.body_stable_key).as_ref(),
                 &function.entry_state,
                 place_stable_keys,
             );
@@ -94,18 +94,21 @@ impl DomainOutput {
                     status: DomainStatus::BudgetExceeded,
                     precision: DomainPrecision::Unknown,
                     reason: "solver_budget_exceeded".to_string(),
-                    stable_key: stable_key_text_from_parts(
+                    stable_key: stable_key_from_parts(
                         interner,
                         FactFamily::DomainEvent,
                         &[
-                            ("body", function.body_stable_key.clone()),
+                            (
+                                "body",
+                                interner.resolve(function.body_stable_key).to_string(),
+                            ),
                             ("reason", "solver_budget_exceeded".to_string()),
                         ],
                     ),
                 });
             }
         }
-        for block in results.blocks() {
+        for block in results.blocks(interner) {
             push_state_observations(
                 interner,
                 &mut output.observations,
@@ -113,7 +116,7 @@ impl DomainOutput {
                 Some(block.block),
                 None,
                 DomainLocation::BlockEntry,
-                &block.stable_key,
+                interner.resolve(block.stable_key).as_ref(),
                 &block.entry,
                 place_stable_keys,
             );
@@ -124,12 +127,12 @@ impl DomainOutput {
                 Some(block.block),
                 None,
                 DomainLocation::BlockExit,
-                &block.stable_key,
+                interner.resolve(block.stable_key).as_ref(),
                 &block.exit,
                 place_stable_keys,
             );
         }
-        for operation in results.operations() {
+        for operation in results.operations(interner) {
             push_state_observations(
                 interner,
                 &mut output.observations,
@@ -137,7 +140,7 @@ impl DomainOutput {
                 Some(operation.block),
                 Some(operation.operation),
                 DomainLocation::BeforeOperation,
-                &operation.stable_key,
+                interner.resolve(operation.stable_key).as_ref(),
                 &operation.before,
                 place_stable_keys,
             );
@@ -148,12 +151,12 @@ impl DomainOutput {
                 Some(operation.block),
                 Some(operation.operation),
                 DomainLocation::AfterOperation,
-                &operation.stable_key,
+                interner.resolve(operation.stable_key).as_ref(),
                 &operation.after,
                 place_stable_keys,
             );
         }
-        for event in results.unknown_top_events() {
+        for event in results.unknown_top_events(interner) {
             output.events.push(DomainEventFact {
                 id: DomainEventId(0),
                 body: event.body,
@@ -163,17 +166,17 @@ impl DomainOutput {
                 status: status_for_top_reason(event.reason),
                 precision: precision_for_top_reason(event.reason),
                 reason: event.reason.as_str().to_string(),
-                stable_key: stable_key_text_from_parts(
+                stable_key: stable_key_from_parts(
                     interner,
                     FactFamily::DomainEvent,
                     &[
-                        ("source", event.stable_key.clone()),
+                        ("source", interner.resolve(event.stable_key).to_string()),
                         ("reason", event.reason.as_str().to_string()),
                     ],
                 ),
             });
         }
-        output.normalized()
+        output.normalized(interner)
     }
 
     fn from_results_for_summary_inputs(
@@ -181,7 +184,7 @@ impl DomainOutput {
         results: &DomainResults,
     ) -> Self {
         let mut output = Self::empty();
-        for function in results.functions() {
+        for function in results.functions(interner) {
             push_reachability_observation(
                 interner,
                 &mut output.observations,
@@ -189,7 +192,10 @@ impl DomainOutput {
                 None,
                 None,
                 DomainLocation::FunctionEntry,
-                (&function.body_stable_key, &function.entry_state),
+                (
+                    interner.resolve(function.body_stable_key).as_ref(),
+                    &function.entry_state,
+                ),
             );
             if function.status == SolverStatus::BudgetExceeded {
                 output.events.push(DomainEventFact {
@@ -201,18 +207,21 @@ impl DomainOutput {
                     status: DomainStatus::BudgetExceeded,
                     precision: DomainPrecision::Unknown,
                     reason: "solver_budget_exceeded".to_string(),
-                    stable_key: stable_key_text_from_parts(
+                    stable_key: stable_key_from_parts(
                         interner,
                         FactFamily::DomainEvent,
                         &[
-                            ("body", function.body_stable_key.clone()),
+                            (
+                                "body",
+                                interner.resolve(function.body_stable_key).to_string(),
+                            ),
                             ("reason", "solver_budget_exceeded".to_string()),
                         ],
                     ),
                 });
             }
         }
-        for block in results.blocks() {
+        for block in results.blocks(interner) {
             push_reachability_observation(
                 interner,
                 &mut output.observations,
@@ -220,10 +229,10 @@ impl DomainOutput {
                 Some(block.block),
                 None,
                 DomainLocation::BlockEntry,
-                (&block.stable_key, &block.entry),
+                (interner.resolve(block.stable_key).as_ref(), &block.entry),
             );
         }
-        for event in results.unknown_top_events() {
+        for event in results.unknown_top_events(interner) {
             output.events.push(DomainEventFact {
                 id: DomainEventId(0),
                 body: event.body,
@@ -233,23 +242,23 @@ impl DomainOutput {
                 status: status_for_top_reason(event.reason),
                 precision: precision_for_top_reason(event.reason),
                 reason: event.reason.as_str().to_string(),
-                stable_key: stable_key_text_from_parts(
+                stable_key: stable_key_from_parts(
                     interner,
                     FactFamily::DomainEvent,
                     &[
-                        ("source", event.stable_key.clone()),
+                        ("source", interner.resolve(event.stable_key).to_string()),
                         ("reason", event.reason.as_str().to_string()),
                     ],
                 ),
             });
         }
-        output.normalized()
+        output.normalized(interner)
     }
 
-    pub(crate) fn normalized(mut self) -> Self {
+    pub(crate) fn normalized(mut self, interner: &crate::core::StableKeyInterner) -> Self {
         self.observations.sort_by(|left, right| {
             (
-                left.stable_key.as_str(),
+                interner.resolve(left.stable_key),
                 left.body,
                 left.block,
                 left.operation,
@@ -260,7 +269,7 @@ impl DomainOutput {
                 left.id,
             )
                 .cmp(&(
-                    right.stable_key.as_str(),
+                    interner.resolve(right.stable_key),
                     right.body,
                     right.block,
                     right.operation,
@@ -273,7 +282,7 @@ impl DomainOutput {
         });
         self.events.sort_by(|left, right| {
             (
-                left.stable_key.as_str(),
+                interner.resolve(left.stable_key),
                 left.body,
                 left.block,
                 left.operation,
@@ -283,7 +292,7 @@ impl DomainOutput {
                 left.id,
             )
                 .cmp(&(
-                    right.stable_key.as_str(),
+                    interner.resolve(right.stable_key),
                     right.body,
                     right.block,
                     right.operation,
@@ -487,7 +496,7 @@ fn observation(
         value,
         status,
         precision,
-        stable_key: stable_key_text_from_parts(
+        stable_key: stable_key_from_parts(
             interner,
             FactFamily::DomainObservation,
             &[
@@ -642,15 +651,18 @@ pub(crate) struct DomainStore {
     observations_by_place: BTreeMap<PlaceId, Vec<usize>>,
     observations_by_slot: BTreeMap<DomainSlot, Vec<usize>>,
     observations_by_status: BTreeMap<DomainStatus, Vec<usize>>,
-    observations_by_stable_key: BTreeMap<String, usize>,
+    observations_by_stable_key: BTreeMap<crate::core::StableKeyId, usize>,
     events_by_body: BTreeMap<MirBodyId, Vec<usize>>,
     events_by_status: BTreeMap<DomainStatus, Vec<usize>>,
-    events_by_stable_key: BTreeMap<String, usize>,
+    events_by_stable_key: BTreeMap<crate::core::StableKeyId, usize>,
 }
 
 impl DomainStore {
-    pub(crate) fn from_output(output: DomainOutput) -> Self {
-        Self::from_normalized_output(output.normalized())
+    pub(crate) fn from_output(
+        output: DomainOutput,
+        interner: &crate::core::StableKeyInterner,
+    ) -> Self {
+        Self::from_normalized_output(output.normalized(interner))
     }
 
     pub(crate) fn from_normalized_output(output: DomainOutput) -> Self {
@@ -698,7 +710,7 @@ impl DomainStore {
                 .push(index);
             store
                 .observations_by_stable_key
-                .insert(fact.stable_key.clone(), index);
+                .insert(fact.stable_key, index);
         }
 
         for (index, fact) in store.output.events.iter().enumerate() {
@@ -712,9 +724,7 @@ impl DomainStore {
                 .entry(fact.status)
                 .or_default()
                 .push(index);
-            store
-                .events_by_stable_key
-                .insert(fact.stable_key.clone(), index);
+            store.events_by_stable_key.insert(fact.stable_key, index);
         }
 
         store
@@ -760,10 +770,10 @@ impl DomainStore {
 
     pub(crate) fn observation_by_stable_key(
         &self,
-        stable_key: &str,
+        stable_key: crate::core::StableKeyId,
     ) -> Option<&DomainObservationFact> {
         self.observations_by_stable_key
-            .get(stable_key)
+            .get(&stable_key)
             .map(|&index| &self.output.observations[index])
     }
 
@@ -771,9 +781,12 @@ impl DomainStore {
         self.event_refs(self.events_by_status.get(&status))
     }
 
-    pub(crate) fn event_by_stable_key(&self, stable_key: &str) -> Option<&DomainEventFact> {
+    pub(crate) fn event_by_stable_key(
+        &self,
+        stable_key: crate::core::StableKeyId,
+    ) -> Option<&DomainEventFact> {
         self.events_by_stable_key
-            .get(stable_key)
+            .get(&stable_key)
             .map(|&index| &self.output.events[index])
     }
 
@@ -821,12 +834,13 @@ mod tests {
             value: DomainValue::Label(format!("{status:?}")),
             status,
             precision: DomainPrecision::Conservative,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
     #[test]
     fn abstract_domain_fact_storage_normalized_sorts_rows_without_dropping_unknown_statuses() {
+        let interner = crate::core::test_stable_key_interner();
         let output = DomainOutput {
             observations: vec![
                 observation(2, "domain:z", DomainStatus::Unsupported),
@@ -835,18 +849,27 @@ mod tests {
             ],
             events: Vec::new(),
         }
-        .normalized();
+        .normalized(&interner);
 
         assert_eq!(
             output
                 .observations
                 .iter()
-                .map(|fact| (fact.stable_key.as_str(), fact.status))
+                .map(|fact| (interner.resolve(fact.stable_key), fact.status))
                 .collect::<Vec<_>>(),
             vec![
-                ("domain:a", DomainStatus::Unknown),
-                ("domain:m", DomainStatus::BudgetExceeded),
-                ("domain:z", DomainStatus::Unsupported),
+                (
+                    std::sync::Arc::<str>::from("domain:a"),
+                    DomainStatus::Unknown
+                ),
+                (
+                    std::sync::Arc::<str>::from("domain:m"),
+                    DomainStatus::BudgetExceeded,
+                ),
+                (
+                    std::sync::Arc::<str>::from("domain:z"),
+                    DomainStatus::Unsupported,
+                ),
             ]
         );
     }
@@ -865,7 +888,8 @@ mod tests {
 
         assert_eq!(db.abstract_domain_observations().len(), 1);
         assert_eq!(
-            db.abstract_domain_observations()[0].stable_key,
+            db.resolve_stable_key(db.abstract_domain_observations()[0].stable_key)
+                .as_ref(),
             "domain:second"
         );
         assert!(
@@ -889,20 +913,19 @@ mod tests {
             .iter()
             .find(|row| row.slot == DomainSlot::Constants)
             .expect("constant row")
-            .stable_key
-            .clone();
+            .stable_key;
         let second_key = second
             .observations
             .iter()
             .find(|row| row.slot == DomainSlot::Constants)
             .expect("constant row")
-            .stable_key
-            .clone();
+            .stable_key;
 
         assert_eq!(first_key, second_key);
     }
 
     fn domain_output_for_place(place: PlaceId, place_key: &str) -> DomainOutput {
+        let interner = crate::core::test_stable_key_interner();
         let mut results = DomainResults::new();
         let mut state = ProductState::entry();
         state.core.constants.insert(
@@ -911,12 +934,12 @@ mod tests {
         );
         results.insert_function(
             MirBodyId(1),
-            "body:stable".to_string(),
+            interner.intern("body:stable"),
             SolverStatus::Solved,
             state,
         );
         DomainOutput::from_results_with_place_keys(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &interner,
             &results,
             &BTreeMap::from([(place, place_key.to_string())]),
         )

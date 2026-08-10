@@ -5,14 +5,17 @@ use crate::analysis::entrypoints::facts::UnresolvedFrameworkFact;
 /// Merge unresolved framework facts from Go and TS/JS recognizers.
 /// Deduplicates by stable_key (keeps first occurrence), sorts by stable key.
 pub(crate) fn merge_unresolved(
+    interner: &crate::core::StableKeyInterner,
     go: Vec<UnresolvedFrameworkFact>,
     ts: Vec<UnresolvedFrameworkFact>,
 ) -> Vec<UnresolvedFrameworkFact> {
-    let mut by_key: BTreeMap<String, UnresolvedFrameworkFact> = BTreeMap::new();
+    let mut by_key = BTreeMap::new();
 
     // Insert Go facts first, then TS/JS facts; first occurrence wins per dedup rule
     for fact in go.into_iter().chain(ts) {
-        by_key.entry(fact.stable_key.clone()).or_insert(fact);
+        by_key
+            .entry(interner.resolve(fact.stable_key))
+            .or_insert(fact);
     }
 
     by_key.into_values().collect()
@@ -41,7 +44,7 @@ mod tests {
             scope_description: "test scope".to_string(),
             precision: EntrypointPrecision::Conservative,
             provider_id: "polint.entrypoints".to_string(),
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
@@ -54,7 +57,7 @@ mod tests {
             "ts.fastify",
         )];
 
-        let merged = merge_unresolved(go, ts);
+        let merged = merge_unresolved(&crate::core::test_stable_key_interner(), go, ts);
 
         assert_eq!(merged.len(), 2);
     }
@@ -68,7 +71,7 @@ mod tests {
             "ts.gin",
         )];
 
-        let merged = merge_unresolved(go, ts);
+        let merged = merge_unresolved(&crate::core::test_stable_key_interner(), go, ts);
 
         assert_eq!(merged.len(), 1);
         // First occurrence (Go) wins
@@ -84,15 +87,30 @@ mod tests {
             make_unresolved(Language::TypeScript, "a-key", "ts.koa"),
         ];
 
-        let merged = merge_unresolved(go, ts);
+        let merged = merge_unresolved(&crate::core::test_stable_key_interner(), go, ts);
 
-        let keys: Vec<&str> = merged.iter().map(|f| f.stable_key.as_str()).collect();
-        assert_eq!(keys, vec!["a-key", "m-key", "z-key"]);
+        let interner = crate::core::test_stable_key_interner();
+        let keys: Vec<_> = merged
+            .iter()
+            .map(|fact| interner.resolve(fact.stable_key))
+            .collect();
+        assert_eq!(
+            keys,
+            vec![
+                std::sync::Arc::<str>::from("a-key"),
+                std::sync::Arc::<str>::from("m-key"),
+                std::sync::Arc::<str>::from("z-key"),
+            ]
+        );
     }
 
     #[test]
     fn merge_handles_empty_inputs() {
-        let merged = merge_unresolved(Vec::new(), Vec::new());
+        let merged = merge_unresolved(
+            &crate::core::test_stable_key_interner(),
+            Vec::new(),
+            Vec::new(),
+        );
         assert!(merged.is_empty());
     }
 
@@ -100,9 +118,14 @@ mod tests {
     fn merge_handles_one_empty_input() {
         let go = vec![make_unresolved(Language::Go, "fact-1", "go.gin")];
 
-        let merged = merge_unresolved(go, Vec::new());
+        let merged = merge_unresolved(&crate::core::test_stable_key_interner(), go, Vec::new());
 
         assert_eq!(merged.len(), 1);
-        assert_eq!(merged[0].stable_key, "fact-1");
+        assert_eq!(
+            crate::core::test_stable_key_interner()
+                .resolve(merged[0].stable_key)
+                .as_ref(),
+            "fact-1"
+        );
     }
 }

@@ -12,25 +12,26 @@ pub(crate) struct ExtensionEvidenceMergeReport {
 
 pub(crate) fn validate_extension_evidence(
     store: &EvidenceStore,
+    interner: &crate::core::StableKeyInterner,
     candidates: Vec<ExtensionEvidenceCandidateFact>,
 ) -> ExtensionEvidenceMergeReport {
     let mut rows = candidates
         .into_iter()
         .map(ExtensionEvidenceCandidateFact::normalized)
-        .map(|candidate| validate_candidate(store, candidate))
+        .map(|candidate| validate_candidate(store, interner, candidate))
         .collect::<Vec<_>>();
     rows.sort_by(|left, right| {
         (
             left.extension_id.as_str(),
             left.provider_id.as_str(),
-            left.stable_key.as_str(),
+            interner.resolve(left.stable_key),
             left.verdict,
             left.reason,
         )
             .cmp(&(
                 right.extension_id.as_str(),
                 right.provider_id.as_str(),
-                right.stable_key.as_str(),
+                interner.resolve(right.stable_key),
                 right.verdict,
                 right.reason,
             ))
@@ -40,9 +41,10 @@ pub(crate) fn validate_extension_evidence(
 
 fn validate_candidate(
     store: &EvidenceStore,
+    interner: &crate::core::StableKeyInterner,
     candidate: ExtensionEvidenceCandidateFact,
 ) -> ExtensionEvidenceMergeFact {
-    let reason = rejection_or_downgrade_reason(store, &candidate);
+    let reason = rejection_or_downgrade_reason(store, interner, &candidate);
     let (verdict, effective_status, effective_precision) = match reason {
         Some(ExtensionEvidenceMergeReason::InvalidEndpoint)
         | Some(ExtensionEvidenceMergeReason::InvalidSpan)
@@ -80,6 +82,7 @@ fn validate_candidate(
 
 fn rejection_or_downgrade_reason(
     store: &EvidenceStore,
+    interner: &crate::core::StableKeyInterner,
     candidate: &ExtensionEvidenceCandidateFact,
 ) -> Option<ExtensionEvidenceMergeReason> {
     if store.node(candidate.from).is_none() || store.node(candidate.to).is_none() {
@@ -108,7 +111,7 @@ fn rejection_or_downgrade_reason(
         return Some(ExtensionEvidenceMergeReason::CandidateCannotStrengthenDiagnostic);
     }
     if candidate.claimed_precision == EvidencePrecision::Exact
-        && !has_native_anchor(store, candidate)
+        && !has_native_anchor(store, interner, candidate)
     {
         return Some(ExtensionEvidenceMergeReason::ExactClaimRequiresNativeAnchor);
     }
@@ -123,7 +126,11 @@ fn is_invalid_extension_source_path(path: &str) -> bool {
         || path.as_bytes().get(1).is_some_and(|byte| *byte == b':')
 }
 
-fn has_native_anchor(store: &EvidenceStore, candidate: &ExtensionEvidenceCandidateFact) -> bool {
+fn has_native_anchor(
+    store: &EvidenceStore,
+    interner: &crate::core::StableKeyInterner,
+    candidate: &ExtensionEvidenceCandidateFact,
+) -> bool {
     !candidate.native_anchor_stable_keys.is_empty()
         && store.edges().iter().any(|edge| {
             edge.provenance == EvidenceProvenance::Native
@@ -134,7 +141,8 @@ fn has_native_anchor(store: &EvidenceStore, candidate: &ExtensionEvidenceCandida
                 && edge.from == candidate.from
                 && edge.to == candidate.to
                 && candidate.native_anchor_stable_keys.iter().any(|key| {
-                    edge.stable_key == *key || edge.source_fact_stable_keys.contains(key)
+                    interner.resolve(edge.stable_key).as_ref() == key
+                        || edge.source_fact_stable_keys.contains(key)
                 })
         })
 }
@@ -193,10 +201,12 @@ mod tests {
     use crate::core::{FileId, Language, Span};
 
     #[test]
-    fn merge_verdicts_are_sorted_and_serializable() {
+    fn merge_verdicts_are_sorted_and_resolvable() {
         let store = store();
+        let interner = crate::core::test_stable_key_interner();
         let rows = validate_extension_evidence(
             &store,
+            &interner,
             vec![
                 candidate("z", EvidenceNodeId(99)),
                 candidate("a", EvidenceNodeId(0)),
@@ -204,9 +214,8 @@ mod tests {
         )
         .rows;
 
-        assert_eq!(rows[0].stable_key, "a");
+        assert_eq!(interner.resolve(rows[0].stable_key).as_ref(), "a");
         assert_eq!(rows[1].verdict, ExtensionEvidenceMergeVerdict::Rejected);
-        serde_json::to_string(&rows).expect("verdict rows serialize");
     }
 
     #[test]
@@ -215,9 +224,13 @@ mod tests {
         let mut candidate = candidate("edge:extension", EvidenceNodeId(0));
         candidate.claimed_precision = EvidencePrecision::Exact;
 
-        let row = validate_extension_evidence(&store, vec![candidate])
-            .rows
-            .remove(0);
+        let row = validate_extension_evidence(
+            &store,
+            &crate::core::test_stable_key_interner(),
+            vec![candidate],
+        )
+        .rows
+        .remove(0);
 
         assert_eq!(
             row.verdict,
@@ -233,7 +246,11 @@ mod tests {
         candidate.claimed_precision = EvidencePrecision::Exact;
         candidate.native_anchor_stable_keys = vec!["edge:native".to_string()];
 
-        let report = validate_extension_evidence(&store, vec![candidate]);
+        let report = validate_extension_evidence(
+            &store,
+            &crate::core::test_stable_key_interner(),
+            vec![candidate],
+        );
         let delta = merge_validated_extension_edges(store.edges().len(), &report.rows);
 
         assert_eq!(
@@ -241,7 +258,12 @@ mod tests {
             ExtensionEvidenceMergeVerdict::Accepted
         );
         assert_eq!(delta.native_edge_count, 1);
-        assert_eq!(store.edges()[0].stable_key, "edge:native");
+        assert_eq!(
+            crate::core::test_stable_key_interner()
+                .resolve(store.edges()[0].stable_key)
+                .as_ref(),
+            "edge:native"
+        );
     }
 
     #[test]
@@ -252,9 +274,13 @@ mod tests {
         candidate.claimed_precision = EvidencePrecision::Exact;
         candidate.native_anchor_stable_keys = vec!["edge:native".to_string()];
 
-        let row = validate_extension_evidence(&store, vec![candidate])
-            .rows
-            .remove(0);
+        let row = validate_extension_evidence(
+            &store,
+            &crate::core::test_stable_key_interner(),
+            vec![candidate],
+        )
+        .rows
+        .remove(0);
 
         assert_eq!(
             row.verdict,
@@ -276,9 +302,12 @@ mod tests {
         let mut bad_expansion = candidate("edge:bad-expansion", EvidenceNodeId(0));
         bad_expansion.expansion = EvidenceExpansion::Expandable { key: String::new() };
 
-        let rows =
-            validate_extension_evidence(&store, vec![bad_span, bad_windows_span, bad_expansion])
-                .rows;
+        let rows = validate_extension_evidence(
+            &store,
+            &crate::core::test_stable_key_interner(),
+            vec![bad_span, bad_windows_span, bad_expansion],
+        )
+        .rows;
 
         assert!(
             rows.iter()
@@ -300,41 +329,48 @@ mod tests {
         let mut candidate = candidate("edge:uncertain", EvidenceNodeId(0));
         candidate.claimed_status = EvidenceStatus::Unknown;
 
-        let row = validate_extension_evidence(&store, vec![candidate])
-            .rows
-            .remove(0);
+        let row = validate_extension_evidence(
+            &store,
+            &crate::core::test_stable_key_interner(),
+            vec![candidate],
+        )
+        .rows
+        .remove(0);
 
         assert_eq!(row.verdict, ExtensionEvidenceMergeVerdict::CandidateOnly);
     }
 
     fn store() -> EvidenceStore {
-        EvidenceStore::from_output(EvidenceOutput {
-            nodes: vec![node(0), node(1)],
-            edges: vec![EvidenceEdgeFact {
-                id: EvidenceEdgeId(0),
-                from: EvidenceNodeId(0),
-                to: EvidenceNodeId(1),
-                kind: EvidenceEdgeKind::DataValue,
-                query_mode: EvidenceQueryMode::Path,
-                status: EvidenceStatus::Present,
-                precision: EvidencePrecision::Conservative,
-                provenance: EvidenceProvenance::Native,
-                validation: EvidenceValidation::ReferentiallyValidated,
-                confidence: EvidenceConfidence::Medium,
-                call_site: None,
-                summary_stable_key: None,
-                expansion: EvidenceExpansion::None,
-                compact_label: None,
-                source_fact_stable_keys: vec!["df:native".to_string()],
-                stable_key: "edge:native".to_string(),
-            }],
-            bundles: Vec::new(),
-            paths: Vec::new(),
-            slices: Vec::new(),
-            unknowns: Vec::new(),
-            omitted_regions: Vec::new(),
-            replay_keys: Vec::new(),
-        })
+        EvidenceStore::from_output(
+            EvidenceOutput {
+                nodes: vec![node(0), node(1)],
+                edges: vec![EvidenceEdgeFact {
+                    id: EvidenceEdgeId(0),
+                    from: EvidenceNodeId(0),
+                    to: EvidenceNodeId(1),
+                    kind: EvidenceEdgeKind::DataValue,
+                    query_mode: EvidenceQueryMode::Path,
+                    status: EvidenceStatus::Present,
+                    precision: EvidencePrecision::Conservative,
+                    provenance: EvidenceProvenance::Native,
+                    validation: EvidenceValidation::ReferentiallyValidated,
+                    confidence: EvidenceConfidence::Medium,
+                    call_site: None,
+                    summary_stable_key: None,
+                    expansion: EvidenceExpansion::None,
+                    compact_label: None,
+                    source_fact_stable_keys: vec!["df:native".to_string()],
+                    stable_key: crate::core::stable_key_for_test("edge:native"),
+                }],
+                bundles: Vec::new(),
+                paths: Vec::new(),
+                slices: Vec::new(),
+                unknowns: Vec::new(),
+                omitted_regions: Vec::new(),
+                replay_keys: Vec::new(),
+            },
+            &crate::core::test_stable_key_interner(),
+        )
         .expect("valid evidence")
     }
 
@@ -342,7 +378,7 @@ mod tests {
         ExtensionEvidenceCandidateFact {
             extension_id: "demo".to_string(),
             provider_id: "model".to_string(),
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
             from,
             to: EvidenceNodeId(1),
             kind: EvidenceEdgeKind::Model,
@@ -389,7 +425,7 @@ mod tests {
             confidence: EvidenceConfidence::High,
             compact_label: None,
             source_fact_stable_keys: Vec::new(),
-            stable_key: format!("node:{id}"),
+            stable_key: crate::core::stable_key_for_test(&format!("node:{id}")),
         }
     }
 }

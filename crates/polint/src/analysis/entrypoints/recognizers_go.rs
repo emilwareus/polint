@@ -9,8 +9,7 @@ use crate::analysis::entrypoints::facts::{
 use crate::analysis::entrypoints::provider::ENTRYPOINTS_PROVIDER_ID;
 use crate::analysis::ids::{EntrypointId, UnresolvedFrameworkId};
 use crate::analysis::places::PlaceRoot;
-use crate::analysis::stable_key::semantic_stable_key;
-use crate::analysis_kernel::{FactFamily, FactRef};
+use crate::analysis_kernel::{FactFamily, FactRef, stable_key_from_parts};
 use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, Span};
 
 // ---------------------------------------------------------------------------
@@ -143,7 +142,7 @@ pub(crate) fn recognize_go_entrypoints(db: &AnalysisDb) -> GoRecognizerOutput {
     // 4. Emit UnresolvedFrameworkFact for unrecognized Go framework imports (D-10)
     for (file, import_path, span) in &unrecognized_imports {
         let file_key = file_stable_key(db, *file);
-        let stable_key = semantic_stable_key(
+        let stable_key = stable_key_from_parts(
             interner,
             FactFamily::UnresolvedFramework,
             &[
@@ -151,8 +150,7 @@ pub(crate) fn recognize_go_entrypoints(db: &AnalysisDb) -> GoRecognizerOutput {
                 ("file_key", file_key),
                 ("import_path", import_path.clone()),
             ],
-        )
-        .into_string();
+        );
 
         unresolved.push(UnresolvedFrameworkFact {
             id: UnresolvedFrameworkId(0),
@@ -179,8 +177,8 @@ pub(crate) fn recognize_go_entrypoints(db: &AnalysisDb) -> GoRecognizerOutput {
     );
 
     // Sort output by stable key
-    entrypoints.sort_by(|a, b| a.stable_key.cmp(&b.stable_key));
-    unresolved.sort_by(|a, b| a.stable_key.cmp(&b.stable_key));
+    entrypoints.sort_by_key(|entrypoint| interner.resolve(entrypoint.stable_key));
+    unresolved.sort_by_key(|fact| interner.resolve(fact.stable_key));
 
     GoRecognizerOutput {
         entrypoints,
@@ -966,8 +964,8 @@ fn entrypoint_stable_key(
     kind: &str,
     target_function_key: &str,
     registration_span: &str,
-) -> String {
-    semantic_stable_key(
+) -> crate::core::StableKeyId {
+    stable_key_from_parts(
         interner,
         FactFamily::Entrypoint,
         &[
@@ -979,7 +977,6 @@ fn entrypoint_stable_key(
             ("registration_span", registration_span.to_string()),
         ],
     )
-    .into_string()
 }
 
 fn unresolved_stable_key(
@@ -988,8 +985,8 @@ fn unresolved_stable_key(
     framework_id: &str,
     reason: &str,
     span: &str,
-) -> String {
-    semantic_stable_key(
+) -> crate::core::StableKeyId {
+    stable_key_from_parts(
         interner,
         FactFamily::UnresolvedFramework,
         &[
@@ -1000,7 +997,6 @@ fn unresolved_stable_key(
             ("span", span.to_string()),
         ],
     )
-    .into_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -1157,8 +1153,9 @@ mod tests {
         assert_eq!(ep.precision, EntrypointPrecision::Heuristic);
         assert_eq!(ep.provenance, EntrypointProvenance::NativeRecognizer);
         assert_eq!(ep.status, EntrypointStatus::Resolved);
-        assert!(ep.stable_key.contains("10:Entrypoint"));
-        assert!(ep.stable_key.contains("8:language=2:Go"));
+        let stable_key = db.resolve_stable_key(ep.stable_key);
+        assert!(stable_key.contains("10:Entrypoint"));
+        assert!(stable_key.contains("8:language=2:Go"));
     }
 
     #[test]
@@ -1493,7 +1490,7 @@ func setup() {
         let output = recognize_go_entrypoints(&db);
 
         assert_eq!(output.entrypoints.len(), 1);
-        let key = &output.entrypoints[0].stable_key;
+        let key = db.resolve_stable_key(output.entrypoints[0].stable_key);
         assert!(
             key.contains("10:Entrypoint"),
             "key should contain FactFamily::Entrypoint"
@@ -1520,10 +1517,10 @@ func setup() {
         let output = recognize_go_entrypoints(&db);
 
         assert_eq!(output.entrypoints.len(), 3);
-        let keys: Vec<&str> = output
+        let keys: Vec<_> = output
             .entrypoints
             .iter()
-            .map(|ep| ep.stable_key.as_str())
+            .map(|ep| db.resolve_stable_key(ep.stable_key))
             .collect();
         let mut sorted = keys.clone();
         sorted.sort();

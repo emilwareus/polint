@@ -49,7 +49,12 @@ pub(crate) fn metadata_debug_json_with_demand_trace_for_test(
         data_flow: crate::analysis::data_flow::debug::data_flow_debug_json_for_test(db),
         evidence: db
             .evidence_store()
-            .map(crate::analysis::evidence::debug::evidence_debug_report)
+            .map(|store| {
+                crate::analysis::evidence::debug::evidence_debug_report(
+                    store,
+                    &db.stable_key_interner(),
+                )
+            })
             .map(|report| serde_json::to_value(report).expect("evidence debug report serializes"))
             .unwrap_or_else(empty_evidence_debug_report),
         entrypoints: crate::analysis::entrypoints::debug::metadata_debug_json_for_test(db),
@@ -1016,7 +1021,7 @@ fn abstract_domain_observation_rows(db: &AnalysisDb) -> Vec<AbstractDomainObserv
                 db,
                 FactFamily::DomainObservation,
                 row.id.0,
-                row.stable_key.as_str(),
+                db.resolve_stable_key(row.stable_key).as_ref(),
                 domain_status_label(row.status),
                 domain_precision_label(row.precision),
                 domain_file(db, row.body),
@@ -1057,7 +1062,7 @@ fn abstract_domain_event_rows(db: &AnalysisDb) -> Vec<AbstractDomainEventDebugRo
                 db,
                 FactFamily::DomainEvent,
                 row.id.0,
-                row.stable_key.as_str(),
+                db.resolve_stable_key(row.stable_key).as_ref(),
                 domain_status_label(row.status),
                 domain_precision_label(row.precision),
                 domain_file(db, row.body),
@@ -3314,6 +3319,7 @@ mod abstract_domains_debug_json {
     #[test]
     fn abstract_domains_debug_json_exposes_compact_deterministic_rows() {
         let mut db = base_db();
+        let interner = db.stable_key_interner();
         db.replace_abstract_domain_facts(DomainOutput {
             observations: vec![DomainObservationFact {
                 id: DomainObservationId(0),
@@ -3326,7 +3332,7 @@ mod abstract_domains_debug_json {
                 value: DomainValue::TopReason("unknown_value".to_string()),
                 status: DomainStatus::Unknown,
                 precision: DomainPrecision::Unknown,
-                stable_key: "domain:observation:value".to_string(),
+                stable_key: interner.intern("domain:observation:value"),
             }],
             events: vec![DomainEventFact {
                 id: DomainEventId(0),
@@ -3337,7 +3343,7 @@ mod abstract_domains_debug_json {
                 status: DomainStatus::BudgetExceeded,
                 precision: DomainPrecision::Unknown,
                 reason: "budget_exceeded".to_string(),
-                stable_key: "domain:event:budget".to_string(),
+                stable_key: interner.intern("domain:event:budget"),
             }],
         });
 

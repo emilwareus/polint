@@ -1013,9 +1013,10 @@ impl AnalysisDb {
         &mut self,
         output: DataFlowOutput,
     ) -> Result<(), AnalysisError> {
-        let store = DataFlowStore::from_output(output)?;
+        let interner = self.stable_key_interner();
+        let store = DataFlowStore::from_output(output, &interner)?;
         *self.data_flow_store_mut() = store;
-        self.refresh_data_flow_metadata();
+        self.refresh_data_flow_metadata(&interner);
         Ok(())
     }
 
@@ -1023,15 +1024,17 @@ impl AnalysisDb {
         &mut self,
         output: EvidenceOutput,
     ) -> Result<(), AnalysisError> {
-        let store = EvidenceStore::from_output(output)?;
+        let interner = self.stable_key_interner();
+        let store = EvidenceStore::from_output(output, &interner)?;
         *self.evidence_store_mut() = store;
-        self.refresh_evidence_metadata();
+        self.refresh_evidence_metadata(&interner);
         Ok(())
     }
 
     #[cfg(test)]
     pub(crate) fn replace_abstract_domain_facts(&mut self, output: DomainOutput) {
-        let store = DomainStore::from_output(output);
+        let interner = self.stable_key_interner();
+        let store = DomainStore::from_output(output, &interner);
         self.replace_abstract_domain_store(store);
     }
 
@@ -1042,7 +1045,8 @@ impl AnalysisDb {
 
     fn replace_abstract_domain_store(&mut self, store: DomainStore) {
         *self.domain_store_mut() = store;
-        self.refresh_abstract_domain_metadata();
+        let interner = self.stable_key_interner();
+        self.refresh_abstract_domain_metadata(&interner);
     }
 
     fn populate_call_owner_symbols(&self, output: &mut CallOutput) {
@@ -1284,7 +1288,7 @@ impl AnalysisDb {
     ) -> Result<(), AnalysisError> {
         let interner_handle = self.stable_key_interner();
         let interner = &interner_handle;
-        let store = EntrypointStore::from_output(output)?;
+        let store = EntrypointStore::from_output(output, interner)?;
         *self.entrypoint_store_mut() = store;
         self.refresh_entrypoint_metadata(interner);
         Ok(())
@@ -1682,7 +1686,7 @@ impl AnalysisDb {
         self.finish_fact_meta_insertions(&[FactFamily::RefinedCallEdge]);
     }
 
-    fn refresh_data_flow_metadata(&mut self) {
+    fn refresh_data_flow_metadata(&mut self, interner: &crate::core::StableKeyInterner) {
         self.fact_meta.remove_family(FactFamily::DataFlowNode);
         self.fact_meta.remove_family(FactFamily::DataFlowEdge);
         self.fact_meta.remove_family(FactFamily::DataFlowModel);
@@ -1694,19 +1698,19 @@ impl AnalysisDb {
         let budgets = self.data_flow_budgets().to_vec();
 
         for fact in &nodes {
-            let metadata = self.data_flow_node_metadata(fact);
+            let metadata = self.data_flow_node_metadata(interner, fact);
             self.record_fact_meta(FactFamily::DataFlowNode, fact.id.0, metadata);
         }
         for fact in &edges {
-            let metadata = self.data_flow_edge_metadata(fact);
+            let metadata = self.data_flow_edge_metadata(interner, fact);
             self.record_fact_meta(FactFamily::DataFlowEdge, fact.id.0, metadata);
         }
         for fact in &models {
-            let metadata = self.data_flow_model_metadata(fact);
+            let metadata = self.data_flow_model_metadata(interner, fact);
             self.record_fact_meta(FactFamily::DataFlowModel, fact.id.0, metadata);
         }
         for fact in &budgets {
-            let metadata = self.data_flow_budget_metadata(fact);
+            let metadata = self.data_flow_budget_metadata(interner, fact);
             self.record_fact_meta(FactFamily::DataFlowBudget, fact.id.0, metadata);
         }
 
@@ -1718,7 +1722,7 @@ impl AnalysisDb {
         ]);
     }
 
-    fn refresh_evidence_metadata(&mut self) {
+    fn refresh_evidence_metadata(&mut self, interner: &crate::core::StableKeyInterner) {
         for family in [
             FactFamily::EvidenceNode,
             FactFamily::EvidenceEdge,
@@ -1742,35 +1746,35 @@ impl AnalysisDb {
         let replay_keys = self.evidence_replay_keys().to_vec();
 
         for fact in &nodes {
-            let metadata = self.evidence_node_metadata(fact);
+            let metadata = self.evidence_node_metadata(interner, fact);
             self.record_fact_meta(FactFamily::EvidenceNode, fact.id.0, metadata);
         }
         for fact in &edges {
-            let metadata = self.evidence_edge_metadata(fact);
+            let metadata = self.evidence_edge_metadata(interner, fact);
             self.record_fact_meta(FactFamily::EvidenceEdge, fact.id.0, metadata);
         }
         for fact in &bundles {
-            let metadata = self.evidence_bundle_metadata(fact);
+            let metadata = self.evidence_bundle_metadata(interner, fact);
             self.record_fact_meta(FactFamily::EvidenceBundle, fact.id.0, metadata);
         }
         for fact in &paths {
-            let metadata = self.evidence_path_metadata(fact);
+            let metadata = self.evidence_path_metadata(interner, fact);
             self.record_fact_meta(FactFamily::EvidencePath, fact.id.0, metadata);
         }
         for fact in &slices {
-            let metadata = self.evidence_slice_metadata(fact);
+            let metadata = self.evidence_slice_metadata(interner, fact);
             self.record_fact_meta(FactFamily::EvidenceSlice, fact.id.0, metadata);
         }
         for (index, fact) in unknowns.iter().enumerate() {
-            let metadata = self.evidence_unknown_metadata(fact);
+            let metadata = self.evidence_unknown_metadata(interner, fact);
             self.record_fact_meta(FactFamily::EvidenceUnknown, index as u64, metadata);
         }
         for fact in &omitted {
-            let metadata = self.evidence_omitted_region_metadata(fact);
+            let metadata = self.evidence_omitted_region_metadata(interner, fact);
             self.record_fact_meta(FactFamily::EvidenceOmittedRegion, fact.id.0, metadata);
         }
         for (index, fact) in replay_keys.iter().enumerate() {
-            let metadata = self.evidence_replay_key_metadata(fact);
+            let metadata = self.evidence_replay_key_metadata(interner, fact);
             self.record_fact_meta(FactFamily::EvidenceReplayKey, index as u64, metadata);
         }
 
@@ -1785,18 +1789,18 @@ impl AnalysisDb {
             FactFamily::EvidenceReplayKey,
         ]);
     }
-    fn refresh_abstract_domain_metadata(&mut self) {
+    fn refresh_abstract_domain_metadata(&mut self, interner: &crate::core::StableKeyInterner) {
         self.fact_meta.remove_family(FactFamily::DomainObservation);
         self.fact_meta.remove_family(FactFamily::DomainEvent);
 
         let observations = self.abstract_domain_observations().to_vec();
         let events = self.abstract_domain_events().to_vec();
         for fact in &observations {
-            let metadata = self.domain_observation_metadata(fact);
+            let metadata = self.domain_observation_metadata(interner, fact);
             self.record_fact_meta(FactFamily::DomainObservation, fact.id.0, metadata);
         }
         for fact in &events {
-            let metadata = self.domain_event_metadata(fact);
+            let metadata = self.domain_event_metadata(interner, fact);
             self.record_fact_meta(FactFamily::DomainEvent, fact.id.0, metadata);
         }
         self.finish_fact_meta_insertions(&[FactFamily::DomainObservation, FactFamily::DomainEvent]);
@@ -1870,15 +1874,15 @@ impl AnalysisDb {
             self.record_fact_meta(FactFamily::Entrypoint, fact.id.0, metadata);
         }
         for fact in &trust_boundaries {
-            let metadata = self.trust_boundary_metadata(fact);
+            let metadata = self.trust_boundary_metadata(interner, fact);
             self.record_fact_meta(FactFamily::TrustBoundary, fact.id.0, metadata);
         }
         for fact in &dispatch_edges {
-            let metadata = self.dispatch_edge_metadata(fact);
+            let metadata = self.dispatch_edge_metadata(interner, fact);
             self.record_fact_meta(FactFamily::DispatchEdge, fact.id.0, metadata);
         }
         for fact in &unresolved {
-            let metadata = self.unresolved_framework_metadata(fact);
+            let metadata = self.unresolved_framework_metadata(interner, fact);
             self.record_fact_meta(FactFamily::UnresolvedFramework, fact.id.0, metadata);
         }
         self.finish_fact_meta_insertions(&[
@@ -2154,7 +2158,7 @@ impl AnalysisDb {
             ENTRYPOINTS_PROVIDER_ID,
             precision,
             confidence,
-            fact.stable_key.clone(),
+            interner.resolve(fact.stable_key).to_string(),
             stable_parts([
                 ("status", format!("{:?}", fact.status)),
                 ("precision", format!("{:?}", fact.precision)),
@@ -2176,7 +2180,11 @@ impl AnalysisDb {
         )
     }
 
-    fn trust_boundary_metadata(&self, fact: &TrustBoundaryFact) -> FactMeta {
+    fn trust_boundary_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        fact: &TrustBoundaryFact,
+    ) -> FactMeta {
         let (precision, confidence) =
             entrypoint_precision_metadata(EntrypointStatus::Resolved, fact.precision);
         fact_meta_from_stable_key(
@@ -2184,10 +2192,13 @@ impl AnalysisDb {
             ENTRYPOINTS_PROVIDER_ID,
             precision,
             confidence,
-            fact.stable_key.clone(),
+            interner.resolve(fact.stable_key).to_string(),
             stable_parts([
                 ("source_kind", format!("{:?}", fact.source_kind)),
-                ("entrypoint_key", fact.entrypoint_stable_key.clone()),
+                (
+                    "entrypoint_key",
+                    interner.resolve(fact.entrypoint_stable_key).to_string(),
+                ),
                 ("precision", format!("{:?}", fact.precision)),
                 ("language", language_label(fact.language).to_string()),
                 ("file_key", self.source_file_key(fact.file)),
@@ -2195,7 +2206,11 @@ impl AnalysisDb {
         )
     }
 
-    fn dispatch_edge_metadata(&self, fact: &FrameworkDispatchEdgeFact) -> FactMeta {
+    fn dispatch_edge_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        fact: &FrameworkDispatchEdgeFact,
+    ) -> FactMeta {
         let (precision, confidence) =
             entrypoint_precision_metadata(EntrypointStatus::Resolved, fact.precision);
         fact_meta_from_stable_key(
@@ -2203,7 +2218,7 @@ impl AnalysisDb {
             ENTRYPOINTS_PROVIDER_ID,
             precision,
             confidence,
-            fact.stable_key.clone(),
+            interner.resolve(fact.stable_key).to_string(),
             stable_parts([
                 ("edge_kind", format!("{:?}", fact.edge_kind)),
                 ("from_source", fact.from_source.clone()),
@@ -2214,13 +2229,17 @@ impl AnalysisDb {
         )
     }
 
-    fn unresolved_framework_metadata(&self, fact: &UnresolvedFrameworkFact) -> FactMeta {
+    fn unresolved_framework_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        fact: &UnresolvedFrameworkFact,
+    ) -> FactMeta {
         fact_meta_from_stable_key(
             FactFamily::UnresolvedFramework,
             ENTRYPOINTS_PROVIDER_ID,
             FactPrecision::SetupAware,
             FactConfidence::Medium,
-            fact.stable_key.clone(),
+            interner.resolve(fact.stable_key).to_string(),
             stable_parts([
                 ("reason", format!("{:?}", fact.reason)),
                 ("framework", fact.framework_id.clone()),
@@ -4338,7 +4357,11 @@ impl AnalysisDb {
         )
     }
 
-    fn data_flow_node_metadata(&self, fact: &DataFlowNodeFact) -> FactMeta {
+    fn data_flow_node_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        fact: &DataFlowNodeFact,
+    ) -> FactMeta {
         let model = fact
             .model
             .and_then(|id| self.data_flow_models().iter().find(|model| model.id == id));
@@ -4357,7 +4380,7 @@ impl AnalysisDb {
                         model.precision,
                         model.confidence,
                         model.validation,
-                        model.stable_key.clone(),
+                        interner.resolve(model.stable_key).to_string(),
                     )
                 },
             );
@@ -4370,7 +4393,7 @@ impl AnalysisDb {
             precision,
             confidence,
             validation,
-            fact.stable_key.clone(),
+            interner.resolve(fact.stable_key).to_string(),
             stable_parts([
                 ("kind", format!("{:?}", fact.kind)),
                 ("status", data_flow_status_label(status).to_string()),
@@ -4425,7 +4448,11 @@ impl AnalysisDb {
         )
     }
 
-    fn data_flow_edge_metadata(&self, fact: &DataFlowEdgeFact) -> FactMeta {
+    fn data_flow_edge_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        fact: &DataFlowEdgeFact,
+    ) -> FactMeta {
         let (precision, status_confidence) = data_flow_status_metadata(fact.status, fact.precision);
         let confidence = data_flow_confidence_metadata(fact.confidence, status_confidence);
         let validation = data_flow_validation_metadata(fact.validation);
@@ -4435,7 +4462,7 @@ impl AnalysisDb {
             precision,
             confidence,
             validation,
-            fact.stable_key.clone(),
+            interner.resolve(fact.stable_key).to_string(),
             stable_parts([
                 ("kind", format!("{:?}", fact.kind)),
                 ("algorithm", format!("{:?}", fact.algorithm)),
@@ -4480,7 +4507,11 @@ impl AnalysisDb {
         )
     }
 
-    fn data_flow_model_metadata(&self, fact: &DataFlowModelFact) -> FactMeta {
+    fn data_flow_model_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        fact: &DataFlowModelFact,
+    ) -> FactMeta {
         let (precision, status_confidence) = data_flow_status_metadata(fact.status, fact.precision);
         let confidence = data_flow_confidence_metadata(fact.confidence, status_confidence);
         let validation = data_flow_validation_metadata(fact.validation);
@@ -4490,7 +4521,7 @@ impl AnalysisDb {
             precision,
             confidence,
             validation,
-            fact.stable_key.clone(),
+            interner.resolve(fact.stable_key).to_string(),
             stable_parts([
                 ("kind", format!("{:?}", fact.kind)),
                 ("language", language_label(fact.language).to_string()),
@@ -4506,13 +4537,17 @@ impl AnalysisDb {
         )
     }
 
-    fn data_flow_budget_metadata(&self, fact: &DataFlowBudgetFact) -> FactMeta {
+    fn data_flow_budget_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        fact: &DataFlowBudgetFact,
+    ) -> FactMeta {
         fact_meta_from_stable_key(
             FactFamily::DataFlowBudget,
             DATA_FLOW_PROVIDER_ID,
             FactPrecision::Heuristic,
             FactConfidence::Medium,
-            fact.stable_key.clone(),
+            interner.resolve(fact.stable_key).to_string(),
             stable_parts([
                 ("reason", format!("{:?}", fact.reason)),
                 ("status", data_flow_status_label(fact.status).to_string()),
@@ -4522,7 +4557,11 @@ impl AnalysisDb {
         )
     }
 
-    fn evidence_node_metadata(&self, fact: &EvidenceNodeFact) -> FactMeta {
+    fn evidence_node_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        fact: &EvidenceNodeFact,
+    ) -> FactMeta {
         let (precision, status_confidence) = evidence_status_metadata(fact.status, fact.precision);
         let confidence = evidence_confidence_metadata(fact.confidence, status_confidence);
         let validation = evidence_validation_metadata(fact.validation);
@@ -4532,7 +4571,7 @@ impl AnalysisDb {
             precision,
             confidence,
             validation,
-            fact.stable_key.clone(),
+            interner.resolve(fact.stable_key).to_string(),
             stable_parts([
                 ("kind", format!("{:?}", fact.kind)),
                 ("status", evidence_status_label(fact.status).to_string()),
@@ -4581,7 +4620,11 @@ impl AnalysisDb {
         )
     }
 
-    fn evidence_edge_metadata(&self, fact: &EvidenceEdgeFact) -> FactMeta {
+    fn evidence_edge_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        fact: &EvidenceEdgeFact,
+    ) -> FactMeta {
         let (precision, status_confidence) = evidence_status_metadata(fact.status, fact.precision);
         let confidence = evidence_confidence_metadata(fact.confidence, status_confidence);
         let validation = evidence_validation_metadata(fact.validation);
@@ -4591,7 +4634,7 @@ impl AnalysisDb {
             precision,
             confidence,
             validation,
-            fact.stable_key.clone(),
+            interner.resolve(fact.stable_key).to_string(),
             stable_parts([
                 ("kind", format!("{:?}", fact.kind)),
                 ("query_mode", format!("{:?}", fact.query_mode)),
@@ -4631,7 +4674,11 @@ impl AnalysisDb {
         )
     }
 
-    fn evidence_bundle_metadata(&self, fact: &EvidenceBundleFact) -> FactMeta {
+    fn evidence_bundle_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        fact: &EvidenceBundleFact,
+    ) -> FactMeta {
         let (precision, status_confidence) = evidence_status_metadata(fact.status, fact.precision);
         let confidence = evidence_confidence_metadata(fact.confidence, status_confidence);
         let validation = evidence_validation_metadata(fact.validation);
@@ -4641,9 +4688,12 @@ impl AnalysisDb {
             precision,
             confidence,
             validation,
-            fact.stable_key.clone(),
+            interner.resolve(fact.stable_key).to_string(),
             stable_parts([
-                ("diagnostic_key", fact.diagnostic_stable_key.clone()),
+                (
+                    "diagnostic_key",
+                    interner.resolve(fact.diagnostic_stable_key).to_string(),
+                ),
                 ("query_mode", format!("{:?}", fact.query_mode)),
                 ("status", evidence_status_label(fact.status).to_string()),
                 (
@@ -4660,7 +4710,11 @@ impl AnalysisDb {
         )
     }
 
-    fn evidence_path_metadata(&self, fact: &EvidencePathFact) -> FactMeta {
+    fn evidence_path_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        fact: &EvidencePathFact,
+    ) -> FactMeta {
         let (precision, confidence) =
             evidence_status_metadata(fact.status, EvidencePrecision::Heuristic);
         fact_meta_from_stable_key(
@@ -4668,7 +4722,7 @@ impl AnalysisDb {
             EVIDENCE_PROVIDER_ID,
             precision,
             confidence,
-            fact.stable_key.clone(),
+            interner.resolve(fact.stable_key).to_string(),
             stable_parts([
                 ("query_mode", format!("{:?}", fact.query_mode)),
                 ("status", evidence_status_label(fact.status).to_string()),
@@ -4680,7 +4734,11 @@ impl AnalysisDb {
         )
     }
 
-    fn evidence_slice_metadata(&self, fact: &EvidenceSliceFact) -> FactMeta {
+    fn evidence_slice_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        fact: &EvidenceSliceFact,
+    ) -> FactMeta {
         let (precision, confidence) =
             evidence_status_metadata(fact.status, EvidencePrecision::Heuristic);
         fact_meta_from_stable_key(
@@ -4688,7 +4746,7 @@ impl AnalysisDb {
             EVIDENCE_PROVIDER_ID,
             precision,
             confidence,
-            fact.stable_key.clone(),
+            interner.resolve(fact.stable_key).to_string(),
             stable_parts([
                 ("query_mode", format!("{:?}", fact.query_mode)),
                 ("status", evidence_status_label(fact.status).to_string()),
@@ -4699,13 +4757,17 @@ impl AnalysisDb {
         )
     }
 
-    fn evidence_unknown_metadata(&self, fact: &EvidenceUnknownFact) -> FactMeta {
+    fn evidence_unknown_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        fact: &EvidenceUnknownFact,
+    ) -> FactMeta {
         fact_meta_from_stable_key(
             FactFamily::EvidenceUnknown,
             EVIDENCE_PROVIDER_ID,
             FactPrecision::Unresolved,
             FactConfidence::Low,
-            fact.stable_key.clone(),
+            interner.resolve(fact.stable_key).to_string(),
             stable_parts([
                 ("reason", format!("{:?}", fact.reason)),
                 ("message", fact.message.clone()),
@@ -4714,13 +4776,17 @@ impl AnalysisDb {
         )
     }
 
-    fn evidence_omitted_region_metadata(&self, fact: &EvidenceOmittedRegionFact) -> FactMeta {
+    fn evidence_omitted_region_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        fact: &EvidenceOmittedRegionFact,
+    ) -> FactMeta {
         fact_meta_from_stable_key(
             FactFamily::EvidenceOmittedRegion,
             EVIDENCE_PROVIDER_ID,
             FactPrecision::Unresolved,
             FactConfidence::Low,
-            fact.stable_key.clone(),
+            interner.resolve(fact.stable_key).to_string(),
             stable_parts([
                 ("reason", format!("{:?}", fact.reason)),
                 ("hidden_node_count", fact.hidden_node_count.to_string()),
@@ -4733,13 +4799,17 @@ impl AnalysisDb {
         )
     }
 
-    fn evidence_replay_key_metadata(&self, fact: &EvidenceReplayKeyFact) -> FactMeta {
+    fn evidence_replay_key_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        fact: &EvidenceReplayKeyFact,
+    ) -> FactMeta {
         fact_meta_from_stable_key(
             FactFamily::EvidenceReplayKey,
             EVIDENCE_PROVIDER_ID,
             FactPrecision::Heuristic,
             FactConfidence::Medium,
-            fact.stable_key.clone(),
+            interner.resolve(fact.stable_key).to_string(),
             stable_parts([
                 ("query_mode", format!("{:?}", fact.query_mode)),
                 ("graph_schema", fact.graph_schema.clone()),
@@ -4794,14 +4864,18 @@ impl AnalysisDb {
         )
     }
 
-    fn domain_observation_metadata(&self, fact: &DomainObservationFact) -> FactMeta {
+    fn domain_observation_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        fact: &DomainObservationFact,
+    ) -> FactMeta {
         let (precision, confidence) = domain_status_metadata(fact.status, fact.precision);
         fact_meta_from_stable_key(
             FactFamily::DomainObservation,
             POLINT_ABSTRACT_DOMAINS_PROVIDER_ID,
             precision,
             confidence,
-            fact.stable_key.clone(),
+            interner.resolve(fact.stable_key).to_string(),
             stable_parts([
                 ("status", fact.status.as_str().to_string()),
                 ("precision", fact.precision.as_str().to_string()),
@@ -4836,14 +4910,18 @@ impl AnalysisDb {
         )
     }
 
-    fn domain_event_metadata(&self, fact: &DomainEventFact) -> FactMeta {
+    fn domain_event_metadata(
+        &self,
+        interner: &crate::core::StableKeyInterner,
+        fact: &DomainEventFact,
+    ) -> FactMeta {
         let (precision, confidence) = domain_status_metadata(fact.status, fact.precision);
         fact_meta_from_stable_key(
             FactFamily::DomainEvent,
             POLINT_ABSTRACT_DOMAINS_PROVIDER_ID,
             precision,
             confidence,
-            fact.stable_key.clone(),
+            interner.resolve(fact.stable_key).to_string(),
             stable_parts([
                 ("status", fact.status.as_str().to_string()),
                 ("precision", fact.precision.as_str().to_string()),

@@ -13,7 +13,7 @@ use crate::analysis::mir::op::{
     AssignMode, ConservativeAction, MirOperation, MirOperationKind, MirValue,
 };
 use crate::analysis::places::{PlaceFact, PlaceProjection};
-use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
+use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
 use crate::core::{AnalysisDb, FunctionId, Language};
 
 pub(crate) fn derive_local_value_flow(db: &AnalysisDb, output: &mut DataFlowOutput) {
@@ -27,7 +27,7 @@ struct LocalFlowBuilder<'a, 'b> {
     db: &'a AnalysisDb,
     output: &'b mut DataFlowOutput,
     place_nodes: BTreeMap<PlaceId, DataFlowNodeId>,
-    emitted_edges: BTreeSet<String>,
+    emitted_edges: BTreeSet<crate::core::StableKeyId>,
     branchy_bodies: BTreeSet<MirBodyId>,
 }
 
@@ -328,7 +328,7 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
                         DataFlowEdgeKind::LocalAssignment | DataFlowEdgeKind::LocalBinding
                     )
             })
-            .map(|edge| edge.stable_key.clone())
+            .map(|edge| edge.stable_key)
             .collect::<BTreeSet<_>>();
         if removed.is_empty() {
             return;
@@ -417,7 +417,7 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
         kind: DataFlowNodeKind,
         suffix: String,
     ) -> DataFlowNodeId {
-        let stable_key = stable_key_text_from_parts(
+        let stable_key = stable_key_from_parts(
             interner,
             FactFamily::DataFlowNode,
             &[
@@ -466,7 +466,7 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
             }
             _ => None,
         };
-        let stable_key = stable_key_text_from_parts(
+        let stable_key = stable_key_from_parts(
             interner,
             FactFamily::DataFlowEdge,
             &[
@@ -477,7 +477,7 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
                 ("status", format!("{:?}", draft.status)),
             ],
         );
-        if !self.emitted_edges.insert(stable_key.clone())
+        if !self.emitted_edges.insert(stable_key)
             || self
                 .output
                 .edges
@@ -542,7 +542,7 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
             .nodes
             .iter()
             .find(|fact| fact.id == node)
-            .map(|fact| fact.stable_key.clone())
+            .map(|fact| self.db.resolve_stable_key(fact.stable_key).to_string())
             .unwrap_or_else(|| format!("node:{}", node.0))
     }
 }
@@ -569,7 +569,7 @@ pub(crate) fn budget_fact(
     context: &str,
     output: &mut DataFlowOutput,
 ) -> DataFlowBudgetId {
-    let stable_key = stable_key_text_from_parts(
+    let stable_key = stable_key_from_parts(
         interner,
         FactFamily::DataFlowBudget,
         &[
@@ -642,14 +642,14 @@ pub(crate) fn node_from_place(
                 place.id.0,
             ))
             .map(|metadata| {
-                stable_key_text_from_parts(
+                stable_key_from_parts(
                     interner,
                     FactFamily::DataFlowNode,
                     &[("place", metadata.stable_key.clone())],
                 )
             })
             .unwrap_or_else(|| {
-                stable_key_text_from_parts(
+                stable_key_from_parts(
                     interner,
                     FactFamily::DataFlowNode,
                     &[("place_id", place.id.0.to_string())],

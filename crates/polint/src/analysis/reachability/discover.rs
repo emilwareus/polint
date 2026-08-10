@@ -147,7 +147,12 @@ fn entrypoint_bridge_root(db: &AnalysisDb, entrypoint: &EntrypointFact) -> Reach
         _ => RootKind::FrameworkEntrypoint,
     };
     let function_identity = function_identity_for_target(db, entrypoint.target_function)
-        .unwrap_or_else(|| format!("entrypoint:{}", entrypoint.stable_key));
+        .unwrap_or_else(|| {
+            format!(
+                "entrypoint:{}",
+                db.resolve_stable_key(entrypoint.stable_key)
+            )
+        });
     let stable_key = compute_reachability_root_stable_key(
         kind,
         entrypoint.language,
@@ -611,7 +616,7 @@ mod tests {
             confidence: EntrypointConfidence::Medium,
             status: EntrypointStatus::Partial,
             provider_id: "polint.entrypoints".to_string(),
-            stable_key: "entrypoint:jest:x".to_string(),
+            stable_key: crate::core::stable_key_for_test("entrypoint:jest:x"),
         };
         db.replace_entrypoint_facts(EntrypointOutput {
             entrypoints: vec![entrypoint],
@@ -656,7 +661,7 @@ mod tests {
             confidence: EntrypointConfidence::High,
             status: EntrypointStatus::Resolved,
             provider_id: "polint.entrypoints".to_string(),
-            stable_key: "entrypoint:express:get:/".to_string(),
+            stable_key: crate::core::stable_key_for_test("entrypoint:express:get:/"),
         };
         db.replace_entrypoint_facts(EntrypointOutput {
             entrypoints: vec![entrypoint],

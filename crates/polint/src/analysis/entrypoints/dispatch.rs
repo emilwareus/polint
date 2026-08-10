@@ -3,9 +3,8 @@ use crate::analysis::entrypoints::facts::{
 };
 use crate::analysis::entrypoints::provider::ENTRYPOINTS_PROVIDER_ID;
 use crate::analysis::ids::DispatchEdgeId;
-use crate::analysis::stable_key::semantic_stable_key;
-use crate::analysis_kernel::FactFamily;
-use crate::core::AnalysisDb;
+use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
+use crate::core::{AnalysisDb, StableKeyId};
 
 /// Derive framework dispatch edge facts from recognized entrypoints.
 ///
@@ -26,7 +25,7 @@ pub(crate) fn derive_dispatch_edges(
 
         let stable_key = dispatch_edge_stable_key(
             interner,
-            &entrypoint.stable_key,
+            entrypoint.stable_key,
             &format!("{}", entrypoint.target_function.0),
             edge_kind,
             entrypoint.language,
@@ -34,7 +33,7 @@ pub(crate) fn derive_dispatch_edges(
 
         edges.push(FrameworkDispatchEdgeFact {
             id: DispatchEdgeId(0), // Reassigned during normalization
-            from_source: entrypoint.stable_key.clone(),
+            from_source: interner.resolve(entrypoint.stable_key).to_string(),
             to_target: entrypoint.target_function,
             to_symbol: entrypoint.target_symbol,
             edge_kind,
@@ -49,7 +48,7 @@ pub(crate) fn derive_dispatch_edges(
         });
     }
 
-    edges.sort_by(|a, b| a.stable_key.cmp(&b.stable_key));
+    edges.sort_by_key(|edge| interner.resolve(edge.stable_key));
     edges
 }
 
@@ -86,22 +85,21 @@ fn edge_kind_for_entrypoint(kind: EntrypointKind) -> DispatchEdgeKind {
 /// Generate a stable key for a dispatch edge fact.
 fn dispatch_edge_stable_key(
     interner: &crate::core::StableKeyInterner,
-    from_source: &str,
+    from_source: StableKeyId,
     to_function_key: &str,
     edge_kind: DispatchEdgeKind,
     language: crate::core::Language,
-) -> String {
-    semantic_stable_key(
+) -> StableKeyId {
+    stable_key_from_parts(
         interner,
         FactFamily::DispatchEdge,
         &[
-            ("from", from_source.to_string()),
+            ("from", interner.resolve(from_source).to_string()),
             ("to_function_key", to_function_key.to_string()),
             ("edge_kind", format!("{edge_kind:?}")),
             ("language", format!("{language:?}")),
         ],
     )
-    .into_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -135,7 +133,7 @@ mod tests {
             confidence: EntrypointConfidence::High,
             status: EntrypointStatus::Resolved,
             provider_id: ENTRYPOINTS_PROVIDER_ID.to_string(),
-            stable_key: format!("ep-{kind:?}"),
+            stable_key: crate::core::stable_key_for_test(&format!("ep-{kind:?}")),
         }
     }
 
@@ -227,7 +225,7 @@ mod tests {
         let edges = derive_dispatch_edges(&db, &[ep]);
 
         assert!(!edges.is_empty());
-        let key = &edges[0].stable_key;
+        let key = db.resolve_stable_key(edges[0].stable_key);
         assert!(
             key.contains("12:DispatchEdge"),
             "stable key should contain FactFamily::DispatchEdge; got: {key}"
@@ -255,7 +253,10 @@ mod tests {
 
         let edges = derive_dispatch_edges(&db, &[ep1, ep2]);
 
-        let keys: Vec<&str> = edges.iter().map(|e| e.stable_key.as_str()).collect();
+        let keys: Vec<_> = edges
+            .iter()
+            .map(|edge| db.resolve_stable_key(edge.stable_key))
+            .collect();
         let mut sorted = keys.clone();
         sorted.sort();
         assert_eq!(
@@ -268,11 +269,14 @@ mod tests {
     fn dispatch_edge_from_source_references_entrypoint_stable_key() {
         let db = AnalysisDb::new();
         let ep = make_entrypoint(EntrypointKind::Test, "go.testing");
-        let entrypoint_key = ep.stable_key.clone();
+        let entrypoint_key = ep.stable_key;
 
         let edges = derive_dispatch_edges(&db, &[ep]);
 
         assert_eq!(edges.len(), 1);
-        assert_eq!(edges[0].from_source, entrypoint_key);
+        assert_eq!(
+            edges[0].from_source,
+            db.resolve_stable_key(entrypoint_key).as_ref()
+        );
     }
 }

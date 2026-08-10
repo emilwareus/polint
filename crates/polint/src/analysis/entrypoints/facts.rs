@@ -1,13 +1,13 @@
 use serde::{Deserialize, Serialize};
 
 use crate::analysis::ids::{DispatchEdgeId, EntrypointId, TrustBoundaryId, UnresolvedFrameworkId};
-use crate::core::{FileId, FunctionId, Language, Span, SymbolId};
+use crate::core::{FileId, FunctionId, Language, Span, StableKeyId, SymbolId};
 
 // ---------------------------------------------------------------------------
 // EntrypointFact
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EntrypointFact {
     pub(crate) id: EntrypointId,
     pub(crate) language: Language,
@@ -24,10 +24,10 @@ pub(crate) struct EntrypointFact {
     pub(crate) confidence: EntrypointConfidence,
     pub(crate) status: EntrypointStatus,
     pub(crate) provider_id: String,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TriggerMetadata {
     pub(crate) method: Option<String>,
     pub(crate) path: Option<String>,
@@ -101,10 +101,10 @@ pub(crate) enum EntrypointStatus {
 // TrustBoundaryFact
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TrustBoundaryFact {
     pub(crate) id: TrustBoundaryId,
-    pub(crate) entrypoint_stable_key: String,
+    pub(crate) entrypoint_stable_key: StableKeyId,
     pub(crate) source_kind: TrustBoundarySourceKind,
     pub(crate) target_parameter: Option<FunctionId>,
     pub(crate) target_parameter_index: Option<usize>,
@@ -115,7 +115,7 @@ pub(crate) struct TrustBoundaryFact {
     pub(crate) span: Span,
     pub(crate) precision: EntrypointPrecision,
     pub(crate) provider_id: String,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -140,7 +140,7 @@ pub(crate) enum TrustBoundarySourceKind {
 // FrameworkDispatchEdgeFact
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FrameworkDispatchEdgeFact {
     pub(crate) id: DispatchEdgeId,
     pub(crate) from_source: String,
@@ -154,7 +154,7 @@ pub(crate) struct FrameworkDispatchEdgeFact {
     pub(crate) span: Span,
     pub(crate) precision: EntrypointPrecision,
     pub(crate) provider_id: String,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -172,7 +172,7 @@ pub(crate) enum DispatchEdgeKind {
 // UnresolvedFrameworkFact
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct UnresolvedFrameworkFact {
     pub(crate) id: UnresolvedFrameworkId,
     pub(crate) language: Language,
@@ -184,7 +184,7 @@ pub(crate) struct UnresolvedFrameworkFact {
     pub(crate) scope_description: String,
     pub(crate) precision: EntrypointPrecision,
     pub(crate) provider_id: String,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -319,12 +319,12 @@ mod tests {
             confidence: EntrypointConfidence::High,
             status: EntrypointStatus::Resolved,
             provider_id: "polint.entrypoints".to_string(),
-            stable_key: "entrypoint:express:get:/api/users".to_string(),
+            stable_key: crate::core::stable_key_for_test("entrypoint:express:get:/api/users"),
         };
 
         let boundary = TrustBoundaryFact {
             id: TrustBoundaryId(1),
-            entrypoint_stable_key: entrypoint.stable_key.clone(),
+            entrypoint_stable_key: entrypoint.stable_key,
             source_kind: TrustBoundarySourceKind::PathParam,
             target_parameter: Some(FunctionId(10)),
             target_parameter_index: Some(0),
@@ -335,12 +335,16 @@ mod tests {
             span: Span::point(FileId(1), 1, 1),
             precision: EntrypointPrecision::ResolvedStatic,
             provider_id: "polint.entrypoints".to_string(),
-            stable_key: "trust-boundary:express:get:/api/users:PathParam".to_string(),
+            stable_key: crate::core::stable_key_for_test(
+                "trust-boundary:express:get:/api/users:PathParam",
+            ),
         };
 
         let dispatch = FrameworkDispatchEdgeFact {
             id: DispatchEdgeId(1),
-            from_source: entrypoint.stable_key.clone(),
+            from_source: crate::core::test_stable_key_interner()
+                .resolve(entrypoint.stable_key)
+                .to_string(),
             to_target: FunctionId(10),
             to_symbol: Some(SymbolId(20)),
             edge_kind: DispatchEdgeKind::RouteDispatch,
@@ -351,7 +355,7 @@ mod tests {
             span: Span::point(FileId(1), 1, 1),
             precision: EntrypointPrecision::ResolvedStatic,
             provider_id: "polint.entrypoints".to_string(),
-            stable_key: "dispatch:express:get:/api/users".to_string(),
+            stable_key: crate::core::stable_key_for_test("dispatch:express:get:/api/users"),
         };
 
         let unresolved = UnresolvedFrameworkFact {
@@ -365,7 +369,7 @@ mod tests {
             scope_description: "fastify server registration".to_string(),
             precision: EntrypointPrecision::Conservative,
             provider_id: "polint.entrypoints".to_string(),
-            stable_key: "unresolved:fastify:file2".to_string(),
+            stable_key: crate::core::stable_key_for_test("unresolved:fastify:file2"),
         };
 
         // Stable keys are distinct across fact families
@@ -378,6 +382,11 @@ mod tests {
         assert_eq!(boundary.entrypoint_stable_key, entrypoint.stable_key);
 
         // Dispatch edge references the entrypoint
-        assert_eq!(dispatch.from_source, entrypoint.stable_key);
+        assert_eq!(
+            dispatch.from_source,
+            crate::core::test_stable_key_interner()
+                .resolve(entrypoint.stable_key)
+                .as_ref()
+        );
     }
 }

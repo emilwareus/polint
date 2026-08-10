@@ -24,39 +24,40 @@ pub(crate) fn validate_entrypoints(db: &AnalysisDb, diagnostics: &mut Vec<Diagno
         "Entrypoint",
         db.entrypoint_facts()
             .iter()
-            .map(|row| row.stable_key.as_str()),
+            .map(|row| db.resolve_stable_key(row.stable_key)),
     );
     check_duplicate_stable_keys(
         diagnostics,
         "TrustBoundary",
         db.trust_boundary_facts()
             .iter()
-            .map(|row| row.stable_key.as_str()),
+            .map(|row| db.resolve_stable_key(row.stable_key)),
     );
     check_duplicate_stable_keys(
         diagnostics,
         "DispatchEdge",
         db.dispatch_edge_facts()
             .iter()
-            .map(|row| row.stable_key.as_str()),
+            .map(|row| db.resolve_stable_key(row.stable_key)),
     );
     check_duplicate_stable_keys(
         diagnostics,
         "UnresolvedFramework",
         db.unresolved_framework_facts()
             .iter()
-            .map(|row| row.stable_key.as_str()),
+            .map(|row| db.resolve_stable_key(row.stable_key)),
     );
 
     // Collect entrypoint stable keys for referential integrity checks
-    let entrypoint_keys: BTreeSet<&str> = db
+    let entrypoint_keys: BTreeSet<crate::core::StableKeyId> = db
         .entrypoint_facts()
         .iter()
-        .map(|ep| ep.stable_key.as_str())
+        .map(|ep| ep.stable_key)
         .collect();
 
     // Collect entrypoints indexed by target_function for conflicting registration check
-    let mut entrypoints_by_target: BTreeMap<crate::core::FunctionId, Vec<&str>> = BTreeMap::new();
+    let mut entrypoints_by_target: BTreeMap<crate::core::FunctionId, Vec<std::sync::Arc<str>>> =
+        BTreeMap::new();
 
     // 2. Validate each EntrypointFact
     for entrypoint in db.entrypoint_facts() {
@@ -65,7 +66,7 @@ pub(crate) fn validate_entrypoints(db: &AnalysisDb, diagnostics: &mut Vec<Diagno
             &functions,
             entrypoint.target_function,
             "Entrypoint",
-            &entrypoint.stable_key,
+            db.resolve_stable_key(entrypoint.stable_key).as_ref(),
             "target_function",
             "dangling entrypoint target function reference",
         );
@@ -75,7 +76,7 @@ pub(crate) fn validate_entrypoints(db: &AnalysisDb, diagnostics: &mut Vec<Diagno
                 &symbols,
                 target_symbol,
                 "Entrypoint",
-                &entrypoint.stable_key,
+                db.resolve_stable_key(entrypoint.stable_key).as_ref(),
                 "target_symbol",
                 "dangling entrypoint target symbol reference",
             );
@@ -85,7 +86,7 @@ pub(crate) fn validate_entrypoints(db: &AnalysisDb, diagnostics: &mut Vec<Diagno
             &files,
             entrypoint.registration_file,
             "Entrypoint",
-            &entrypoint.stable_key,
+            db.resolve_stable_key(entrypoint.stable_key).as_ref(),
             "registration_file",
             "dangling entrypoint registration file reference",
         );
@@ -93,7 +94,7 @@ pub(crate) fn validate_entrypoints(db: &AnalysisDb, diagnostics: &mut Vec<Diagno
             push_entrypoint_diagnostic(
                 diagnostics,
                 "Entrypoint",
-                &entrypoint.stable_key,
+                db.resolve_stable_key(entrypoint.stable_key).as_ref(),
                 "registration_span",
                 "invalid span byte range",
             );
@@ -103,7 +104,7 @@ pub(crate) fn validate_entrypoints(db: &AnalysisDb, diagnostics: &mut Vec<Diagno
         entrypoints_by_target
             .entry(entrypoint.target_function)
             .or_default()
-            .push(&entrypoint.stable_key);
+            .push(db.resolve_stable_key(entrypoint.stable_key));
     }
 
     // 3. Validate each TrustBoundaryFact
@@ -113,7 +114,7 @@ pub(crate) fn validate_entrypoints(db: &AnalysisDb, diagnostics: &mut Vec<Diagno
             &files,
             boundary.file,
             "TrustBoundary",
-            &boundary.stable_key,
+            db.resolve_stable_key(boundary.stable_key).as_ref(),
             "file",
             "dangling trust boundary file reference",
         );
@@ -121,16 +122,16 @@ pub(crate) fn validate_entrypoints(db: &AnalysisDb, diagnostics: &mut Vec<Diagno
             push_entrypoint_diagnostic(
                 diagnostics,
                 "TrustBoundary",
-                &boundary.stable_key,
+                db.resolve_stable_key(boundary.stable_key).as_ref(),
                 "span",
                 "invalid span byte range",
             );
         }
-        if !entrypoint_keys.contains(boundary.entrypoint_stable_key.as_str()) {
+        if !entrypoint_keys.contains(&boundary.entrypoint_stable_key) {
             push_entrypoint_diagnostic(
                 diagnostics,
                 "TrustBoundary",
-                &boundary.stable_key,
+                db.resolve_stable_key(boundary.stable_key).as_ref(),
                 "entrypoint_stable_key",
                 "dangling trust boundary entrypoint reference",
             );
@@ -144,7 +145,7 @@ pub(crate) fn validate_entrypoints(db: &AnalysisDb, diagnostics: &mut Vec<Diagno
             &functions,
             edge.to_target,
             "DispatchEdge",
-            &edge.stable_key,
+            db.resolve_stable_key(edge.stable_key).as_ref(),
             "to_target",
             "dangling dispatch edge target function reference",
         );
@@ -154,7 +155,7 @@ pub(crate) fn validate_entrypoints(db: &AnalysisDb, diagnostics: &mut Vec<Diagno
                 &symbols,
                 to_symbol,
                 "DispatchEdge",
-                &edge.stable_key,
+                db.resolve_stable_key(edge.stable_key).as_ref(),
                 "to_symbol",
                 "dangling dispatch edge target symbol reference",
             );
@@ -164,7 +165,7 @@ pub(crate) fn validate_entrypoints(db: &AnalysisDb, diagnostics: &mut Vec<Diagno
             &files,
             edge.file,
             "DispatchEdge",
-            &edge.stable_key,
+            db.resolve_stable_key(edge.stable_key).as_ref(),
             "file",
             "dangling dispatch edge file reference",
         );
@@ -172,7 +173,7 @@ pub(crate) fn validate_entrypoints(db: &AnalysisDb, diagnostics: &mut Vec<Diagno
             push_entrypoint_diagnostic(
                 diagnostics,
                 "DispatchEdge",
-                &edge.stable_key,
+                db.resolve_stable_key(edge.stable_key).as_ref(),
                 "span",
                 "invalid span byte range",
             );
@@ -181,7 +182,7 @@ pub(crate) fn validate_entrypoints(db: &AnalysisDb, diagnostics: &mut Vec<Diagno
             push_entrypoint_diagnostic(
                 diagnostics,
                 "DispatchEdge",
-                &edge.stable_key,
+                db.resolve_stable_key(edge.stable_key).as_ref(),
                 "from_source",
                 "empty dispatch edge source",
             );
@@ -195,7 +196,7 @@ pub(crate) fn validate_entrypoints(db: &AnalysisDb, diagnostics: &mut Vec<Diagno
             &files,
             fact.file,
             "UnresolvedFramework",
-            &fact.stable_key,
+            db.resolve_stable_key(fact.stable_key).as_ref(),
             "file",
             "dangling unresolved framework file reference",
         );
@@ -203,7 +204,7 @@ pub(crate) fn validate_entrypoints(db: &AnalysisDb, diagnostics: &mut Vec<Diagno
             push_entrypoint_diagnostic(
                 diagnostics,
                 "UnresolvedFramework",
-                &fact.stable_key,
+                db.resolve_stable_key(fact.stable_key).as_ref(),
                 "span",
                 "invalid span byte range",
             );
@@ -244,7 +245,7 @@ pub(crate) fn validate_entrypoints(db: &AnalysisDb, diagnostics: &mut Vec<Diagno
                 .filter_map(|key| {
                     entrypoints
                         .iter()
-                        .find(|ep| ep.stable_key == *key)
+                        .find(|ep| db.resolve_stable_key(ep.stable_key).as_ref() == key.as_ref())
                         .map(|ep| ep.framework_id.as_str())
                 })
                 .collect();
@@ -253,7 +254,7 @@ pub(crate) fn validate_entrypoints(db: &AnalysisDb, diagnostics: &mut Vec<Diagno
                     push_entrypoint_diagnostic(
                         diagnostics,
                         "Entrypoint",
-                        key,
+                        key.as_ref(),
                         "target_function",
                         "conflicting entrypoint registrations for same target function with different frameworks",
                     );
@@ -263,18 +264,18 @@ pub(crate) fn validate_entrypoints(db: &AnalysisDb, diagnostics: &mut Vec<Diagno
     }
 }
 
-fn check_duplicate_stable_keys<'a>(
+fn check_duplicate_stable_keys(
     diagnostics: &mut Vec<Diagnostic>,
     family: &'static str,
-    keys: impl Iterator<Item = &'a str>,
+    keys: impl Iterator<Item = std::sync::Arc<str>>,
 ) {
     let mut seen = BTreeSet::new();
     for key in keys {
-        if !seen.insert(key) {
+        if !seen.insert(key.clone()) {
             push_entrypoint_diagnostic(
                 diagnostics,
                 family,
-                key,
+                key.as_ref(),
                 "stable_key",
                 "duplicate stable key",
             );
@@ -699,14 +700,14 @@ mod tests {
             confidence: EntrypointConfidence::High,
             status: EntrypointStatus::Resolved,
             provider_id: "polint.entrypoints".to_string(),
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
     fn trust_boundary(id: u64, entrypoint_key: &str, stable_key: &str) -> TrustBoundaryFact {
         TrustBoundaryFact {
             id: TrustBoundaryId(id),
-            entrypoint_stable_key: entrypoint_key.to_string(),
+            entrypoint_stable_key: crate::core::stable_key_for_test(entrypoint_key),
             source_kind: TrustBoundarySourceKind::QueryString,
             target_parameter: Some(FunctionId(0)),
             target_parameter_index: Some(0),
@@ -717,7 +718,7 @@ mod tests {
             span: span(FileId(0)),
             precision: EntrypointPrecision::SetupAware,
             provider_id: "polint.entrypoints".to_string(),
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
@@ -735,7 +736,7 @@ mod tests {
             span: span(FileId(0)),
             precision: EntrypointPrecision::SetupAware,
             provider_id: "polint.entrypoints".to_string(),
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
@@ -751,7 +752,7 @@ mod tests {
             scope_description: "server setup".to_string(),
             precision: EntrypointPrecision::Conservative,
             provider_id: "polint.entrypoints".to_string(),
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 

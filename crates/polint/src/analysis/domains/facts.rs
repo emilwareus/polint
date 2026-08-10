@@ -1,3 +1,4 @@
+use crate::core::StableKeyId;
 use serde::{Deserialize, Serialize};
 
 use crate::analysis::cfg::ids::BasicBlockId;
@@ -110,7 +111,7 @@ impl DomainPrecision {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DomainObservationFact {
     pub(crate) id: DomainObservationId,
     pub(crate) body: MirBodyId,
@@ -122,10 +123,10 @@ pub(crate) struct DomainObservationFact {
     pub(crate) value: DomainValue,
     pub(crate) status: DomainStatus,
     pub(crate) precision: DomainPrecision,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DomainEventFact {
     pub(crate) id: DomainEventId,
     pub(crate) body: MirBodyId,
@@ -135,7 +136,7 @@ pub(crate) struct DomainEventFact {
     pub(crate) status: DomainStatus,
     pub(crate) precision: DomainPrecision,
     pub(crate) reason: String,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
 #[cfg(test)]
@@ -157,13 +158,18 @@ mod tests {
             value: DomainValue::Label("nil".to_string()),
             status: DomainStatus::Present,
             precision: DomainPrecision::ExactLocal,
-            stable_key: "domain:after-op:nilness".to_string(),
+            stable_key: crate::core::stable_key_for_test("domain:after-op:nilness"),
         };
 
         assert_eq!(fact.id.0, 7);
         assert_eq!(fact.status, DomainStatus::Present);
         assert_eq!(fact.precision, DomainPrecision::ExactLocal);
-        assert_eq!(fact.stable_key, "domain:after-op:nilness");
+        assert_eq!(
+            crate::core::test_stable_key_interner()
+                .resolve(fact.stable_key)
+                .as_ref(),
+            "domain:after-op:nilness"
+        );
     }
 
     #[test]

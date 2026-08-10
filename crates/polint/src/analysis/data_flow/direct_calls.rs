@@ -9,7 +9,7 @@ use crate::analysis::refined_calls::facts::{RefinedCallConfidence, RefinedCallEd
 use crate::analysis::summaries::facts::{
     FlowRoot, SummaryDomainKind, SummaryFact, SummaryPrecision, SummaryStatus,
 };
-use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
+use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
 use crate::core::{AnalysisDb, Language};
 
 pub(crate) fn derive_direct_call_edges(db: &AnalysisDb, output: &mut DataFlowOutput) {
@@ -357,14 +357,14 @@ fn push_edge(
     output: &mut DataFlowOutput,
     draft: CallEdgeDraft<'_>,
 ) {
-    let stable_key = stable_key_text_from_parts(
+    let stable_key = stable_key_from_parts(
         interner,
         FactFamily::DataFlowEdge,
         &[
             ("kind", format!("{:?}", draft.kind)),
             ("refined_call", draft.edge.stable_key.clone()),
-            ("from", node_key(output, draft.from)),
-            ("to", node_key(output, draft.to)),
+            ("from", node_key(interner, output, draft.from)),
+            ("to", node_key(interner, output, draft.to)),
             ("status", format!("{:?}", draft.status)),
         ],
     );
@@ -410,7 +410,7 @@ fn summary_node(
     role: &str,
     call_site: Option<CallSiteId>,
 ) -> DataFlowNodeId {
-    let stable_key = stable_key_text_from_parts(
+    let stable_key = stable_key_from_parts(
         interner,
         FactFamily::DataFlowNode,
         &[
@@ -464,15 +464,15 @@ fn push_call_summary_tito_edge(
     pair: (DataFlowNodeId, Option<CallSiteId>),
 ) {
     let (to, call_site) = pair;
-    let stable_key = stable_key_text_from_parts(
+    let stable_key = stable_key_from_parts(
         interner,
         FactFamily::DataFlowEdge,
         &[
             ("kind", format!("{:?}", DataFlowEdgeKind::SummaryTito)),
             ("refined_call", edge.stable_key.clone()),
             ("summary", summary.stable_key.clone()),
-            ("from", node_key(output, from)),
-            ("to", node_key(output, to)),
+            ("from", node_key(interner, output, from)),
+            ("to", node_key(interner, output, to)),
             ("flow_from", super::summary_edges::root_role(flow.from)),
             ("flow_to", super::summary_edges::root_role(flow.to)),
             ("flow_kind", format!("{:?}", flow.kind)),
@@ -553,12 +553,16 @@ fn unresolved_validation(
     }
 }
 
-fn node_key(output: &DataFlowOutput, node: DataFlowNodeId) -> String {
+fn node_key(
+    interner: &crate::core::StableKeyInterner,
+    output: &DataFlowOutput,
+    node: DataFlowNodeId,
+) -> String {
     output
         .nodes
         .iter()
         .find(|fact| fact.id == node)
-        .map(|fact| fact.stable_key.clone())
+        .map(|fact| interner.resolve(fact.stable_key).to_string())
         .unwrap_or_else(|| format!("node:{}", node.0))
 }
 
@@ -570,7 +574,7 @@ fn call_node(
     suffix: String,
     call_site: Option<CallSiteId>,
 ) -> DataFlowNodeId {
-    let stable_key = stable_key_text_from_parts(
+    let stable_key = stable_key_from_parts(
         interner,
         FactFamily::DataFlowNode,
         &[
@@ -827,7 +831,8 @@ mod tests {
 
         derive_direct_call_edges(&db, &mut output);
         super::super::summary_edges::derive_summary_projected_edges(&db, &mut output);
-        let store = DataFlowStore::from_output(output).expect("valid store");
+        let store = DataFlowStore::from_output(output, &crate::core::test_stable_key_interner())
+            .expect("valid store");
         let source = store
             .nodes()
             .iter()
@@ -904,7 +909,8 @@ mod tests {
 
         derive_direct_call_edges(&db, &mut output);
         super::super::summary_edges::derive_summary_projected_edges(&db, &mut output);
-        let store = DataFlowStore::from_output(output).expect("valid store");
+        let store = DataFlowStore::from_output(output, &crate::core::test_stable_key_interner())
+            .expect("valid store");
         let unrelated_argument = store
             .nodes()
             .iter()
@@ -965,7 +971,8 @@ mod tests {
 
         derive_direct_call_edges(&db, &mut output);
         super::super::summary_edges::derive_summary_projected_edges(&db, &mut output);
-        let store = DataFlowStore::from_output(output).expect("valid store");
+        let store = DataFlowStore::from_output(output, &crate::core::test_stable_key_interner())
+            .expect("valid store");
         let receiver = store
             .nodes()
             .iter()
@@ -1044,7 +1051,8 @@ mod tests {
 
         derive_direct_call_edges(&db, &mut output);
         super::super::summary_edges::derive_summary_projected_edges(&db, &mut output);
-        let store = DataFlowStore::from_output(output).expect("valid store");
+        let store = DataFlowStore::from_output(output, &crate::core::test_stable_key_interner())
+            .expect("valid store");
         let source = store
             .nodes()
             .iter()
@@ -1109,7 +1117,8 @@ mod tests {
 
         derive_direct_call_edges(&db, &mut output);
         super::super::summary_edges::derive_summary_projected_edges(&db, &mut output);
-        let store = DataFlowStore::from_output(output).expect("valid store");
+        let store = DataFlowStore::from_output(output, &crate::core::test_stable_key_interner())
+            .expect("valid store");
         let first_argument = store
             .nodes()
             .iter()
@@ -1295,7 +1304,7 @@ mod tests {
             call_site: None,
             model: None,
             span: None,
-            stable_key: format!("node:place:{}", place.0),
+            stable_key: crate::core::stable_key_for_test(&format!("node:place:{}", place.0)),
         }
     }
 

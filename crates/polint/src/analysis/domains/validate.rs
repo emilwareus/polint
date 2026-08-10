@@ -24,14 +24,14 @@ pub(crate) fn validate_abstract_domains(db: &AnalysisDb, diagnostics: &mut Vec<D
         "DomainObservation",
         db.abstract_domain_observations()
             .iter()
-            .map(|row| row.stable_key.as_str()),
+            .map(|row| db.resolve_stable_key(row.stable_key)),
     );
     check_duplicate_stable_keys(
         diagnostics,
         "DomainEvent",
         db.abstract_domain_events()
             .iter()
-            .map(|row| row.stable_key.as_str()),
+            .map(|row| db.resolve_stable_key(row.stable_key)),
     );
 
     for row in db.abstract_domain_observations() {
@@ -77,11 +77,12 @@ fn validate_observation(
     places: &BTreeSet<crate::analysis::ids::PlaceId>,
     row: &DomainObservationFact,
 ) {
-    if row.stable_key.trim().is_empty() {
+    let stable_key = db.resolve_stable_key(row.stable_key);
+    if stable_key.trim().is_empty() {
         push_domain_diagnostic(
             diagnostics,
             "DomainObservation",
-            &row.stable_key,
+            stable_key.as_ref(),
             "stable_key",
             "stable key is required",
         );
@@ -92,14 +93,14 @@ fn validate_observation(
         FactFamily::DomainObservation,
         row.id.0,
         "DomainObservation",
-        &row.stable_key,
+        stable_key.as_ref(),
     );
     check_ref(
         diagnostics,
         bodies,
         row.body,
         "DomainObservation",
-        &row.stable_key,
+        stable_key.as_ref(),
         "body",
         "dangling MIR body reference",
     );
@@ -108,7 +109,7 @@ fn validate_observation(
         blocks,
         row.block,
         "DomainObservation",
-        &row.stable_key,
+        stable_key.as_ref(),
         "block",
         "dangling basic block reference",
     );
@@ -117,7 +118,7 @@ fn validate_observation(
         operations,
         row.operation,
         "DomainObservation",
-        &row.stable_key,
+        stable_key.as_ref(),
         "operation",
         "dangling MIR operation reference",
     );
@@ -126,7 +127,7 @@ fn validate_observation(
         places,
         row.place,
         "DomainObservation",
-        &row.stable_key,
+        stable_key.as_ref(),
         "place",
         "dangling place reference",
     );
@@ -135,7 +136,7 @@ fn validate_observation(
         DomainValue::TopReason(reason) => validate_reasoned_status(
             diagnostics,
             "DomainObservation",
-            &row.stable_key,
+            stable_key.as_ref(),
             row.status,
             row.precision,
             reason,
@@ -143,14 +144,14 @@ fn validate_observation(
         DomainValue::Label(value) if value.trim().is_empty() => push_domain_diagnostic(
             diagnostics,
             "DomainObservation",
-            &row.stable_key,
+            stable_key.as_ref(),
             "value",
             "label values must not be empty",
         ),
         DomainValue::DigestParts(parts) if parts.is_empty() => push_domain_diagnostic(
             diagnostics,
             "DomainObservation",
-            &row.stable_key,
+            stable_key.as_ref(),
             "value",
             "digest-part values must not be empty",
         ),
@@ -159,7 +160,7 @@ fn validate_observation(
                 push_domain_diagnostic(
                     diagnostics,
                     "DomainObservation",
-                    &row.stable_key,
+                    stable_key.as_ref(),
                     "value",
                     "top, unknown, unsupported, setup-missing, and budget rows require a TopReason",
                 );
@@ -173,7 +174,7 @@ fn validate_observation(
                 push_domain_diagnostic(
                     diagnostics,
                     "DomainObservation",
-                    &row.stable_key,
+                    stable_key.as_ref(),
                     "precision",
                     "present rows require ExactLocal, SetupAware, Conservative, or Heuristic precision",
                 );
@@ -191,11 +192,12 @@ fn validate_event(
     call_operations: &BTreeSet<MirOpId>,
     row: &DomainEventFact,
 ) {
-    if row.stable_key.trim().is_empty() {
+    let stable_key = db.resolve_stable_key(row.stable_key);
+    if stable_key.trim().is_empty() {
         push_domain_diagnostic(
             diagnostics,
             "DomainEvent",
-            &row.stable_key,
+            stable_key.as_ref(),
             "stable_key",
             "stable key is required",
         );
@@ -206,14 +208,14 @@ fn validate_event(
         FactFamily::DomainEvent,
         row.id.0,
         "DomainEvent",
-        &row.stable_key,
+        stable_key.as_ref(),
     );
     check_ref(
         diagnostics,
         bodies,
         row.body,
         "DomainEvent",
-        &row.stable_key,
+        stable_key.as_ref(),
         "body",
         "dangling MIR body reference",
     );
@@ -222,7 +224,7 @@ fn validate_event(
         blocks,
         row.block,
         "DomainEvent",
-        &row.stable_key,
+        stable_key.as_ref(),
         "block",
         "dangling basic block reference",
     );
@@ -231,7 +233,7 @@ fn validate_event(
         operations,
         row.operation,
         "DomainEvent",
-        &row.stable_key,
+        stable_key.as_ref(),
         "operation",
         "dangling MIR operation reference",
     );
@@ -239,7 +241,7 @@ fn validate_event(
         push_domain_diagnostic(
             diagnostics,
             "DomainEvent",
-            &row.stable_key,
+            stable_key.as_ref(),
             "status",
             "domain events must describe top, unknown, setup, unsupported, or budget loss",
         );
@@ -247,7 +249,7 @@ fn validate_event(
     validate_reasoned_status(
         diagnostics,
         "DomainEvent",
-        &row.stable_key,
+        stable_key.as_ref(),
         row.status,
         row.precision,
         row.reason.as_str(),
@@ -255,7 +257,7 @@ fn validate_event(
     validate_unresolved_call_reference(
         diagnostics,
         "DomainEvent",
-        &row.stable_key,
+        stable_key.as_ref(),
         row.operation,
         call_operations,
         Some(row.reason.as_str()),
@@ -403,18 +405,18 @@ fn reason_contract(reason: &str) -> Option<(DomainStatus, &'static [DomainPrecis
     }
 }
 
-fn check_duplicate_stable_keys<'a>(
+fn check_duplicate_stable_keys(
     diagnostics: &mut Vec<Diagnostic>,
     family: &'static str,
-    keys: impl Iterator<Item = &'a str>,
+    keys: impl Iterator<Item = std::sync::Arc<str>>,
 ) {
     let mut seen = BTreeSet::new();
     for key in keys {
-        if !seen.insert(key) {
+        if !seen.insert(key.clone()) {
             push_domain_diagnostic(
                 diagnostics,
                 family,
-                key,
+                key.as_ref(),
                 "stable_key",
                 "duplicate stable key",
             );
@@ -513,7 +515,7 @@ mod tests {
             value: DomainValue::TopReason("unresolved_call".to_string()),
             status: DomainStatus::Unknown,
             precision: DomainPrecision::Unknown,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         };
         let mut diagnostics = Vec::new();
 

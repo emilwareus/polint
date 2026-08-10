@@ -48,7 +48,11 @@ pub(crate) fn nodes_by_edge_kind(
         .flat_map(|edge| [edge.from, edge.to])
         .filter_map(|node| store.node(node))
         .collect::<Vec<_>>();
-    nodes.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    nodes.sort_by(|left, right| {
+        store
+            .resolve_stable_key(left.stable_key)
+            .cmp(&store.resolve_stable_key(right.stable_key))
+    });
     nodes.dedup_by(|left, right| left.id == right.id);
     nodes
 }

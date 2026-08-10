@@ -622,7 +622,7 @@
                 confidence: EvidenceConfidence::High,
                 compact_label: None,
                 source_fact_stable_keys: Vec::new(),
-                stable_key: "evidence:node:exact".to_string(),
+                stable_key: crate::core::stable_key_for_test("evidence:node:exact"),
             }],
             ..crate::analysis::evidence::store::EvidenceOutput::empty()
         })

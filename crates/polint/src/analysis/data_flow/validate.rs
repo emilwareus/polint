@@ -17,7 +17,10 @@ pub(crate) struct DataFlowValidationIssue {
     dead_code,
     reason = "Validation is kept as a reusable private hook before it is surfaced in debug output."
 )]
-pub(crate) fn validate_output(output: &DataFlowOutput) -> Vec<DataFlowValidationIssue> {
+pub(crate) fn validate_output(
+    output: &DataFlowOutput,
+    interner: &crate::core::StableKeyInterner,
+) -> Vec<DataFlowValidationIssue> {
     let mut issues = Vec::new();
     let nodes = output
         .nodes
@@ -37,23 +40,23 @@ pub(crate) fn validate_output(output: &DataFlowOutput) -> Vec<DataFlowValidation
     let mut stable_keys = BTreeSet::new();
 
     for node in &output.nodes {
-        if !stable_keys.insert(("node", node.stable_key.clone())) {
+        if !stable_keys.insert(("node", node.stable_key)) {
             issues.push(DataFlowValidationIssue {
-                stable_key: node.stable_key.clone(),
+                stable_key: interner.resolve(node.stable_key).to_string(),
                 reason: "duplicate node stable key".to_string(),
             });
         }
     }
     for edge in &output.edges {
-        if !stable_keys.insert(("edge", edge.stable_key.clone())) {
+        if !stable_keys.insert(("edge", edge.stable_key)) {
             issues.push(DataFlowValidationIssue {
-                stable_key: edge.stable_key.clone(),
+                stable_key: interner.resolve(edge.stable_key).to_string(),
                 reason: "duplicate edge stable key".to_string(),
             });
         }
         if !nodes.contains(&edge.from) || !nodes.contains(&edge.to) {
             issues.push(DataFlowValidationIssue {
-                stable_key: edge.stable_key.clone(),
+                stable_key: interner.resolve(edge.stable_key).to_string(),
                 reason: "dangling edge endpoint".to_string(),
             });
         }
@@ -64,13 +67,13 @@ pub(crate) fn validate_output(output: &DataFlowOutput) -> Vec<DataFlowValidation
                 .all(|key| key.trim().is_empty())
         {
             issues.push(DataFlowValidationIssue {
-                stable_key: edge.stable_key.clone(),
+                stable_key: interner.resolve(edge.stable_key).to_string(),
                 reason: "summary-projected edge missing summary stable-key evidence".to_string(),
             });
         }
         if edge.status == DataFlowStatus::BudgetExceeded && edge.budget.is_none() {
             issues.push(DataFlowValidationIssue {
-                stable_key: edge.stable_key.clone(),
+                stable_key: interner.resolve(edge.stable_key).to_string(),
                 reason: "budget-exceeded edge missing budget row".to_string(),
             });
         }
@@ -78,7 +81,7 @@ pub(crate) fn validate_output(output: &DataFlowOutput) -> Vec<DataFlowValidation
             && !budgets.contains(&budget)
         {
             issues.push(DataFlowValidationIssue {
-                stable_key: edge.stable_key.clone(),
+                stable_key: interner.resolve(edge.stable_key).to_string(),
                 reason: "edge references missing budget row".to_string(),
             });
         }
@@ -88,7 +91,7 @@ pub(crate) fn validate_output(output: &DataFlowOutput) -> Vec<DataFlowValidation
         ) && edge.evidence.is_empty()
         {
             issues.push(DataFlowValidationIssue {
-                stable_key: edge.stable_key.clone(),
+                stable_key: interner.resolve(edge.stable_key).to_string(),
                 reason: "uncertainty edge missing evidence".to_string(),
             });
         }
@@ -98,7 +101,7 @@ pub(crate) fn validate_output(output: &DataFlowOutput) -> Vec<DataFlowValidation
             && model.validation == DataFlowValidation::Rejected
         {
             issues.push(DataFlowValidationIssue {
-                stable_key: model.stable_key.clone(),
+                stable_key: interner.resolve(model.stable_key).to_string(),
                 reason: "present model cannot be rejected".to_string(),
             });
         }
@@ -108,7 +111,7 @@ pub(crate) fn validate_output(output: &DataFlowOutput) -> Vec<DataFlowValidation
             && !models.contains(&model)
         {
             issues.push(DataFlowValidationIssue {
-                stable_key: node.stable_key.clone(),
+                stable_key: interner.resolve(node.stable_key).to_string(),
                 reason: "node references missing model".to_string(),
             });
         }
@@ -132,12 +135,15 @@ mod tests {
         edge.status = DataFlowStatus::BudgetExceeded;
         edge.kind = DataFlowEdgeKind::BudgetTruncated;
 
-        let issues = validate_output(&DataFlowOutput {
-            nodes: vec![node(0), node(1)],
-            edges: vec![edge],
-            models: Vec::new(),
-            budgets: Vec::new(),
-        });
+        let issues = validate_output(
+            &DataFlowOutput {
+                nodes: vec![node(0), node(1)],
+                edges: vec![edge],
+                models: Vec::new(),
+                budgets: Vec::new(),
+            },
+            &crate::core::test_stable_key_interner(),
+        );
 
         assert!(
             issues
@@ -162,7 +168,7 @@ mod tests {
             call_site: None,
             model: None,
             span: None,
-            stable_key: format!("node:{id}"),
+            stable_key: crate::core::stable_key_for_test(&format!("node:{id}")),
         }
     }
 
@@ -185,7 +191,7 @@ mod tests {
             budget: None,
             evidence: Vec::new(),
             input_stable_keys: Vec::new(),
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 }

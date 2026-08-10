@@ -9,8 +9,7 @@ use crate::analysis::entrypoints::facts::{
 use crate::analysis::entrypoints::provider::ENTRYPOINTS_PROVIDER_ID;
 use crate::analysis::ids::{EntrypointId, UnresolvedFrameworkId};
 use crate::analysis::places::PlaceRoot;
-use crate::analysis::stable_key::semantic_stable_key;
-use crate::analysis_kernel::{FactFamily, FactRef};
+use crate::analysis_kernel::{FactFamily, FactRef, stable_key_from_parts};
 use crate::core::{
     AnalysisDb, FileId, FunctionFact, FunctionId, Language, Span, span_from_byte_range,
 };
@@ -163,7 +162,7 @@ pub(crate) fn recognize_ts_entrypoints(db: &AnalysisDb) -> TsRecognizerOutput {
     // 6. Emit UnresolvedFrameworkFact for unrecognized TS/JS framework imports (D-10)
     for (file, import_path, span) in &unrecognized_imports {
         let file_key = file_stable_key(db, *file);
-        let stable_key = semantic_stable_key(
+        let stable_key = stable_key_from_parts(
             interner,
             FactFamily::UnresolvedFramework,
             &[
@@ -171,8 +170,7 @@ pub(crate) fn recognize_ts_entrypoints(db: &AnalysisDb) -> TsRecognizerOutput {
                 ("file_key", file_key),
                 ("import_path", import_path.clone()),
             ],
-        )
-        .into_string();
+        );
 
         unresolved.push(UnresolvedFrameworkFact {
             id: UnresolvedFrameworkId(0),
@@ -199,12 +197,12 @@ pub(crate) fn recognize_ts_entrypoints(db: &AnalysisDb) -> TsRecognizerOutput {
     );
 
     // Sort output by stable key
-    entrypoints.sort_by(|a, b| a.stable_key.cmp(&b.stable_key));
+    entrypoints.sort_by_key(|entrypoint| interner.resolve(entrypoint.stable_key));
     let mut seen_entrypoints = BTreeSet::new();
     entrypoints.retain(|entrypoint| {
         seen_entrypoints.insert(entrypoint_semantic_identity(interner, entrypoint))
     });
-    unresolved.sort_by(|a, b| a.stable_key.cmp(&b.stable_key));
+    unresolved.sort_by_key(|fact| interner.resolve(fact.stable_key));
 
     TsRecognizerOutput {
         entrypoints,
@@ -695,8 +693,8 @@ fn recognize_cli_entrypoints(
 fn entrypoint_semantic_identity(
     interner: &crate::core::StableKeyInterner,
     entrypoint: &EntrypointFact,
-) -> String {
-    semantic_stable_key(
+) -> crate::core::StableKeyId {
+    stable_key_from_parts(
         interner,
         FactFamily::Entrypoint,
         &[
@@ -756,7 +754,6 @@ fn entrypoint_semantic_identity(
             ),
         ],
     )
-    .into_string()
 }
 
 fn recognize_source_level_entrypoints(
@@ -1320,7 +1317,7 @@ fn emit_unresolved_for_unused_frameworks(
 
             if !files_with_entrypoints.contains(&(*file_id, framework_id)) {
                 let file_key = file_stable_key(db, *file_id);
-                let stable_key = semantic_stable_key(
+                let stable_key = stable_key_from_parts(
                     interner,
                     FactFamily::UnresolvedFramework,
                     &[
@@ -1330,8 +1327,7 @@ fn emit_unresolved_for_unused_frameworks(
                         ("reason", "UnrecognizedPattern".to_string()),
                         ("span", span_key(import_span)),
                     ],
-                )
-                .into_string();
+                );
 
                 let framework_label = match framework {
                     TsFramework::Express => "Express",
@@ -1643,8 +1639,8 @@ fn entrypoint_stable_key(
     kind: &str,
     target_function_key: &str,
     registration_span: &str,
-) -> String {
-    semantic_stable_key(
+) -> crate::core::StableKeyId {
+    stable_key_from_parts(
         interner,
         FactFamily::Entrypoint,
         &[
@@ -1656,7 +1652,6 @@ fn entrypoint_stable_key(
             ("registration_span", registration_span.to_string()),
         ],
     )
-    .into_string()
 }
 
 fn language_label_for_stable_key(language: Language) -> &'static str {
@@ -2365,7 +2360,7 @@ app.route("/api/users/:id").get(getUsers);
         let output = recognize_ts_entrypoints(&db);
 
         assert_eq!(output.entrypoints.len(), 1);
-        let key = &output.entrypoints[0].stable_key;
+        let key = db.resolve_stable_key(output.entrypoints[0].stable_key);
         assert!(
             key.contains("10:Entrypoint"),
             "key should contain FactFamily::Entrypoint"
@@ -2432,10 +2427,10 @@ app.route("/api/users/:id").get(getUsers);
         let output = recognize_ts_entrypoints(&db);
 
         assert_eq!(output.entrypoints.len(), 3);
-        let keys: Vec<&str> = output
+        let keys: Vec<_> = output
             .entrypoints
             .iter()
-            .map(|ep| ep.stable_key.as_str())
+            .map(|ep| db.resolve_stable_key(ep.stable_key))
             .collect();
         let mut sorted = keys.clone();
         sorted.sort();

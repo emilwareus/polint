@@ -53,7 +53,10 @@ pub(crate) struct EvidenceDebugBudgetCaps {
     pub(crate) max_depth: u32,
 }
 
-pub(crate) fn evidence_debug_report(store: &EvidenceStore) -> EvidenceDebugReport {
+pub(crate) fn evidence_debug_report(
+    store: &EvidenceStore,
+    interner: &crate::core::StableKeyInterner,
+) -> EvidenceDebugReport {
     let mut summary_expansion_keys = store
         .edges()
         .iter()
@@ -79,7 +82,7 @@ pub(crate) fn evidence_debug_report(store: &EvidenceStore) -> EvidenceDebugRepor
     let mut replay_keys = store
         .replay_keys()
         .iter()
-        .map(|key| key.stable_key.clone())
+        .map(|key| interner.resolve(key.stable_key).to_string())
         .chain(
             store
                 .bundles()
@@ -102,7 +105,7 @@ pub(crate) fn evidence_debug_report(store: &EvidenceStore) -> EvidenceDebugRepor
         .omitted_regions()
         .iter()
         .map(|region| EvidenceDebugOmittedRegion {
-            stable_key: region.stable_key.clone(),
+            stable_key: interner.resolve(region.stable_key).to_string(),
             reason: format!("{:?}", region.reason),
             hidden_node_count: region.hidden_node_count,
             hidden_edge_count: region.hidden_edge_count,
@@ -212,8 +215,8 @@ mod tests {
     fn debug_report_is_deterministic_compact_and_private() {
         let store = store();
 
-        let first = evidence_debug_report(&store);
-        let second = evidence_debug_report(&store);
+        let first = evidence_debug_report(&store, &crate::core::test_stable_key_interner());
+        let second = evidence_debug_report(&store, &crate::core::test_stable_key_interner());
 
         assert_eq!(first, second);
         assert_eq!(first.counts.edges, 1);
@@ -232,7 +235,7 @@ mod tests {
         let mut output = output();
         output.bundles.push(EvidenceBundleFact {
             id: EvidenceBundleId(1),
-            diagnostic_stable_key: "diag:2".to_string(),
+            diagnostic_stable_key: crate::core::stable_key_for_test("diag:2"),
             query_mode: EvidenceQueryMode::Path,
             status: EvidenceStatus::Partial,
             precision: EvidencePrecision::SetupAware,
@@ -243,7 +246,7 @@ mod tests {
             selected_paths: Vec::new(),
             selected_slices: Vec::new(),
             replay_key: Some("replay:larger".to_string()),
-            stable_key: "bundle:larger".to_string(),
+            stable_key: crate::core::stable_key_for_test("bundle:larger"),
         });
         output.replay_keys.push(EvidenceReplayKeyFact {
             bundle: EvidenceBundleId(1),
@@ -258,11 +261,12 @@ mod tests {
             ranking: EvidenceRankingMode::DeterministicDisplay,
             renderer: EvidenceRendererMode::Debug,
             upstream_digest_keys: Vec::new(),
-            stable_key: "replay:larger".to_string(),
+            stable_key: crate::core::stable_key_for_test("replay:larger"),
         });
-        let store = EvidenceStore::from_output(output).expect("valid evidence");
+        let store = EvidenceStore::from_output(output, &crate::core::test_stable_key_interner())
+            .expect("valid evidence");
 
-        let report = evidence_debug_report(&store);
+        let report = evidence_debug_report(&store, &crate::core::test_stable_key_interner());
 
         assert_eq!(
             report.budget_caps,
@@ -276,7 +280,8 @@ mod tests {
     }
 
     fn store() -> EvidenceStore {
-        EvidenceStore::from_output(output()).expect("valid evidence")
+        EvidenceStore::from_output(output(), &crate::core::test_stable_key_interner())
+            .expect("valid evidence")
     }
 
     fn output() -> EvidenceOutput {
@@ -300,11 +305,11 @@ mod tests {
                 },
                 compact_label: None,
                 source_fact_stable_keys: Vec::new(),
-                stable_key: "edge:summary".to_string(),
+                stable_key: crate::core::stable_key_for_test("edge:summary"),
             }],
             bundles: vec![EvidenceBundleFact {
                 id: EvidenceBundleId(0),
-                diagnostic_stable_key: "diag:1".to_string(),
+                diagnostic_stable_key: crate::core::stable_key_for_test("diag:1"),
                 query_mode: EvidenceQueryMode::Path,
                 status: EvidenceStatus::Partial,
                 precision: EvidencePrecision::SetupAware,
@@ -315,7 +320,7 @@ mod tests {
                 selected_paths: vec![EvidencePathId(0)],
                 selected_slices: Vec::new(),
                 replay_key: Some("replay:bundle".to_string()),
-                stable_key: "bundle:diag".to_string(),
+                stable_key: crate::core::stable_key_for_test("bundle:diag"),
             }],
             paths: vec![EvidencePathFact {
                 id: EvidencePathId(0),
@@ -328,7 +333,7 @@ mod tests {
                 status: EvidenceStatus::Partial,
                 hidden_node_count: 3,
                 omitted_regions: vec![EvidenceOmittedRegionId(0)],
-                stable_key: "path:summary".to_string(),
+                stable_key: crate::core::stable_key_for_test("path:summary"),
             }],
             slices: Vec::new(),
             unknowns: vec![EvidenceUnknownFact {
@@ -339,7 +344,7 @@ mod tests {
                 reason: EvidenceUnknownReason::OpaqueSummary,
                 message: "opaque".to_string(),
                 source_fact_stable_keys: Vec::new(),
-                stable_key: "unknown:summary".to_string(),
+                stable_key: crate::core::stable_key_for_test("unknown:summary"),
             }],
             omitted_regions: vec![EvidenceOmittedRegionFact {
                 id: EvidenceOmittedRegionId(0),
@@ -350,7 +355,7 @@ mod tests {
                 hidden_node_count: 3,
                 hidden_edge_count: 1,
                 budget_label: Some("compact".to_string()),
-                stable_key: "omitted:summary".to_string(),
+                stable_key: crate::core::stable_key_for_test("omitted:summary"),
             }],
             replay_keys: vec![EvidenceReplayKeyFact {
                 bundle: EvidenceBundleId(0),
@@ -360,7 +365,7 @@ mod tests {
                 ranking: EvidenceRankingMode::DeterministicDisplay,
                 renderer: EvidenceRendererMode::Debug,
                 upstream_digest_keys: Vec::new(),
-                stable_key: "replay:bundle".to_string(),
+                stable_key: crate::core::stable_key_for_test("replay:bundle"),
             }],
         }
     }
@@ -387,7 +392,7 @@ mod tests {
             confidence: EvidenceConfidence::High,
             compact_label: None,
             source_fact_stable_keys: Vec::new(),
-            stable_key: format!("node:{id}"),
+            stable_key: crate::core::stable_key_for_test(&format!("node:{id}")),
         }
     }
 }

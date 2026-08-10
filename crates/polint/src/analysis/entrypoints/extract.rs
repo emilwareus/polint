@@ -24,7 +24,11 @@ pub(crate) fn extract_entrypoints(db: &AnalysisDb) -> EntrypointOutput {
     let dispatch_edges = derive_dispatch_edges(db, &entrypoints);
 
     // 5. Merge unresolved facts from both recognizers
-    let unresolved = merge_unresolved(go_output.unresolved, ts_output.unresolved);
+    let unresolved = merge_unresolved(
+        &db.stable_key_interner(),
+        go_output.unresolved,
+        ts_output.unresolved,
+    );
 
     // 6. Return combined output
     EntrypointOutput {

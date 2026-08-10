@@ -5,9 +5,9 @@ use crate::analysis::ids::{
     CallSiteId, CallTargetId, DataFlowBudgetId, DataFlowEdgeId, DataFlowModelId, DataFlowNodeId,
     MirBodyId, MirOpId, PlaceId, RefinedCallEdgeId,
 };
-use crate::core::{FileId, FunctionId, Language, ReferenceId, Span, SymbolId};
+use crate::core::{FileId, FunctionId, Language, ReferenceId, Span, StableKeyId, SymbolId};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DataFlowNodeFact {
     pub(crate) id: DataFlowNodeId,
     pub(crate) kind: DataFlowNodeKind,
@@ -23,10 +23,10 @@ pub(crate) struct DataFlowNodeFact {
     pub(crate) call_site: Option<CallSiteId>,
     pub(crate) model: Option<DataFlowModelId>,
     pub(crate) span: Option<Span>,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DataFlowEdgeFact {
     pub(crate) id: DataFlowEdgeId,
     pub(crate) from: DataFlowNodeId,
@@ -45,10 +45,10 @@ pub(crate) struct DataFlowEdgeFact {
     pub(crate) budget: Option<DataFlowBudgetId>,
     pub(crate) evidence: Vec<String>,
     pub(crate) input_stable_keys: Vec<String>,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DataFlowModelFact {
     pub(crate) id: DataFlowModelId,
     pub(crate) kind: DataFlowModelKind,
@@ -63,17 +63,17 @@ pub(crate) struct DataFlowModelFact {
     pub(crate) provenance: DataFlowProvenance,
     pub(crate) evidence: Vec<String>,
     pub(crate) payload_labels: Vec<String>,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DataFlowBudgetFact {
     pub(crate) id: DataFlowBudgetId,
     pub(crate) reason: DataFlowBudgetReason,
     pub(crate) limit: u64,
     pub(crate) observed: u64,
     pub(crate) status: DataFlowStatus,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

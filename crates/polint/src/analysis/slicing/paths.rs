@@ -306,7 +306,7 @@ pub(crate) mod summary {
         }
         Some(EvidenceSummaryStep {
             edge: edge.id,
-            stable_key: edge.stable_key.clone(),
+            stable_key: store.resolve_stable_key(edge.stable_key).to_string(),
             domain: edge
                 .source_fact_stable_keys
                 .iter()
@@ -415,36 +415,39 @@ pub(crate) mod summary {
             } else {
                 EvidenceStatus::Present
             };
-            EvidenceStore::from_output(EvidenceOutput {
-                nodes: vec![node(0), node(1)],
-                edges: vec![EvidenceEdgeFact {
-                    id: EvidenceEdgeId(0),
-                    from: EvidenceNodeId(0),
-                    to: EvidenceNodeId(1),
-                    kind: EvidenceEdgeKind::Summary,
-                    query_mode: EvidenceQueryMode::Path,
-                    status,
-                    precision: EvidencePrecision::SetupAware,
-                    provenance: EvidenceProvenance::Summary,
-                    validation: EvidenceValidation::ReferentiallyValidated,
-                    confidence: EvidenceConfidence::Medium,
-                    call_site: None,
-                    summary_stable_key: Some("summary:tito".to_string()),
-                    expansion,
-                    compact_label: Some("data_flow_tito".to_string()),
-                    source_fact_stable_keys: vec![
-                        "summary:tito".to_string(),
-                        "callable:fn".to_string(),
-                    ],
-                    stable_key: "edge:summary".to_string(),
-                }],
-                bundles: Vec::new(),
-                paths: Vec::new(),
-                slices: Vec::new(),
-                unknowns: Vec::new(),
-                omitted_regions: Vec::new(),
-                replay_keys: Vec::new(),
-            })
+            EvidenceStore::from_output(
+                EvidenceOutput {
+                    nodes: vec![node(0), node(1)],
+                    edges: vec![EvidenceEdgeFact {
+                        id: EvidenceEdgeId(0),
+                        from: EvidenceNodeId(0),
+                        to: EvidenceNodeId(1),
+                        kind: EvidenceEdgeKind::Summary,
+                        query_mode: EvidenceQueryMode::Path,
+                        status,
+                        precision: EvidencePrecision::SetupAware,
+                        provenance: EvidenceProvenance::Summary,
+                        validation: EvidenceValidation::ReferentiallyValidated,
+                        confidence: EvidenceConfidence::Medium,
+                        call_site: None,
+                        summary_stable_key: Some("summary:tito".to_string()),
+                        expansion,
+                        compact_label: Some("data_flow_tito".to_string()),
+                        source_fact_stable_keys: vec![
+                            "summary:tito".to_string(),
+                            "callable:fn".to_string(),
+                        ],
+                        stable_key: crate::core::stable_key_for_test("edge:summary"),
+                    }],
+                    bundles: Vec::new(),
+                    paths: Vec::new(),
+                    slices: Vec::new(),
+                    unknowns: Vec::new(),
+                    omitted_regions: Vec::new(),
+                    replay_keys: Vec::new(),
+                },
+                &crate::core::test_stable_key_interner(),
+            )
             .expect("valid evidence")
         }
 
@@ -470,7 +473,7 @@ pub(crate) mod summary {
                 confidence: EvidenceConfidence::High,
                 compact_label: None,
                 source_fact_stable_keys: Vec::new(),
-                stable_key: format!("node:{id}"),
+                stable_key: crate::core::stable_key_for_test(&format!("node:{id}")),
             }
         }
     }
@@ -494,8 +497,8 @@ fn path_from_frame(store: &EvidenceStore, frame: PathFrame) -> EvidencePath {
             .map(|edge| {
                 store
                     .edge(*edge)
-                    .map(|edge| edge.stable_key.as_str())
-                    .unwrap_or("missing")
+                    .map(|edge| store.resolve_stable_key(edge.stable_key))
+                    .unwrap_or_else(|| std::sync::Arc::from("missing"))
             })
             .collect::<Vec<_>>()
             .join(">"),
@@ -512,7 +515,11 @@ fn outgoing_ranked_edges(
     node: EvidenceNodeId,
 ) -> Vec<&crate::analysis::evidence::facts::EvidenceEdgeFact> {
     let mut edges = store.outgoing(node);
-    edges.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    edges.sort_by(|left, right| {
+        store
+            .resolve_stable_key(left.stable_key)
+            .cmp(&store.resolve_stable_key(right.stable_key))
+    });
     edges
 }
 
@@ -823,33 +830,36 @@ mod tests {
 
     #[test]
     fn chop_does_not_intersect_mismatched_call_boundary_edges_as_present() {
-        let store = EvidenceStore::from_output(EvidenceOutput {
-            nodes: (0..4).map(node).collect(),
-            edges: vec![
-                edge_with(
-                    0,
-                    0,
-                    1,
-                    "edge:call-a-in",
-                    EvidenceEdgeKind::ParameterIn,
-                    EvidenceStatus::Present,
-                ),
-                edge_with(
-                    1,
-                    1,
-                    3,
-                    "edge:call-b-out",
-                    EvidenceEdgeKind::ParameterOut,
-                    EvidenceStatus::Present,
-                ),
-            ],
-            bundles: Vec::new(),
-            paths: Vec::new(),
-            slices: Vec::new(),
-            unknowns: Vec::new(),
-            omitted_regions: Vec::new(),
-            replay_keys: Vec::new(),
-        })
+        let store = EvidenceStore::from_output(
+            EvidenceOutput {
+                nodes: (0..4).map(node).collect(),
+                edges: vec![
+                    edge_with(
+                        0,
+                        0,
+                        1,
+                        "edge:call-a-in",
+                        EvidenceEdgeKind::ParameterIn,
+                        EvidenceStatus::Present,
+                    ),
+                    edge_with(
+                        1,
+                        1,
+                        3,
+                        "edge:call-b-out",
+                        EvidenceEdgeKind::ParameterOut,
+                        EvidenceStatus::Present,
+                    ),
+                ],
+                bundles: Vec::new(),
+                paths: Vec::new(),
+                slices: Vec::new(),
+                unknowns: Vec::new(),
+                omitted_regions: Vec::new(),
+                replay_keys: Vec::new(),
+            },
+            &crate::core::test_stable_key_interner(),
+        )
         .expect("valid evidence");
 
         let result = chop(
@@ -878,21 +888,24 @@ mod tests {
     }
 
     fn path_store() -> EvidenceStore {
-        EvidenceStore::from_output(EvidenceOutput {
-            nodes: (0..5).map(node).collect(),
-            edges: vec![
-                edge(0, 0, 3, "edge:direct"),
-                edge(1, 0, 1, "edge:a"),
-                edge(2, 1, 3, "edge:b"),
-                edge(3, 0, 4, "edge:unrelated"),
-            ],
-            bundles: Vec::new(),
-            paths: Vec::new(),
-            slices: Vec::new(),
-            unknowns: Vec::new(),
-            omitted_regions: Vec::new(),
-            replay_keys: Vec::new(),
-        })
+        EvidenceStore::from_output(
+            EvidenceOutput {
+                nodes: (0..5).map(node).collect(),
+                edges: vec![
+                    edge(0, 0, 3, "edge:direct"),
+                    edge(1, 0, 1, "edge:a"),
+                    edge(2, 1, 3, "edge:b"),
+                    edge(3, 0, 4, "edge:unrelated"),
+                ],
+                bundles: Vec::new(),
+                paths: Vec::new(),
+                slices: Vec::new(),
+                unknowns: Vec::new(),
+                omitted_regions: Vec::new(),
+                replay_keys: Vec::new(),
+            },
+            &crate::core::test_stable_key_interner(),
+        )
         .expect("valid evidence")
     }
 
@@ -904,37 +917,43 @@ mod tests {
         kind: EvidenceEdgeKind,
         status: EvidenceStatus,
     ) -> EvidenceStore {
-        EvidenceStore::from_output(EvidenceOutput {
-            nodes: (0..5).map(node).collect(),
-            edges: vec![edge_with(0, 0, 3, "edge:direct", kind, status)],
-            bundles: Vec::new(),
-            paths: Vec::new(),
-            slices: Vec::new(),
-            unknowns: Vec::new(),
-            omitted_regions: Vec::new(),
-            replay_keys: Vec::new(),
-        })
+        EvidenceStore::from_output(
+            EvidenceOutput {
+                nodes: (0..5).map(node).collect(),
+                edges: vec![edge_with(0, 0, 3, "edge:direct", kind, status)],
+                bundles: Vec::new(),
+                paths: Vec::new(),
+                slices: Vec::new(),
+                unknowns: Vec::new(),
+                omitted_regions: Vec::new(),
+                replay_keys: Vec::new(),
+            },
+            &crate::core::test_stable_key_interner(),
+        )
         .expect("valid evidence")
     }
 
     fn path_store_with_edge_status(status: EvidenceStatus) -> EvidenceStore {
-        EvidenceStore::from_output(EvidenceOutput {
-            nodes: (0..5).map(node).collect(),
-            edges: vec![edge_with(
-                0,
-                0,
-                3,
-                "edge:non-present",
-                EvidenceEdgeKind::DataValue,
-                status,
-            )],
-            bundles: Vec::new(),
-            paths: Vec::new(),
-            slices: Vec::new(),
-            unknowns: Vec::new(),
-            omitted_regions: Vec::new(),
-            replay_keys: Vec::new(),
-        })
+        EvidenceStore::from_output(
+            EvidenceOutput {
+                nodes: (0..5).map(node).collect(),
+                edges: vec![edge_with(
+                    0,
+                    0,
+                    3,
+                    "edge:non-present",
+                    EvidenceEdgeKind::DataValue,
+                    status,
+                )],
+                bundles: Vec::new(),
+                paths: Vec::new(),
+                slices: Vec::new(),
+                unknowns: Vec::new(),
+                omitted_regions: Vec::new(),
+                replay_keys: Vec::new(),
+            },
+            &crate::core::test_stable_key_interner(),
+        )
         .expect("valid evidence")
     }
 
@@ -948,16 +967,19 @@ mod tests {
                 node
             })
             .collect();
-        EvidenceStore::from_output(EvidenceOutput {
-            nodes,
-            edges: vec![edge(0, 0, 3, "edge:direct")],
-            bundles: Vec::new(),
-            paths: Vec::new(),
-            slices: Vec::new(),
-            unknowns: Vec::new(),
-            omitted_regions: Vec::new(),
-            replay_keys: Vec::new(),
-        })
+        EvidenceStore::from_output(
+            EvidenceOutput {
+                nodes,
+                edges: vec![edge(0, 0, 3, "edge:direct")],
+                bundles: Vec::new(),
+                paths: Vec::new(),
+                slices: Vec::new(),
+                unknowns: Vec::new(),
+                omitted_regions: Vec::new(),
+                replay_keys: Vec::new(),
+            },
+            &crate::core::test_stable_key_interner(),
+        )
         .expect("valid evidence")
     }
 
@@ -983,7 +1005,7 @@ mod tests {
             confidence: EvidenceConfidence::High,
             compact_label: None,
             source_fact_stable_keys: Vec::new(),
-            stable_key: format!("node:{id}"),
+            stable_key: crate::core::stable_key_for_test(&format!("node:{id}")),
         }
     }
 
@@ -1022,7 +1044,7 @@ mod tests {
             expansion: EvidenceExpansion::None,
             compact_label: None,
             source_fact_stable_keys: Vec::new(),
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 }

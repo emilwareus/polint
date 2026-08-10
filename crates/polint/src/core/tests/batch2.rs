@@ -123,7 +123,7 @@
                     call_site: None,
                     model: Some(crate::analysis::ids::DataFlowModelId(20)),
                     span: None,
-                    stable_key: "node:source".to_string(),
+                    stable_key: crate::core::stable_key_for_test("node:source"),
                 }],
                 edges: Vec::new(),
                 models: vec![DataFlowModelFact {
@@ -140,7 +140,7 @@
                     provenance: DataFlowProvenance::Native,
                     evidence: Vec::new(),
                     payload_labels: Vec::new(),
-                    stable_key: model_key.to_string(),
+                    stable_key: crate::core::stable_key_for_test(model_key),
                 }],
                 budgets: Vec::new(),
             }

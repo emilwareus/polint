@@ -22,7 +22,7 @@ pub(crate) fn derive_framework_refinements(db: &AnalysisDb) -> RefinedCallOutput
     let entrypoints_by_key = db
         .entrypoint_facts()
         .iter()
-        .map(|entrypoint| (entrypoint.stable_key.as_str(), entrypoint))
+        .map(|entrypoint| (db.resolve_stable_key(entrypoint.stable_key), entrypoint))
         .collect::<BTreeMap<_, _>>();
     let mut edges = Vec::new();
 
@@ -56,7 +56,7 @@ fn edge_from_dispatch(
         db,
         FactFamily::DispatchEdge,
         dispatch.id.0,
-        &dispatch.stable_key,
+        db.resolve_stable_key(dispatch.stable_key).as_ref(),
     );
     RefinedCallEdgeFact {
         id: RefinedCallEdgeId(index as u64),
@@ -85,7 +85,7 @@ fn edge_from_dispatch(
                 db,
                 FactFamily::Entrypoint,
                 entrypoint.id.0,
-                &entrypoint.stable_key,
+                db.resolve_stable_key(entrypoint.stable_key).as_ref(),
             ),
             dispatch_key.clone(),
         ],
@@ -116,7 +116,7 @@ fn edge_from_unresolved(
         db,
         FactFamily::UnresolvedFramework,
         unresolved.id.0,
-        &unresolved.stable_key,
+        db.resolve_stable_key(unresolved.stable_key).as_ref(),
     );
     RefinedCallEdgeFact {
         id: RefinedCallEdgeId(index as u64),
@@ -271,7 +271,7 @@ mod tests {
                 span: span(),
                 precision: EntrypointPrecision::Heuristic,
                 provider_id: "polint.entrypoints".to_string(),
-                stable_key: "dispatch:handler".to_string(),
+                stable_key: crate::core::stable_key_for_test("dispatch:handler"),
             }],
             ..EntrypointOutput::empty()
         })
@@ -301,7 +301,7 @@ mod tests {
                 scope_description: "router".to_string(),
                 precision: EntrypointPrecision::Unknown,
                 provider_id: "polint.entrypoints".to_string(),
-                stable_key: "unresolved:framework".to_string(),
+                stable_key: crate::core::stable_key_for_test("unresolved:framework"),
             }],
             ..EntrypointOutput::empty()
         })
@@ -382,7 +382,7 @@ mod tests {
             confidence: EntrypointConfidence::High,
             status: EntrypointStatus::Resolved,
             provider_id: "polint.entrypoints".to_string(),
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 

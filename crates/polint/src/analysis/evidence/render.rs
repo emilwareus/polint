@@ -38,6 +38,7 @@ impl Default for EvidenceRenderLimit {
 
 pub(crate) fn render_bundle_json_v1(
     store: &EvidenceStore,
+    interner: &crate::core::StableKeyInterner,
     bundle_id: EvidenceBundleId,
     limit: EvidenceRenderLimit,
 ) -> Option<Value> {
@@ -51,7 +52,8 @@ pub(crate) fn render_bundle_json_v1(
         .filter_map(|path_id| store.paths().iter().find(|path| path.id == *path_id))
         .collect::<Vec<_>>();
     paths.sort_by(|left, right| {
-        (left.rank, left.stable_key.as_str()).cmp(&(right.rank, right.stable_key.as_str()))
+        (left.rank, interner.resolve(left.stable_key))
+            .cmp(&(right.rank, interner.resolve(right.stable_key)))
     });
 
     let mut unknowns = store
@@ -59,20 +61,20 @@ pub(crate) fn render_bundle_json_v1(
         .iter()
         .filter(|unknown| unknown.bundle == Some(bundle.id))
         .collect::<Vec<_>>();
-    unknowns.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    unknowns.sort_by_key(|unknown| interner.resolve(unknown.stable_key));
 
     let mut omitted = store
         .omitted_regions()
         .iter()
         .filter(|region| region.bundle == Some(bundle.id))
         .collect::<Vec<_>>();
-    omitted.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    omitted.sort_by_key(|region| interner.resolve(region.stable_key));
 
     let replay_key = store
         .replay_keys()
         .iter()
         .find(|key| key.bundle == bundle.id)
-        .map(|key| key.stable_key.clone())
+        .map(|key| interner.resolve(key.stable_key).to_string())
         .or_else(|| bundle.replay_key.clone());
 
     let total_paths = paths.len();
@@ -86,8 +88,8 @@ pub(crate) fn render_bundle_json_v1(
         "version": 1,
         "bundle": {
             "id": bundle.id.0,
-            "stable_key": bundle.stable_key,
-            "diagnostic_stable_key": bundle.diagnostic_stable_key,
+            "stable_key": interner.resolve(bundle.stable_key),
+            "diagnostic_stable_key": interner.resolve(bundle.diagnostic_stable_key),
             "status": label(bundle.status),
             "precision": label(bundle.precision),
             "provenance": label(bundle.provenance),
@@ -105,7 +107,7 @@ pub(crate) fn render_bundle_json_v1(
                 .map(|edge| {
                     let mut value = json!({
                         "id": edge.id.0,
-                        "stable_key": edge.stable_key,
+                        "stable_key": interner.resolve(edge.stable_key),
                         "kind": label(edge.kind),
                         "status": label(edge.status),
                         "precision": label(edge.precision),
@@ -125,7 +127,7 @@ pub(crate) fn render_bundle_json_v1(
                 .collect::<Vec<_>>();
             json!({
                 "id": path.id.0,
-                "stable_key": path.stable_key,
+                "stable_key": interner.resolve(path.stable_key),
                 "rank": path.rank,
                 "status": label(path.status),
                 "hidden_node_count": path.hidden_node_count,
@@ -138,14 +140,14 @@ pub(crate) fn render_bundle_json_v1(
             })
         }).collect::<Vec<_>>(),
         "unknowns": unknowns.into_iter().take(limit.max_unknowns).map(|unknown| json!({
-            "stable_key": unknown.stable_key,
+            "stable_key": interner.resolve(unknown.stable_key),
             "reason": label(unknown.reason),
             "message": unknown.message,
             "edge": unknown.edge.map(|edge| edge.0),
         })).collect::<Vec<_>>(),
         "omitted_regions": omitted.into_iter().take(limit.max_omitted_regions).map(|region| json!({
             "id": region.id.0,
-            "stable_key": region.stable_key,
+            "stable_key": interner.resolve(region.stable_key),
             "reason": label(region.reason),
             "hidden_node_count": region.hidden_node_count,
             "hidden_edge_count": region.hidden_edge_count,
@@ -318,6 +320,7 @@ mod tests {
 
         let first = render_bundle_json_v1(
             &store,
+            &crate::core::test_stable_key_interner(),
             EvidenceBundleId(0),
             EvidenceRenderLimit {
                 max_paths: 1,
@@ -329,6 +332,7 @@ mod tests {
         .expect("bundle");
         let second = render_bundle_json_v1(
             &store,
+            &crate::core::test_stable_key_interner(),
             EvidenceBundleId(0),
             EvidenceRenderLimit {
                 max_paths: 1,
@@ -359,6 +363,7 @@ mod tests {
 
         let value = render_bundle_json_v1(
             &store,
+            &crate::core::test_stable_key_interner(),
             EvidenceBundleId(0),
             EvidenceRenderLimit {
                 max_paths: 0,
@@ -382,9 +387,13 @@ mod tests {
     fn bundle_json_round_trips_through_structured_evidence_validator() {
         let store = render_store();
 
-        let value =
-            render_bundle_json_v1(&store, EvidenceBundleId(0), EvidenceRenderLimit::default())
-                .expect("bundle");
+        let value = render_bundle_json_v1(
+            &store,
+            &crate::core::test_stable_key_interner(),
+            EvidenceBundleId(0),
+            EvidenceRenderLimit::default(),
+        )
+        .expect("bundle");
 
         crate::diagnostics::StructuredEvidenceV1::try_from_value(value.clone())
             .expect("rendered evidence should satisfy public schema contract");
@@ -397,9 +406,13 @@ mod tests {
     #[test]
     fn scalar_bridge_preserves_existing_evidence_shape() {
         let store = render_store();
-        let value =
-            render_bundle_json_v1(&store, EvidenceBundleId(0), EvidenceRenderLimit::default())
-                .expect("bundle");
+        let value = render_bundle_json_v1(
+            &store,
+            &crate::core::test_stable_key_interner(),
+            EvidenceBundleId(0),
+            EvidenceRenderLimit::default(),
+        )
+        .expect("bundle");
 
         let scalar = scalar_evidence_for_bundle_json(&value);
 
@@ -410,9 +423,13 @@ mod tests {
     #[test]
     fn sarif_messages_include_lossy_unknown_and_budget_wording() {
         let store = render_store();
-        let value =
-            render_bundle_json_v1(&store, EvidenceBundleId(0), EvidenceRenderLimit::default())
-                .expect("bundle");
+        let value = render_bundle_json_v1(
+            &store,
+            &crate::core::test_stable_key_interner(),
+            EvidenceBundleId(0),
+            EvidenceRenderLimit::default(),
+        )
+        .expect("bundle");
 
         let messages = sarif_thread_flow_messages(&value);
 
@@ -423,9 +440,13 @@ mod tests {
     #[test]
     fn sarif_messages_include_provenance_validation_and_confidence() {
         let store = render_store();
-        let value =
-            render_bundle_json_v1(&store, EvidenceBundleId(0), EvidenceRenderLimit::default())
-                .expect("bundle");
+        let value = render_bundle_json_v1(
+            &store,
+            &crate::core::test_stable_key_interner(),
+            EvidenceBundleId(0),
+            EvidenceRenderLimit::default(),
+        )
+        .expect("bundle");
 
         let messages = sarif_thread_flow_messages(&value);
 
@@ -447,90 +468,93 @@ mod tests {
     }
 
     fn render_store() -> EvidenceStore {
-        EvidenceStore::from_output(EvidenceOutput {
-            nodes: vec![node(0), node(1)],
-            edges: vec![EvidenceEdgeFact {
-                id: EvidenceEdgeId(0),
-                from: EvidenceNodeId(0),
-                to: EvidenceNodeId(1),
-                kind: EvidenceEdgeKind::Summary,
-                query_mode: EvidenceQueryMode::Path,
-                status: EvidenceStatus::Present,
-                precision: EvidencePrecision::SetupAware,
-                provenance: EvidenceProvenance::Summary,
-                validation: EvidenceValidation::ReferentiallyValidated,
-                confidence: EvidenceConfidence::Medium,
-                call_site: None,
-                summary_stable_key: Some("summary:tito".to_string()),
-                expansion: EvidenceExpansion::Expandable {
-                    key: "expand:summary".to_string(),
-                },
-                compact_label: None,
-                source_fact_stable_keys: Vec::new(),
-                stable_key: "edge:summary".to_string(),
-            }],
-            bundles: vec![EvidenceBundleFact {
-                id: EvidenceBundleId(0),
-                diagnostic_stable_key: "diag:1".to_string(),
-                query_mode: EvidenceQueryMode::Path,
-                status: EvidenceStatus::Partial,
-                precision: EvidencePrecision::SetupAware,
-                provenance: EvidenceProvenance::Query,
-                validation: EvidenceValidation::RendererValidated,
-                confidence: EvidenceConfidence::Medium,
-                entry_node: None,
-                selected_paths: vec![EvidencePathId(0)],
-                selected_slices: Vec::new(),
-                replay_key: Some("replay:bundle".to_string()),
-                stable_key: "bundle:diag".to_string(),
-            }],
-            paths: vec![EvidencePathFact {
-                id: EvidencePathId(0),
-                bundle: Some(EvidenceBundleId(0)),
-                query_mode: EvidenceQueryMode::Path,
-                nodes: vec![EvidenceNodeId(0), EvidenceNodeId(1)],
-                edges: vec![EvidenceEdgeId(0)],
-                rank: 0,
-                score: EvidenceRankScore::default(),
-                status: EvidenceStatus::Partial,
-                hidden_node_count: 2,
-                omitted_regions: vec![EvidenceOmittedRegionId(0)],
-                stable_key: "path:summary".to_string(),
-            }],
-            slices: Vec::new(),
-            unknowns: vec![EvidenceUnknownFact {
-                bundle: Some(EvidenceBundleId(0)),
-                path: Some(EvidencePathId(0)),
-                slice: None,
-                edge: Some(EvidenceEdgeId(0)),
-                reason: EvidenceUnknownReason::OpaqueSummary,
-                message: "opaque summary".to_string(),
-                source_fact_stable_keys: Vec::new(),
-                stable_key: "unknown:summary".to_string(),
-            }],
-            omitted_regions: vec![EvidenceOmittedRegionFact {
-                id: EvidenceOmittedRegionId(0),
-                bundle: Some(EvidenceBundleId(0)),
-                path: Some(EvidencePathId(0)),
-                slice: None,
-                reason: EvidenceOmittedReason::CompactRendering,
-                hidden_node_count: 2,
-                hidden_edge_count: 1,
-                budget_label: Some("compact".to_string()),
-                stable_key: "omitted:summary".to_string(),
-            }],
-            replay_keys: vec![EvidenceReplayKeyFact {
-                bundle: EvidenceBundleId(0),
-                query_mode: EvidenceQueryMode::Path,
-                graph_schema: "evidence.graph.v1".to_string(),
-                query_budget: Default::default(),
-                ranking:
-                    crate::analysis::evidence::facts::EvidenceRankingMode::DeterministicDisplay,
-                renderer: crate::analysis::evidence::facts::EvidenceRendererMode::Json,
-                upstream_digest_keys: Vec::new(),
-                stable_key: "replay:bundle".to_string(),
-            }],
-        })
+        EvidenceStore::from_output(
+            EvidenceOutput {
+                nodes: vec![node(0), node(1)],
+                edges: vec![EvidenceEdgeFact {
+                    id: EvidenceEdgeId(0),
+                    from: EvidenceNodeId(0),
+                    to: EvidenceNodeId(1),
+                    kind: EvidenceEdgeKind::Summary,
+                    query_mode: EvidenceQueryMode::Path,
+                    status: EvidenceStatus::Present,
+                    precision: EvidencePrecision::SetupAware,
+                    provenance: EvidenceProvenance::Summary,
+                    validation: EvidenceValidation::ReferentiallyValidated,
+                    confidence: EvidenceConfidence::Medium,
+                    call_site: None,
+                    summary_stable_key: Some("summary:tito".to_string()),
+                    expansion: EvidenceExpansion::Expandable {
+                        key: "expand:summary".to_string(),
+                    },
+                    compact_label: None,
+                    source_fact_stable_keys: Vec::new(),
+                    stable_key: crate::core::stable_key_for_test("edge:summary"),
+                }],
+                bundles: vec![EvidenceBundleFact {
+                    id: EvidenceBundleId(0),
+                    diagnostic_stable_key: crate::core::stable_key_for_test("diag:1"),
+                    query_mode: EvidenceQueryMode::Path,
+                    status: EvidenceStatus::Partial,
+                    precision: EvidencePrecision::SetupAware,
+                    provenance: EvidenceProvenance::Query,
+                    validation: EvidenceValidation::RendererValidated,
+                    confidence: EvidenceConfidence::Medium,
+                    entry_node: None,
+                    selected_paths: vec![EvidencePathId(0)],
+                    selected_slices: Vec::new(),
+                    replay_key: Some("replay:bundle".to_string()),
+                    stable_key: crate::core::stable_key_for_test("bundle:diag"),
+                }],
+                paths: vec![EvidencePathFact {
+                    id: EvidencePathId(0),
+                    bundle: Some(EvidenceBundleId(0)),
+                    query_mode: EvidenceQueryMode::Path,
+                    nodes: vec![EvidenceNodeId(0), EvidenceNodeId(1)],
+                    edges: vec![EvidenceEdgeId(0)],
+                    rank: 0,
+                    score: EvidenceRankScore::default(),
+                    status: EvidenceStatus::Partial,
+                    hidden_node_count: 2,
+                    omitted_regions: vec![EvidenceOmittedRegionId(0)],
+                    stable_key: crate::core::stable_key_for_test("path:summary"),
+                }],
+                slices: Vec::new(),
+                unknowns: vec![EvidenceUnknownFact {
+                    bundle: Some(EvidenceBundleId(0)),
+                    path: Some(EvidencePathId(0)),
+                    slice: None,
+                    edge: Some(EvidenceEdgeId(0)),
+                    reason: EvidenceUnknownReason::OpaqueSummary,
+                    message: "opaque summary".to_string(),
+                    source_fact_stable_keys: Vec::new(),
+                    stable_key: crate::core::stable_key_for_test("unknown:summary"),
+                }],
+                omitted_regions: vec![EvidenceOmittedRegionFact {
+                    id: EvidenceOmittedRegionId(0),
+                    bundle: Some(EvidenceBundleId(0)),
+                    path: Some(EvidencePathId(0)),
+                    slice: None,
+                    reason: EvidenceOmittedReason::CompactRendering,
+                    hidden_node_count: 2,
+                    hidden_edge_count: 1,
+                    budget_label: Some("compact".to_string()),
+                    stable_key: crate::core::stable_key_for_test("omitted:summary"),
+                }],
+                replay_keys: vec![EvidenceReplayKeyFact {
+                    bundle: EvidenceBundleId(0),
+                    query_mode: EvidenceQueryMode::Path,
+                    graph_schema: "evidence.graph.v1".to_string(),
+                    query_budget: Default::default(),
+                    ranking:
+                        crate::analysis::evidence::facts::EvidenceRankingMode::DeterministicDisplay,
+                    renderer: crate::analysis::evidence::facts::EvidenceRendererMode::Json,
+                    upstream_digest_keys: Vec::new(),
+                    stable_key: crate::core::stable_key_for_test("replay:bundle"),
+                }],
+            },
+            &crate::core::test_stable_key_interner(),
+        )
         .expect("valid evidence")
     }
 
@@ -556,7 +580,7 @@ mod tests {
             confidence: EvidenceConfidence::High,
             compact_label: None,
             source_fact_stable_keys: Vec::new(),
-            stable_key: format!("node:{id}"),
+            stable_key: crate::core::stable_key_for_test(&format!("node:{id}")),
         }
     }
 }
