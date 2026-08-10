@@ -830,21 +830,21 @@
       "branch": "swarm/T-INTERN-B-rest-module-graph / swarm/T-INTERN-B-rest-analysis-mid",
       "dispatched_at": "2026-08-10T16:59:58+02:00",
       "attempts": 1,
-      "slice": "rest-module_graph+analysis_mid",
+      "slice": "rest-analysis_mid",
       "fact_family_locks": [
-        "module_graph",
         "analysis_mid"
       ],
-      "note": "frontends MERGED@ec9d2d1a; dispatching module_graph + analysis_mid",
+      "note": "module_graph MERGED@753b0ca3; analysis_mid in flight \u2014 rebase onto tip when DONE",
       "slices_done": [
         "symbols",
         "mir",
         "cfg",
         "calls",
         "rest-semantic",
-        "rest-frontends"
+        "rest-frontends",
+        "rest-module-graph"
       ],
-      "updated_at": "2026-08-10T16:41:49+02:00"
+      "updated_at": "2026-08-10T17:54:49+02:00"
     },
     "T-INTERN-C": {
       "state": "BLOCKED",
@@ -878,10 +878,6 @@
   "locks": {
     "golden": null,
     "fact_family": {},
-    "fact_family:module_graph": {
-      "holder": "T-INTERN-B",
-      "at": "2026-08-10T16:59:58+02:00"
-    },
     "fact_family:analysis_mid": {
       "holder": "T-INTERN-B",
       "at": "2026-08-10T16:59:58+02:00"
@@ -937,7 +933,7 @@
   },
   "integration_branch": "static-analysis-architecture-review",
   "never_merge_to_main": true,
-  "integration_head": "8da0c6da",
+  "integration_head": "753b0ca3",
   "m0_gate": {
     "status": "PASS",
     "completed_at": "2026-08-08T11:52:00+02:00",
@@ -1079,6 +1075,11 @@
       "at": "2026-08-10T16:55:46+02:00",
       "event": "T-INTERN-B rest-frontends MERGED",
       "commit": "ec9d2d1a"
+    },
+    {
+      "at": "2026-08-10T17:54:49+02:00",
+      "event": "T-INTERN-B rest-module-graph MERGED",
+      "commit": "753b0ca3"
     }
   ],
   "ready": [],
