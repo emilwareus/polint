@@ -809,21 +809,33 @@
       "note": "tip green after G3 fix 8427dcc6"
     },
     "T-INTERN-A": {
-      "state": "CLAIMED",
+      "state": "MERGED",
       "depends_on": [
         "T-VERIFY"
       ],
       "created_at": "2026-08-10T10:04:15+02:00",
       "branch": "swarm/T-INTERN-A",
       "dispatched_at": "2026-08-10T11:20:35+02:00",
-      "attempts": 1
+      "attempts": 1,
+      "commit": "3564fe3d",
+      "merged_at": "2026-08-10T12:03:01+02:00",
+      "note": "StableKeyInterner + construction; facts still String until B"
     },
     "T-INTERN-B": {
-      "state": "BLOCKED",
+      "state": "CLAIMED",
       "depends_on": [
         "T-INTERN-A"
       ],
-      "created_at": "2026-08-10T10:04:15+02:00"
+      "created_at": "2026-08-10T10:04:15+02:00",
+      "branch": "swarm/T-INTERN-B-symbols",
+      "dispatched_at": "2026-08-10T12:03:01+02:00",
+      "attempts": 1,
+      "slice": "symbols",
+      "fact_family_locks": [
+        "symbols",
+        "definitions",
+        "references"
+      ]
     },
     "T-INTERN-C": {
       "state": "BLOCKED",
@@ -856,12 +868,24 @@
   },
   "locks": {
     "golden": null,
-    "fact_family": {}
+    "fact_family": {},
+    "fact_family:symbols": {
+      "holder": "T-INTERN-B",
+      "at": "2026-08-10T12:03:01+02:00"
+    },
+    "fact_family:definitions": {
+      "holder": "T-INTERN-B",
+      "at": "2026-08-10T12:03:01+02:00"
+    },
+    "fact_family:references": {
+      "holder": "T-INTERN-B",
+      "at": "2026-08-10T12:03:01+02:00"
+    }
   },
   "milestone": "PRE-SHIP",
   "READY": [],
   "IN_FLIGHT": [
-    "T-INTERN-A"
+    "T-INTERN-B"
   ],
   "IN_REVIEW": [],
   "MERGED": [
@@ -908,7 +932,7 @@
   },
   "integration_branch": "static-analysis-architecture-review",
   "never_merge_to_main": true,
-  "integration_head": "8427dcc6",
+  "integration_head": "3564fe3d",
   "m0_gate": {
     "status": "PASS",
     "completed_at": "2026-08-08T11:52:00+02:00",
