@@ -889,7 +889,9 @@
         "determinism": "PASS",
         "golden": "PASS",
         "public_surface_leak": "PASS_markers_7_of_8_probe_sandbox_blocked"
-      }
+      },
+      "land_commit": "22263b22",
+      "tip": "f2118eaf"
     },
     "T-SPLIT": {
       "state": "READY",
@@ -969,7 +971,7 @@
   },
   "integration_branch": "static-analysis-architecture-review",
   "never_merge_to_main": true,
-  "integration_head": "7ccbca94",
+  "integration_head": "f2118eaf",
   "m0_gate": {
     "status": "PASS",
     "completed_at": "2026-08-08T11:52:00+02:00",
@@ -1077,7 +1079,8 @@
     "2026-08-11T00:17:59+0200: T-INTERN-C implementation complete; preparing commits; fact_family:metadata still held",
     "2026-08-11T00:18:22+0200: T-INTERN-C MERGED @932cfd0b; released fact_family:metadata; T-SPLIT READY",
     "2026-08-11T00:18:39+0200: integration_head synced to T-INTERN-C land tip 22263b22",
-    "2026-08-11T00:18:45+0200: integration_head -> 7ccbca94 after T-INTERN-C SHA bookkeeping"
+    "2026-08-11T00:18:45+0200: integration_head -> 7ccbca94 after T-INTERN-C SHA bookkeeping",
+    "2026-08-11T00:18:53+0200: integration_head set to tip f2118eaf (T-INTERN-C complete)"
   ],
   "events": [
     "2026-08-08T15:10:20+02:00: W2.2d+e landed FF @271ccd15; core/mod.rs 8739 LOC; capability+rule extracted; main untouched",
