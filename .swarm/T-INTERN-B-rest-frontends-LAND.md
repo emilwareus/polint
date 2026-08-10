@@ -31,7 +31,8 @@
 - Golden diagnostics — PASS (all expected diagnostic sets remained identical
   on both stock-harness runs).
 - Golden cost sidecar — the known `examples/go-sensitive-writes/json`
-  sensitivity remained cost-red: 463 ms versus the 358 ms baseline (+29.3%)
-  on the first run and 1014 ms (+183.2%) on the required retry. Peak RSS stayed
-  close to baseline on both runs. Per DECISION Q6.2, diagnostics-identical after
-  the retry is PASS; cost baselines were not regenerated.
+  sensitivity remained cost-red after rebase: 493 ms versus the 358 ms baseline
+  (+37.7%) on the first run and 441 ms (+23.2%) on the required retry. Peak RSS
+  stayed close to baseline on both runs. Per DECISION Q6.2,
+  diagnostics-identical after the retry is PASS; cost baselines were not
+  regenerated.
