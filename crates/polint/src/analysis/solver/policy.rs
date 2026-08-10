@@ -322,7 +322,9 @@ mod ts_points_to {
             .iter()
             .map(|set| (set.variable, set))
             .collect::<BTreeMap<_, _>>();
-        let mut edges = BTreeMap::new();
+        // Membership-only dedup by StableKeyId; emission order is assigned below via
+        // `SolverOutput::normalized` (resolved-text sort), never allocation order.
+        let mut edges = std::collections::HashMap::new();
 
         for callsite in &inputs.callsites {
             let Some(set) = sets.get(&var_for_node(callsite.callsite_node)) else {
@@ -377,9 +379,17 @@ mod ts_points_to {
             }
         }
 
+        // Direct/policy consumers must never observe allocation-order emission.
+        let derived_edges = crate::analysis::solver::store::SolverOutput {
+            derived_edges: edges.into_values().collect(),
+            ..crate::analysis::solver::store::SolverOutput::default()
+        }
+        .normalized(interner)
+        .derived_edges;
+
         TsPointsToSolveResult {
             points_to,
-            derived_edges: edges.into_values().collect(),
+            derived_edges,
         }
     }
 

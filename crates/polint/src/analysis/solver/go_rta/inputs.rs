@@ -72,17 +72,22 @@ pub(crate) struct GoRtaInputs {
     /// Every `UnresolvedDynamic` callsite that maps to a `CallConstraint` node, with
     /// its dispatch detail joined by `callsite_stable_key`.
     pub(crate) callsites: Vec<GoRtaCallsite>,
-    /// `type_name -> method names` (the method-set input).
+    /// `type_name -> method names` (the method-set input). Text-keyed for RTA
+    /// graph algorithms; ordered by type-name string, never by StableKeyId.
     pub(crate) method_sets: BTreeMap<String, BTreeSet<String>>,
-    /// `type_name -> the method-set fact's stable key` (a contributing fact).
+    /// Lookup-only map: `type_name -> method-set fact StableKeyId` for provenance
+    /// membership. Not an ordering surface; contributing keys are sorted by
+    /// resolved text in `DerivedEdgeProvenance::new`.
     pub(crate) method_set_keys: BTreeMap<String, StableKeyId>,
     /// The instantiated runtime-type set (the RTA rapid-type set).
     pub(crate) instantiated: BTreeSet<String>,
-    /// `type_name -> the instantiated-type fact's stable key` (a contributing fact).
+    /// Lookup-only map: `type_name -> instantiated-type fact StableKeyId` for
+    /// provenance membership (not an ordering surface).
     pub(crate) instantiated_keys: BTreeMap<String, StableKeyId>,
     /// Address-taken function identities (`qualified`) — func-value candidates.
     pub(crate) address_taken: BTreeSet<String>,
-    /// `qualified -> the address-taken fact's stable key` (a contributing fact).
+    /// Lookup-only map: `qualified -> address-taken fact StableKeyId` for
+    /// provenance membership (not an ordering surface).
     pub(crate) address_taken_keys: BTreeMap<String, StableKeyId>,
     /// `qualified -> the function's unified semantic node` (edge endpoints).
     pub(crate) function_node: BTreeMap<String, SemanticNodeId>,

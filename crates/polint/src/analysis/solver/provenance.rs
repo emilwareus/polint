@@ -12,13 +12,13 @@
 //! 2. the producing **constraint kind**, sourced from
 //!    [`crate::analysis::semantic_graph::constraints::ConstraintKind::as_str`] — a
 //!    stable snake_case label reused wholesale (no parallel enum is minted).
-//! 3. the **solver step** — the monotonic `u64` worklist step counter the Wave-1
+//! 3. the **solver step** — the monotonic `u64` worklist step counter the
 //!    [`super::engine::SolverEngine`] maintains.
 //!
 //! Provenance is SOUND and LOAD-BEARING per edge FACT, not decorative: it records a
 //! deterministic WITNESSING derivation, and the derived-edge fact's `stable_key`
 //! embeds that witness (the totally-ordered contributing keys + constraint kind). The
-//! deletion property test (D-09, in [`super::engine`]/`tests`) proves that removing
+//! deletion property test (D-09, in [`super::engine`]::`tests`) proves that removing
 //! any single witness fact means THAT derived-edge fact (by stable key) is not
 //! reproduced. On a multi-path graph the underlying `source -> target` value-flow may
 //! still hold via an alternate witness under a DIFFERENT edge identity — provenance
@@ -26,8 +26,10 @@
 //! diamond test in [`super::engine`]).
 //!
 //! All types are `pub(crate)` (D-16); nothing here reaches the public SDK surface.
+//! Wire/cache/test byte stability must go through [`DerivedEdgeProvenance::stable_payload`]
+//! (resolved text), never raw numeric interner ids.
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::analysis::semantic_graph::constraints::ConstraintKind;
 use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
@@ -43,7 +45,7 @@ use crate::core::{StableKeyId, StableKeyInterner};
 /// captured INSIDE the stable key (no separate non-serializable `FactFamily` field
 /// is carried). The total order over a set of these is the lexicographic order of
 /// the resolved stable-key text (never raw [`StableKeyId`] allocation order).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct ContributingFact {
     /// The contributing fact's stable key — its EXISTING stable identity, built via
     /// the `stable_key_from_parts` recipe (which embeds the `FactFamily` label).
@@ -67,15 +69,21 @@ impl ContributingFact {
     }
 }
 
+/// Resolved-text wire/cache payload for one contributing fact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ContributingFactStablePayload {
+    pub(crate) stable_key: String,
+}
+
 /// Full provenance for one solver-derived edge (GRAPH-04, D-08).
 ///
 /// The three roadmap-named fields: contributing fact IDs (total-ordered by resolved
 /// stable text), the producing constraint kind, and the monotonic solver step. Two
 /// provenances built from the SAME contributing facts in different discovery order
-/// are equal and serialize byte-identically, because [`DerivedEdgeProvenance::new`]
-/// sorts and de-duplicates the contributing set by resolved `stable_key` text (which embeds the
-/// originating family).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// are equal and project to identical resolved-text payloads, because
+/// [`DerivedEdgeProvenance::new`] sorts and de-duplicates the contributing set by
+/// resolved `stable_key` text (which embeds the originating family).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct DerivedEdgeProvenance {
     /// Contributing fact identities, TOTALLY ORDERED BY RESOLVED STABLE TEXT (sorted by
     /// resolved `stable_key`, de-duplicated). This is the load-bearing set the deletion
@@ -83,11 +91,18 @@ pub(crate) struct DerivedEdgeProvenance {
     pub(crate) contributing_facts: Vec<ContributingFact>,
     /// The producing `ConstraintKind`, as its stable snake_case label
     /// (`ConstraintKind::as_str()`, owned). Reuses the existing vocabulary; no
-    /// parallel enum is minted. Owned (`String`) rather than `&'static str` so the
-    /// provenance — and the derived-edge fact that carries it — is `Deserialize`.
+    /// parallel enum is minted.
     pub(crate) constraint_kind: String,
     /// The monotonic `u64` solver step (the engine's worklist step counter) at
     /// which this edge was derived.
+    pub(crate) solver_step: u64,
+}
+
+/// Resolved-text wire/cache payload for provenance. Never carries numeric interner ids.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct DerivedEdgeProvenanceStablePayload {
+    pub(crate) contributing_facts: Vec<ContributingFactStablePayload>,
+    pub(crate) constraint_kind: String,
     pub(crate) solver_step: u64,
 }
 
@@ -141,6 +156,24 @@ impl DerivedEdgeProvenance {
         }
         fragment
     }
+
+    /// Project provenance into a resolved-text stable payload.
+    pub(crate) fn stable_payload(
+        &self,
+        interner: &StableKeyInterner,
+    ) -> DerivedEdgeProvenanceStablePayload {
+        DerivedEdgeProvenanceStablePayload {
+            contributing_facts: self
+                .contributing_facts
+                .iter()
+                .map(|fact| ContributingFactStablePayload {
+                    stable_key: interner.resolve(fact.stable_key).to_string(),
+                })
+                .collect(),
+            constraint_kind: self.constraint_kind.clone(),
+            solver_step: self.solver_step,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -155,9 +188,9 @@ mod tests {
         }
     }
 
-    fn fact(name: &str) -> ContributingFact {
+    fn fact_on(interner: &StableKeyInterner, name: &str) -> ContributingFact {
         ContributingFact::from_parts(
-            &crate::core::test_stable_key_interner(),
+            interner,
             FactFamily::PointsToConstraint,
             &[("constraint", name.to_string())],
         )
@@ -166,34 +199,98 @@ mod tests {
     #[test]
     fn provenance_is_shuffle_stable_in_contributing_order() {
         // Provenance built from the same contributing facts in DIFFERENT input order
-        // is equal and serializes byte-identically (total-order by resolved stable text).
-        let interner = crate::core::test_stable_key_interner();
+        // is equal and projects to identical resolved-text payloads.
+        let interner = StableKeyInterner::default();
         let forward = DerivedEdgeProvenance::new(
             &interner,
-            vec![fact("addr-a"), fact("copy"), fact("field-store")],
+            vec![
+                fact_on(&interner, "addr-a"),
+                fact_on(&interner, "copy"),
+                fact_on(&interner, "field-store"),
+            ],
             &copy_edge(),
             7,
         );
         let reversed = DerivedEdgeProvenance::new(
             &interner,
-            vec![fact("field-store"), fact("copy"), fact("addr-a")],
+            vec![
+                fact_on(&interner, "field-store"),
+                fact_on(&interner, "copy"),
+                fact_on(&interner, "addr-a"),
+            ],
             &copy_edge(),
             7,
         );
 
         assert_eq!(forward, reversed);
         assert_eq!(
-            serde_json::to_string(&forward).expect("serialize forward"),
-            serde_json::to_string(&reversed).expect("serialize reversed"),
+            serde_json::to_string(&forward.stable_payload(&interner)).expect("serialize forward"),
+            serde_json::to_string(&reversed.stable_payload(&interner)).expect("serialize reversed"),
+        );
+    }
+
+    #[test]
+    fn reverse_intern_allocation_order_yields_identical_stable_payload() {
+        // Two independent interners that allocate the same texts in opposite order
+        // must still produce byte-identical resolved-text provenance payloads.
+        let forward_interner = StableKeyInterner::default();
+        let reverse_interner = StableKeyInterner::default();
+        let _ = fact_on(&forward_interner, "addr-a");
+        let _ = fact_on(&forward_interner, "copy");
+        let _ = fact_on(&forward_interner, "field-store");
+        let _ = fact_on(&reverse_interner, "field-store");
+        let _ = fact_on(&reverse_interner, "copy");
+        let _ = fact_on(&reverse_interner, "addr-a");
+
+        let forward = DerivedEdgeProvenance::new(
+            &forward_interner,
+            vec![
+                fact_on(&forward_interner, "addr-a"),
+                fact_on(&forward_interner, "copy"),
+                fact_on(&forward_interner, "field-store"),
+            ],
+            &copy_edge(),
+            7,
+        );
+        let reversed = DerivedEdgeProvenance::new(
+            &reverse_interner,
+            vec![
+                fact_on(&reverse_interner, "field-store"),
+                fact_on(&reverse_interner, "copy"),
+                fact_on(&reverse_interner, "addr-a"),
+            ],
+            &copy_edge(),
+            7,
+        );
+
+        let forward_first = forward.contributing_facts[0].stable_key;
+        let reverse_first = reversed.contributing_facts[0].stable_key;
+        assert_eq!(
+            forward_interner.resolve(forward_first).as_ref(),
+            reverse_interner.resolve(reverse_first).as_ref()
+        );
+        assert_ne!(
+            forward_first.0, reverse_first.0,
+            "same text must receive different allocation ids across reverse-interned tables"
+        );
+        assert_eq!(
+            serde_json::to_string(&forward.stable_payload(&forward_interner))
+                .expect("serialize forward"),
+            serde_json::to_string(&reversed.stable_payload(&reverse_interner))
+                .expect("serialize reversed"),
         );
     }
 
     #[test]
     fn provenance_dedups_repeated_contributing_facts() {
-        let interner = crate::core::test_stable_key_interner();
+        let interner = StableKeyInterner::default();
         let with_dup = DerivedEdgeProvenance::new(
             &interner,
-            vec![fact("copy"), fact("copy"), fact("addr-a")],
+            vec![
+                fact_on(&interner, "copy"),
+                fact_on(&interner, "copy"),
+                fact_on(&interner, "addr-a"),
+            ],
             &copy_edge(),
             3,
         );
@@ -202,20 +299,34 @@ mod tests {
 
     #[test]
     fn provenance_captures_constraint_kind_label_and_step() {
-        let interner = crate::core::test_stable_key_interner();
-        let provenance =
-            DerivedEdgeProvenance::new(&interner, vec![fact("copy")], &copy_edge(), 42);
+        let interner = StableKeyInterner::default();
+        let provenance = DerivedEdgeProvenance::new(
+            &interner,
+            vec![fact_on(&interner, "copy")],
+            &copy_edge(),
+            42,
+        );
         assert_eq!(provenance.constraint_kind, "copy_edge");
         assert_eq!(provenance.solver_step, 42);
     }
 
     #[test]
     fn stable_key_fragment_is_independent_of_input_order() {
-        let interner = crate::core::test_stable_key_interner();
-        let a = DerivedEdgeProvenance::new(&interner, vec![fact("a"), fact("b")], &copy_edge(), 1);
+        let interner = StableKeyInterner::default();
+        let a = DerivedEdgeProvenance::new(
+            &interner,
+            vec![fact_on(&interner, "a"), fact_on(&interner, "b")],
+            &copy_edge(),
+            1,
+        );
         // A different solver step must NOT change the stable-key fragment (the step
         // is run-local progress, not identity).
-        let b = DerivedEdgeProvenance::new(&interner, vec![fact("b"), fact("a")], &copy_edge(), 99);
+        let b = DerivedEdgeProvenance::new(
+            &interner,
+            vec![fact_on(&interner, "b"), fact_on(&interner, "a")],
+            &copy_edge(),
+            99,
+        );
         assert_eq!(
             a.stable_key_fragment(&interner),
             b.stable_key_fragment(&interner)
@@ -232,7 +343,12 @@ mod tests {
     use crate::analysis::solver::budget::SolverBudget;
     use crate::analysis::solver::engine::derive_edges;
 
-    fn copy_constraint(stable_key: &str, src: u64, dst: u64) -> ConstraintFact {
+    fn copy_constraint(
+        interner: &StableKeyInterner,
+        stable_key: &str,
+        src: u64,
+        dst: u64,
+    ) -> ConstraintFact {
         ConstraintFact {
             id: SemanticConstraintId(0),
             kind: ConstraintKind::CopyEdge {
@@ -241,7 +357,7 @@ mod tests {
             },
             status: PointsToStatus::Present,
             precision: PointsToPrecision::FlowInsensitive,
-            stable_key: crate::core::stable_key_for_test(stable_key),
+            stable_key: interner.intern(stable_key),
         }
     }
 
@@ -254,10 +370,10 @@ mod tests {
     /// not decorative.
     #[test]
     fn deleting_any_contributing_fact_invalidates_the_derived_edge() {
-        let interner = crate::core::test_stable_key_interner();
+        let interner = StableKeyInterner::default();
         let constraints = vec![
-            copy_constraint("copy|a-b", 1, 2),
-            copy_constraint("copy|b-c", 2, 3),
+            copy_constraint(&interner, "copy|a-b", 1, 2),
+            copy_constraint(&interner, "copy|b-c", 2, 3),
         ];
         let budget = SolverBudget::default();
 

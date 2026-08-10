@@ -351,7 +351,12 @@ fn go_rta_solver_output_is_byte_identical_under_permuted_fact_insertion_order() 
             budget,
         );
         let solver_output = engine.run_to_solver_output(&interner, &constraints);
-        serde_json::to_string(&(&solver_output.derived_edges, solver_output.budget_status))
+        let edges = crate::analysis::solver::facts::serialize_derived_edges_stable(
+            &interner,
+            &solver_output.derived_edges,
+        )
+        .expect("serialize solver edges");
+        serde_json::to_string(&(edges, solver_output.budget_status))
             .expect("serialize solver output")
     };
 
@@ -396,13 +401,14 @@ fn ts_points_to_solver_is_deterministic_and_non_vacuous() {
     let temp = copy_fixture_repo_for_test(&fixture).expect("copy fixture repo");
     let output = run_kernel_for_repo_for_test(temp.path()).expect("kernel runs");
     let inputs = TsPointsToInputs::from_db(&output.db);
+    let interner = output.db.stable_key_interner();
     let solver_json = || -> String {
-        let result = solve_ts_points_to(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            &inputs,
-            &SolverBudget::default(),
-        );
-        serde_json::to_string(&result.derived_edges).expect("serialize TS points-to edges")
+        let result = solve_ts_points_to(&interner, &inputs, &SolverBudget::default());
+        crate::analysis::solver::facts::serialize_derived_edges_stable(
+            &interner,
+            &result.derived_edges,
+        )
+        .expect("serialize TS points-to edges")
     };
     let canonical = solver_json();
     assert!(

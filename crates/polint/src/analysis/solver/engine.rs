@@ -20,7 +20,7 @@
 //! Go RTA and JS/TS function tokens. This keeps multiple sub-domains under one budget
 //! and one normalization path.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 
 use crate::analysis::ids::DerivedEdgeId;
 use crate::analysis::points_to::facts::{PointsToPrecision, PointsToStatus};
@@ -281,10 +281,12 @@ pub(crate) fn derive_edges(
     // Primitive copy adjacency `src -> {dst}`. For each hop `src -> dst` accumulate
     // (a) the UNION of contributing constraint stable keys (#10 — never drop a
     // justifying identity) and (b) the WEAKEST status/precision across the
-    // constraints asserting it (#4 — never launder an untrusted hop). BTree-ordered
-    // for determinism.
+    // constraints asserting it (#4 — never launder an untrusted hop).
+    // Adjacency/endpoints stay BTree-ordered by SemanticNodeRef. Hop key sets are
+    // membership-only (`HashSet<StableKeyId>`); ordered emission sorts by resolved
+    // text inside `DerivedEdgeProvenance::new` (never StableKeyId allocation order).
     let mut adjacency: BTreeMap<SemanticNodeRef, BTreeSet<SemanticNodeRef>> = BTreeMap::new();
-    let mut hop_keys: BTreeMap<(SemanticNodeRef, SemanticNodeRef), BTreeSet<StableKeyId>> =
+    let mut hop_keys: BTreeMap<(SemanticNodeRef, SemanticNodeRef), HashSet<StableKeyId>> =
         BTreeMap::new();
     let mut hop_meta: BTreeMap<
         (SemanticNodeRef, SemanticNodeRef),
@@ -560,10 +562,14 @@ type SemanticNodeRef = u64;
 /// keys), `status`/`precision` (its trust), and `step` (the global monotonic step at
 /// which that derivation reached the node). A strictly-weaker derivation discovered
 /// later replaces the whole record (and re-enqueues the node); equal-weakness ties
-/// keep the first. `BTreeSet` keeps the contributing keys totally ordered (byte-stable).
+/// keep the first.
+///
+/// `keys` is membership-only (`HashSet<StableKeyId>`). When an edge is emitted,
+/// [`DerivedEdgeProvenance::new`] sorts contributing identities by resolved stable
+/// text — never by StableKeyId allocation order.
 #[derive(Debug, Clone)]
 struct PathMeta {
-    keys: BTreeSet<StableKeyId>,
+    keys: HashSet<StableKeyId>,
     status: PointsToStatus,
     precision: PointsToPrecision,
     /// The global monotonic `solver_step` at which this node's adopted derivation
@@ -575,7 +581,7 @@ impl PathMeta {
     /// The start node's seed: zero contributing facts, fully trusted, step 0.
     fn seed() -> Self {
         Self {
-            keys: BTreeSet::new(),
+            keys: HashSet::new(),
             status: PointsToStatus::Present,
             precision: PointsToPrecision::FlowInsensitive,
             step: 0,
@@ -1566,8 +1572,74 @@ mod tests {
             &SolverBudget::default(),
         );
 
-        let a_json = serde_json::to_string(&a.derived_edges).expect("serialize a");
-        let b_json = serde_json::to_string(&b.derived_edges).expect("serialize b");
+        let interner = crate::core::test_stable_key_interner();
+        let a_json = crate::analysis::solver::facts::serialize_derived_edges_stable(
+            &interner,
+            &a.derived_edges,
+        )
+        .expect("serialize a");
+        let b_json = crate::analysis::solver::facts::serialize_derived_edges_stable(
+            &interner,
+            &b.derived_edges,
+        )
+        .expect("serialize b");
         assert_eq!(a_json, b_json);
+    }
+
+    #[test]
+    fn derive_edges_stable_payload_ignores_reverse_intern_allocation_order() {
+        let forward_interner = crate::core::StableKeyInterner::default();
+        let reverse_interner = crate::core::StableKeyInterner::default();
+        let forward = vec![
+            copy_constraint_on(&forward_interner, "copy|a-b", 1, 2),
+            copy_constraint_on(&forward_interner, "copy|b-c", 2, 3),
+        ];
+        let reverse = vec![
+            copy_constraint_on(&reverse_interner, "copy|b-c", 2, 3),
+            copy_constraint_on(&reverse_interner, "copy|a-b", 1, 2),
+        ];
+        let forward_ab = forward[0].stable_key;
+        let reverse_ab = reverse[1].stable_key;
+        assert_eq!(
+            forward_interner.resolve(forward_ab).as_ref(),
+            reverse_interner.resolve(reverse_ab).as_ref()
+        );
+        assert_ne!(
+            forward_ab.0, reverse_ab.0,
+            "same text must receive different allocation ids across reverse-interned tables"
+        );
+
+        let a = derive_edges(&forward_interner, &forward, &SolverBudget::default());
+        let b = derive_edges(&reverse_interner, &reverse, &SolverBudget::default());
+        let a_json = crate::analysis::solver::facts::serialize_derived_edges_stable(
+            &forward_interner,
+            &a.derived_edges,
+        )
+        .expect("serialize a");
+        let b_json = crate::analysis::solver::facts::serialize_derived_edges_stable(
+            &reverse_interner,
+            &b.derived_edges,
+        )
+        .expect("serialize b");
+        assert_eq!(a_json, b_json);
+    }
+
+    fn copy_constraint_on(
+        interner: &crate::core::StableKeyInterner,
+        stable_key: &str,
+        src: u64,
+        dst: u64,
+    ) -> ConstraintFact {
+        use crate::analysis::ids::SemanticConstraintId;
+        ConstraintFact {
+            id: SemanticConstraintId(0),
+            kind: ConstraintKind::CopyEdge {
+                dst: crate::analysis::ids::SemanticNodeId(dst),
+                src: crate::analysis::ids::SemanticNodeId(src),
+            },
+            status: PointsToStatus::Present,
+            precision: PointsToPrecision::FlowInsensitive,
+            stable_key: interner.intern(stable_key),
+        }
     }
 }

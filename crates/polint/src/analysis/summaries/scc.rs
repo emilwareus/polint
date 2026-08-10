@@ -17,7 +17,10 @@ use crate::core::{AnalysisDb, FunctionId, StableKeyId, StableKeyInterner};
 /// Members are sorted by their callable stable key for determinism (D-17).
 /// When `is_recursive` is true, the SCC requires fixpoint iteration;
 /// otherwise a single pass suffices (D-05).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+/// In-memory SCC. `member_stable_keys` owns interned identities sorted by resolved
+/// text at construction; do not serde this type (numeric ids). Use
+/// [`SccSchedule::debug_info`] for resolved-text payloads.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Scc {
     /// Function IDs in this SCC, sorted by resolved stable-key text.
     pub(crate) members: Vec<FunctionId>,
@@ -35,7 +38,9 @@ pub(crate) struct Scc {
 /// first so their summaries are available when callers are processed.
 /// Independent SCCs at the same topological level are ordered by the
 /// sorted stable keys of their members for determinism (D-17).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+/// In-memory SCC schedule. Not a wire type — use [`SccSchedule::debug_info`] for
+/// resolved-text serialization.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SccSchedule {
     /// SCCs in reverse topological order (leaf callees first).
     pub(crate) sccs: Vec<Scc>,
@@ -659,7 +664,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn schedule_serializes_to_json() {
+    fn schedule_debug_info_serializes_resolved_text() {
         let summaries = vec![summary_fact(1, "func::a"), summary_fact(2, "func::b")];
         let db = build_db(summaries, Vec::new(), Vec::new());
         let interner = db.stable_key_interner();
@@ -670,5 +675,30 @@ mod tests {
         assert!(debug_json.contains("func::a"));
         assert!(debug_json.contains("func::b"));
         assert!(debug_json.contains("total_sccs"));
+        assert!(debug_json.contains("processing_order"));
+    }
+
+    #[test]
+    fn reverse_intern_order_preserves_member_text_order() {
+        let forward = crate::core::StableKeyInterner::default();
+        let reverse = crate::core::StableKeyInterner::default();
+        let fa = forward.intern("func::a");
+        let fb = forward.intern("func::b");
+        let rb = reverse.intern("func::b");
+        let ra = reverse.intern("func::a");
+        assert_ne!(fa.0, ra.0);
+
+        let mut forward_keys = vec![fb, fa];
+        let mut reverse_keys = vec![ra, rb];
+        forward_keys.sort_by_key(|key| forward.resolve(*key));
+        reverse_keys.sort_by_key(|key| reverse.resolve(*key));
+        assert_eq!(
+            resolved_member_keys(&forward, &forward_keys),
+            resolved_member_keys(&reverse, &reverse_keys)
+        );
+        assert_eq!(
+            resolved_member_keys(&forward, &forward_keys),
+            vec!["func::a".to_string(), "func::b".to_string()]
+        );
     }
 }

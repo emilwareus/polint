@@ -150,7 +150,10 @@ pub(crate) struct SummaryFlowEdge {
     pub(crate) kind: FlowKind,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// In-memory summary fact. Identity fields are interned [`StableKeyId`]s; do not
+/// derive serde on this type — wire/debug payloads must resolve text via an interner
+/// (see `analysis_kernel::debug` summary rows).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SummaryFact {
     pub(crate) id: SummaryId,
     pub(crate) callable_stable_key: StableKeyId,
@@ -164,7 +167,10 @@ pub(crate) struct SummaryFact {
     pub(crate) stable_key: StableKeyId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// In-memory summary event fact. Identity fields are interned [`StableKeyId`]s; do
+/// not derive serde on this type — wire/debug payloads must resolve text via an
+/// interner (see `analysis_kernel::debug` summary event rows).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SummaryEventFact {
     pub(crate) id: SummaryEventId,
     pub(crate) callable_stable_key: StableKeyId,

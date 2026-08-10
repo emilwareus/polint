@@ -115,11 +115,13 @@ pub(crate) fn solve_go_rta(
     // (review CR-01). Deterministic (BTreeSet order).
     let mut frontier: BTreeSet<String> = inputs.roots.clone();
 
-    // Deduplicated edge accumulator keyed by stable key (the store rejects duplicate
-    // stable keys; the same callee resolved in different rounds yields an identical
-    // stable key, so we keep the first occurrence — its `solver_step` is the earliest,
-    // a stable monotonic witness).
-    let mut edges_by_key: BTreeMap<crate::core::StableKeyId, DerivedEdgeFact> = BTreeMap::new();
+    // Membership-only dedup keyed by StableKeyId (the store rejects duplicate stable
+    // keys; the same callee resolved in different rounds yields an identical stable
+    // key, so we keep the first occurrence — its `solver_step` is the earliest, a
+    // stable monotonic witness). Iteration order is NOT load-bearing: `finish`
+    // always runs `SolverOutput::normalized` (resolved-text sort).
+    let mut edges_by_key: std::collections::HashMap<crate::core::StableKeyId, DerivedEdgeFact> =
+        std::collections::HashMap::new();
 
     let mut budget_exceeded = false;
     let mut budget_reasons = BTreeSet::new();
@@ -268,7 +270,7 @@ pub(crate) fn solve_go_rta(
 /// run-level budget status.
 fn finish(
     interner: &crate::core::StableKeyInterner,
-    edges_by_key: BTreeMap<crate::core::StableKeyId, DerivedEdgeFact>,
+    edges_by_key: std::collections::HashMap<crate::core::StableKeyId, DerivedEdgeFact>,
     budget_exceeded: bool,
     budget_reasons: BTreeSet<String>,
 ) -> SolverOutput {
@@ -814,10 +816,17 @@ mod tests {
             &SolverBudget::default(),
         );
 
-        let forward_json =
-            serde_json::to_string(&forward.derived_edges).expect("serialize forward");
-        let reversed_json =
-            serde_json::to_string(&reversed.derived_edges).expect("serialize reversed");
+        let interner = crate::core::test_stable_key_interner();
+        let forward_json = crate::analysis::solver::facts::serialize_derived_edges_stable(
+            &interner,
+            &forward.derived_edges,
+        )
+        .expect("serialize forward");
+        let reversed_json = crate::analysis::solver::facts::serialize_derived_edges_stable(
+            &interner,
+            &reversed.derived_edges,
+        )
+        .expect("serialize reversed");
         assert_eq!(forward_json, reversed_json);
     }
 

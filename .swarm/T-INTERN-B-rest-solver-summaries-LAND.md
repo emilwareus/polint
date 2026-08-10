@@ -83,7 +83,41 @@ Diagnosis:
 T-INTERN-B still open for residual/debug/wire buckets above. T-INTERN-C remains
 blocked on full B (`stable_key: String` count → 0 including FactMeta).
 
+## Post-land audit fix (adversarial review of `0c6dc64d..e5057d7d`)
+
+Concrete findings closed without densification or dual identity fields:
+
+1. **Engine hop/path keys** — `hop_keys` / `PathMeta.keys` are membership-only
+   `HashSet<StableKeyId>`; ordered emission sorts by resolved text in
+   `DerivedEdgeProvenance::new`. Misleading “byte-stable BTreeSet” comment removed.
+2. **TS points-to** — `solve_ts_points_to` dedups via `HashMap`, then
+   `SolverOutput::normalized(interner)` before return so direct/policy consumers
+   never see allocation order.
+3. **StableKeyId serde** — removed `Serialize`/`Deserialize` from
+   `DerivedEdgeFact` / `ContributingFact` / `DerivedEdgeProvenance` /
+   `SummaryFact` / `SummaryEventFact` / `Scc` / `SccSchedule`. Added
+   `DerivedEdgeFact::stable_payload` + `serialize_derived_edges_stable` (and
+   provenance `stable_payload`) that require an interner and emit resolved text.
+   Shuffle/determinism harnesses updated; reverse-intern allocation-order tests
+   added (`derive_edges_stable_payload_ignores_reverse_intern_allocation_order`,
+   `reverse_intern_allocation_order_yields_identical_stable_payload`,
+   `reverse_intern_order_preserves_member_text_order`).
+4. **Go RTA residual** — `edges_by_key` is membership-only `HashMap` (finish
+   still normalizes). Dual text/`*_keys` maps documented as lookup-only for
+   provenance membership; ordering stays on text sets / resolved-text sorts.
+
+### Audit-fix verification
+
+- `cargo fmt --all -- --check` — PASS
+- `cargo check -p polint --all-targets --all-features --locked` — PASS
+- `cargo clippy -p polint --all-targets --all-features --locked -- -D warnings` — PASS
+- `cargo test -p polint --lib --locked analysis::solver::` — PASS (118)
+- `cargo test -p polint --lib --locked analysis::summaries::` — PASS (107)
+- `cargo test -p polint --lib --locked solver_projection_tests` — PASS (5)
+- `cargo test -p polint --lib --locked eval::determinism_gate` — PASS (12)
+
 ## Landing
 
 - Feat commit: `1a2d62387820060178dba5f5626c8fc645fef88a`
 - Swarm land: `f3284061`
+- Audit-fix commit: `14f248fad48afe341b2bdd3289c42015d91feb36`

@@ -286,11 +286,19 @@ mod tests {
         let a = base.normalized(&crate::core::test_stable_key_interner());
         let b = shuffled.normalized(&crate::core::test_stable_key_interner());
 
-        // Byte-identical serialized output under shuffle (dense `id` is
-        // `#[serde(skip)]`, so this captures endpoints/status/precision/stable_key/
-        // provenance).
-        let a_edges = serde_json::to_string(&a.derived_edges).expect("serialize a");
-        let b_edges = serde_json::to_string(&b.derived_edges).expect("serialize b");
+        // Byte-identical resolved-text payload under shuffle (dense `id` omitted;
+        // stable_key/provenance serialize as resolved text, never numeric ids).
+        let interner = crate::core::test_stable_key_interner();
+        let a_edges = crate::analysis::solver::facts::serialize_derived_edges_stable(
+            &interner,
+            &a.derived_edges,
+        )
+        .expect("serialize a");
+        let b_edges = crate::analysis::solver::facts::serialize_derived_edges_stable(
+            &interner,
+            &b.derived_edges,
+        )
+        .expect("serialize b");
         assert_eq!(a_edges, b_edges);
         // The dense IDs assigned are identical too.
         assert_eq!(

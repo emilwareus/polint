@@ -118,14 +118,22 @@ fn function_nodes(db: &AnalysisDb) -> BTreeMap<String, SemanticNodeId> {
     GoRtaInputs::from_db(&crate::core::AnalysisDb::new().stable_key_interner(), db).function_node
 }
 
-/// Two engine runs over the same fixture-built db produce byte-identical serialized
-/// derived edges (the determinism discipline; dense `id` is `#[serde(skip)]` so this
-/// captures endpoints/status/precision/stable_key/provenance).
+/// Two engine runs over the same fixture-built db produce byte-identical resolved-text
+/// derived-edge payloads (dense `id` omitted; identities serialize as resolved text).
 fn assert_solver_output_byte_stable(db: &AnalysisDb, budget: SolverBudget) {
     let first = solver_output_for_db(db, budget);
     let second = solver_output_for_db(db, budget);
-    let first_json = serde_json::to_string(&first.derived_edges).expect("serialize first");
-    let second_json = serde_json::to_string(&second.derived_edges).expect("serialize second");
+    let interner = db.stable_key_interner();
+    let first_json = crate::analysis::solver::facts::serialize_derived_edges_stable(
+        &interner,
+        &first.derived_edges,
+    )
+    .expect("serialize first");
+    let second_json = crate::analysis::solver::facts::serialize_derived_edges_stable(
+        &interner,
+        &second.derived_edges,
+    )
+    .expect("serialize second");
     assert_eq!(
         first_json, second_json,
         "solver derived-edge JSON diverged across two engine runs"

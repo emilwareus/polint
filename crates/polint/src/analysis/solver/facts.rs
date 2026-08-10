@@ -2,41 +2,42 @@
 //!
 //! A [`DerivedEdgeFact`] is one edge the unified solver derived from the frontend
 //! constraint vocabulary. It mirrors `semantic_graph::constraints::ConstraintFact`
-//! (`{ #[serde(skip)] id, ..., status, precision, stable_key }`) and carries, in
-//! addition, the [`DerivedEdgeProvenance`] (D-08) recording the contributing facts,
-//! producing `ConstraintKind`, and solver step.
+//! shape (`{ id, ..., status, precision, stable_key }`) and carries, in addition,
+//! the [`DerivedEdgeProvenance`] (D-08) recording the contributing facts, producing
+//! `ConstraintKind`, and solver step.
 //!
 //! It reuses the shared `points_to::facts::{PointsToStatus, PointsToPrecision}`
 //! status/precision vocabulary rather than minting redundant enums (composition over
-//! duplication). The dense `id` carries `#[serde(skip)]` so it never enters the
-//! output digest (D-06); serde restores it via `DerivedEdgeId::default()` (= 0).
+//! duplication). The dense `id` is a post-normalization read concern only and is
+//! excluded from resolved-text stable payloads (D-06).
 //!
 //! **Precision ceiling (D-06).** Derived edges are an OVER-APPROXIMATION; they reject
 //! the exact precision tier. [`derived_edge_precision_ceiling`] maps the points-to
 //! precision onto the kernel [`FactPrecision`] vocabulary and is asserted to NEVER
 //! return [`FactPrecision::Exact`] — budget exhaustion and conservative derivation
 //! surface honestly, never as a falsely-exact edge.
+//!
+//! Identity fields are interned [`StableKeyId`]s. Wire/cache/test byte stability must
+//! go through [`DerivedEdgeFact::stable_payload`] (resolved text), never raw numeric
+//! interner ids.
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::analysis::ids::{DerivedEdgeId, SemanticNodeId};
 use crate::analysis::points_to::facts::{PointsToPrecision, PointsToStatus};
 use crate::analysis_kernel::FactPrecision;
-use crate::core::StableKeyId;
+use crate::core::{StableKeyId, StableKeyInterner};
 
-use super::provenance::DerivedEdgeProvenance;
+use super::provenance::{DerivedEdgeProvenance, DerivedEdgeProvenanceStablePayload};
 
 /// One solver-derived edge `source -> target` with full provenance (GRAPH-04).
 ///
-/// Mirrors `ConstraintFact`: the dense `id` is a post-normalization read concern
-/// only and is stripped from any serialized stable payload (`#[serde(skip)]`, D-06);
-/// serde restores it via `DerivedEdgeId::default()`. The `stable_key` is built from
-/// the referenced endpoints + the provenance fragment (never run-local dense IDs).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// The dense `id` is a post-normalization read concern only and is omitted from
+/// resolved-text stable payloads. The `stable_key` is built from the referenced
+/// endpoints + the provenance fragment (never run-local dense IDs).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DerivedEdgeFact {
     /// Run-local dense handle, assigned only after the stable-key sort (D-08).
-    /// `#[serde(skip)]` keeps it out of the digest; serde restores it via `Default`.
-    #[serde(skip)]
     pub(crate) id: DerivedEdgeId,
     /// The edge's source endpoint (a unified `SemanticNodeId`).
     pub(crate) source: SemanticNodeId,
@@ -53,9 +54,21 @@ pub(crate) struct DerivedEdgeFact {
     /// Built from the referenced endpoints + the provenance fragment, never run-local
     /// dense IDs. Populated by the solver store.
     pub(crate) stable_key: StableKeyId,
-    /// The edge's provenance (D-08): contributing facts (total-ordered by stable ID),
-    /// producing constraint kind, and solver step.
+    /// The edge's provenance (D-08): contributing facts (total-ordered by resolved
+    /// stable text), producing constraint kind, and solver step.
     pub(crate) provenance: DerivedEdgeProvenance,
+}
+
+/// Resolved-text wire/cache payload for one derived edge. Never carries numeric
+/// interner ids; requires an interner at construction time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct DerivedEdgeStablePayload {
+    pub(crate) source: SemanticNodeId,
+    pub(crate) target: SemanticNodeId,
+    pub(crate) status: PointsToStatus,
+    pub(crate) precision: PointsToPrecision,
+    pub(crate) stable_key: String,
+    pub(crate) provenance: DerivedEdgeProvenanceStablePayload,
 }
 
 impl DerivedEdgeFact {
@@ -64,6 +77,30 @@ impl DerivedEdgeFact {
     pub(crate) fn honors_precision_ceiling(&self) -> bool {
         derived_edge_precision_ceiling(self.precision) != FactPrecision::Exact
     }
+
+    /// Project this edge into a resolved-text stable payload (dense `id` omitted).
+    pub(crate) fn stable_payload(&self, interner: &StableKeyInterner) -> DerivedEdgeStablePayload {
+        DerivedEdgeStablePayload {
+            source: self.source,
+            target: self.target,
+            status: self.status,
+            precision: self.precision,
+            stable_key: interner.resolve(self.stable_key).to_string(),
+            provenance: self.provenance.stable_payload(interner),
+        }
+    }
+}
+
+/// Serialize derived edges as resolved-text stable payloads (never numeric ids).
+pub(crate) fn serialize_derived_edges_stable(
+    interner: &StableKeyInterner,
+    edges: &[DerivedEdgeFact],
+) -> Result<String, serde_json::Error> {
+    let payload: Vec<DerivedEdgeStablePayload> = edges
+        .iter()
+        .map(|edge| edge.stable_payload(interner))
+        .collect();
+    serde_json::to_string(&payload)
 }
 
 /// Maps a derived edge's points-to precision onto the kernel [`FactPrecision`]
@@ -144,7 +181,8 @@ mod tests {
     }
 
     #[test]
-    fn dense_id_is_skipped_from_serialization() {
+    fn dense_id_is_omitted_from_stable_payload() {
+        let interner = crate::core::test_stable_key_interner();
         let edge = DerivedEdgeFact {
             id: DerivedEdgeId(99),
             source: SemanticNodeId(1),
@@ -154,11 +192,9 @@ mod tests {
             stable_key: crate::core::stable_key_for_test("edge|copy_edge|a"),
             provenance: provenance(),
         };
-        let json = serde_json::to_string(&edge).expect("serialize");
-        // The dense id (99) must NOT appear in the serialized payload.
+        let json = serde_json::to_string(&edge.stable_payload(&interner)).expect("serialize");
         assert!(!json.contains("\"id\""));
-        // A round-trip restores the id to its Default (0), proving `#[serde(skip)]`.
-        let restored: DerivedEdgeFact = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(restored.id, DerivedEdgeId(0));
+        assert!(json.contains("edge|copy_edge|a"));
+        assert!(!json.contains(&format!("{}", edge.stable_key.0)));
     }
 }
