@@ -1,19 +1,19 @@
-use crate::go::lifecycle::GoAnalysisConfig;
+use crate::lifecycle::GoAnalysisConfig;
 
-pub(crate) const GO_SEMANTIC_SCHEMA_LABEL: &str = "go-semantic-facts-2";
-pub(crate) const GO_SEMANTIC_PROVIDER_ID: &str = "polint.go.semantic";
+pub const GO_SEMANTIC_SCHEMA_LABEL: &str = "go-semantic-facts-2";
+pub const GO_SEMANTIC_PROVIDER_ID: &str = "polint.go.semantic";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct GoSemanticCacheInputs {
-    pub(crate) sidecar_digest: String,
-    pub(crate) go_version: String,
-    pub(crate) x_tools_version: String,
-    pub(crate) upstream_digest: String,
-    pub(crate) lifecycle: GoAnalysisConfig,
+pub struct GoSemanticCacheInputs {
+    pub sidecar_digest: String,
+    pub go_version: String,
+    pub x_tools_version: String,
+    pub upstream_digest: String,
+    pub lifecycle: GoAnalysisConfig,
 }
 
-pub(crate) fn go_semantic_provider_parameter_digest() -> String {
-    crate::cache::stable_hash(&[
+pub fn go_semantic_provider_parameter_digest() -> String {
+    crate::hash::stable_hash(&[
         GO_SEMANTIC_SCHEMA_LABEL,
         GO_SEMANTIC_PROVIDER_ID,
         "sidecar_digest",
@@ -29,9 +29,9 @@ pub(crate) fn go_semantic_provider_parameter_digest() -> String {
     ])
 }
 
-pub(crate) fn go_semantic_input_digest(inputs: &GoSemanticCacheInputs) -> String {
+pub fn go_semantic_input_digest(inputs: &GoSemanticCacheInputs) -> String {
     let lifecycle_digest = go_semantic_lifecycle_digest(&inputs.lifecycle);
-    crate::cache::stable_hash(&[
+    crate::hash::stable_hash(&[
         go_semantic_provider_parameter_digest().as_str(),
         inputs.sidecar_digest.as_str(),
         inputs.go_version.as_str(),
@@ -41,7 +41,7 @@ pub(crate) fn go_semantic_input_digest(inputs: &GoSemanticCacheInputs) -> String
     ])
 }
 
-pub(crate) fn go_semantic_lifecycle_digest(config: &GoAnalysisConfig) -> String {
+pub fn go_semantic_lifecycle_digest(config: &GoAnalysisConfig) -> String {
     let mut parts = vec![
         format!("include_tests={}", config.include_tests),
         format!("offline={}", config.offline),
@@ -66,7 +66,7 @@ pub(crate) fn go_semantic_lifecycle_digest(config: &GoAnalysisConfig) -> String 
     );
     parts.sort();
     let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
-    crate::cache::stable_hash(&refs)
+    crate::hash::stable_hash(&refs)
 }
 
 #[cfg(test)]
@@ -106,7 +106,7 @@ mod tests {
         // the row vocabulary changed without a schema-label bump — that is a regression,
         // not a snapshot to bless. Reconstruct the exact locked parts list.
         assert_eq!(GO_SEMANTIC_SCHEMA_LABEL, "go-semantic-facts-2");
-        let expected = crate::cache::stable_hash(&[
+        let expected = crate::hash::stable_hash(&[
             "go-semantic-facts-2",
             GO_SEMANTIC_PROVIDER_ID,
             "sidecar_digest",
@@ -125,7 +125,7 @@ mod tests {
     fn provider_parameter_digest_differs_from_pre_phase48_recipe() {
         // The previous recipe (schema -1, no RTA vocabulary) must not collide with
         // the bumped recipe, so a cache built before this stage is invalidated.
-        let pre_phase48 = crate::cache::stable_hash(&[
+        let pre_phase48 = crate::hash::stable_hash(&[
             "go-semantic-facts-1",
             GO_SEMANTIC_PROVIDER_ID,
             "sidecar_digest",

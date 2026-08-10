@@ -1,7 +1,7 @@
 use super::*;
 use crate::analysis_plan::AnalysisPlan;
 use crate::core::{AnalysisDb, BranchObligation, Language};
-use crate::diagnostics::TextRange;
+use polint_core::DiagnosticRange;
 use crate::graph::ImportGraph;
 use std::fs;
 use std::path::{Path, PathBuf};

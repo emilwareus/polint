@@ -62,3 +62,43 @@ impl Span {
         }
     }
 }
+
+/// Build a [`Span`] from UTF-8 byte offsets in `source`.
+pub fn span_from_byte_range(
+    file: FileId,
+    source: &str,
+    start_byte: usize,
+    end_byte: usize,
+) -> Span {
+    let start_byte = start_byte.min(source.len());
+    let end_byte = end_byte.min(source.len()).max(start_byte);
+    let (start_line, start_col) = line_col(source, start_byte);
+    let (end_line, end_col) = line_col(source, end_byte);
+    Span::new(
+        file,
+        start_byte as u32,
+        end_byte as u32,
+        start_line,
+        start_col,
+        end_line,
+        end_col,
+    )
+}
+
+fn line_col(source: &str, byte_offset: usize) -> (u32, u32) {
+    let mut line = 1_u32;
+    let mut col = 1_u32;
+    let limit = byte_offset.min(source.len());
+    for (idx, ch) in source.char_indices() {
+        if idx >= limit {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            col = 1;
+        } else {
+            col += 1;
+        }
+    }
+    (line, col)
+}

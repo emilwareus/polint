@@ -1,23 +1,22 @@
-use crate::analysis_kernel::ProviderRunResult;
-use crate::analysis_kernel::incremental::{
-    CacheStats, Digest, DigestKind, LayerCacheManifest, LayerCacheReadStatus, LayerCacheStore,
-    LayerCacheWriteStatus, LayerKey, LayerKind, PrecisionTier,
-};
-use crate::analysis_plan::AnalysisPlan;
-use crate::cache::CacheReadStatus;
-use crate::core::{
-    AnalysisDb, BranchId, BranchObligation, CachedFileAnalysis, FileId, FunctionFact, FunctionId,
-    ImportFact, Language, PackageFact, SourceFile, Span, StringLiteralFact, TestFact,
-    span_from_byte_range,
-};
-use crate::diagnostics::{Diagnostic, TextRange, fingerprint};
 use anyhow::{Context, Result};
+use polint_analysis_api::{
+    AnalysisCache, BranchObligation, CacheStats, CachedFileAnalysis, Digest, DigestKind,
+    DisabledAnalysisCache, FactDatabase, FileCacheKeyParts, FileCacheReadStatus, FunctionFact,
+    ImportFact, LayerCacheKeyParts, LayerCacheKind, LayerCachePrecision, LayerCacheReadStatus,
+    LayerCacheWriteStatus, PackageFact, ProviderRunResult, SourceFile, StringLiteralFact, TestFact,
+};
+use polint_core::{
+    BranchId, Diagnostic, DiagnosticRange as TextRange, FileId, FunctionId, Language, Span,
+    fingerprint, span_from_byte_range,
+};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tree_sitter::{Node, Parser};
+
+use crate::local_db::LocalFactDb;
 
 const GO_CACHE_SCHEMA: &str = "go-facts-v2";
 const GO_PROVIDER_ID: &str = "polint.go.syntax";
@@ -29,56 +28,61 @@ thread_local! {
 
 /// Convenience wrapper used by Go-adapter unit tests (no cache, sequential).
 #[cfg(test)]
-pub(crate) fn analyze(db: &mut AnalysisDb) -> Vec<Diagnostic> {
-    let cache = crate::cache::Cache::new("", false);
+pub fn analyze(db: &mut dyn FactDatabase) -> Vec<Diagnostic> {
+    let cache = DisabledAnalysisCache;
     analyze_with_options(db, &cache, "", "", false)
 }
 
 /// Sequential, cache-aware analysis used by Go-adapter unit tests only.
 #[cfg(test)]
-pub(crate) fn analyze_with_cache(
-    db: &mut AnalysisDb,
-    cache: &crate::cache::Cache,
+pub fn analyze_with_cache(
+    db: &mut dyn FactDatabase,
+    cache: &dyn AnalysisCache,
     config_hash: &str,
     rule_hash: &str,
 ) -> Vec<Diagnostic> {
     analyze_with_options(db, cache, config_hash, rule_hash, false)
 }
 
-// `pub` for `polint::_bench::go` / `polint-bench`, not for direct downstream use.
+/// Used by `polint::_bench::go` / `polint-bench`.
 #[allow(dead_code, unreachable_pub)]
 pub fn analyze_with_options(
-    db: &mut AnalysisDb,
-    cache: &crate::cache::Cache,
+    db: &mut dyn FactDatabase,
+    cache: &dyn AnalysisCache,
     config_hash: &str,
     rule_hash: &str,
     parallel: bool,
 ) -> Vec<Diagnostic> {
-    let plan = AnalysisPlan::empty();
-    analyze_with_plan_options(db, cache, config_hash, rule_hash, &plan, parallel)
+    analyze_with_plan_options(db, cache, config_hash, rule_hash, "", parallel)
 }
 
-pub(crate) fn analyze_with_plan_options(
-    db: &mut AnalysisDb,
-    cache: &crate::cache::Cache,
+pub fn analyze_with_plan_options(
+    db: &mut dyn FactDatabase,
+    cache: &dyn AnalysisCache,
     config_hash: &str,
     rule_hash: &str,
-    plan: &AnalysisPlan,
+    plan_digest: &str,
     parallel: bool,
 ) -> Vec<Diagnostic> {
-    analyze_with_plan_options_and_cache_stats(db, cache, config_hash, rule_hash, plan, parallel)
-        .diagnostics
+    analyze_with_plan_options_and_cache_stats(
+        db,
+        cache,
+        config_hash,
+        rule_hash,
+        plan_digest,
+        parallel,
+    )
+    .diagnostics
 }
 
-pub(crate) fn analyze_with_plan_options_and_cache_stats(
-    db: &mut AnalysisDb,
-    cache: &crate::cache::Cache,
+pub fn analyze_with_plan_options_and_cache_stats(
+    db: &mut dyn FactDatabase,
+    cache: &dyn AnalysisCache,
     config_hash: &str,
     rule_hash: &str,
-    plan: &AnalysisPlan,
+    plan_digest: &str,
     parallel: bool,
 ) -> ProviderRunResult {
-    // Clone so file refs do not borrow `db` across mutation in analyze_files.
     let owned: Vec<SourceFile> = db
         .files()
         .iter()
@@ -92,18 +96,18 @@ pub(crate) fn analyze_with_plan_options_and_cache_stats(
         cache,
         config_hash,
         rule_hash,
-        plan,
+        plan_digest,
         parallel,
     )
 }
 
-pub(crate) fn analyze_files_with_plan_options_and_cache_stats(
-    db: &mut AnalysisDb,
+pub fn analyze_files_with_plan_options_and_cache_stats(
+    db: &mut dyn FactDatabase,
     files: &[&SourceFile],
-    cache: &crate::cache::Cache,
+    cache: &dyn AnalysisCache,
     config_hash: &str,
     rule_hash: &str,
-    plan: &AnalysisPlan,
+    plan_digest: &str,
     parallel: bool,
 ) -> ProviderRunResult {
     let mut cache_stats = CacheStats::default();
@@ -115,22 +119,25 @@ pub(crate) fn analyze_files_with_plan_options_and_cache_stats(
         };
     }
 
-    let layer_store = cache.layer_cache_store();
     let layer_key = go_syntax_layer_key(files, config_hash);
-    let read = layer_store.read_json_validated::<SyntaxLayerPayload, _>(
-        &layer_key,
-        |payload, manifest| {
-            validate_syntax_layer_payload(payload, manifest, GO_SYNTAX_LAYER_SCHEMA, files)
-        },
-    );
+    let mut validate = |bytes: &[u8], output_digest: Option<&Digest>| -> bool {
+        let Ok(payload) = serde_json::from_slice::<SyntaxLayerPayload>(bytes) else {
+            return false;
+        };
+        validate_syntax_layer_payload(&payload, output_digest, GO_SYNTAX_LAYER_SCHEMA, files)
+    };
+    let read = cache.read_layer_json(&layer_key, &mut validate);
 
     match read.status {
         LayerCacheReadStatus::Hit => {
             cache_stats.record_hit();
             cache_stats.record_verified_reuse();
-            let payload = read
-                .value
-                .expect("layer cache hit should include syntax payload");
+            let payload = serde_json::from_slice::<SyntaxLayerPayload>(
+                &read
+                    .value
+                    .expect("layer cache hit should include syntax payload"),
+            )
+            .expect("layer cache hit payload validated");
             ProviderRunResult {
                 diagnostics: restore_syntax_layer_payload(db, payload),
                 cache_stats,
@@ -140,8 +147,14 @@ pub(crate) fn analyze_files_with_plan_options_and_cache_stats(
         LayerCacheReadStatus::BypassedDisabled => {
             cache_stats.record_disabled_bypass();
             cache_stats.record_recompute();
-            let payload =
-                parse_go_syntax_layer_payload(files, cache, config_hash, rule_hash, plan, parallel);
+            let payload = parse_go_syntax_layer_payload(
+                files,
+                cache,
+                config_hash,
+                rule_hash,
+                plan_digest,
+                parallel,
+            );
             ProviderRunResult {
                 diagnostics: restore_syntax_layer_payload(db, payload),
                 cache_stats,
@@ -155,12 +168,18 @@ pub(crate) fn analyze_files_with_plan_options_and_cache_stats(
                 cache_stats.record_invalid_evicted_read();
             }
             cache_stats.record_recompute();
-            let payload =
-                parse_go_syntax_layer_payload(files, cache, config_hash, rule_hash, plan, parallel);
+            let payload = parse_go_syntax_layer_payload(
+                files,
+                cache,
+                config_hash,
+                rule_hash,
+                plan_digest,
+                parallel,
+            );
             let mut write_diagnostics = Vec::new();
             let output_digest = write_syntax_layer_payload(
-                &layer_store,
-                layer_key,
+                cache,
+                &layer_key,
                 &payload,
                 &mut cache_stats,
                 &mut write_diagnostics,
@@ -180,7 +199,7 @@ struct GoFileAnalysis {
     relative_path: String,
     content_hash: String,
     diagnostics: Vec<Diagnostic>,
-    facts: Option<crate::core::CachedFileFacts>,
+    facts: Option<polint_analysis_api::CachedFileFacts>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -194,25 +213,25 @@ struct SyntaxLayerFile {
     relative_path: String,
     content_hash: String,
     diagnostics: Vec<Diagnostic>,
-    facts: Option<crate::core::CachedFileFacts>,
+    facts: Option<polint_analysis_api::CachedFileFacts>,
 }
 
-fn go_syntax_layer_key(files: &[&SourceFile], config_hash: &str) -> LayerKey {
-    LayerKey::syntax_layer_key(
-        LayerKind::GoSyntax,
-        GO_PROVIDER_ID,
-        env!("CARGO_PKG_VERSION"),
-        GO_CACHE_SCHEMA,
-        files.iter().map(|file| source_text_digest(file)).collect(),
-        Digest::from_parts(DigestKind::Config, "config_hash", &[config_hash]),
-        Digest::absent(DigestKind::GoLifecycle, "go_syntax_lifecycle_absent"),
-        Digest::from_parts(
+fn go_syntax_layer_key(files: &[&SourceFile], config_hash: &str) -> LayerCacheKeyParts {
+    LayerCacheKeyParts {
+        layer_kind: LayerCacheKind::GoSyntax,
+        provider_id: GO_PROVIDER_ID.to_string(),
+        provider_version: env!("CARGO_PKG_VERSION").to_string(),
+        schema_version: GO_CACHE_SCHEMA.to_string(),
+        parameter_digest: parser_parameter_digest(files),
+        lifecycle_digest: Digest::absent(DigestKind::GoLifecycle, "go_syntax_lifecycle_absent"),
+        config_digest: Digest::from_parts(DigestKind::Config, "config_hash", &[config_hash]),
+        toolchain_digest: Digest::from_parts(
             DigestKind::ToolInvocation,
             "go_syntax_parser_toolchain",
             &[env!("CARGO_PKG_VERSION")],
         ),
-        parser_parameter_digest(files),
-    )
+        input_digests: files.iter().map(|file| source_text_digest(file)).collect(),
+    }
 }
 
 fn source_text_digest(file: &SourceFile) -> Digest {
@@ -239,7 +258,7 @@ fn parser_parameter_digest(files: &[&SourceFile]) -> Digest {
 
 fn validate_syntax_layer_payload(
     payload: &SyntaxLayerPayload,
-    manifest: &LayerCacheManifest,
+    output_digest: Option<&Digest>,
     schema: &str,
     files: &[&SourceFile],
 ) -> bool {
@@ -256,26 +275,28 @@ fn validate_syntax_layer_payload(
         .iter()
         .map(|file| (file.relative_path.as_str(), file.content_hash.as_str()))
         .collect::<Vec<_>>();
-    actual == expected && manifest.output_digest == go_syntax_output_digest_for_payload(payload)
+    actual == expected
+        && output_digest
+            .is_some_and(|digest| digest == &go_syntax_output_digest_for_payload(payload))
 }
 
 fn parse_go_syntax_layer_payload(
     files: &[&SourceFile],
-    cache: &crate::cache::Cache,
+    cache: &dyn AnalysisCache,
     config_hash: &str,
     rule_hash: &str,
-    plan: &AnalysisPlan,
+    plan_digest: &str,
     parallel: bool,
 ) -> SyntaxLayerPayload {
     let mut results = if parallel {
         files
             .par_iter()
-            .map(|file| analyze_go_source_file(file, cache, config_hash, rule_hash, plan.digest()))
+            .map(|file| analyze_go_source_file(file, cache, config_hash, rule_hash, plan_digest))
             .collect::<Vec<_>>()
     } else {
         files
             .iter()
-            .map(|file| analyze_go_source_file(file, cache, config_hash, rule_hash, plan.digest()))
+            .map(|file| analyze_go_source_file(file, cache, config_hash, rule_hash, plan_digest))
             .collect::<Vec<_>>()
     };
     results.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
@@ -295,7 +316,7 @@ fn parse_go_syntax_layer_payload(
 }
 
 fn restore_syntax_layer_payload(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     payload: SyntaxLayerPayload,
 ) -> Vec<Diagnostic> {
     // FileId is dense; build a path→id index once so restore is O(F), not O(F²).
@@ -325,40 +346,55 @@ fn restore_syntax_layer_payload(
 }
 
 fn write_syntax_layer_payload(
-    store: &LayerCacheStore,
-    layer_key: LayerKey,
+    cache: &dyn AnalysisCache,
+    layer_key: &LayerCacheKeyParts,
     payload: &SyntaxLayerPayload,
     stats: &mut CacheStats,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<Digest> {
-    let payload_digest = match LayerCacheStore::payload_digest_for_json(payload) {
+    let payload_bytes = match serde_json::to_vec(payload) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            diagnostics.push(cache_write_diagnostic(
+                "go syntax layer",
+                anyhow::anyhow!(error),
+            ));
+            return None;
+        }
+    };
+    let payload_digest = match cache.payload_digest_for_json_bytes(&payload_bytes) {
         Ok(digest) => digest,
         Err(error) => {
-            diagnostics.push(cache_write_diagnostic("go syntax layer", error));
+            diagnostics.push(cache_write_diagnostic(
+                "go syntax layer",
+                anyhow::anyhow!(error),
+            ));
             return None;
         }
     };
     let output_digest = go_syntax_output_digest(&payload_digest);
-    let manifest = LayerCacheManifest::new(
+    match cache.write_layer_json(
         layer_key,
-        output_digest.clone(),
-        payload_digest,
-        Vec::new(),
-        PrecisionTier::Syntax,
+        &output_digest,
+        &payload_digest,
+        LayerCachePrecision::Syntax,
         "native_trusted",
-        Vec::new(),
-    );
-
-    match store.write_json(&manifest, payload) {
+        &payload_bytes,
+    ) {
         Ok(LayerCacheWriteStatus::Written) => stats.record_write(),
         Ok(LayerCacheWriteStatus::BypassedDisabled) => stats.record_disabled_bypass(),
-        Err(error) => diagnostics.push(cache_write_diagnostic("go syntax layer", error)),
+        Err(error) => diagnostics.push(cache_write_diagnostic(
+            "go syntax layer",
+            anyhow::anyhow!(error),
+        )),
     }
     Some(output_digest)
 }
 
 fn go_syntax_output_digest_for_payload(payload: &SyntaxLayerPayload) -> Digest {
-    let payload_digest = LayerCacheStore::payload_digest_for_json(payload)
+    let payload_bytes = serde_json::to_vec(payload).unwrap_or_default();
+    let payload_digest = DisabledAnalysisCache
+        .payload_digest_for_json_bytes(&payload_bytes)
         .unwrap_or_else(|_| Digest::unsupported(DigestKind::LayerOutput, "go_syntax", "json"));
     go_syntax_output_digest(&payload_digest)
 }
@@ -373,22 +409,23 @@ fn go_syntax_output_digest(payload_digest: &Digest) -> Digest {
 
 fn analyze_go_source_file(
     file: &SourceFile,
-    cache: &crate::cache::Cache,
+    cache: &dyn AnalysisCache,
     config_hash: &str,
     rule_hash: &str,
     plan_hash: &str,
 ) -> GoFileAnalysis {
-    let key = crate::cache::CacheKey::for_file(
-        file.relative_path.as_str(),
-        file.content_hash.as_str(),
-        config_hash,
-        rule_hash,
-        plan_hash,
-        GO_CACHE_SCHEMA,
-    );
-    let read = cache.read_json_with_status::<CachedFileAnalysis>(&key);
-    if read.status == CacheReadStatus::Hit
-        && let Some(cached) = read.value
+    let key = FileCacheKeyParts {
+        relative_path: file.relative_path.clone(),
+        content_hash: file.content_hash.clone(),
+        config_hash: config_hash.to_string(),
+        rule_hash: rule_hash.to_string(),
+        plan_hash: plan_hash.to_string(),
+        schema: GO_CACHE_SCHEMA.to_string(),
+    };
+    let read = cache.read_file_json(&key);
+    if read.status == FileCacheReadStatus::Hit
+        && let Some(bytes) = read.value
+        && let Ok(cached) = serde_json::from_slice::<CachedFileAnalysis>(&bytes)
         && cached.schema == GO_CACHE_SCHEMA
     {
         return GoFileAnalysis {
@@ -399,8 +436,9 @@ fn analyze_go_source_file(
         };
     }
 
-    let mut local_db = AnalysisDb::new();
-    let local_file = local_db.add_source_file(
+    let mut local_db = LocalFactDb::new();
+    let local_file = FactDatabase::add_source_file(
+        &mut local_db,
         file.path.clone(),
         file.relative_path.clone(),
         file.language,
@@ -429,8 +467,13 @@ fn analyze_go_source_file(
         diagnostics: diagnostics.clone(),
         facts: facts.clone(),
     };
-    if let Err(error) = cache.write_json(&key, &cached) {
-        diagnostics.push(cache_write_diagnostic(file.relative_path.as_str(), error));
+    if let Ok(bytes) = serde_json::to_vec(&cached)
+        && let Err(error) = cache.write_file_json(&key, &bytes)
+    {
+        diagnostics.push(cache_write_diagnostic(
+            file.relative_path.as_str(),
+            anyhow::anyhow!(error),
+        ));
     };
     GoFileAnalysis {
         relative_path: file.relative_path.clone(),
@@ -449,7 +492,7 @@ fn cache_write_diagnostic(path: &str, error: anyhow::Error) -> Diagnostic {
     )
 }
 
-fn parse_go_file(db: &mut AnalysisDb, file_id: FileId) -> Result<Vec<Diagnostic>> {
+fn parse_go_file(db: &mut dyn FactDatabase, file_id: FileId) -> Result<Vec<Diagnostic>> {
     let source_owned = {
         let file = db.file(file_id).context("missing source file")?;
         Arc::clone(&file.source)
@@ -485,7 +528,7 @@ fn parse_go_file(db: &mut AnalysisDb, file_id: FileId) -> Result<Vec<Diagnostic>
 }
 
 fn parser_error_diagnostic(
-    db: &AnalysisDb,
+    db: &dyn FactDatabase,
     file_id: FileId,
     source: &str,
     root: Node<'_>,
@@ -502,7 +545,7 @@ fn parser_error_diagnostic(
     )
 }
 
-fn extract_package(db: &mut AnalysisDb, file: FileId, source: &str, root: Node<'_>) {
+fn extract_package(db: &mut dyn FactDatabase, file: FileId, source: &str, root: Node<'_>) {
     let Some(package_clause) =
         first_named_descendant(root, &|node| node.kind() == "package_clause")
     else {
@@ -520,7 +563,7 @@ fn extract_package(db: &mut AnalysisDb, file: FileId, source: &str, root: Node<'
     };
 
     db.push_package(PackageFact {
-        id: crate::core::PackageId(0),
+        id: polint_core::PackageId(0),
         file,
         name: name.to_string(),
         span: node_span(file, source, identifier),
@@ -583,7 +626,7 @@ where
     None
 }
 
-fn extract_imports(db: &mut AnalysisDb, file: FileId, source: &str, root: Node<'_>) {
+fn extract_imports(db: &mut dyn FactDatabase, file: FileId, source: &str, root: Node<'_>) {
     visit_named_descendants(root, &mut |node| {
         if node.kind() != "import_declaration" {
             return;
@@ -607,7 +650,7 @@ fn extract_imports(db: &mut AnalysisDb, file: FileId, source: &str, root: Node<'
     });
 }
 
-fn push_import_from_node(db: &mut AnalysisDb, file: FileId, source: &str, node: Node<'_>) {
+fn push_import_from_node(db: &mut dyn FactDatabase, file: FileId, source: &str, node: Node<'_>) {
     let Some(path_node) = first_named_descendant(node, &is_go_string_literal) else {
         return;
     };
@@ -617,7 +660,7 @@ fn push_import_from_node(db: &mut AnalysisDb, file: FileId, source: &str, node: 
     let package = import_alias(source, node, path_node);
 
     db.push_import(ImportFact {
-        id: crate::core::ImportId(0),
+        id: polint_core::ImportId(0),
         file,
         package,
         path,
@@ -663,7 +706,7 @@ fn is_go_string_literal(node: Node<'_>) -> bool {
     )
 }
 
-fn extract_string_literals(db: &mut AnalysisDb, file: FileId, source: &str, root: Node<'_>) {
+fn extract_string_literals(db: &mut dyn FactDatabase, file: FileId, source: &str, root: Node<'_>) {
     visit_named_descendants(root, &mut |node| {
         if !is_go_string_literal(node) || is_inside_go_import(node) {
             return;
@@ -693,7 +736,7 @@ fn is_inside_go_import(node: Node<'_>) -> bool {
     false
 }
 
-fn extract_functions(db: &mut AnalysisDb, file: FileId, source: &str, root: Node<'_>) {
+fn extract_functions(db: &mut dyn FactDatabase, file: FileId, source: &str, root: Node<'_>) {
     let file_path = db.path_for(file);
     visit_named_descendants(root, &mut |node| {
         if !matches!(node.kind(), "function_declaration" | "method_declaration") {
@@ -1143,7 +1186,7 @@ fn first_named_child<'tree>(node: Node<'tree>, kind: &str) -> Option<Node<'tree>
 }
 
 fn extract_branches(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     file: FileId,
     function: FunctionId,
     function_name: &str,
@@ -1203,7 +1246,7 @@ fn extract_branches(
 }
 
 fn push_if_branches(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     file: FileId,
     function: FunctionId,
     function_name: &str,
@@ -1253,7 +1296,7 @@ fn push_if_branches(
 }
 
 fn push_switch_branch(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     file: FileId,
     function: FunctionId,
     function_name: &str,
@@ -1281,7 +1324,7 @@ fn push_switch_branch(
 }
 
 fn push_case_branch(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     target: BranchTarget<'_>,
     function_returns_error: bool,
     source: &str,
@@ -1311,7 +1354,7 @@ fn push_case_branch(
 }
 
 fn push_for_branch(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     file: FileId,
     function: FunctionId,
     function_name: &str,
@@ -1364,7 +1407,7 @@ fn direct_range_clause(node: Node<'_>) -> Option<Node<'_>> {
 }
 
 fn push_select_branch(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     file: FileId,
     function: FunctionId,
     function_name: &str,
@@ -1520,7 +1563,7 @@ struct BranchTarget<'name> {
 }
 
 fn push_branch(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     target: BranchTarget<'_>,
     decision_span: Span,
     condition_text: String,
@@ -1658,7 +1701,6 @@ fn contains_error_word(text: &str) -> bool {
 #[cfg(test)]
 mod subtest_name_tests {
     use super::*;
-    use crate::core::AnalysisDb;
 
     #[test]
     fn harvests_literal_t_run_names() {
@@ -1672,7 +1714,7 @@ func TestFoo(t *testing.T) {
     t.Run(`case_b`, func(t *testing.T) {})
 }
 "#;
-        let mut db = AnalysisDb::new();
+        let mut db = LocalFactDb::new();
         let fid = db.add_file(
             std::path::PathBuf::from("x_test.go"),
             "x_test.go".to_string(),

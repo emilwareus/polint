@@ -2,13 +2,22 @@
 
 use std::any::Any;
 use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::sync::Arc;
 
-use polint_core::{Diagnostic, LanguageId};
+use polint_core::{
+    BranchId, Diagnostic, FileId, FunctionId, ImportId, Language, LanguageId, PackageId,
+    StableKeyInterner,
+};
 
 use crate::digest::{CacheStats, Digest, DigestKind};
 use crate::fact_store::FactStore;
 use crate::metadata::{FactFamily, FactMetaStore};
-use polint_core::StableKeyInterner;
+use crate::source_file::SourceFile;
+use crate::syntax_facts::{
+    BranchObligation, CachedFileFacts, CoverageFact, FunctionFact, ImportFact, JsxAttributeFact,
+    PackageFact, StringLiteralFact, TestFact, TsClassFact, TsComponentFact,
+};
 
 /// Host fact registry neck used by providers and frontends.
 pub trait FactDatabase: Any + Send {
@@ -19,12 +28,61 @@ pub trait FactDatabase: Any + Send {
     fn fact_meta(&self) -> &FactMetaStore;
     fn fact_meta_mut(&mut self) -> &mut FactMetaStore;
     fn stable_key_interner(&self) -> StableKeyInterner;
+
+    /// Source-file spine shared by language frontends.
+    fn files(&self) -> &[SourceFile];
+    fn file(&self, id: FileId) -> Option<&SourceFile>;
+    fn path_for(&self, file: FileId) -> String;
+    fn add_file(&mut self, path: PathBuf, relative_path: String, source: String) -> FileId;
+    fn add_source_file(
+        &mut self,
+        path: PathBuf,
+        relative_path: String,
+        language: Language,
+        source: Arc<str>,
+        content_hash: String,
+    ) -> FileId;
+
+    fn push_package(&mut self, fact: PackageFact) -> PackageId;
+    fn push_function(&mut self, fact: FunctionFact) -> FunctionId;
+    fn push_import(&mut self, fact: ImportFact) -> ImportId;
+    fn push_branch(&mut self, fact: BranchObligation) -> BranchId;
+    fn push_test(&mut self, fact: TestFact);
+    fn push_coverage(&mut self, fact: CoverageFact);
+    fn push_string_literal(&mut self, fact: StringLiteralFact);
+    fn push_ts_component(&mut self, fact: TsComponentFact);
+    fn push_ts_class(&mut self, fact: TsClassFact);
+    fn push_jsx_attribute(&mut self, fact: JsxAttributeFact);
+
+    fn packages(&self) -> &[PackageFact];
+    fn functions(&self) -> &[FunctionFact];
+    fn imports(&self) -> &[ImportFact];
+    fn branches(&self) -> &[BranchObligation];
+    fn tests(&self) -> &[TestFact];
+    fn coverage(&self) -> &[CoverageFact];
+    fn string_literals(&self) -> &[StringLiteralFact];
+    fn ts_components(&self) -> &[TsComponentFact];
+    fn ts_classes(&self) -> &[TsClassFact];
+    fn jsx_attributes(&self) -> &[JsxAttributeFact];
+
+    fn facts_for_file(&self, file: FileId) -> CachedFileFacts;
+    fn restore_file_facts(&mut self, file: FileId, facts: CachedFileFacts);
 }
 
 /// Facade/host services providers need beyond the fact registry (cache, config, plan).
 pub trait ProviderHostServices: Any + Send {
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
+
+    /// Plan digest string for frontend file-cache keys. Empty when unavailable.
+    fn plan_digest(&self) -> &str {
+        ""
+    }
+
+    /// Opaque frontend analysis cache (implemented by the composition root).
+    fn analysis_cache(&self) -> Option<&dyn crate::cache_api::AnalysisCache> {
+        None
+    }
 }
 
 /// Opaque host side-channel (for example SCC-closure outputs owned by the composition root).

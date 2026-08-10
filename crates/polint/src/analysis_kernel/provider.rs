@@ -364,12 +364,17 @@ impl Provider for GoSemanticProvider {
 
     fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
         let ctx = CtxHandle::from_ctx(ctx);
+        let root = ctx.loaded.root.clone();
+        let go_settings = ctx.loaded.config.languages.go.clone();
+        let config_digest = ctx.config_digest;
+        let go_syntax_digest = ctx.dependency_digest("polint.go.syntax");
         let derivation = crate::go::semantic::provider::derive_go_semantic_with_cache_stats(
             ctx.db,
-            &ctx.loaded,
-            &ctx.input_snapshot,
+            &root,
+            &go_settings,
+            config_digest,
             self.manifest(),
-            ctx.dependency_digest("polint.go.syntax"),
+            go_syntax_digest,
         );
         ProviderRunResult {
             diagnostics: derivation.diagnostics,

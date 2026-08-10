@@ -2,30 +2,30 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::go::semantic::protocol::GO_SEMANTIC_SCHEMA;
+use crate::semantic::protocol::GO_SEMANTIC_SCHEMA;
 
-pub(crate) const GO_SEMANTIC_FRONTEND_ENV: &str = "POLINT_GO_FRONTEND";
+pub const GO_SEMANTIC_FRONTEND_ENV: &str = "POLINT_GO_FRONTEND";
 const EMBEDDED_GO_FRONTEND_FILES: &[(&str, &str)] = &[
     (
         "go.mod",
-        include_str!("../../../go-sidecar/polint-go-frontend/go.mod"),
+        include_str!("../../go-sidecar/polint-go-frontend/go.mod"),
     ),
     (
         "go.sum",
-        include_str!("../../../go-sidecar/polint-go-frontend/go.sum"),
+        include_str!("../../go-sidecar/polint-go-frontend/go.sum"),
     ),
     (
         "main.go",
-        include_str!("../../../go-sidecar/polint-go-frontend/main.go"),
+        include_str!("../../go-sidecar/polint-go-frontend/main.go"),
     ),
     (
         "internal/semantic/emit.go",
-        include_str!("../../../go-sidecar/polint-go-frontend/internal/semantic/emit.go"),
+        include_str!("../../go-sidecar/polint-go-frontend/internal/semantic/emit.go"),
     ),
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum GoSemanticProcessError {
+pub enum GoSemanticProcessError {
     CommandFailed(String),
     CommandUnavailable(String),
     VersionUnsupported(String),
@@ -46,12 +46,12 @@ impl std::fmt::Display for GoSemanticProcessError {
 impl std::error::Error for GoSemanticProcessError {}
 
 #[derive(Debug, Clone)]
-pub(crate) enum GoSemanticCommand {
+pub enum GoSemanticCommand {
     Binary(PathBuf),
     SourceDir(PathBuf),
 }
 
-pub(crate) fn resolve_go_semantic_frontend() -> Result<GoSemanticCommand, GoSemanticProcessError> {
+pub fn resolve_go_semantic_frontend() -> Result<GoSemanticCommand, GoSemanticProcessError> {
     if let Ok(path) = std::env::var(GO_SEMANTIC_FRONTEND_ENV)
         && !path.trim().is_empty()
     {
@@ -63,7 +63,7 @@ pub(crate) fn resolve_go_semantic_frontend() -> Result<GoSemanticCommand, GoSema
     materialize_embedded_frontend().map(GoSemanticCommand::SourceDir)
 }
 
-pub(crate) fn command_for_path(path: PathBuf) -> Result<GoSemanticCommand, GoSemanticProcessError> {
+pub fn command_for_path(path: PathBuf) -> Result<GoSemanticCommand, GoSemanticProcessError> {
     if path.is_file() {
         return Ok(GoSemanticCommand::Binary(path));
     }
@@ -200,22 +200,20 @@ fn unique_materialization_suffix() -> u128 {
         .unwrap_or_default()
 }
 
-pub(crate) fn embedded_frontend_hash() -> String {
+pub fn embedded_frontend_hash() -> String {
     let mut parts = Vec::new();
     parts.push(GO_SEMANTIC_SCHEMA.to_string());
     for (relative_path, contents) in EMBEDDED_GO_FRONTEND_FILES {
         parts.push(format!(
             "{relative_path}:{}",
-            crate::cache::stable_hash(&[*contents])
+            crate::hash::stable_hash(&[*contents])
         ));
     }
     let part_refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
-    crate::cache::stable_hash(&part_refs)
+    crate::hash::stable_hash(&part_refs)
 }
 
-pub(crate) fn frontend_digest(
-    frontend: &GoSemanticCommand,
-) -> Result<String, GoSemanticProcessError> {
+pub fn frontend_digest(frontend: &GoSemanticCommand) -> Result<String, GoSemanticProcessError> {
     match frontend {
         GoSemanticCommand::Binary(path) => {
             let bytes = fs::read(path).map_err(|error| {
@@ -250,7 +248,7 @@ fn source_dir_digest(path: &Path) -> Result<String, GoSemanticProcessError> {
         ));
     }
     let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
-    Ok(crate::cache::stable_hash(&refs))
+    Ok(crate::hash::stable_hash(&refs))
 }
 
 fn collect_frontend_source_files(
@@ -316,7 +314,7 @@ fn stable_bytes_hash(bytes: &[u8]) -> String {
     format!("{hash:016x}")
 }
 
-pub(crate) fn command_for_frontend(
+pub fn command_for_frontend(
     frontend: &GoSemanticCommand,
     root: &Path,
 ) -> Result<Command, GoSemanticProcessError> {
@@ -405,7 +403,7 @@ fn ensure_local_go_toolchain_supported() -> Result<(), GoSemanticProcessError> {
     Ok(())
 }
 
-pub(crate) fn local_go_toolchain_version() -> Result<String, GoSemanticProcessError> {
+pub fn local_go_toolchain_version() -> Result<String, GoSemanticProcessError> {
     let output = Command::new("go")
         .arg("version")
         .output()

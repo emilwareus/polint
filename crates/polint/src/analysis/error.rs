@@ -11,6 +11,22 @@ pub(crate) enum AnalysisError {
     CacheSchemaMismatch { schema: String },
 }
 
+impl From<polint_go::error::AnalysisError> for AnalysisError {
+    fn from(error: polint_go::error::AnalysisError) -> Self {
+        match error {
+            polint_go::error::AnalysisError::MissingFactFamily { family } => {
+                Self::MissingFactFamily { family }
+            }
+            polint_go::error::AnalysisError::InvalidFact { provider, reason } => {
+                Self::InvalidFact { provider, reason }
+            }
+            polint_go::error::AnalysisError::CacheSchemaMismatch { schema } => {
+                Self::CacheSchemaMismatch { schema }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

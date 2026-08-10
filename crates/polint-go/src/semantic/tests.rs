@@ -1,4 +1,4 @@
-use crate::go::semantic::protocol::decode_ndjson_str;
+use crate::semantic::protocol::decode_ndjson_str;
 
 #[test]
 fn semantic_protocol_accepts_sidecar_shape() {

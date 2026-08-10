@@ -4,15 +4,15 @@ use std::process::{Child, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::go::lifecycle::GoAnalysisConfig;
-use crate::go::semantic::diagnostics::GO_SIDECAR_TIMEOUT;
-use crate::go::semantic::process::{
+use crate::lifecycle::GoAnalysisConfig;
+use crate::semantic::diagnostics::GO_SIDECAR_TIMEOUT;
+use crate::semantic::process::{
     GoSemanticProcessError, command_for_frontend, frontend_digest, resolve_go_semantic_frontend,
 };
-use crate::go::semantic::protocol::{GoSemanticOutput, GoSemanticProtocolError, decode_ndjson};
+use crate::semantic::protocol::{GoSemanticOutput, GoSemanticProtocolError, decode_ndjson};
 
 #[derive(Debug)]
-pub(crate) enum GoSemanticClientError {
+pub enum GoSemanticClientError {
     Process(GoSemanticProcessError),
     Protocol(GoSemanticProtocolError),
 }
@@ -41,19 +41,19 @@ impl From<GoSemanticProtocolError> for GoSemanticClientError {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct GoSemanticClient {
+pub struct GoSemanticClient {
     root: PathBuf,
     timeout: Duration,
 }
 
 #[derive(Debug)]
-pub(crate) struct GoSemanticClientRun {
-    pub(crate) output: GoSemanticOutput,
-    pub(crate) frontend_digest: String,
+pub struct GoSemanticClientRun {
+    pub output: GoSemanticOutput,
+    pub frontend_digest: String,
 }
 
 impl GoSemanticClient {
-    pub(crate) fn new(root: PathBuf) -> Self {
+    pub fn new(root: PathBuf) -> Self {
         Self {
             root,
             timeout: Duration::from_secs(30),
@@ -61,11 +61,11 @@ impl GoSemanticClient {
     }
 
     #[cfg(test)]
-    pub(crate) fn with_timeout(root: PathBuf, timeout: Duration) -> Self {
+    pub fn with_timeout(root: PathBuf, timeout: Duration) -> Self {
         Self { root, timeout }
     }
 
-    pub(crate) fn run(
+    pub fn run(
         &self,
         config: &GoAnalysisConfig,
     ) -> Result<GoSemanticClientRun, GoSemanticClientError> {

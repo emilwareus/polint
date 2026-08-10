@@ -1,16 +1,16 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use crate::analysis::error::AnalysisError;
-use crate::core::{StableKeyId, StableKeyInterner};
-use crate::go::semantic::facts::{
+use crate::error::AnalysisError;
+use crate::semantic::facts::{
     GoSemanticAddressTakenFact, GoSemanticCallsiteFact, GoSemanticDynamicDispatchFact,
     GoSemanticFunctionFact, GoSemanticInstantiatedTypeFact, GoSemanticMethodSetFact,
     GoSemanticPackageFact, GoSemanticRtaEdgeFact,
 };
-use crate::go::semantic::store::{GO_SEMANTIC_PROVIDER_ID, GoSemanticFactsOutput};
+use crate::semantic::store::{GO_SEMANTIC_PROVIDER_ID, GoSemanticFactsOutput};
+use polint_core::{StableKeyId, StableKeyInterner};
 
-pub(crate) fn validate_go_semantic_output(
+pub fn validate_go_semantic_output(
     output: &GoSemanticFactsOutput,
     interner: &StableKeyInterner,
 ) -> Result<(), AnalysisError> {
@@ -115,7 +115,7 @@ pub(crate) fn validate_go_semantic_output(
 /// the lowering fallback stable-key recipe — so a missing stable_key would collide distinct
 /// types and the set-dedup would silently drop a real member (WR-03). It is dropped rather
 /// than fabricated.
-pub(crate) fn method_set_rejection(
+pub fn method_set_rejection(
     fact: &GoSemanticMethodSetFact,
     interner: &StableKeyInterner,
 ) -> Option<String> {
@@ -128,7 +128,7 @@ pub(crate) fn method_set_rejection(
 /// Identity guard (WR-02): the address-taken function identity is the row's discriminating
 /// field (`inputs.rs` keys the address-taken set on it). An empty `function`, or a missing
 /// stable_key, would seed a bogus candidate keyed on the empty string — dropped.
-pub(crate) fn address_taken_rejection(
+pub fn address_taken_rejection(
     fact: &GoSemanticAddressTakenFact,
     interner: &StableKeyInterner,
 ) -> Option<String> {
@@ -147,7 +147,7 @@ pub(crate) fn address_taken_rejection(
 /// Identity guard (WR-02): the instantiated `type_name` is the row's discriminating field.
 /// An empty `type_name` normalizes to "" and could spuriously intersect a method-set keyed
 /// on an empty type; a missing stable_key collides distinct types — both dropped.
-pub(crate) fn instantiated_type_rejection(
+pub fn instantiated_type_rejection(
     fact: &GoSemanticInstantiatedTypeFact,
     interner: &StableKeyInterner,
 ) -> Option<String> {
@@ -168,7 +168,7 @@ pub(crate) fn instantiated_type_rejection(
 /// `method`) or a func-value signature — and must join back to its callsite via a
 /// non-empty `callsite_stable_key`. A row with neither discriminant (or a missing
 /// stable_key / callsite key) is dropped rather than stored as a useless identity.
-pub(crate) fn dynamic_dispatch_rejection(
+pub fn dynamic_dispatch_rejection(
     fact: &GoSemanticDynamicDispatchFact,
     interner: &StableKeyInterner,
 ) -> Option<String> {
@@ -192,7 +192,7 @@ pub(crate) fn dynamic_dispatch_rejection(
     None
 }
 
-pub(crate) fn rta_edge_rejection(
+pub fn rta_edge_rejection(
     fact: &GoSemanticRtaEdgeFact,
     interner: &StableKeyInterner,
 ) -> Option<String> {
@@ -284,7 +284,7 @@ fn reject_empty_stable_key(
     Ok(())
 }
 
-pub(crate) fn validate_relative_path(path: &str) -> Result<(), AnalysisError> {
+pub fn validate_relative_path(path: &str) -> Result<(), AnalysisError> {
     let candidate = Path::new(path);
     if candidate.is_absolute() || path == ".." || path.starts_with("../") || path.contains("/../") {
         return Err(invalid_fact(format!(
@@ -304,7 +304,7 @@ fn invalid_fact(reason: String) -> AnalysisError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::go::semantic::facts::{
+    use crate::semantic::facts::{
         GoSemanticAddressTakenFact, GoSemanticAddressTakenId, GoSemanticCallStatus,
         GoSemanticCallsiteId, GoSemanticFunctionId, GoSemanticFunctionKind,
         GoSemanticInstantiatedTypeFact, GoSemanticInstantiatedTypeId, GoSemanticRtaEdgeFact,
@@ -417,7 +417,7 @@ mod tests {
         let interner = StableKeyInterner::default();
         let output = GoSemanticFactsOutput {
             dynamic_dispatch: vec![GoSemanticDynamicDispatchFact {
-                id: crate::go::semantic::facts::GoSemanticDynamicDispatchId(0),
+                id: crate::semantic::facts::GoSemanticDynamicDispatchId(0),
                 stable_key: interner.intern("dd"),
                 package_id: "pkg".to_string(),
                 package_path: "example.com/pkg".to_string(),
@@ -438,7 +438,7 @@ mod tests {
         let interner = StableKeyInterner::default();
         let output = GoSemanticFactsOutput {
             dynamic_dispatch: vec![GoSemanticDynamicDispatchFact {
-                id: crate::go::semantic::facts::GoSemanticDynamicDispatchId(0),
+                id: crate::semantic::facts::GoSemanticDynamicDispatchId(0),
                 stable_key: interner.intern("dd"),
                 package_id: "pkg".to_string(),
                 package_path: "example.com/pkg".to_string(),
@@ -459,7 +459,7 @@ mod tests {
         let interner = StableKeyInterner::default();
         let output = GoSemanticFactsOutput {
             dynamic_dispatch: vec![GoSemanticDynamicDispatchFact {
-                id: crate::go::semantic::facts::GoSemanticDynamicDispatchId(0),
+                id: crate::semantic::facts::GoSemanticDynamicDispatchId(0),
                 stable_key: interner.intern("dd"),
                 package_id: "pkg".to_string(),
                 package_path: "example.com/pkg".to_string(),

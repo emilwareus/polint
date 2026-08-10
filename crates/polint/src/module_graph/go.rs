@@ -74,10 +74,11 @@ impl Default for GoPackageIndex {
 
 impl GoPackageIndex {
     pub(crate) fn load(loaded: &LoadedConfig, db: &AnalysisDb) -> Self {
-        let config = match GoAnalysisConfig::from_loaded(loaded, db) {
-            Ok(config) => config,
-            Err(error) => return Self::setup_missing(error.reason()),
-        };
+        let config =
+            match GoAnalysisConfig::from_settings(&loaded.root, &loaded.config.languages.go, db) {
+                Ok(config) => config,
+                Err(error) => return Self::setup_missing(error.reason()),
+            };
         Self::load_with_runner(loaded.root.as_path(), db, &config, run_go_list)
     }
 
@@ -219,7 +220,8 @@ impl GoPackageIndex {
         run: impl FnOnce() -> GoCommandOutput,
     ) -> Self {
         let loaded = crate::config::load_config(root).expect("config loads");
-        let config = GoAnalysisConfig::from_loaded(&loaded, db).expect("Go lifecycle config loads");
+        let config = GoAnalysisConfig::from_settings(&loaded.root, &loaded.config.languages.go, db)
+            .expect("Go lifecycle config loads");
         Self::load_with_runner(root, db, &config, |_, _| run())
     }
 }
@@ -266,17 +268,18 @@ fn collect_go_topology_inner(
     metadata: &GoPackageIndex,
     interner: &crate::core::StableKeyInterner,
 ) -> TopologyOutput {
-    let config = match GoAnalysisConfig::from_loaded(loaded, db) {
-        Ok(config) => config,
-        Err(_) => {
-            return TopologyOutput {
-                workspace_roots: vec![repository_root()],
-                source_sets: go_files_setup_missing(db, None),
-                ..TopologyOutput::default()
+    let config =
+        match GoAnalysisConfig::from_settings(&loaded.root, &loaded.config.languages.go, db) {
+            Ok(config) => config,
+            Err(_) => {
+                return TopologyOutput {
+                    workspace_roots: vec![repository_root()],
+                    source_sets: go_files_setup_missing(db, None),
+                    ..TopologyOutput::default()
+                }
+                .normalized(interner);
             }
-            .normalized(interner);
-        }
-    };
+        };
 
     let mut output = TopologyOutput::default();
     output.workspace_roots.push(repository_root());

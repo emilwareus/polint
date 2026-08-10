@@ -1176,6 +1176,7 @@ dependencies = [
  "polint-analysis-api",
  "polint-core",
  "polint-frontend-api",
+ "polint-go",
  "polint-ir",
  "polint-macros",
  "predicates",
@@ -1349,6 +1350,25 @@ version = "0.1.17"
 dependencies = [
  "polint-analysis-api",
  "polint-core",
+]
+
+[[package]]
+name = "polint-go"
+version = "0.1.17"
+dependencies = [
+ "anyhow",
+ "polint-analysis-api",
+ "polint-core",
+ "polint-frontend-api",
+ "polint-ir",
+ "rayon",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "toml",
+ "tree-sitter",
+ "tree-sitter-go",
 ]
 
 [[package]]

@@ -1,9 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::analysis::stable_key::semantic_stable_key;
-use crate::analysis_kernel::FactFamily;
-use crate::core::{AnalysisDb, FileId, Language, Span};
-use crate::go::semantic::facts::{
+use crate::semantic::facts::{
     GoSemanticAddressTakenFact, GoSemanticAddressTakenId, GoSemanticCallStatus,
     GoSemanticCallsiteFact, GoSemanticCallsiteId, GoSemanticDynamicDispatchFact,
     GoSemanticDynamicDispatchId, GoSemanticFunctionFact, GoSemanticFunctionId,
@@ -12,9 +9,13 @@ use crate::go::semantic::facts::{
     GoSemanticPackageErrorId, GoSemanticPackageFact, GoSemanticPackageId, GoSemanticRtaEdgeFact,
     GoSemanticRtaEdgeId,
 };
-use crate::go::semantic::protocol::{GoSemanticOutput, GoSemanticRawFrame, GoSemanticSpan};
-use crate::go::semantic::store::GoSemanticFactsOutput;
-use crate::go::semantic::validate::validate_relative_path;
+use crate::semantic::protocol::{GoSemanticOutput, GoSemanticRawFrame, GoSemanticSpan};
+use crate::semantic::store::GoSemanticFactsOutput;
+use crate::semantic::validate::validate_relative_path;
+use crate::stable_key::semantic_stable_key;
+use polint_analysis_api::FactDatabase;
+use polint_analysis_api::FactFamily;
+use polint_core::{FileId, Language, Span};
 
 struct LoweredLocation {
     relative_file: Option<String>,
@@ -38,7 +39,7 @@ impl std::fmt::Display for GoSemanticLowerError {
 impl std::error::Error for GoSemanticLowerError {}
 
 pub(crate) fn lower_go_semantic(
-    db: &AnalysisDb,
+    db: &dyn FactDatabase,
     output: &GoSemanticOutput,
 ) -> Result<GoSemanticFactsOutput, GoSemanticLowerError> {
     let interner_handle = db.stable_key_interner();
@@ -87,7 +88,7 @@ pub(crate) fn lower_go_semantic(
 }
 
 fn lower_package(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     row: &GoSemanticRawFrame,
     files: &BTreeMap<&str, FileId>,
 ) -> Result<GoSemanticPackageFact, GoSemanticLowerError> {
@@ -112,7 +113,7 @@ fn lower_package(
 }
 
 fn lower_function(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     row: &GoSemanticRawFrame,
     files: &BTreeMap<&str, FileId>,
 ) -> Result<GoSemanticFunctionFact, GoSemanticLowerError> {
@@ -138,7 +139,7 @@ fn lower_function(
 }
 
 fn lower_callsite(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     row: &GoSemanticRawFrame,
     files: &BTreeMap<&str, FileId>,
 ) -> Result<GoSemanticCallsiteFact, GoSemanticLowerError> {
@@ -163,7 +164,7 @@ fn lower_callsite(
 }
 
 fn lower_method_set(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     row: &GoSemanticRawFrame,
 ) -> GoSemanticMethodSetFact {
     GoSemanticMethodSetFact {
@@ -182,7 +183,7 @@ fn lower_method_set(
 }
 
 fn lower_address_taken(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     row: &GoSemanticRawFrame,
 ) -> GoSemanticAddressTakenFact {
     GoSemanticAddressTakenFact {
@@ -195,7 +196,7 @@ fn lower_address_taken(
 }
 
 fn lower_instantiated_type(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     row: &GoSemanticRawFrame,
 ) -> GoSemanticInstantiatedTypeFact {
     GoSemanticInstantiatedTypeFact {
@@ -208,7 +209,7 @@ fn lower_instantiated_type(
 }
 
 fn lower_dynamic_dispatch(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     row: &GoSemanticRawFrame,
 ) -> GoSemanticDynamicDispatchFact {
     GoSemanticDynamicDispatchFact {
@@ -225,7 +226,7 @@ fn lower_dynamic_dispatch(
 }
 
 fn lower_rta_edge(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     row: &GoSemanticRawFrame,
 ) -> GoSemanticRtaEdgeFact {
     GoSemanticRtaEdgeFact {
@@ -240,7 +241,7 @@ fn lower_rta_edge(
 }
 
 fn lower_package_error(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     row: &GoSemanticRawFrame,
 ) -> GoSemanticPackageErrorFact {
     GoSemanticPackageErrorFact {
@@ -303,17 +304,17 @@ fn to_span(file: FileId, span: &GoSemanticSpan) -> Span {
 /// fact set (FINDING B), so this returns the (possibly empty) key rather than failing the
 /// entire lowering.
 fn harvest_stable_key(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     row: &GoSemanticRawFrame,
-) -> crate::core::StableKeyId {
+) -> polint_core::StableKeyId {
     interner.intern(row.stable_key_text.clone())
 }
 
 fn row_stable_key(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     row: &GoSemanticRawFrame,
     kind: &str,
-) -> crate::core::StableKeyId {
+) -> polint_core::StableKeyId {
     if !row.stable_key_text.is_empty() {
         return interner.intern(row.stable_key_text.clone());
     }
@@ -341,7 +342,7 @@ fn non_empty(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::go::semantic::protocol::{GO_SEMANTIC_SCHEMA, decode_ndjson_str};
+    use crate::semantic::protocol::{GO_SEMANTIC_SCHEMA, decode_ndjson_str};
     use std::path::PathBuf;
 
     #[test]
@@ -416,7 +417,7 @@ mod tests {
                 .is_empty()
         );
         // The store drops it (the bad row) without touching valid facts.
-        let store = crate::go::semantic::store::GoSemanticStore::from_output(
+        let store = crate::semantic::store::GoSemanticStore::from_output(
             lowered,
             &db.stable_key_interner(),
         )
@@ -442,7 +443,7 @@ mod tests {
                 .resolve(lowered.instantiated_types[0].stable_key)
                 .is_empty()
         );
-        let store = crate::go::semantic::store::GoSemanticStore::from_output(
+        let store = crate::semantic::store::GoSemanticStore::from_output(
             lowered,
             &db.stable_key_interner(),
         )
@@ -572,8 +573,8 @@ mod tests {
         );
     }
 
-    fn db_with_go_file(path: &str) -> AnalysisDb {
-        let mut db = AnalysisDb::new();
+    fn db_with_go_file(path: &str) -> crate::local_db::LocalFactDb {
+        let mut db = crate::local_db::LocalFactDb::new();
         db.add_file(
             PathBuf::from(path),
             path.to_string(),

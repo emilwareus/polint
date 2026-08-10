@@ -35,13 +35,11 @@ use crate::analysis::types::store::TypeStore;
 use crate::analysis::values::store::ValueStore;
 use crate::analysis_kernel::FactFamily;
 use crate::core::facts::{
-    BranchObligation, ComplexityMetricFact, CoverageFact, DefinitionFact, FileMetricFact,
-    FunctionFact, FunctionMetricFact, ImportFact, JsxAttributeFact, ModuleEdge, ModuleNode,
-    PackageFact, ReferenceFact, ResolvedImportFact, StringLiteralFact, SymbolFact, TestFact,
-    TsClassFact, TsComponentFact,
+    ComplexityMetricFact, CoverageFact, DefinitionFact, FileMetricFact, FunctionMetricFact,
+    JsxAttributeFact, ModuleEdge, ModuleNode, ReferenceFact, ResolvedImportFact, StringLiteralFact,
+    SymbolFact, TsClassFact, TsComponentFact,
 };
-use crate::core::ids::{BranchId, FileId, FunctionId, ImportId, PackageId, SymbolId};
-use crate::go::semantic::store::GoSemanticStore;
+use crate::core::ids::{FileId, SymbolId};
 use crate::module_graph::topology::{
     DependencyRequirementFact, ImportToPackageFact, RepoTopologyOverlayFact,
     ResolvedDependencyEdgeFact, SourceSetFact, TopologyOutput, TopologyPackageFact,
@@ -53,105 +51,10 @@ use crate::symbol_graph::semantic::{
     StableExportId, StableExportIdentity,
 };
 use crate::ts::object_model::store::TsObjectModelStore;
+pub(crate) use polint_go::semantic::store::GO_SEMANTIC_STORE_FAMILY;
+pub(crate) use polint_go::{GO_SYNTAX_STORE_FAMILY, GoSyntaxStore};
 
 pub(crate) use polint_analysis_api::{FactStore, FactStoreEntry};
-
-/// Syntax facts produced by `polint.go.syntax` (and shared `functions` /
-/// `imports` rows also written by `polint.ts.syntax` through the same accessors).
-#[derive(Debug, Clone, Default)]
-pub(crate) struct GoSyntaxStore {
-    pub(crate) packages: Vec<PackageFact>,
-    pub(crate) functions: Vec<FunctionFact>,
-    pub(crate) imports: Vec<ImportFact>,
-    pub(crate) branches: Vec<BranchObligation>,
-    pub(crate) tests: Vec<TestFact>,
-}
-
-impl GoSyntaxStore {
-    pub(crate) fn packages(&self) -> &[PackageFact] {
-        &self.packages
-    }
-
-    pub(crate) fn functions(&self) -> &[FunctionFact] {
-        &self.functions
-    }
-
-    pub(crate) fn imports(&self) -> &[ImportFact] {
-        &self.imports
-    }
-
-    pub(crate) fn branches(&self) -> &[BranchObligation] {
-        &self.branches
-    }
-
-    pub(crate) fn tests(&self) -> &[TestFact] {
-        &self.tests
-    }
-
-    pub(crate) fn push_package(&mut self, mut fact: PackageFact) -> PackageId {
-        let id = PackageId(self.packages.len() as u64);
-        fact.id = id;
-        self.packages.push(fact);
-        id
-    }
-
-    pub(crate) fn push_function(&mut self, mut fact: FunctionFact) -> FunctionId {
-        let id = FunctionId(self.functions.len() as u64);
-        fact.id = id;
-        self.functions.push(fact);
-        id
-    }
-
-    pub(crate) fn push_import(&mut self, mut fact: ImportFact) -> ImportId {
-        let id = ImportId(self.imports.len() as u64);
-        fact.id = id;
-        self.imports.push(fact);
-        id
-    }
-
-    pub(crate) fn push_branch(&mut self, mut fact: BranchObligation) -> BranchId {
-        let id = BranchId(self.branches.len() as u64);
-        fact.id = id;
-        self.branches.push(fact);
-        id
-    }
-
-    pub(crate) fn push_test(&mut self, fact: TestFact) -> u64 {
-        let run_id = self.tests.len() as u64;
-        self.tests.push(fact);
-        run_id
-    }
-}
-
-impl FactStore for GoSyntaxStore {
-    fn family(&self) -> FactFamily {
-        // Primary key for the multi-family syntax group in the registry map.
-        FactFamily::Package
-    }
-
-    fn clear(&mut self) {
-        self.packages.clear();
-        self.functions.clear();
-        self.imports.clear();
-        self.branches.clear();
-        self.tests.clear();
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-
-    fn clone_box(&self) -> Box<dyn FactStore> {
-        Box::new(self.clone())
-    }
-}
-
-/// Registry key used for [`GoSyntaxStore`] in `AnalysisDb::fact_stores`.
-pub(crate) const GO_SYNTAX_STORE_FAMILY: FactFamily = FactFamily::Package;
 
 /// TS/JSX syntax facts produced by `polint.ts.syntax`.
 #[derive(Debug, Clone, Default)]
@@ -329,31 +232,6 @@ impl FactStore for CallStore {
 
 /// Registry key used for [`CallStore`] in `AnalysisDb::fact_stores`.
 pub(crate) const CALL_STORE_FAMILY: FactFamily = FactFamily::CallSite;
-
-impl FactStore for GoSemanticStore {
-    fn family(&self) -> FactFamily {
-        FactFamily::GoSemantic
-    }
-
-    fn clear(&mut self) {
-        *self = GoSemanticStore::default();
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-
-    fn clone_box(&self) -> Box<dyn FactStore> {
-        Box::new(self.clone())
-    }
-}
-
-/// Registry key used for [`GoSemanticStore`] in `AnalysisDb::fact_stores`.
-pub(crate) const GO_SEMANTIC_STORE_FAMILY: FactFamily = FactFamily::GoSemantic;
 
 /// Module-graph facts produced by `polint.module_graph`.
 #[derive(Debug, Clone, Default)]

@@ -29,7 +29,7 @@ pub(crate) mod eval;
 pub(crate) mod frontend;
 pub(crate) mod fs;
 pub(crate) mod git;
-pub(crate) mod go;
+pub(crate) use polint_go as go;
 pub(crate) mod golden_cost;
 #[cfg(test)]
 pub(crate) mod graph;
@@ -68,7 +68,21 @@ pub mod _bench {
     }
 
     pub mod go {
-        pub use crate::go::analyze_with_options;
+        use crate::cache::CacheAnalysisCache;
+        use crate::core::AnalysisDb;
+        use crate::diagnostics::Diagnostic;
+
+        /// Bench entry: adapts facade [`Cache`](crate::cache::Cache) to the go frontend cache trait.
+        pub fn analyze_with_options(
+            db: &mut AnalysisDb,
+            cache: &crate::cache::Cache,
+            config_hash: &str,
+            rule_hash: &str,
+            parallel: bool,
+        ) -> Vec<Diagnostic> {
+            let cache = CacheAnalysisCache::new(cache.clone());
+            crate::go::analyze_with_options(db, cache.as_ref(), config_hash, rule_hash, parallel)
+        }
     }
 
     pub mod ts {

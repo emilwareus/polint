@@ -124,7 +124,11 @@ impl InputSnapshot {
 
 impl GoLifecycleSnapshot {
     fn from_loaded(loaded: &LoadedConfig, db: &AnalysisDb) -> Self {
-        let components = match crate::go::lifecycle::GoAnalysisConfig::from_loaded(loaded, db) {
+        let components = match crate::go::lifecycle::GoAnalysisConfig::from_settings(
+            &loaded.root,
+            &loaded.config.languages.go,
+            db,
+        ) {
             Ok(config) => go_lifecycle_components(loaded, &config),
             Err(error) => go_lifecycle_error_components(loaded, error.reason()),
         };

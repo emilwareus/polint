@@ -225,6 +225,17 @@ impl LayerCacheStore {
         self.read_json_validated(key, |_, _| true)
     }
 
+    pub(crate) fn read_json_bytes_validated<F>(
+        &self,
+        key: &LayerKey,
+        validator: F,
+    ) -> LayerCacheReadOutcome<Vec<u8>>
+    where
+        F: FnOnce(&[u8], &LayerCacheManifest) -> bool,
+    {
+        self.read_payload_bytes_validated(key, validator)
+    }
+
     pub(crate) fn read_json_validated<T, F>(
         &self,
         key: &LayerKey,
@@ -233,6 +244,43 @@ impl LayerCacheStore {
     where
         T: for<'de> Deserialize<'de>,
         F: FnOnce(&T, &LayerCacheManifest) -> bool,
+    {
+        let read = self.read_payload_bytes_validated(key, |payload_bytes, manifest| {
+            let Ok(value) = serde_json::from_slice::<T>(payload_bytes) else {
+                return false;
+            };
+            validator(&value, manifest)
+        });
+        match read.status {
+            LayerCacheReadStatus::Hit => {
+                let payload_bytes = read.value.expect("layer cache hit includes payload bytes");
+                let value = serde_json::from_slice::<T>(&payload_bytes)
+                    .expect("layer cache hit payload was validated as T");
+                LayerCacheReadOutcome {
+                    status: LayerCacheReadStatus::Hit,
+                    output_digest: read.output_digest,
+                    payload_digest: read.payload_digest,
+                    manifest: read.manifest,
+                    value: Some(value),
+                }
+            }
+            status => LayerCacheReadOutcome {
+                status,
+                output_digest: read.output_digest,
+                payload_digest: read.payload_digest,
+                manifest: read.manifest,
+                value: None,
+            },
+        }
+    }
+
+    fn read_payload_bytes_validated<F>(
+        &self,
+        key: &LayerKey,
+        validator: F,
+    ) -> LayerCacheReadOutcome<Vec<u8>>
+    where
+        F: FnOnce(&[u8], &LayerCacheManifest) -> bool,
     {
         if !self.enabled {
             return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::BypassedDisabled);
@@ -292,12 +340,7 @@ impl LayerCacheStore {
             evict_file(&blob_path);
             return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::InvalidEvicted);
         }
-        let Ok(value) = serde_json::from_slice::<T>(&payload_bytes) else {
-            evict_file(&manifest_path);
-            evict_file(&blob_path);
-            return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::InvalidEvicted);
-        };
-        if !validator(&value, &manifest) {
+        if !validator(&payload_bytes, &manifest) {
             evict_file(&manifest_path);
             return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::InvalidEvicted);
         }
@@ -307,7 +350,7 @@ impl LayerCacheStore {
             output_digest: Some(manifest.output_digest.clone()),
             payload_digest: Some(payload_digest),
             manifest: Some(manifest),
-            value: Some(value),
+            value: Some(payload_bytes),
         }
     }
 

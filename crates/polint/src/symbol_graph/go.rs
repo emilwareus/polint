@@ -29,19 +29,19 @@ const GO_SYMBOL_SIDECAR_ENV: &str = "POLINT_GO_SYMBOLS";
 const EMBEDDED_GO_SIDECAR_FILES: &[(&str, &str)] = &[
     (
         "go.mod",
-        include_str!("../../go-sidecar/polint-go-symbols/go.mod"),
+        include_str!("../../../polint-go/go-sidecar/polint-go-symbols/go.mod"),
     ),
     (
         "go.sum",
-        include_str!("../../go-sidecar/polint-go-symbols/go.sum"),
+        include_str!("../../../polint-go/go-sidecar/polint-go-symbols/go.sum"),
     ),
     (
         "main.go",
-        include_str!("../../go-sidecar/polint-go-symbols/main.go"),
+        include_str!("../../../polint-go/go-sidecar/polint-go-symbols/main.go"),
     ),
     (
         "internal/symbols/emit.go",
-        include_str!("../../go-sidecar/polint-go-symbols/internal/symbols/emit.go"),
+        include_str!("../../../polint-go/go-sidecar/polint-go-symbols/internal/symbols/emit.go"),
     ),
 ];
 
@@ -221,7 +221,11 @@ fn derive_go_symbols_with_runner(
         return LanguageSymbolOutput::default();
     }
 
-    let config = match GoAnalysisConfig::from_loaded_files(loaded, &files) {
+    let config = match GoAnalysisConfig::from_settings_files(
+        &loaded.root,
+        &loaded.config.languages.go,
+        &files,
+    ) {
         Ok(config) => config,
         Err(error) => {
             return setup_missing_output(
@@ -1946,7 +1950,7 @@ mod symbol_graph_go_setup {
     #[test]
     fn embedded_go_sidecar_sources_match_workspace_sources() {
         let workspace_sidecar =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/polint-go-symbols");
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../polint-go/go-sidecar/polint-go-symbols");
         for (relative_path, embedded) in EMBEDDED_GO_SIDECAR_FILES {
             let workspace = std::fs::read_to_string(workspace_sidecar.join(relative_path))
                 .unwrap_or_else(|error| panic!("read workspace sidecar {relative_path}: {error}"));
@@ -1993,8 +1997,11 @@ include_tests = false
         .expect("write config");
 
         let files = Vec::new();
-        let config =
-            GoAnalysisConfig::from_loaded_files(&loaded_config_for(temp.path()), &files).unwrap();
+        let config = {
+            let loaded = loaded_config_for(temp.path());
+            GoAnalysisConfig::from_settings_files(&loaded.root, &loaded.config.languages.go, &files)
+        }
+        .unwrap();
 
         assert_eq!(
             config,
@@ -2039,8 +2046,11 @@ include_tests = false
         );
         let files = lifecycle::go_files(&db);
 
-        let config =
-            GoAnalysisConfig::from_loaded_files(&loaded_config_for(temp.path()), &files).unwrap();
+        let config = {
+            let loaded = loaded_config_for(temp.path());
+            GoAnalysisConfig::from_settings_files(&loaded.root, &loaded.config.languages.go, &files)
+        }
+        .unwrap();
 
         assert_eq!(
             config.module_roots,
@@ -2075,8 +2085,11 @@ module_roots = ["services/payments"]
         );
         let files = lifecycle::go_files(&db);
 
-        let config =
-            GoAnalysisConfig::from_loaded_files(&loaded_config_for(temp.path()), &files).unwrap();
+        let config = {
+            let loaded = loaded_config_for(temp.path());
+            GoAnalysisConfig::from_settings_files(&loaded.root, &loaded.config.languages.go, &files)
+        }
+        .unwrap();
 
         assert_eq!(config.module_roots, vec!["services/payments".to_string()]);
         assert_eq!(

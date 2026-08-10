@@ -1,34 +1,20 @@
 use super::StableKeyId;
 use super::ids::{
-    BranchId, DefinitionId, FileId, FunctionId, ImportId, ModuleEdgeId, ModuleNodeId, PackageId,
-    ReferenceId, ResolvedImportId, SymbolId,
+    DefinitionId, FileId, FunctionId, ImportId, ModuleEdgeId, ModuleNodeId, PackageId, ReferenceId,
+    ResolvedImportId, SymbolId,
 };
 use super::lang::Language;
 use super::span::Span;
-use crate::diagnostics::Diagnostic;
 use serde::{Deserialize, Serialize};
 
-pub use polint_analysis_api::SourceFile;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct FunctionFact {
-    pub id: FunctionId,
-    pub file: FileId,
-    pub name: String,
-    pub span: Span,
-    pub language: Language,
-    pub is_test: bool,
-    pub is_exported: bool,
-    pub cyclomatic_complexity: u32,
-    pub calls: Vec<String>,
-}
-
-pub(crate) const TS_JS_MODULE_FUNCTION_NAME: &str = "<polint:module>";
-
-pub(crate) fn is_synthetic_ts_js_module_function(function: &FunctionFact) -> bool {
-    function.language.is_ts_family() && function.name == TS_JS_MODULE_FUNCTION_NAME
-}
+pub use polint_analysis_api::{
+    BranchObligation, CoverageFact, FunctionFact, ImportFact, JsxAttributeFact, PackageFact,
+    SourceFile, StringLiteralFact, TestFact, TsClassFact, TsComponentFact,
+};
+pub(crate) use polint_analysis_api::{
+    CachedFileAnalysis, CachedFileFacts, TS_JS_MODULE_FUNCTION_NAME,
+    is_synthetic_ts_js_module_function,
+};
 
 /// Source-file size and aggregate function metrics derived from parsed facts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,27 +51,6 @@ pub struct ComplexityMetricFact {
     pub span: Span,
     pub language: Language,
     pub cyclomatic_complexity: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct PackageFact {
-    pub id: PackageId,
-    pub file: FileId,
-    pub name: String,
-    pub span: Span,
-    pub language: Language,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct ImportFact {
-    pub id: ImportId,
-    pub file: FileId,
-    pub package: Option<String>,
-    pub path: String,
-    pub span: Span,
-    pub language: Language,
 }
 
 /// File, package, module, or external target participating in the module graph.
@@ -320,101 +285,4 @@ pub struct ReferenceFact {
     pub(crate) stable_key: StableKeyId,
     pub status: SymbolResolutionStatus,
     pub precision: SymbolPrecision,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct BranchObligation {
-    pub id: BranchId,
-    pub function: Option<FunctionId>,
-    pub file: FileId,
-    pub decision_span: Span,
-    pub condition_text: String,
-    pub edge_label: String,
-    pub is_error_path: bool,
-    pub stable_fingerprint: String,
-}
-
-/// Facts harvested from Go test functions (`TestXxx`, benchmarks, fuzz) in `_test.go` files.
-///
-/// See the polint repository's `docs/facts/go-tests.md` for field semantics and harvester limits.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct TestFact {
-    pub file: FileId,
-    pub function: Option<FunctionId>,
-    pub name: String,
-    pub span: Span,
-    pub evidence_terms: Vec<String>,
-    pub assertion_count: u32,
-    pub subtest_count: u32,
-    /// Literal string names from direct `t.Run("name", ...)` calls (first argument only).
-    pub subtest_names: Vec<String>,
-    pub table_rows: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct CoverageFact {
-    pub branch: BranchId,
-    pub covered: Option<bool>,
-    pub source: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct TsComponentFact {
-    pub file: FileId,
-    pub function: Option<FunctionId>,
-    pub name: String,
-    pub span: Span,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct TsClassFact {
-    pub file: FileId,
-    pub name: String,
-    pub span: Span,
-    pub is_exported: bool,
-    pub is_component_like: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct StringLiteralFact {
-    pub file: FileId,
-    pub value: String,
-    pub span: Span,
-    pub language: Language,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct JsxAttributeFact {
-    pub file: FileId,
-    pub name: String,
-    pub value: Option<String>,
-    pub span: Span,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct CachedFileAnalysis {
-    pub(crate) schema: String,
-    pub(crate) diagnostics: Vec<Diagnostic>,
-    pub(crate) facts: CachedFileFacts,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct CachedFileFacts {
-    pub packages: Vec<PackageFact>,
-    pub functions: Vec<FunctionFact>,
-    pub imports: Vec<ImportFact>,
-    pub branches: Vec<BranchObligation>,
-    pub tests: Vec<TestFact>,
-    pub coverage: Vec<CoverageFact>,
-    pub ts_components: Vec<TsComponentFact>,
-    pub ts_classes: Vec<TsClassFact>,
-    pub string_literals: Vec<StringLiteralFact>,
-    pub jsx_attributes: Vec<JsxAttributeFact>,
 }

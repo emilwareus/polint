@@ -1,10 +1,10 @@
 use serde::Deserialize;
 use std::collections::BTreeSet;
 
-pub(crate) const GO_SEMANTIC_SCHEMA: &str = "polint-go-semantic-2";
+pub const GO_SEMANTIC_SCHEMA: &str = "polint-go-semantic-2";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum GoSemanticProtocolError {
+pub enum GoSemanticProtocolError {
     InvalidJson(String),
     UnsupportedSchema(String),
     UnknownKind(String),
@@ -45,98 +45,98 @@ impl std::fmt::Display for GoSemanticProtocolError {
 impl std::error::Error for GoSemanticProtocolError {}
 
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct GoSemanticRawFrame {
-    pub(crate) schema: String,
-    pub(crate) kind: String,
+pub struct GoSemanticRawFrame {
+    pub schema: String,
+    pub kind: String,
     #[serde(default)]
-    pub(crate) package_id: String,
+    pub package_id: String,
     #[serde(default)]
-    pub(crate) package_path: String,
+    pub package_path: String,
     #[serde(default)]
-    pub(crate) package_name: String,
+    pub package_name: String,
     #[serde(default)]
-    pub(crate) module_path: String,
+    pub module_path: String,
     #[serde(default)]
-    pub(crate) files: Vec<String>,
+    pub files: Vec<String>,
     #[serde(default)]
-    pub(crate) name: String,
+    pub name: String,
     #[serde(default)]
-    pub(crate) qualified: String,
+    pub qualified: String,
     #[serde(default)]
-    pub(crate) signature: String,
+    pub signature: String,
     #[serde(default, rename = "stable_key")]
-    pub(crate) stable_key_text: String,
+    pub stable_key_text: String,
     #[serde(default)]
-    pub(crate) receiver: String,
+    pub receiver: String,
     #[serde(default)]
-    pub(crate) method: String,
+    pub method: String,
     #[serde(default, rename = "type")]
-    pub(crate) type_name: String,
+    pub type_name: String,
     #[serde(default)]
-    pub(crate) methods: Vec<String>,
+    pub methods: Vec<String>,
     #[serde(default)]
-    pub(crate) file: String,
+    pub file: String,
     #[serde(default)]
-    pub(crate) span: Option<GoSemanticSpan>,
+    pub span: Option<GoSemanticSpan>,
     #[serde(default)]
-    pub(crate) caller: String,
+    pub caller: String,
     #[serde(default)]
-    pub(crate) callee: String,
+    pub callee: String,
     #[serde(default)]
-    pub(crate) edge_kind: String,
+    pub edge_kind: String,
     #[serde(default)]
-    pub(crate) static_callee: String,
+    pub static_callee: String,
     #[serde(default)]
-    pub(crate) function: String,
+    pub function: String,
     #[serde(default)]
-    pub(crate) interface_type: String,
+    pub interface_type: String,
     #[serde(default, rename = "callsite_stable_key")]
-    pub(crate) callsite_stable_key_text: String,
+    pub callsite_stable_key_text: String,
     #[serde(default)]
-    pub(crate) message: String,
+    pub message: String,
     #[serde(default)]
-    pub(crate) status: String,
+    pub status: String,
     #[serde(default)]
-    pub(crate) reason: String,
+    pub reason: String,
     #[serde(default)]
-    pub(crate) go_version: String,
+    pub go_version: String,
     #[serde(default)]
-    pub(crate) x_tools_version: String,
+    pub x_tools_version: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct GoSemanticSpan {
-    pub(crate) start_byte: u32,
-    pub(crate) end_byte: u32,
-    pub(crate) start_line: u32,
+pub struct GoSemanticSpan {
+    pub start_byte: u32,
+    pub end_byte: u32,
+    pub start_line: u32,
     #[serde(rename = "start_column")]
-    pub(crate) start_col: u32,
-    pub(crate) end_line: u32,
+    pub start_col: u32,
+    pub end_line: u32,
     #[serde(rename = "end_column")]
-    pub(crate) end_col: u32,
+    pub end_col: u32,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct GoSemanticOutput {
-    pub(crate) go_version: String,
-    pub(crate) x_tools_version: String,
-    pub(crate) rows: Vec<GoSemanticRawFrame>,
+pub struct GoSemanticOutput {
+    pub go_version: String,
+    pub x_tools_version: String,
+    pub rows: Vec<GoSemanticRawFrame>,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum GoSemanticFrame {
+pub enum GoSemanticFrame {
     SessionBegin(GoSemanticRawFrame),
     Row(GoSemanticRawFrame),
     SessionEnd,
 }
 
-pub(crate) fn decode_ndjson(bytes: &[u8]) -> Result<GoSemanticOutput, GoSemanticProtocolError> {
+pub fn decode_ndjson(bytes: &[u8]) -> Result<GoSemanticOutput, GoSemanticProtocolError> {
     let text = std::str::from_utf8(bytes)
         .map_err(|error| GoSemanticProtocolError::InvalidJson(error.to_string()))?;
     decode_ndjson_str(text)
 }
 
-pub(crate) fn decode_ndjson_str(text: &str) -> Result<GoSemanticOutput, GoSemanticProtocolError> {
+pub fn decode_ndjson_str(text: &str) -> Result<GoSemanticOutput, GoSemanticProtocolError> {
     let allowed = allowed_kinds();
     let mut saw_begin = false;
     let mut saw_end = false;

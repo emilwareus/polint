@@ -1,13 +1,17 @@
-use crate::analysis::error::AnalysisError;
-use crate::core::{StableKeyId, StableKeyInterner};
-use crate::go::semantic::facts::{
+use std::any::Any;
+
+use polint_analysis_api::{FactFamily, FactStore};
+use polint_core::{StableKeyId, StableKeyInterner};
+
+use crate::error::AnalysisError;
+use crate::semantic::facts::{
     GoSemanticAddressTakenFact, GoSemanticCallsiteFact, GoSemanticDynamicDispatchFact,
     GoSemanticFunctionFact, GoSemanticInstantiatedTypeFact, GoSemanticMethodSetFact,
     GoSemanticPackageErrorFact, GoSemanticPackageFact, GoSemanticRtaEdgeFact,
 };
-use crate::go::semantic::validate::validate_go_semantic_output;
+use crate::semantic::validate::validate_go_semantic_output;
 
-pub(crate) const GO_SEMANTIC_PROVIDER_ID: &str = "polint.go.semantic";
+pub const GO_SEMANTIC_PROVIDER_ID: &str = "polint.go.semantic";
 
 /// Per-family count of duplicate STRUCTURAL rows (packages/functions/method_sets) collapsed
 /// keep-first by [`GoSemanticFactsOutput::collapse_duplicate_structural_keys`], plus whether
@@ -21,18 +25,18 @@ pub(crate) const GO_SEMANTIC_PROVIDER_ID: &str = "polint.go.semantic";
 /// behaviour of zeroing ALL Go RTA repo-wide) but it is flagged loudly. All counts zero and
 /// `conflicting == false` on a clean run, so the provider stays quiet.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct StructuralDuplicateReport {
-    pub(crate) packages: usize,
-    pub(crate) functions: usize,
-    pub(crate) method_sets: usize,
+pub struct StructuralDuplicateReport {
+    pub packages: usize,
+    pub functions: usize,
+    pub method_sets: usize,
     /// True when at least one collapsed duplicate row DIFFERED from the kept row of the same
     /// stable_key (a practically-impossible genuine identity collision → recipe bug).
-    pub(crate) conflicting: bool,
+    pub conflicting: bool,
 }
 
 impl StructuralDuplicateReport {
     /// Total structural duplicate rows collapsed across all three families.
-    pub(crate) fn total(&self) -> usize {
+    pub fn total(&self) -> usize {
         self.packages + self.functions + self.method_sets
     }
 }
@@ -42,36 +46,36 @@ impl StructuralDuplicateReport {
 /// RTA-signal harvest rows dropped (FIX 3) with the duplicate structural rows collapsed
 /// keep-first, so a single bad row is NEVER catastrophic yet is always OBSERVABLE.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct GoSemanticStoreReport {
-    pub(crate) dropped_harvest_rows: usize,
-    pub(crate) structural_duplicates: StructuralDuplicateReport,
+pub struct GoSemanticStoreReport {
+    pub dropped_harvest_rows: usize,
+    pub structural_duplicates: StructuralDuplicateReport,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct GoSemanticFactsOutput {
-    pub(crate) packages: Vec<GoSemanticPackageFact>,
-    pub(crate) functions: Vec<GoSemanticFunctionFact>,
-    pub(crate) callsites: Vec<GoSemanticCallsiteFact>,
-    pub(crate) method_sets: Vec<GoSemanticMethodSetFact>,
-    pub(crate) address_taken: Vec<GoSemanticAddressTakenFact>,
-    pub(crate) instantiated_types: Vec<GoSemanticInstantiatedTypeFact>,
-    pub(crate) dynamic_dispatch: Vec<GoSemanticDynamicDispatchFact>,
-    pub(crate) rta_edges: Vec<GoSemanticRtaEdgeFact>,
-    pub(crate) package_errors: Vec<GoSemanticPackageErrorFact>,
+pub struct GoSemanticFactsOutput {
+    pub packages: Vec<GoSemanticPackageFact>,
+    pub functions: Vec<GoSemanticFunctionFact>,
+    pub callsites: Vec<GoSemanticCallsiteFact>,
+    pub method_sets: Vec<GoSemanticMethodSetFact>,
+    pub address_taken: Vec<GoSemanticAddressTakenFact>,
+    pub instantiated_types: Vec<GoSemanticInstantiatedTypeFact>,
+    pub dynamic_dispatch: Vec<GoSemanticDynamicDispatchFact>,
+    pub rta_edges: Vec<GoSemanticRtaEdgeFact>,
+    pub package_errors: Vec<GoSemanticPackageErrorFact>,
 }
 
 impl GoSemanticFactsOutput {
-    pub(crate) fn normalized(mut self, interner: &StableKeyInterner) -> Self {
+    pub fn normalized(mut self, interner: &StableKeyInterner) -> Self {
         self.packages
             .sort_by_cached_key(|row| interner.resolve(row.stable_key));
         for (index, fact) in self.packages.iter_mut().enumerate() {
-            fact.id = crate::go::semantic::facts::GoSemanticPackageId(index as u64);
+            fact.id = crate::semantic::facts::GoSemanticPackageId(index as u64);
         }
 
         self.functions
             .sort_by_cached_key(|row| interner.resolve(row.stable_key));
         for (index, fact) in self.functions.iter_mut().enumerate() {
-            fact.id = crate::go::semantic::facts::GoSemanticFunctionId(index as u64);
+            fact.id = crate::semantic::facts::GoSemanticFunctionId(index as u64);
         }
 
         // Callsites, address-taken funcs, instantiated runtime types, and dynamic-dispatch
@@ -92,13 +96,13 @@ impl GoSemanticFactsOutput {
         self.callsites
             .dedup_by(|left, right| left.stable_key == right.stable_key);
         for (index, fact) in self.callsites.iter_mut().enumerate() {
-            fact.id = crate::go::semantic::facts::GoSemanticCallsiteId(index as u64);
+            fact.id = crate::semantic::facts::GoSemanticCallsiteId(index as u64);
         }
 
         self.method_sets
             .sort_by_cached_key(|row| interner.resolve(row.stable_key));
         for (index, fact) in self.method_sets.iter_mut().enumerate() {
-            fact.id = crate::go::semantic::facts::GoSemanticMethodSetId(index as u64);
+            fact.id = crate::semantic::facts::GoSemanticMethodSetId(index as u64);
         }
 
         self.address_taken
@@ -106,7 +110,7 @@ impl GoSemanticFactsOutput {
         self.address_taken
             .dedup_by(|left, right| left.stable_key == right.stable_key);
         for (index, fact) in self.address_taken.iter_mut().enumerate() {
-            fact.id = crate::go::semantic::facts::GoSemanticAddressTakenId(index as u64);
+            fact.id = crate::semantic::facts::GoSemanticAddressTakenId(index as u64);
         }
 
         self.instantiated_types
@@ -114,7 +118,7 @@ impl GoSemanticFactsOutput {
         self.instantiated_types
             .dedup_by(|left, right| left.stable_key == right.stable_key);
         for (index, fact) in self.instantiated_types.iter_mut().enumerate() {
-            fact.id = crate::go::semantic::facts::GoSemanticInstantiatedTypeId(index as u64);
+            fact.id = crate::semantic::facts::GoSemanticInstantiatedTypeId(index as u64);
         }
 
         self.dynamic_dispatch
@@ -122,7 +126,7 @@ impl GoSemanticFactsOutput {
         self.dynamic_dispatch
             .dedup_by(|left, right| left.stable_key == right.stable_key);
         for (index, fact) in self.dynamic_dispatch.iter_mut().enumerate() {
-            fact.id = crate::go::semantic::facts::GoSemanticDynamicDispatchId(index as u64);
+            fact.id = crate::semantic::facts::GoSemanticDynamicDispatchId(index as u64);
         }
 
         self.rta_edges
@@ -130,13 +134,13 @@ impl GoSemanticFactsOutput {
         self.rta_edges
             .dedup_by(|left, right| left.stable_key == right.stable_key);
         for (index, fact) in self.rta_edges.iter_mut().enumerate() {
-            fact.id = crate::go::semantic::facts::GoSemanticRtaEdgeId(index as u64);
+            fact.id = crate::semantic::facts::GoSemanticRtaEdgeId(index as u64);
         }
 
         self.package_errors
             .sort_by_cached_key(|row| interner.resolve(row.stable_key));
         for (index, fact) in self.package_errors.iter_mut().enumerate() {
-            fact.id = crate::go::semantic::facts::GoSemanticPackageErrorId(index as u64);
+            fact.id = crate::semantic::facts::GoSemanticPackageErrorId(index as u64);
         }
         self
     }
@@ -159,7 +163,7 @@ impl GoSemanticFactsOutput {
     /// regression (e.g. every method_set losing its stable_key → repo-wide under-resolution)
     /// fails loudly instead of being swallowed.
     fn drop_invalid_harvest_rows(mut self, interner: &StableKeyInterner) -> (Self, usize) {
-        use crate::go::semantic::validate::{
+        use crate::semantic::validate::{
             address_taken_rejection, dynamic_dispatch_rejection, instantiated_type_rejection,
             method_set_rejection, rta_edge_rejection,
         };
@@ -191,7 +195,7 @@ impl GoSemanticFactsOutput {
     /// method_sets) keep-first, BEFORE validation, so a single duplicate row is no longer
     /// CATASTROPHIC (FIX-08). These families are keyed by unique declaration identity and are
     /// deliberately NOT deduped in [`Self::normalized`]; before this pass a single duplicate
-    /// stable key reached [`crate::go::semantic::validate::validate_go_semantic_output`]'s
+    /// stable key reached [`crate::semantic::validate::validate_go_semantic_output`]'s
     /// `validate_unique` → `Err` → the provider assigned ZERO Go facts → `GoRtaInputs::from_db`
     /// read nothing → RTA derived zero edges for the ENTIRE repository. One duplicate row zeroed
     /// the whole repo's Go call graph (verified, recurring 3×: FINDING-B and FIX-07's two
@@ -286,7 +290,7 @@ impl StableKeyed for GoSemanticPackageFact {
         self.stable_key
     }
     fn clear_id(&mut self) {
-        self.id = crate::go::semantic::facts::GoSemanticPackageId(0);
+        self.id = crate::semantic::facts::GoSemanticPackageId(0);
     }
 }
 
@@ -295,7 +299,7 @@ impl StableKeyed for GoSemanticFunctionFact {
         self.stable_key
     }
     fn clear_id(&mut self) {
-        self.id = crate::go::semantic::facts::GoSemanticFunctionId(0);
+        self.id = crate::semantic::facts::GoSemanticFunctionId(0);
     }
 }
 
@@ -304,12 +308,12 @@ impl StableKeyed for GoSemanticMethodSetFact {
         self.stable_key
     }
     fn clear_id(&mut self) {
-        self.id = crate::go::semantic::facts::GoSemanticMethodSetId(0);
+        self.id = crate::semantic::facts::GoSemanticMethodSetId(0);
     }
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct GoSemanticStore {
+pub struct GoSemanticStore {
     output: GoSemanticFactsOutput,
     /// Count of malformed RTA-signal harvest rows dropped while building this store
     /// (FIX 3). The provider surfaces a diagnostic when this is non-zero, so a systematic
@@ -323,7 +327,7 @@ pub(crate) struct GoSemanticStore {
 }
 
 impl GoSemanticStore {
-    pub(crate) fn from_output(
+    pub fn from_output(
         output: GoSemanticFactsOutput,
         interner: &StableKeyInterner,
     ) -> Result<Self, AnalysisError> {
@@ -351,25 +355,25 @@ impl GoSemanticStore {
         })
     }
 
-    pub(crate) fn output(&self) -> &GoSemanticFactsOutput {
+    pub fn output(&self) -> &GoSemanticFactsOutput {
         &self.output
     }
 
     /// The number of malformed RTA-signal harvest rows dropped while building this store
     /// (FIX 3). Zero on a clean frontend run; non-zero surfaces a provider diagnostic.
-    pub(crate) fn dropped_harvest_rows(&self) -> usize {
+    pub fn dropped_harvest_rows(&self) -> usize {
         self.dropped_harvest_rows
     }
 
     /// Per-family duplicate STRUCTURAL rows collapsed keep-first while building this store
     /// (FIX-08), plus the conflicting flag. All zero / not-conflicting on a clean run.
-    pub(crate) fn structural_duplicates(&self) -> StructuralDuplicateReport {
+    pub fn structural_duplicates(&self) -> StructuralDuplicateReport {
         self.structural_duplicates
     }
 
     /// The combined resilience report (dropped harvest rows + collapsed structural duplicates)
     /// the provider surfaces as diagnostics (FIX-08).
-    pub(crate) fn report(&self) -> GoSemanticStoreReport {
+    pub fn report(&self) -> GoSemanticStoreReport {
         GoSemanticStoreReport {
             dropped_harvest_rows: self.dropped_harvest_rows,
             structural_duplicates: self.structural_duplicates,
@@ -377,17 +381,42 @@ impl GoSemanticStore {
     }
 }
 
+/// Registry key for [`GoSemanticStore`] in the host fact-store map.
+pub const GO_SEMANTIC_STORE_FAMILY: FactFamily = FactFamily::GoSemantic;
+
+impl FactStore for GoSemanticStore {
+    fn family(&self) -> FactFamily {
+        FactFamily::GoSemantic
+    }
+
+    fn clear(&mut self) {
+        *self = GoSemanticStore::default();
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn clone_box(&self) -> Box<dyn FactStore> {
+        Box::new(self.clone())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{FileId, Span};
-    use crate::go::semantic::facts::{
+    use crate::semantic::facts::{
         GoSemanticAddressTakenFact, GoSemanticAddressTakenId, GoSemanticCallStatus,
         GoSemanticCallsiteFact, GoSemanticCallsiteId, GoSemanticDynamicDispatchFact,
         GoSemanticDynamicDispatchId, GoSemanticFunctionId, GoSemanticFunctionKind,
         GoSemanticInstantiatedTypeFact, GoSemanticInstantiatedTypeId, GoSemanticMethodSetFact,
         GoSemanticMethodSetId, GoSemanticPackageFact, GoSemanticPackageId,
     };
+    use polint_core::{FileId, Span};
 
     #[test]
     fn store_normalizes_by_stable_key_before_dense_id_assignment() {
@@ -810,7 +839,7 @@ mod tests {
     #[test]
     fn normalized_dedups_identity_duplicate_set_facts_keeping_first() {
         let interner = StableKeyInterner::default();
-        use crate::go::semantic::facts::{GoSemanticAddressTakenFact, GoSemanticAddressTakenId};
+        use crate::semantic::facts::{GoSemanticAddressTakenFact, GoSemanticAddressTakenId};
 
         // The whole-reachable-program harvests (address-taken / instantiated / callsite /
         // dynamic-dispatch) legitimately produce the SAME official identity more than once:

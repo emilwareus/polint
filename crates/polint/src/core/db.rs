@@ -351,6 +351,10 @@ impl AnalysisDb {
             .expect("GoSemanticStore is installed when AnalysisDb is constructed")
     }
 
+    #[allow(
+        dead_code,
+        reason = "Go semantic writes now go through polint-go local helpers; kept for AnalysisDb store access."
+    )]
     fn go_semantic_store_mut(&mut self) -> &mut GoSemanticStore {
         self.fact_store_mut(GO_SEMANTIC_STORE_FAMILY)
             .expect("GoSemanticStore is installed when AnalysisDb is constructed")

@@ -2,12 +2,19 @@
 //!
 //! Depends only on `polint-core` and `polint-ir`. Must not import concrete analyses or frontends.
 
+mod cache_api;
 mod digest;
 mod fact_store;
 mod metadata;
 mod provider;
 mod source_file;
+mod syntax_facts;
 
+pub use cache_api::{
+    AnalysisCache, DisabledAnalysisCache, FileCacheKeyParts, FileCacheReadOutcome,
+    FileCacheReadStatus, LayerCacheKeyParts, LayerCacheKind, LayerCachePrecision,
+    LayerCacheReadOutcome, LayerCacheReadStatus, LayerCacheWriteStatus,
+};
 pub use digest::{CacheStats, Digest, DigestBuilder, DigestKind};
 pub use fact_store::{FactStore, FactStoreEntry};
 pub use metadata::{
@@ -21,6 +28,11 @@ pub use provider::{
     SchemaVersion,
 };
 pub use source_file::SourceFile;
+pub use syntax_facts::{
+    BranchObligation, CachedFileAnalysis, CachedFileFacts, CoverageFact, FunctionFact, ImportFact,
+    JsxAttributeFact, PackageFact, StringLiteralFact, TS_JS_MODULE_FUNCTION_NAME, TestFact,
+    TsClassFact, TsComponentFact, is_synthetic_ts_js_module_function,
+};
 
 /// MIR identifiers shared with analysis contracts.
 pub use polint_ir::{MirBodyId, PlaceId};

@@ -12,10 +12,17 @@ use crate::analysis_kernel::incremental::InputSnapshot;
 use crate::analysis_plan::AnalysisPlan;
 use crate::cache::Cache;
 use crate::config::LoadedConfig;
+use std::path::PathBuf;
+use std::sync::Arc;
+
 use crate::core::{AnalysisDb, CapabilitySupportView, StableKeyInterner};
 use polint_analysis_api::{
-    FactDatabase, FactFamily, FactMetaStore, FactStore, NullHostAttachment, ProviderHostServices,
+    AnalysisCache, BranchObligation, CachedFileFacts, CoverageFact, FactDatabase, FactFamily,
+    FactMetaStore, FactStore, FunctionFact, ImportFact, JsxAttributeFact, NullHostAttachment,
+    PackageFact, ProviderHostServices, SourceFile, StringLiteralFact, TestFact, TsClassFact,
+    TsComponentFact,
 };
+use polint_core::{BranchId, FileId, FunctionId, ImportId, Language, PackageId};
 
 thread_local! {
     static PROVIDER_HOST_SESSION: RefCell<Option<ProviderHostSession>> = const { RefCell::new(None) };
@@ -53,9 +60,12 @@ pub(crate) fn with_provider_host_session_mut<R>(
     })
 }
 
-/// Placeholder host services object for `ProviderCtx::host`.
-#[derive(Debug, Default)]
-pub(crate) struct FacadeHostServices;
+/// Host services object for `ProviderCtx::host`, carrying plan digest + cache handle.
+#[derive(Default)]
+pub(crate) struct FacadeHostServices {
+    pub(crate) plan_digest: String,
+    pub(crate) analysis_cache: Option<Arc<dyn AnalysisCache>>,
+}
 
 impl ProviderHostServices for FacadeHostServices {
     fn as_any(&self) -> &dyn Any {
@@ -64,6 +74,14 @@ impl ProviderHostServices for FacadeHostServices {
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
+    }
+
+    fn plan_digest(&self) -> &str {
+        &self.plan_digest
+    }
+
+    fn analysis_cache(&self) -> Option<&dyn AnalysisCache> {
+        self.analysis_cache.as_deref()
     }
 }
 
@@ -98,5 +116,120 @@ impl FactDatabase for AnalysisDb {
 
     fn stable_key_interner(&self) -> StableKeyInterner {
         self.stable_keys.clone()
+    }
+
+    fn files(&self) -> &[SourceFile] {
+        AnalysisDb::files(self)
+    }
+
+    fn file(&self, id: FileId) -> Option<&SourceFile> {
+        AnalysisDb::file(self, id)
+    }
+
+    fn path_for(&self, file: FileId) -> String {
+        AnalysisDb::path_for(self, file)
+    }
+
+    fn add_file(&mut self, path: PathBuf, relative_path: String, source: String) -> FileId {
+        AnalysisDb::add_file(self, path, relative_path, source)
+    }
+
+    fn add_source_file(
+        &mut self,
+        path: PathBuf,
+        relative_path: String,
+        language: Language,
+        source: Arc<str>,
+        content_hash: String,
+    ) -> FileId {
+        AnalysisDb::add_source_file(self, path, relative_path, language, source, content_hash)
+    }
+
+    fn push_package(&mut self, fact: PackageFact) -> PackageId {
+        AnalysisDb::push_package(self, fact)
+    }
+
+    fn push_function(&mut self, fact: FunctionFact) -> FunctionId {
+        AnalysisDb::push_function(self, fact)
+    }
+
+    fn push_import(&mut self, fact: ImportFact) -> ImportId {
+        AnalysisDb::push_import(self, fact)
+    }
+
+    fn push_branch(&mut self, fact: BranchObligation) -> BranchId {
+        AnalysisDb::push_branch(self, fact)
+    }
+
+    fn push_test(&mut self, fact: TestFact) {
+        AnalysisDb::push_test(self, fact)
+    }
+
+    fn push_coverage(&mut self, fact: CoverageFact) {
+        AnalysisDb::push_coverage(self, fact)
+    }
+
+    fn push_string_literal(&mut self, fact: StringLiteralFact) {
+        AnalysisDb::push_string_literal(self, fact)
+    }
+
+    fn push_ts_component(&mut self, fact: TsComponentFact) {
+        AnalysisDb::push_ts_component(self, fact)
+    }
+
+    fn push_ts_class(&mut self, fact: TsClassFact) {
+        AnalysisDb::push_ts_class(self, fact)
+    }
+
+    fn push_jsx_attribute(&mut self, fact: JsxAttributeFact) {
+        AnalysisDb::push_jsx_attribute(self, fact)
+    }
+
+    fn packages(&self) -> &[PackageFact] {
+        AnalysisDb::packages(self)
+    }
+
+    fn functions(&self) -> &[FunctionFact] {
+        AnalysisDb::functions(self)
+    }
+
+    fn imports(&self) -> &[ImportFact] {
+        AnalysisDb::imports(self)
+    }
+
+    fn branches(&self) -> &[BranchObligation] {
+        AnalysisDb::branches(self)
+    }
+
+    fn tests(&self) -> &[TestFact] {
+        AnalysisDb::tests(self)
+    }
+
+    fn coverage(&self) -> &[CoverageFact] {
+        AnalysisDb::coverage(self)
+    }
+
+    fn string_literals(&self) -> &[StringLiteralFact] {
+        AnalysisDb::string_literals(self)
+    }
+
+    fn ts_components(&self) -> &[TsComponentFact] {
+        AnalysisDb::ts_components(self)
+    }
+
+    fn ts_classes(&self) -> &[TsClassFact] {
+        AnalysisDb::ts_classes(self)
+    }
+
+    fn jsx_attributes(&self) -> &[JsxAttributeFact] {
+        AnalysisDb::jsx_attributes(self)
+    }
+
+    fn facts_for_file(&self, file: FileId) -> CachedFileFacts {
+        AnalysisDb::facts_for_file(self, file)
+    }
+
+    fn restore_file_facts(&mut self, file: FileId, facts: CachedFileFacts) {
+        AnalysisDb::restore_file_facts(self, file, facts)
     }
 }

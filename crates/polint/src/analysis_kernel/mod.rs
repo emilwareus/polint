@@ -144,7 +144,10 @@ fn run_scheduled_providers<'a>(
             scc_closure: None,
         },
     );
-    let mut host_services = crate::analysis_kernel::host::FacadeHostServices;
+    let mut host_services = crate::analysis_kernel::host::FacadeHostServices {
+        plan_digest: input.plan.digest().to_string(),
+        analysis_cache: Some(crate::cache::CacheAnalysisCache::new(input.cache.clone())),
+    };
     let mut host_attachment = crate::analysis_kernel::host::FacadeHostAttachment::default();
     // Emit a provider_outputs row for every manifest entry (historical identity),
     // but only execute providers selected by capability closure.
