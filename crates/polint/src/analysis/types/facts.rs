@@ -4,6 +4,8 @@ use crate::analysis::cfg::ids::BasicBlockId;
 use crate::analysis::ids::{MirBodyId, MirOpId, NarrowedTypeId, PlaceId, TypeFactId, TypeSetId};
 use crate::core::{FileId, FunctionId, Language, StableKeyId, SymbolId};
 
+pub(crate) use polint_ir::TypeShape;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct TypeFact {
     pub(crate) id: TypeFactId,
@@ -51,25 +53,6 @@ pub(crate) enum TypeSubject {
     Function(FunctionId),
     Synthetic(String),
     Unknown(String),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub(crate) enum TypeShape {
-    Primitive(String),
-    Literal(String),
-    Nullish(String),
-    Callable { signature: String },
-    Class { name: Option<String> },
-    Object { shape_id: Option<String> },
-    Module { module_key: String },
-    Nominal { type_id: String },
-    Structural { shape_id: String },
-    Union(Vec<TypeSetId>),
-    Intersection(Vec<TypeSetId>),
-    GenericPlaceholder(String),
-    Any,
-    Unknown { reason: String },
-    Unsupported { reason: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

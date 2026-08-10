@@ -1,77 +1,12 @@
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
-
-use crate::analysis::ids::{CallSiteId, MirBodyId, PlaceId};
+use crate::analysis::ids::PlaceId;
 use crate::analysis::stable_key::semantic_stable_key;
 use crate::analysis::types::facts::TypeShape;
 use crate::analysis_kernel::FactFamily;
-use crate::core::{FileId, FunctionId, Language, StableKeyId, StableKeyInterner, SymbolId};
+use crate::core::{FileId, FunctionId, Language, StableKeyInterner};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PlaceFact {
-    pub(crate) id: PlaceId,
-    pub(crate) language: Language,
-    pub(crate) file: Option<FileId>,
-    pub(crate) function: Option<FunctionId>,
-    pub(crate) root: PlaceRoot,
-    pub(crate) projections: Vec<PlaceProjection>,
-    pub(crate) stable_key: StableKeyId,
-    pub(crate) status: PlaceStatus,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PlaceTypeFact {
-    pub(crate) place: PlaceId,
-    pub(crate) ty: TypeShape,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub(crate) enum PlaceRoot {
-    Local {
-        function: FunctionId,
-        name: String,
-    },
-    Parameter {
-        function: FunctionId,
-        index: u32,
-        name: Option<String>,
-    },
-    Global {
-        symbol: Option<SymbolId>,
-        name: String,
-    },
-    Temporary {
-        body: MirBodyId,
-        ordinal: u32,
-    },
-    CallReturn {
-        call: CallSiteId,
-    },
-    Unknown {
-        evidence: String,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub(crate) enum PlaceProjection {
-    Field(String),
-    Property(String),
-    IndexKnown(String),
-    IndexUnknown { evidence: String },
-    Deref,
-    AwaitResult,
-    CallReturn(CallSiteId),
-    Unknown { evidence: String },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub(crate) enum PlaceStatus {
-    Resolved,
-    Partial,
-    Unknown,
-    Unsupported,
-}
+pub(crate) use polint_ir::{PlaceFact, PlaceProjection, PlaceRoot, PlaceStatus, PlaceTypeFact};
 
 #[derive(Debug, Default, Clone)]
 pub(crate) struct PlaceTableBuilder {

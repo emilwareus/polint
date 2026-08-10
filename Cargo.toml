@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/polint-core",
+    "crates/polint-ir",
     "crates/polint",
     "crates/polint-bench",
     "crates/polint-eval",

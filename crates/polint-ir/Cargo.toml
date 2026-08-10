@@ -1,0 +1,16 @@
+[package]
+name = "polint-ir"
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+description = "Language-neutral MIR IR for polint"
+
+[dependencies]
+polint-core.workspace = true
+serde.workspace = true
+
+[lints]
+workspace = true

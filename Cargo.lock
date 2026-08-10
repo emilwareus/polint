@@ -1174,6 +1174,7 @@ dependencies = [
  "oxc_span",
  "petgraph",
  "polint-core",
+ "polint-ir",
  "polint-macros",
  "predicates",
  "proptest",
@@ -1328,6 +1329,14 @@ name = "polint-example-ts-no-raw-api-calls-rule"
 version = "0.1.17"
 dependencies = [
  "polint",
+]
+
+[[package]]
+name = "polint-ir"
+version = "0.1.17"
+dependencies = [
+ "polint-core",
+ "serde",
 ]
 
 [[package]]
