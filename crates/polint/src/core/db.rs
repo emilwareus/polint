@@ -80,7 +80,9 @@ use crate::go::semantic::facts::{
     GoSemanticFunctionFact, GoSemanticInstantiatedTypeFact, GoSemanticMethodSetFact,
     GoSemanticPackageErrorFact, GoSemanticPackageFact,
 };
-use crate::go::semantic::store::{GoSemanticFactsOutput, GoSemanticStore, GoSemanticStoreReport};
+use crate::go::semantic::store::GoSemanticStore;
+#[cfg(test)]
+use crate::go::semantic::store::{GoSemanticFactsOutput, GoSemanticStoreReport};
 use crate::module_graph::topology::{
     DependencyRequirementFact, ImportToPackageFact, RepoTopologyOverlayFact,
     ResolvedDependencyEdgeFact, SourceSetFact, TopologyOutput, TopologyPackageFact,
@@ -1465,10 +1467,9 @@ impl AnalysisDb {
         self.solver_store_inner().budget_reasons()
     }
 
-    /// Store the Go semantic facts, returning the resilience report (malformed RTA-signal
-    /// harvest rows dropped, FIX 3; plus duplicate structural rows collapsed keep-first,
-    /// FIX-08) so the provider can surface observable diagnostics. All counts are zero on a
-    /// clean frontend run.
+    /// Test helper: install Go semantic facts into the facade DB (production writes go through
+    /// the `polint-go` provider → fact-store path).
+    #[cfg(test)]
     pub(crate) fn replace_go_semantic_facts(
         &mut self,
         output: GoSemanticFactsOutput,
@@ -1478,15 +1479,6 @@ impl AnalysisDb {
         let report = store.report();
         *self.go_semantic_store_mut() = store;
         Ok(report)
-    }
-
-    /// The normalized Go semantic output currently stored in the database.
-    ///
-    /// Used by the provider after `replace_go_semantic_facts` so its output digest certifies
-    /// the rows that survived store-time resilience passes (invalid harvest-row drops and
-    /// duplicate structural-key collapse), not the raw sidecar/lowering rows.
-    pub(crate) fn go_semantic_facts_output(&self) -> GoSemanticFactsOutput {
-        self.go_semantic_store().output().clone()
     }
 
     pub(crate) fn go_semantic_packages(&self) -> &[GoSemanticPackageFact] {

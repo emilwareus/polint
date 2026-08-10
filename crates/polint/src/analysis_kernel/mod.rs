@@ -134,7 +134,7 @@ fn run_scheduled_providers<'a>(
 ) {
     let mut upstream_digests = std::collections::BTreeMap::new();
     let capability_support = input.plan.support_view().clone();
-    crate::analysis_kernel::host::install_provider_host_session(
+    let host_scope = crate::analysis_kernel::host::ProviderHostSessionScope::install(
         crate::analysis_kernel::host::ProviderHostSession {
             cache: input.cache.clone(),
             loaded: input.loaded.clone(),
@@ -189,8 +189,7 @@ fn run_scheduled_providers<'a>(
             output_digest,
         ));
     }
-    let session =
-        crate::analysis_kernel::host::take_provider_host_session().expect("provider host session");
+    let session = host_scope.take();
     (session.capability_support, session.scc_closure)
 }
 

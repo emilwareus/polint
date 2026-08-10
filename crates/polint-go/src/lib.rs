@@ -15,12 +15,19 @@ mod stable_key;
 mod syntax_store;
 
 #[cfg(test)]
-#[path = "tests_disabled.rs"]
+mod test_cache;
+#[cfg(test)]
 mod tests;
 
-pub use adapter::{
-    analyze, analyze_files_with_plan_options_and_cache_stats, analyze_with_cache,
-    analyze_with_options, analyze_with_plan_options, analyze_with_plan_options_and_cache_stats,
+/// Re-export for `polint::_bench::go`; production callers use the plan-aware entrypoint.
+#[allow(unreachable_pub, unused_imports)]
+pub use adapter::analyze_with_options;
+#[cfg(test)]
+pub(crate) use adapter::{analyze, analyze_with_cache};
+#[allow(unused_imports)]
+pub(crate) use adapter::{
+    analyze_files_with_plan_options_and_cache_stats, analyze_with_plan_options,
+    analyze_with_plan_options_and_cache_stats,
 };
 pub use frontend::{FAMILY_GO, GO_FRONTEND_PROFILE, GoFrontend};
 pub use lifecycle::{

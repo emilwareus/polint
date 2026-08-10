@@ -2406,7 +2406,8 @@ mod places {
             "auth.go".to_string(),
             source.to_string(),
         );
-        let diagnostics = crate::go::analyze(&mut db);
+        let cache = polint_analysis_api::DisabledAnalysisCache;
+        let diagnostics = crate::go::analyze_with_options(&mut db, &cache, "", "", false);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         let output = lower_go_mir(&db);
         (output, db.stable_key_interner())
@@ -2597,7 +2598,8 @@ func (svc *Service) authorize(user User) bool {
 "#
             .to_string(),
         );
-        let diagnostics = crate::go::analyze(&mut db);
+        let cache = polint_analysis_api::DisabledAnalysisCache;
+        let diagnostics = crate::go::analyze_with_options(&mut db, &cache, "", "", false);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
 
         let function = db
@@ -2659,7 +2661,8 @@ mod operations {
             "flow.go".to_string(),
             source.to_string(),
         );
-        let diagnostics = crate::go::analyze(&mut db);
+        let cache = polint_analysis_api::DisabledAnalysisCache;
+        let diagnostics = crate::go::analyze_with_options(&mut db, &cache, "", "", false);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         let output = lower_go_mir(&db);
         (output, db.stable_key_interner())

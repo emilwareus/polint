@@ -38,14 +38,49 @@ pub(crate) struct ProviderHostSession {
     pub(crate) scc_closure: Option<SccClosureProviderOutput>,
 }
 
-pub(crate) fn install_provider_host_session(session: ProviderHostSession) {
-    PROVIDER_HOST_SESSION.with(|slot| {
-        *slot.borrow_mut() = Some(session);
-    });
+/// Installs a provider host session for the current thread and restores the previous
+/// value (if any) when the scope ends — including on panic.
+pub(crate) struct ProviderHostSessionScope {
+    previous: Option<ProviderHostSession>,
+    active: bool,
 }
 
-pub(crate) fn take_provider_host_session() -> Option<ProviderHostSession> {
-    PROVIDER_HOST_SESSION.with(|slot| slot.borrow_mut().take())
+impl ProviderHostSessionScope {
+    pub(crate) fn install(session: ProviderHostSession) -> Self {
+        let previous = PROVIDER_HOST_SESSION.with(|slot| slot.borrow_mut().replace(session));
+        Self {
+            previous,
+            active: true,
+        }
+    }
+
+    /// Take the active session and restore any previous session. Disarms [`Drop`].
+    pub(crate) fn take(mut self) -> ProviderHostSession {
+        self.active = false;
+        let current = PROVIDER_HOST_SESSION
+            .with(|slot| slot.borrow_mut().take())
+            .expect("provider host session installed by analysis kernel");
+        if let Some(previous) = self.previous.take() {
+            PROVIDER_HOST_SESSION.with(|slot| {
+                *slot.borrow_mut() = Some(previous);
+            });
+        }
+        current
+    }
+}
+
+impl Drop for ProviderHostSessionScope {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        let _ = PROVIDER_HOST_SESSION.with(|slot| slot.borrow_mut().take());
+        if let Some(previous) = self.previous.take() {
+            PROVIDER_HOST_SESSION.with(|slot| {
+                *slot.borrow_mut() = Some(previous);
+            });
+        }
+    }
 }
 
 pub(crate) fn with_provider_host_session_mut<R>(
@@ -58,6 +93,11 @@ pub(crate) fn with_provider_host_session_mut<R>(
             .expect("provider host session installed by analysis kernel");
         f(session)
     })
+}
+
+#[cfg(test)]
+fn provider_host_session_is_installed() -> bool {
+    PROVIDER_HOST_SESSION.with(|slot| slot.borrow().is_some())
 }
 
 /// Host services object for `ProviderCtx::host`, carrying plan digest + cache handle.
@@ -231,5 +271,70 @@ impl FactDatabase for AnalysisDb {
 
     fn restore_file_facts(&mut self, file: FileId, facts: CachedFileFacts) {
         AnalysisDb::restore_file_facts(self, file, facts)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::analysis_kernel::AnalysisKernel;
+    use crate::config::load_config;
+
+    fn test_session(marker: &str) -> ProviderHostSession {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _ = marker;
+        let loaded = load_config(temp.path()).expect("config");
+        let cache = Cache::new("", false);
+        let plan = AnalysisPlan::empty();
+        let db = AnalysisDb::default();
+        let input_snapshot = InputSnapshot::from_run_inputs(
+            &loaded,
+            &db,
+            "config",
+            "rules",
+            plan.digest(),
+            AnalysisKernel::provider_manifests(),
+        );
+        ProviderHostSession {
+            cache,
+            loaded,
+            input_snapshot,
+            capability_support: plan.support_view().clone(),
+            plan,
+            scc_closure: None,
+        }
+    }
+
+    #[test]
+    fn provider_host_session_scope_clears_on_drop() {
+        assert!(!provider_host_session_is_installed());
+        {
+            let _scope = ProviderHostSessionScope::install(test_session("outer"));
+            assert!(provider_host_session_is_installed());
+        }
+        assert!(!provider_host_session_is_installed());
+    }
+
+    #[test]
+    fn provider_host_session_scope_restores_previous_on_drop() {
+        assert!(!provider_host_session_is_installed());
+        let outer = ProviderHostSessionScope::install(test_session("outer"));
+        assert!(provider_host_session_is_installed());
+        {
+            let _inner = ProviderHostSessionScope::install(test_session("inner"));
+            assert!(provider_host_session_is_installed());
+        }
+        assert!(provider_host_session_is_installed());
+        let _ = outer.take();
+        assert!(!provider_host_session_is_installed());
+    }
+
+    #[test]
+    fn provider_host_session_scope_take_disarms_drop() {
+        assert!(!provider_host_session_is_installed());
+        let scope = ProviderHostSessionScope::install(test_session("take"));
+        let session = scope.take();
+        assert!(!provider_host_session_is_installed());
+        assert!(session.scc_closure.is_none());
     }
 }

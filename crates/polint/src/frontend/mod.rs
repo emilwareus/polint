@@ -225,7 +225,7 @@ mod tests {
             files: &files,
             root: temp.path(),
         };
-        crate::analysis_kernel::host::install_provider_host_session(
+        let _host_scope = crate::analysis_kernel::host::ProviderHostSessionScope::install(
             crate::analysis_kernel::host::ProviderHostSession {
                 cache,
                 loaded,

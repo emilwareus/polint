@@ -41,10 +41,9 @@ impl StructuralDuplicateReport {
     }
 }
 
-/// Aggregate resilience report returned by [`GoSemanticStore::from_output`] /
-/// [`crate::core::AnalysisDb::replace_go_semantic_facts`] (FIX-08). Combines the malformed
-/// RTA-signal harvest rows dropped (FIX 3) with the duplicate structural rows collapsed
-/// keep-first, so a single bad row is NEVER catastrophic yet is always OBSERVABLE.
+/// Aggregate resilience report returned by [`GoSemanticStore::from_output`].
+/// Combines malformed RTA-signal harvest rows dropped with duplicate structural rows
+/// collapsed keep-first, so a single bad row is never catastrophic yet always observable.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct GoSemanticStoreReport {
     pub dropped_harvest_rows: usize,

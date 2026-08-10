@@ -28,14 +28,14 @@ thread_local! {
 
 /// Convenience wrapper used by Go-adapter unit tests (no cache, sequential).
 #[cfg(test)]
-pub fn analyze(db: &mut dyn FactDatabase) -> Vec<Diagnostic> {
+pub(crate) fn analyze(db: &mut dyn FactDatabase) -> Vec<Diagnostic> {
     let cache = DisabledAnalysisCache;
     analyze_with_options(db, &cache, "", "", false)
 }
 
 /// Sequential, cache-aware analysis used by Go-adapter unit tests only.
 #[cfg(test)]
-pub fn analyze_with_cache(
+pub(crate) fn analyze_with_cache(
     db: &mut dyn FactDatabase,
     cache: &dyn AnalysisCache,
     config_hash: &str,
@@ -56,7 +56,7 @@ pub fn analyze_with_options(
     analyze_with_plan_options(db, cache, config_hash, rule_hash, "", parallel)
 }
 
-pub fn analyze_with_plan_options(
+pub(crate) fn analyze_with_plan_options(
     db: &mut dyn FactDatabase,
     cache: &dyn AnalysisCache,
     config_hash: &str,
@@ -75,7 +75,7 @@ pub fn analyze_with_plan_options(
     .diagnostics
 }
 
-pub fn analyze_with_plan_options_and_cache_stats(
+pub(crate) fn analyze_with_plan_options_and_cache_stats(
     db: &mut dyn FactDatabase,
     cache: &dyn AnalysisCache,
     config_hash: &str,
@@ -101,7 +101,7 @@ pub fn analyze_with_plan_options_and_cache_stats(
     )
 }
 
-pub fn analyze_files_with_plan_options_and_cache_stats(
+pub(crate) fn analyze_files_with_plan_options_and_cache_stats(
     db: &mut dyn FactDatabase,
     files: &[&SourceFile],
     cache: &dyn AnalysisCache,
