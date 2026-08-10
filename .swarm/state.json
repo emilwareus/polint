@@ -797,15 +797,72 @@
       "commit": "844f8287",
       "merged_at": "2026-08-08T22:29:07+02:00",
       "note": "IdeDomainSolver sole domain path; LocalDomainSolver deleted"
+    },
+    "T-VERIFY": {
+      "state": "MERGED",
+      "depends_on": [],
+      "created_at": "2026-08-10T10:04:15+02:00",
+      "dispatched_at": "2026-08-10T10:04:15+02:00",
+      "branch": "static-analysis-architecture-review",
+      "commit": "8427dcc6",
+      "done_at": "2026-08-10T11:20:35+02:00",
+      "note": "tip green after G3 fix 8427dcc6"
+    },
+    "T-INTERN-A": {
+      "state": "CLAIMED",
+      "depends_on": [
+        "T-VERIFY"
+      ],
+      "created_at": "2026-08-10T10:04:15+02:00",
+      "branch": "swarm/T-INTERN-A",
+      "dispatched_at": "2026-08-10T11:20:35+02:00",
+      "attempts": 1
+    },
+    "T-INTERN-B": {
+      "state": "BLOCKED",
+      "depends_on": [
+        "T-INTERN-A"
+      ],
+      "created_at": "2026-08-10T10:04:15+02:00"
+    },
+    "T-INTERN-C": {
+      "state": "BLOCKED",
+      "depends_on": [
+        "T-INTERN-B"
+      ],
+      "created_at": "2026-08-10T10:04:15+02:00"
+    },
+    "T-SPLIT": {
+      "state": "BLOCKED",
+      "depends_on": [
+        "T-INTERN-C"
+      ],
+      "created_at": "2026-08-10T10:04:15+02:00"
+    },
+    "T-ARCH-DOC": {
+      "state": "BLOCKED",
+      "depends_on": [
+        "T-SPLIT"
+      ],
+      "created_at": "2026-08-10T10:04:15+02:00"
+    },
+    "T-SHIP-PREP": {
+      "state": "BLOCKED",
+      "depends_on": [
+        "T-ARCH-DOC"
+      ],
+      "created_at": "2026-08-10T10:04:15+02:00"
     }
   },
   "locks": {
     "golden": null,
     "fact_family": {}
   },
-  "milestone": "M4",
+  "milestone": "PRE-SHIP",
   "READY": [],
-  "IN_FLIGHT": [],
+  "IN_FLIGHT": [
+    "T-INTERN-A"
+  ],
   "IN_REVIEW": [],
   "MERGED": [
     "W2.2",
@@ -847,12 +904,11 @@
   "dispatch_allowed": true,
   "halt": {
     "active": false,
-    "cleared_at": "2026-08-08T22:41:16+02:00",
-    "reason": "M3+M4 task set complete; human ship decision"
+    "reason": "T-VERIFY in progress"
   },
   "integration_branch": "static-analysis-architecture-review",
   "never_merge_to_main": true,
-  "integration_head": "477ac54a",
+  "integration_head": "8427dcc6",
   "m0_gate": {
     "status": "PASS",
     "completed_at": "2026-08-08T11:52:00+02:00",
@@ -981,5 +1037,6 @@
   "m4_gate": {
     "status": "COMPLETE",
     "at": "2026-08-08T22:41:16+02:00"
-  }
+  },
+  "binding": ".swarm/DECISION-2026-08-10-PRE-SHIP.md"
 }
