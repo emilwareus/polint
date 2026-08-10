@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use crate::analysis::ids::TsDirectBindingId;
 use crate::core::{
     FileId, ImportFact, ModuleNode, ModuleNodeId, ModuleNodeKind, ResolutionStatus,
-    ResolvedImportFact,
+    ResolvedImportFact, StableKeyId, StableKeyInterner,
 };
 use crate::ts::binding::facts::{
     TsDirectBindingFact, TsDirectBindingKind, TsDirectBindingReason, TsDirectBindingStatus,
@@ -47,58 +47,67 @@ impl<'a> TsDirectBindingModuleInput<'a> {
 }
 
 pub(crate) fn resolve_direct_bindings(
+    interner: &StableKeyInterner,
     inventory: &TsInventoryOutput,
     scope: &TsScopeOutput,
 ) -> TsDirectBindingOutput {
-    resolve_direct_bindings_with_modules(inventory, scope, &TsDirectBindingModuleInput::empty())
+    resolve_direct_bindings_with_modules(
+        interner,
+        inventory,
+        scope,
+        &TsDirectBindingModuleInput::empty(),
+    )
 }
 
 pub(crate) fn resolve_direct_bindings_with_modules(
+    interner: &StableKeyInterner,
     inventory: &TsInventoryOutput,
     scope: &TsScopeOutput,
     module_input: &TsDirectBindingModuleInput<'_>,
 ) -> TsDirectBindingOutput {
-    let index = DirectBindingIndex::new(inventory, scope, module_input);
-    let mut rows = Vec::new();
+    crate::ts::with_frontend_stable_keys(interner, || {
+        let index = DirectBindingIndex::new(inventory, scope, module_input);
+        let mut rows = Vec::new();
 
-    for callsite in &inventory.callsites {
-        let callsite_scope = index.scope_key_for_callsite(callsite);
-        if let Some(reason) = intrinsic_unresolved_reason_for_callsite(callsite) {
-            rows.push(unresolved_row(callsite, reason));
-            continue;
+        for callsite in &inventory.callsites {
+            let callsite_scope = index.scope_key_for_callsite(callsite);
+            if let Some(reason) = intrinsic_unresolved_reason_for_callsite(callsite) {
+                rows.push(unresolved_row(callsite, reason));
+                continue;
+            }
+
+            let Some(display_name) = callsite.display_name.as_deref() else {
+                rows.push(unresolved_row(
+                    callsite,
+                    TsDirectBindingReason::LocalBindingMissing,
+                ));
+                continue;
+            };
+            let lookup = CalleeLookup::new(display_name);
+            let Some(visible) = index.visible_binding_for_lookup(callsite_scope, lookup) else {
+                rows.push(unresolved_row(
+                    callsite,
+                    TsDirectBindingReason::LocalBindingMissing,
+                ));
+                continue;
+            };
+
+            rows.push(index.row_for_visible_binding(callsite, visible.binding, lookup));
         }
 
-        let Some(display_name) = callsite.display_name.as_deref() else {
-            rows.push(unresolved_row(
-                callsite,
-                TsDirectBindingReason::LocalBindingMissing,
-            ));
-            continue;
-        };
-        let lookup = CalleeLookup::new(display_name);
-        let Some(visible) = index.visible_binding_for_lookup(callsite_scope, lookup) else {
-            rows.push(unresolved_row(
-                callsite,
-                TsDirectBindingReason::LocalBindingMissing,
-            ));
-            continue;
-        };
-
-        rows.push(index.row_for_visible_binding(callsite, visible.binding, lookup));
-    }
-
-    TsDirectBindingOutput { bindings: rows }.normalized()
+        TsDirectBindingOutput { bindings: rows }.normalized(interner)
+    })
 }
 
 struct DirectBindingIndex<'a> {
     function_by_name: BTreeMap<&'a str, Vec<&'a TsInventoryFunctionFact>>,
-    alias_by_scope_name: BTreeMap<(&'a str, &'a str), &'a TsBindingFact>,
-    import_by_scope_name: BTreeMap<(&'a str, &'a str), &'a TsBindingFact>,
-    local_by_scope_name: BTreeMap<(&'a str, &'a str), &'a TsBindingFact>,
-    unsupported_by_scope_name: BTreeMap<(&'a str, &'a str), &'a TsBindingFact>,
-    scope_parent_by_key: BTreeMap<&'a str, Option<&'a str>>,
+    alias_by_scope_name: BTreeMap<(StableKeyId, &'a str), &'a TsBindingFact>,
+    import_by_scope_name: BTreeMap<(StableKeyId, &'a str), &'a TsBindingFact>,
+    local_by_scope_name: BTreeMap<(StableKeyId, &'a str), &'a TsBindingFact>,
+    unsupported_by_scope_name: BTreeMap<(StableKeyId, &'a str), &'a TsBindingFact>,
+    scope_parent_by_key: BTreeMap<StableKeyId, Option<StableKeyId>>,
     scopes_by_file: BTreeMap<FileId, Vec<&'a TsScopeFact>>,
-    module_scope_by_file: BTreeMap<FileId, &'a str>,
+    module_scope_by_file: BTreeMap<FileId, StableKeyId>,
     module_index: ModuleBindingIndex<'a>,
 }
 
@@ -123,7 +132,7 @@ impl<'a> DirectBindingIndex<'a> {
                 .or_default()
                 .push(scope_row);
             if scope_row.kind == TsScopeKind::Module {
-                module_scope_by_file.insert(scope_row.file, scope_row.stable_key.as_str());
+                module_scope_by_file.insert(scope_row.file, scope_row.stable_key);
             }
         }
 
@@ -140,7 +149,7 @@ impl<'a> DirectBindingIndex<'a> {
                         TsBindingKind::Alias | TsBindingKind::Destructuring
                     )
                 })
-                .map(|binding| ((binding.scope_key.as_str(), binding.name.as_str()), binding))
+                .map(|binding| ((binding.scope_key, binding.name.as_str()), binding))
                 .collect(),
             import_by_scope_name: scope
                 .bindings
@@ -156,7 +165,7 @@ impl<'a> DirectBindingIndex<'a> {
                             | TsBindingKind::ReExport
                     )
                 })
-                .map(|binding| ((binding.scope_key.as_str(), binding.name.as_str()), binding))
+                .map(|binding| ((binding.scope_key, binding.name.as_str()), binding))
                 .collect(),
             local_by_scope_name: scope
                 .bindings
@@ -172,18 +181,18 @@ impl<'a> DirectBindingIndex<'a> {
                             | TsBindingKind::Parameter
                     )
                 })
-                .map(|binding| ((binding.scope_key.as_str(), binding.name.as_str()), binding))
+                .map(|binding| ((binding.scope_key, binding.name.as_str()), binding))
                 .collect(),
             unsupported_by_scope_name: scope
                 .bindings
                 .iter()
                 .filter(|binding| binding.binding_kind == TsBindingKind::UnsupportedDynamic)
-                .map(|binding| ((binding.scope_key.as_str(), binding.name.as_str()), binding))
+                .map(|binding| ((binding.scope_key, binding.name.as_str()), binding))
                 .collect(),
             scope_parent_by_key: scope
                 .scopes
                 .iter()
-                .map(|scope| (scope.stable_key.as_str(), scope.parent_scope_key.as_deref()))
+                .map(|scope| (scope.stable_key, scope.parent_scope_key))
                 .collect(),
             scopes_by_file,
             module_scope_by_file,
@@ -191,7 +200,7 @@ impl<'a> DirectBindingIndex<'a> {
         }
     }
 
-    fn scope_key_for_callsite(&self, callsite: &TsInventoryCallsiteFact) -> Option<&'a str> {
+    fn scope_key_for_callsite(&self, callsite: &TsInventoryCallsiteFact) -> Option<StableKeyId> {
         self.scopes_by_file
             .get(&callsite.file)
             .and_then(|scopes| {
@@ -200,14 +209,14 @@ impl<'a> DirectBindingIndex<'a> {
                     .filter(|scope| scope.kind != TsScopeKind::Module)
                     .filter(|scope| span_contains(&scope.span, &callsite.span))
                     .min_by_key(|scope| scope.span.end_byte - scope.span.start_byte)
-                    .map(|scope| scope.stable_key.as_str())
+                    .map(|scope| scope.stable_key)
             })
             .or_else(|| self.module_scope_by_file.get(&callsite.file).copied())
     }
 
     fn visible_binding_for_lookup(
         &self,
-        scope_key: Option<&str>,
+        scope_key: Option<StableKeyId>,
         lookup: CalleeLookup<'_>,
     ) -> Option<VisibleBinding<'a>> {
         let local = self.visible_any_binding(scope_key, lookup.local_name, false);
@@ -281,7 +290,7 @@ impl<'a> DirectBindingIndex<'a> {
     fn local_alias_target(&self, alias: &'a TsBindingFact) -> Option<&'a TsInventoryFunctionFact> {
         let target_name = alias.imported_name.as_deref()?;
         let target_binding = self.visible_binding_in_map(
-            Some(alias.scope_key.as_str()),
+            Some(alias.scope_key),
             target_name,
             &self.local_by_scope_name,
         )?;
@@ -323,7 +332,7 @@ impl<'a> DirectBindingIndex<'a> {
 
     fn visible_any_binding(
         &self,
-        scope_key: Option<&str>,
+        scope_key: Option<StableKeyId>,
         name: &str,
         exact_member: bool,
     ) -> Option<VisibleBinding<'a>> {
@@ -339,14 +348,14 @@ impl<'a> DirectBindingIndex<'a> {
             }
             current = self
                 .scope_parent_by_key
-                .get(scope)
+                .get(&scope)
                 .and_then(|parent| *parent);
             distance += 1;
         }
         None
     }
 
-    fn binding_in_scope(&self, scope: &str, name: &str) -> Option<&'a TsBindingFact> {
+    fn binding_in_scope(&self, scope: StableKeyId, name: &str) -> Option<&'a TsBindingFact> {
         self.unsupported_by_scope_name
             .get(&(scope, name))
             .copied()
@@ -357,9 +366,9 @@ impl<'a> DirectBindingIndex<'a> {
 
     fn visible_binding_in_map(
         &self,
-        scope_key: Option<&str>,
+        scope_key: Option<StableKeyId>,
         name: &str,
-        bindings: &BTreeMap<(&'a str, &'a str), &'a TsBindingFact>,
+        bindings: &BTreeMap<(StableKeyId, &'a str), &'a TsBindingFact>,
     ) -> Option<&'a TsBindingFact> {
         let mut current = scope_key;
         while let Some(scope) = current {
@@ -368,7 +377,7 @@ impl<'a> DirectBindingIndex<'a> {
             }
             current = self
                 .scope_parent_by_key
-                .get(scope)
+                .get(&scope)
                 .and_then(|parent| *parent);
         }
         None
@@ -565,7 +574,7 @@ impl<'a> ModuleBindingIndex<'a> {
         let module = self.module_file_by_node.get(&module_node)?;
         for binding in &module.scope.bindings {
             if binding.exported_name.as_deref() == Some(export_name)
-                && let Some(function_key) = binding.inventory_function_key.as_deref()
+                && let Some(function_key) = binding.inventory_function_key
                 && let Some(function) = module
                     .inventory
                     .functions
@@ -768,7 +777,7 @@ fn function_for_local_export<'a>(
     export: &TsBindingFact,
     local_name: &str,
 ) -> Option<&'a TsInventoryFunctionFact> {
-    if let Some(binding) = visible_function_binding(scope, export.scope_key.as_str(), local_name)
+    if let Some(binding) = visible_function_binding(scope, export.scope_key, local_name)
         && let Some(function) = function_by_binding(inventory, local_name, binding)
     {
         return Some(function);
@@ -789,13 +798,13 @@ fn function_for_local_export<'a>(
 
 fn visible_function_binding<'a>(
     scope: &'a TsScopeOutput,
-    scope_key: &str,
+    scope_key: StableKeyId,
     name: &str,
 ) -> Option<&'a TsBindingFact> {
     let parent_by_key = scope
         .scopes
         .iter()
-        .map(|scope| (scope.stable_key.as_str(), scope.parent_scope_key.as_deref()))
+        .map(|scope| (scope.stable_key, scope.parent_scope_key))
         .collect::<BTreeMap<_, _>>();
     let mut current = Some(scope_key);
     while let Some(scope_key) = current {
@@ -809,7 +818,7 @@ fn visible_function_binding<'a>(
         }) {
             return Some(binding);
         }
-        current = parent_by_key.get(scope_key).and_then(|parent| *parent);
+        current = parent_by_key.get(&scope_key).and_then(|parent| *parent);
     }
     None
 }
@@ -851,19 +860,19 @@ fn resolved_row(
     TsDirectBindingFact {
         id: TsDirectBindingId(0),
         callsite: callsite.id,
-        callsite_stable_key: callsite.stable_key.clone(),
+        callsite_stable_key: callsite.stable_key,
         target_function: Some(target.id),
-        target_function_stable_key: Some(target.stable_key.clone()),
+        target_function_stable_key: Some(target.stable_key),
         scope_binding: binding.map(|binding| binding.id),
-        scope_binding_stable_key: binding.map(|binding| binding.stable_key.clone()),
+        scope_binding_stable_key: binding.map(|binding| binding.stable_key),
         resolved_import: None,
         module_node: None,
         kind,
         status: TsDirectBindingStatus::Resolved,
         reason: None,
         stable_key: direct_binding_key(
-            &callsite.stable_key,
-            target.stable_key.as_str(),
+            callsite.stable_key,
+            Some(target.stable_key),
             kind,
             TsDirectBindingStatus::Resolved,
             None,
@@ -882,19 +891,19 @@ fn resolved_import_row(
     TsDirectBindingFact {
         id: TsDirectBindingId(0),
         callsite: callsite.id,
-        callsite_stable_key: callsite.stable_key.clone(),
+        callsite_stable_key: callsite.stable_key,
         target_function: Some(target.id),
-        target_function_stable_key: Some(target.stable_key.clone()),
+        target_function_stable_key: Some(target.stable_key),
         scope_binding: Some(binding.id),
-        scope_binding_stable_key: Some(binding.stable_key.clone()),
+        scope_binding_stable_key: Some(binding.stable_key),
         resolved_import: Some(resolved_import.id),
         module_node: Some(module_node),
         kind,
         status: TsDirectBindingStatus::Resolved,
         reason: None,
         stable_key: direct_binding_key(
-            &callsite.stable_key,
-            target.stable_key.as_str(),
+            callsite.stable_key,
+            Some(target.stable_key),
             kind,
             TsDirectBindingStatus::Resolved,
             None,
@@ -909,7 +918,7 @@ fn unresolved_row(
     TsDirectBindingFact {
         id: TsDirectBindingId(0),
         callsite: callsite.id,
-        callsite_stable_key: callsite.stable_key.clone(),
+        callsite_stable_key: callsite.stable_key,
         target_function: None,
         target_function_stable_key: None,
         scope_binding: None,
@@ -920,8 +929,8 @@ fn unresolved_row(
         status: TsDirectBindingStatus::Unresolved,
         reason: Some(reason),
         stable_key: direct_binding_key(
-            &callsite.stable_key,
-            "<unresolved>",
+            callsite.stable_key,
+            None,
             TsDirectBindingKind::LocalFunction,
             TsDirectBindingStatus::Unresolved,
             Some(reason),
@@ -941,19 +950,19 @@ fn unresolved_import_row(
     TsDirectBindingFact {
         id: TsDirectBindingId(0),
         callsite: callsite.id,
-        callsite_stable_key: callsite.stable_key.clone(),
+        callsite_stable_key: callsite.stable_key,
         target_function: None,
         target_function_stable_key: None,
         scope_binding: Some(binding.id),
-        scope_binding_stable_key: Some(binding.stable_key.clone()),
+        scope_binding_stable_key: Some(binding.stable_key),
         resolved_import: resolved_import.map(|resolved| resolved.id),
         module_node,
         kind,
         status,
         reason: Some(reason),
         stable_key: direct_binding_key(
-            &callsite.stable_key,
-            binding.stable_key.as_str(),
+            callsite.stable_key,
+            Some(binding.stable_key),
             kind,
             status,
             Some(reason),
@@ -962,15 +971,19 @@ fn unresolved_import_row(
 }
 
 fn direct_binding_key(
-    callsite_key: &str,
-    target_key: &str,
+    callsite_key: StableKeyId,
+    target_key: Option<StableKeyId>,
     kind: TsDirectBindingKind,
     status: TsDirectBindingStatus,
     reason: Option<TsDirectBindingReason>,
-) -> String {
-    format!(
+) -> StableKeyId {
+    let callsite_key = crate::ts::resolve_frontend_stable_key(callsite_key);
+    let target_key = target_key
+        .map(crate::ts::resolve_frontend_stable_key)
+        .unwrap_or_else(|| "<unresolved>".into());
+    crate::ts::intern_frontend_stable_key(format!(
         "ts_direct_binding|callsite={callsite_key}|target={target_key}|kind={kind:?}|status={}|reason={}",
         status.as_str(),
         reason.map(TsDirectBindingReason::as_str).unwrap_or("none")
-    )
+    ))
 }

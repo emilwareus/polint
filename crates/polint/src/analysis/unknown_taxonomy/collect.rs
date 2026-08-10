@@ -242,7 +242,7 @@ fn go_semantic_unknowns(db: &AnalysisDb) -> Vec<UnknownRow> {
                     precision: Some("unsupported".to_string()),
                     docs_path: Some("docs/facts/capability-plans.md".to_string()),
                     suggested_artifact: Some("go_setup".to_string()),
-                    source_stable_key: Some(error.stable_key.clone()),
+                    source_stable_key: Some(interner.resolve(error.stable_key).to_string()),
                 },
             )
         })
@@ -1257,14 +1257,16 @@ mod tests {
     #[test]
     fn graph_engine_unknowns_include_go_solver_model_and_refined_rows() {
         let mut db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
         db.replace_go_semantic_facts(GoSemanticFactsOutput {
             package_errors: vec![
-                go_error("go:load", "package load failed"),
+                go_error(&interner, "go:load", "package load failed"),
                 go_error(
+                    &interner,
                     "go:version",
                     "polint-go-frontend source mode requires Go 1.25",
                 ),
-                go_error("go:timeout", "GoSidecarTimeout: request timeout"),
+                go_error(&interner, "go:timeout", "GoSidecarTimeout: request timeout"),
             ],
             ..GoSemanticFactsOutput::default()
         })
@@ -1396,8 +1398,9 @@ mod tests {
     #[test]
     fn graph_engine_unknowns_do_not_duplicate_package_error_or_quality_diagnostics() {
         let mut db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
         db.replace_go_semantic_facts(GoSemanticFactsOutput {
-            package_errors: vec![go_error("go:load", "load failed")],
+            package_errors: vec![go_error(&interner, "go:load", "load failed")],
             ..GoSemanticFactsOutput::default()
         })
         .expect("go semantic facts");
@@ -1420,10 +1423,14 @@ mod tests {
         assert_eq!(rows[0].reason.as_deref(), Some("load failed"));
     }
 
-    fn go_error(stable_key: &str, message: &str) -> GoSemanticPackageErrorFact {
+    fn go_error(
+        interner: &crate::core::StableKeyInterner,
+        stable_key: &str,
+        message: &str,
+    ) -> GoSemanticPackageErrorFact {
         GoSemanticPackageErrorFact {
             id: GoSemanticPackageErrorId(0),
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key),
             package_id: "pkg".to_string(),
             package_path: "pkg".to_string(),
             message: message.to_string(),

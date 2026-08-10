@@ -397,10 +397,11 @@ mod tests {
             span: Span::point(file, 1, 1),
             language: Language::Go,
         });
+        let package_stable_key = db.stable_key_interner().intern("pkg");
         db.replace_go_semantic_facts(GoSemanticFactsOutput {
             packages: vec![GoSemanticPackageFact {
                 id: GoSemanticPackageId(0),
-                stable_key: "pkg".to_string(),
+                stable_key: package_stable_key,
                 package_id: "github.com/acme/project/pkg".to_string(),
                 package_path: "github.com/acme/project/pkg".to_string(),
                 package_name: "foo".to_string(),

@@ -669,8 +669,9 @@ mod tests {
         let source = std::fs::read_to_string(&forms).expect("read TS inventory span fixture");
         let mut db = AnalysisDb::new();
         let file_id = db.add_file(forms, "src/forms.ts".to_string(), source);
+        let interner = db.stable_key_interner();
         let file = db.file(file_id).expect("fixture file");
-        let inventory = extract_ts_inventory(file);
+        let inventory = extract_ts_inventory(&interner, file);
         let expectations = ts_inventory_span_expectations();
         let expected_spans = ts_inventory_span_oracle();
         assert_eq!(

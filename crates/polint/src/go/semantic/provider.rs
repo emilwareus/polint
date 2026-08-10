@@ -236,7 +236,8 @@ fn store_output(
     manifest: &ProviderManifest,
     parts: StoreOutputParts,
 ) -> GoSemanticProviderRunOutput {
-    let output = parts.output.normalized();
+    let interner = db.stable_key_interner();
+    let output = parts.output.normalized(&interner);
     match db.replace_go_semantic_facts(output) {
         // `replace_go_semantic_facts` returns the resilience report: the count of malformed
         // RTA-signal harvest rows it dropped (FIX 3) and the duplicate STRUCTURAL rows it
@@ -258,6 +259,7 @@ fn store_output(
                 &parts.digest_inputs,
                 &parts.lifecycle,
                 &stored_output,
+                &interner,
             );
             let mut diagnostics = parts.diagnostics;
             if report.dropped_harvest_rows > 0 {
@@ -287,6 +289,7 @@ fn go_semantic_output_digest(
     digest_inputs: &DigestInputs,
     lifecycle: &GoAnalysisConfig,
     output: &GoSemanticFactsOutput,
+    interner: &crate::core::StableKeyInterner,
 ) -> Digest {
     let cache_inputs = GoSemanticCacheInputs {
         sidecar_digest: digest_inputs.sidecar_digest.clone(),
@@ -308,7 +311,7 @@ fn go_semantic_output_digest(
     parts.extend(output.packages.iter().map(|package| {
         format!(
             "package={} id={} path={} name={} module={} files={}",
-            package.stable_key,
+            interner.resolve(package.stable_key),
             package.package_id,
             package.package_path,
             package.package_name,
@@ -319,7 +322,7 @@ fn go_semantic_output_digest(
     parts.extend(output.functions.iter().map(|function| {
         format!(
             "function={} package={} qualified={} kind={:?} file={} span={}",
-            function.stable_key,
+            interner.resolve(function.stable_key),
             function.package_path,
             function.qualified,
             function.kind,
@@ -330,7 +333,7 @@ fn go_semantic_output_digest(
     parts.extend(output.callsites.iter().map(|callsite| {
         format!(
             "callsite={} package={} caller={} static={} status={:?} file={} span={}",
-            callsite.stable_key,
+            interner.resolve(callsite.stable_key),
             callsite.package_path,
             callsite.caller,
             callsite.static_callee.as_deref().unwrap_or(""),
@@ -342,7 +345,7 @@ fn go_semantic_output_digest(
     parts.extend(output.method_sets.iter().map(|method_set| {
         format!(
             "method_set={} package={} type={} methods={}",
-            method_set.stable_key,
+            interner.resolve(method_set.stable_key),
             method_set.package_path,
             method_set.type_name,
             method_set.methods.join(",")
@@ -359,7 +362,7 @@ fn go_semantic_output_digest(
     parts.extend(output.instantiated_types.iter().map(|instantiated_type| {
         format!(
             "instantiated_type={} package={} type={}",
-            instantiated_type.stable_key,
+            interner.resolve(instantiated_type.stable_key),
             instantiated_type.package_path,
             instantiated_type.type_name
         )
@@ -367,16 +370,18 @@ fn go_semantic_output_digest(
     parts.extend(output.address_taken.iter().map(|address_taken| {
         format!(
             "address_taken={} package={} function={}",
-            address_taken.stable_key, address_taken.package_path, address_taken.function
+            interner.resolve(address_taken.stable_key),
+            address_taken.package_path,
+            address_taken.function
         )
     }));
     parts.extend(output.dynamic_dispatch.iter().map(|dynamic_dispatch| {
         format!(
             "dynamic_dispatch={} package={} caller={} callsite={} interface={} method={} signature={}",
-            dynamic_dispatch.stable_key,
+            interner.resolve(dynamic_dispatch.stable_key),
             dynamic_dispatch.package_path,
             dynamic_dispatch.caller,
-            dynamic_dispatch.callsite_stable_key,
+            interner.resolve(dynamic_dispatch.callsite_stable_key),
             dynamic_dispatch.interface_type.as_deref().unwrap_or(""),
             dynamic_dispatch.method.as_deref().unwrap_or(""),
             dynamic_dispatch.signature.as_deref().unwrap_or("")
@@ -385,13 +390,19 @@ fn go_semantic_output_digest(
     parts.extend(output.rta_edges.iter().map(|edge| {
         format!(
             "rta_edge={} package={} caller={} callee={} kind={}",
-            edge.stable_key, edge.package_path, edge.caller, edge.callee, edge.edge_kind
+            interner.resolve(edge.stable_key),
+            edge.package_path,
+            edge.caller,
+            edge.callee,
+            edge.edge_kind
         )
     }));
     parts.extend(output.package_errors.iter().map(|package_error| {
         format!(
             "package_error={} package={} message={}",
-            package_error.stable_key, package_error.package_path, package_error.message
+            interner.resolve(package_error.stable_key),
+            package_error.package_path,
+            package_error.message
         )
     }));
     if output.packages.is_empty()
@@ -695,6 +706,7 @@ mod tests {
             },
             &default_lifecycle(),
             &db.go_semantic_facts_output(),
+            &db.stable_key_interner(),
         );
         assert_eq!(
             output.output_digest,
@@ -797,6 +809,7 @@ mod tests {
             },
             &default_lifecycle(),
             &db.go_semantic_facts_output(),
+            &db.stable_key_interner(),
         );
         assert_eq!(
             output.output_digest,
@@ -902,7 +915,10 @@ mod tests {
 
     /// Compute `go_semantic_output_digest` for `output` with fixed (irrelevant-to-this-test)
     /// provider/lifecycle inputs, so a test can isolate the effect of the OUTPUT row content.
-    fn output_digest_for(output: &GoSemanticFactsOutput) -> Digest {
+    fn output_digest_for(
+        output: &GoSemanticFactsOutput,
+        interner: &crate::core::StableKeyInterner,
+    ) -> Digest {
         let temp = tempfile::tempdir().expect("tempdir");
         std::fs::write(temp.path().join(".polint.toml"), "").expect("config");
         let loaded = load_config(temp.path()).expect("config loads");
@@ -919,6 +935,7 @@ mod tests {
             },
             &default_lifecycle(),
             output,
+            interner,
         )
     }
 
@@ -930,6 +947,7 @@ mod tests {
     /// was folded, so each of these mutations left the digest unchanged.
     #[test]
     fn rta_harvest_families_participate_in_go_semantic_output_digest() {
+        let interner = crate::core::StableKeyInterner::default();
         use crate::go::semantic::facts::{
             GoSemanticAddressTakenFact, GoSemanticAddressTakenId, GoSemanticDynamicDispatchFact,
             GoSemanticDynamicDispatchId, GoSemanticInstantiatedTypeFact,
@@ -940,33 +958,33 @@ mod tests {
         let base = GoSemanticFactsOutput {
             instantiated_types: vec![GoSemanticInstantiatedTypeFact {
                 id: GoSemanticInstantiatedTypeId(0),
-                stable_key: "inst|pkg.Dog".to_string(),
+                stable_key: interner.intern("inst|pkg.Dog"),
                 package_id: "pkg".to_string(),
                 package_path: "pkg".to_string(),
                 type_name: "pkg.Dog".to_string(),
             }],
             address_taken: vec![GoSemanticAddressTakenFact {
                 id: GoSemanticAddressTakenId(0),
-                stable_key: "at|pkg.handler".to_string(),
+                stable_key: interner.intern("at|pkg.handler"),
                 package_id: "pkg".to_string(),
                 package_path: "pkg".to_string(),
                 function: "pkg.handler".to_string(),
             }],
             dynamic_dispatch: vec![GoSemanticDynamicDispatchFact {
                 id: GoSemanticDynamicDispatchId(0),
-                stable_key: "dd|pkg.main".to_string(),
+                stable_key: interner.intern("dd|pkg.main"),
                 package_id: "pkg".to_string(),
                 package_path: "pkg".to_string(),
                 caller: "pkg.main".to_string(),
-                callsite_stable_key: "cs|pkg.main".to_string(),
+                callsite_stable_key: interner.intern("cs|pkg.main"),
                 interface_type: Some("pkg.Speaker".to_string()),
                 method: Some("Speak".to_string()),
                 signature: None,
             }],
             ..GoSemanticFactsOutput::default()
         }
-        .normalized();
-        let base_digest = output_digest_for(&base);
+        .normalized(&interner);
+        let base_digest = output_digest_for(&base, &interner);
 
         // (a) Adding an instantiated type (the RTA rapid-type filter) changes the digest.
         let mut changed_instantiated = base.clone();
@@ -974,14 +992,14 @@ mod tests {
             .instantiated_types
             .push(GoSemanticInstantiatedTypeFact {
                 id: GoSemanticInstantiatedTypeId(0),
-                stable_key: "inst|pkg.Cat".to_string(),
+                stable_key: interner.intern("inst|pkg.Cat"),
                 package_id: "pkg".to_string(),
                 package_path: "pkg".to_string(),
                 type_name: "pkg.Cat".to_string(),
             });
         assert_ne!(
             base_digest,
-            output_digest_for(&changed_instantiated.normalized()),
+            output_digest_for(&changed_instantiated.normalized(&interner), &interner),
             "an instantiated_type change must invalidate the go.semantic output digest"
         );
 
@@ -991,14 +1009,14 @@ mod tests {
             .address_taken
             .push(GoSemanticAddressTakenFact {
                 id: GoSemanticAddressTakenId(0),
-                stable_key: "at|pkg.other".to_string(),
+                stable_key: interner.intern("at|pkg.other"),
                 package_id: "pkg".to_string(),
                 package_path: "pkg".to_string(),
                 function: "pkg.other".to_string(),
             });
         assert_ne!(
             base_digest,
-            output_digest_for(&changed_address_taken.normalized()),
+            output_digest_for(&changed_address_taken.normalized(&interner), &interner),
             "an address_taken change must invalidate the go.semantic output digest"
         );
 
@@ -1007,7 +1025,7 @@ mod tests {
         changed_dispatch.dynamic_dispatch[0].method = Some("Bark".to_string());
         assert_ne!(
             base_digest,
-            output_digest_for(&changed_dispatch.normalized()),
+            output_digest_for(&changed_dispatch.normalized(&interner), &interner),
             "a dynamic_dispatch discriminant change must invalidate the go.semantic output digest"
         );
 
@@ -1015,7 +1033,7 @@ mod tests {
         let mut changed_rta_edge = base;
         changed_rta_edge.rta_edges.push(GoSemanticRtaEdgeFact {
             id: GoSemanticRtaEdgeId(0),
-            stable_key: "rta|main|init1".to_string(),
+            stable_key: interner.intern("rta|main|init1"),
             package_id: "pkg".to_string(),
             package_path: "pkg".to_string(),
             caller: "main".to_string(),
@@ -1024,7 +1042,7 @@ mod tests {
         });
         assert_ne!(
             base_digest,
-            output_digest_for(&changed_rta_edge.normalized()),
+            output_digest_for(&changed_rta_edge.normalized(&interner), &interner),
             "an rta_edge change must invalidate the go.semantic output digest"
         );
     }

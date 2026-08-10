@@ -244,7 +244,11 @@ fn ts_direct_bindings_fixture_asserts_each_claimed_binding_form_projects_to_cons
     let bindings = collect_ts_direct_bindings(&output.db);
 
     for expected in ts_direct_binding_expectations() {
-        let binding = binding_for_callsite(&bindings.bindings, expected.callsite);
+        let binding = binding_for_callsite(
+            &output.db.stable_key_interner(),
+            &bindings.bindings,
+            expected.callsite,
+        );
         assert_eq!(
             binding.status, expected.status,
             "ts_direct_bindings: {} status mismatch: {binding:#?}",
@@ -264,16 +268,25 @@ fn ts_direct_bindings_fixture_asserts_each_claimed_binding_form_projects_to_cons
             assert!(
                 binding
                     .target_function_stable_key
-                    .as_deref()
-                    .is_some_and(|key| key.contains(target)),
+                    .is_some_and(|key| output.db.resolve_stable_key(key).contains(target)),
                 "ts_direct_bindings: {} target must contain {target}: {binding:#?}",
                 expected.callsite
             );
         }
         if expected.status == TsDirectBindingStatus::Resolved {
-            assert_ts_direct_constraint(&observed, "call_constraint", binding);
+            assert_ts_direct_constraint(
+                &output.db.stable_key_interner(),
+                &observed,
+                "call_constraint",
+                binding,
+            );
             if expected.emits_copy_edge {
-                assert_ts_direct_constraint(&observed, "copy_edge", binding);
+                assert_ts_direct_constraint(
+                    &output.db.stable_key_interner(),
+                    &observed,
+                    "copy_edge",
+                    binding,
+                );
             }
         }
     }
@@ -303,7 +316,11 @@ fn semantic_graph_digest_changes_when_ts_path_alias_fixture_changes() {
         run_kernel_for_repo_with_plan_for_test(temp.path(), &plan).expect("first kernel run");
     let first_digest = provider_output_digest(&first, "polint.semantic_graph");
     let first_bindings = collect_ts_direct_bindings(&first.db);
-    let first_alias = binding_for_callsite(&first_bindings.bindings, "aliasTarget");
+    let first_alias = binding_for_callsite(
+        &first.db.stable_key_interner(),
+        &first_bindings.bindings,
+        "aliasTarget",
+    );
     assert_eq!(first_alias.status, TsDirectBindingStatus::Resolved);
 
     std::fs::write(
@@ -328,7 +345,11 @@ fn semantic_graph_digest_changes_when_ts_path_alias_fixture_changes() {
         run_kernel_for_repo_with_plan_for_test(temp.path(), &plan).expect("second kernel run");
     let second_digest = provider_output_digest(&second, "polint.semantic_graph");
     let second_bindings = collect_ts_direct_bindings(&second.db);
-    let second_alias = binding_for_callsite(&second_bindings.bindings, "aliasTarget");
+    let second_alias = binding_for_callsite(
+        &second.db.stable_key_interner(),
+        &second_bindings.bindings,
+        "aliasTarget",
+    );
 
     assert_ne!(
         first_digest, second_digest,
@@ -436,16 +457,22 @@ fn ts_direct_binding_expectations() -> [TsDirectBindingExpectation; 9] {
 }
 
 fn binding_for_callsite<'a>(
+    interner: &crate::core::StableKeyInterner,
     bindings: &'a [TsDirectBindingFact],
     callsite: &str,
 ) -> &'a TsDirectBindingFact {
     bindings
         .iter()
-        .find(|binding| binding.callsite_stable_key.contains(callsite))
+        .find(|binding| {
+            interner
+                .resolve(binding.callsite_stable_key)
+                .contains(callsite)
+        })
         .unwrap_or_else(|| panic!("missing direct binding for callsite {callsite}: {bindings:#?}"))
 }
 
 fn assert_ts_direct_constraint(
+    interner: &crate::core::StableKeyInterner,
     observed: &serde_json::Value,
     kind: &str,
     binding: &TsDirectBindingFact,
@@ -457,11 +484,11 @@ fn assert_ts_direct_constraint(
         constraints.iter().any(|row| {
             row["source"] == "ts_direct_binding"
                 && row["kind"].as_str() == Some(kind)
-                && row["stable_key"]
-                    .as_str()
-                    .is_some_and(|stable_key| stable_key.contains(&binding.stable_key))
+                && row["stable_key"].as_str().is_some_and(|stable_key| {
+                    stable_key.contains(interner.resolve(binding.stable_key).as_ref())
+                })
         }),
         "missing TS direct-binding {kind} constraint for {}: {observed:#}",
-        binding.stable_key
+        interner.resolve(binding.stable_key)
     );
 }

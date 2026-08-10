@@ -1361,7 +1361,8 @@ impl AnalysisDb {
         &mut self,
         output: TsObjectModelOutput,
     ) -> Result<(), AnalysisError> {
-        let store = TsObjectModelStore::try_from_output(output)?;
+        let interner = self.stable_key_interner();
+        let store = TsObjectModelStore::try_from_output(output, &interner)?;
         *self.ts_object_model_store_mut() = store;
         Ok(())
     }
@@ -1436,7 +1437,8 @@ impl AnalysisDb {
         &mut self,
         output: GoSemanticFactsOutput,
     ) -> Result<GoSemanticStoreReport, AnalysisError> {
-        let store = GoSemanticStore::from_output(output)?;
+        let interner = self.stable_key_interner();
+        let store = GoSemanticStore::from_output(output, &interner)?;
         let report = store.report();
         *self.go_semantic_store_mut() = store;
         Ok(report)

@@ -8,6 +8,55 @@ pub(crate) mod inventory;
 pub(crate) mod object_model;
 pub(crate) mod parse;
 pub(crate) mod scope;
+
+use std::cell::RefCell;
+
+use std::sync::Arc;
+
+use crate::core::{StableKeyId, StableKeyInterner};
+
+thread_local! {
+    static FRONTEND_STABLE_KEYS: RefCell<Option<StableKeyInterner>> = const { RefCell::new(None) };
+}
+
+struct FrontendStableKeysGuard {
+    previous: Option<StableKeyInterner>,
+}
+
+impl Drop for FrontendStableKeysGuard {
+    fn drop(&mut self) {
+        FRONTEND_STABLE_KEYS.with(|slot| {
+            slot.replace(self.previous.take());
+        });
+    }
+}
+
+pub(crate) fn with_frontend_stable_keys<T>(
+    interner: &StableKeyInterner,
+    operation: impl FnOnce() -> T,
+) -> T {
+    let previous = FRONTEND_STABLE_KEYS.with(|slot| slot.replace(Some(interner.clone())));
+    let _guard = FrontendStableKeysGuard { previous };
+    operation()
+}
+
+pub(crate) fn intern_frontend_stable_key(key: String) -> StableKeyId {
+    FRONTEND_STABLE_KEYS.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .expect("TS frontend extraction requires a stable-key interner")
+            .intern(key)
+    })
+}
+
+pub(crate) fn resolve_frontend_stable_key(key: StableKeyId) -> Arc<str> {
+    FRONTEND_STABLE_KEYS.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .expect("TS frontend extraction requires a stable-key interner")
+            .resolve(key)
+    })
+}
 pub(crate) mod spans;
 #[cfg(test)]
 mod tests;

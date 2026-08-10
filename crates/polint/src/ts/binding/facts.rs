@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::analysis::ids::{
     TsBindingId, TsDirectBindingId, TsInventoryCallsiteId, TsInventoryFunctionId,
 };
-use crate::core::{ModuleNodeId, ResolvedImportId};
+use crate::core::{ModuleNodeId, ResolvedImportId, StableKeyId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) enum TsDirectBindingStatus {
@@ -78,21 +78,21 @@ pub(crate) enum TsDirectBindingKind {
     CommonJsRequireMember,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TsDirectBindingFact {
     pub(crate) id: TsDirectBindingId,
     pub(crate) callsite: TsInventoryCallsiteId,
-    pub(crate) callsite_stable_key: String,
+    pub(crate) callsite_stable_key: StableKeyId,
     pub(crate) target_function: Option<TsInventoryFunctionId>,
-    pub(crate) target_function_stable_key: Option<String>,
+    pub(crate) target_function_stable_key: Option<StableKeyId>,
     pub(crate) scope_binding: Option<TsBindingId>,
-    pub(crate) scope_binding_stable_key: Option<String>,
+    pub(crate) scope_binding_stable_key: Option<StableKeyId>,
     pub(crate) resolved_import: Option<ResolvedImportId>,
     pub(crate) module_node: Option<ModuleNodeId>,
     pub(crate) kind: TsDirectBindingKind,
     pub(crate) status: TsDirectBindingStatus,
     pub(crate) reason: Option<TsDirectBindingReason>,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
 #[cfg(test)]
@@ -153,20 +153,21 @@ mod tests {
 
     #[test]
     fn binding_fact_references_existing_identities_without_module_payload_copy() {
+        let interner = crate::core::StableKeyInterner::default();
         let fact = TsDirectBindingFact {
             id: TsDirectBindingId(1),
             callsite: TsInventoryCallsiteId(2),
-            callsite_stable_key: "callsite:f".to_string(),
+            callsite_stable_key: interner.intern("callsite:f"),
             target_function: Some(TsInventoryFunctionId(3)),
-            target_function_stable_key: Some("function:f".to_string()),
+            target_function_stable_key: Some(interner.intern("function:f")),
             scope_binding: Some(TsBindingId(4)),
-            scope_binding_stable_key: Some("binding:f".to_string()),
+            scope_binding_stable_key: Some(interner.intern("binding:f")),
             resolved_import: Some(ResolvedImportId(5)),
             module_node: Some(ModuleNodeId(6)),
             kind: TsDirectBindingKind::ImportedNamed,
             status: TsDirectBindingStatus::Resolved,
             reason: None,
-            stable_key: "direct:f".to_string(),
+            stable_key: interner.intern("direct:f"),
         };
 
         assert_eq!(fact.resolved_import, Some(ResolvedImportId(5)));

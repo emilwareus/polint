@@ -465,8 +465,9 @@ None,
                 "src/app.ts".to_string(),
                 "const holder = { target() {} }; holder.target();\n".to_string(),
             );
+            let interner = db.stable_key_interner();
 
-            db.replace_ts_object_model_facts(full_output(file, "first"))
+            db.replace_ts_object_model_facts(full_output(&interner, file, "first"))
                 .expect("first object-model replace");
             assert_eq!(db.ts_object_allocations().len(), 1);
             assert_eq!(db.ts_property_writes().len(), 1);
@@ -476,23 +477,24 @@ None,
             assert!(
                 db.ts_object_model_store()
                     .expect("object-model store")
-                    .allocation_by_stable_key("object:first")
+                    .allocation_by_stable_key(interner.intern("object:first"))
                     .is_some()
             );
+            let interner = db.stable_key_interner();
 
-            db.replace_ts_object_model_facts(allocation_only_output(file, "second"))
+            db.replace_ts_object_model_facts(allocation_only_output(&interner, file, "second"))
                 .expect("second object-model replace");
 
             assert_eq!(db.ts_object_allocations().len(), 1);
             assert_eq!(db.ts_object_allocations()[0].id, TsObjectAllocationId(0));
-            assert_eq!(db.ts_object_allocations()[0].stable_key, "object:second");
+            assert_eq!(db.ts_object_allocations()[0].stable_key, interner.intern("object:second"));
             assert!(db.ts_property_writes().is_empty());
             assert!(db.ts_property_reads().is_empty());
             assert!(db.ts_receiver_bindings().is_empty());
             assert!(db.ts_prototype_links().is_empty());
             let store = db.ts_object_model_store().expect("object-model store");
-            assert!(store.allocation_by_stable_key("object:first").is_none());
-            assert!(store.allocation_by_stable_key("object:second").is_some());
+            assert!(store.allocation_by_stable_key(interner.intern("object:first")).is_none());
+            assert!(store.allocation_by_stable_key(interner.intern("object:second")).is_some());
         }
 
         #[test]
@@ -503,12 +505,13 @@ None,
                 "src/app.ts".to_string(),
                 "const holder = {};\n".to_string(),
             );
+            let interner = db.stable_key_interner();
 
             let error = db
                 .replace_ts_object_model_facts(TsObjectModelOutput {
                     allocations: vec![
-                        allocation(file, "object:dup", 1),
-                        allocation(file, "object:dup", 2),
+                        allocation(&interner, file, "object:dup", 1),
+                        allocation(&interner, file, "object:dup", 2),
                     ],
                     property_writes: Vec::new(),
                     property_reads: Vec::new(),
@@ -523,19 +526,19 @@ None,
             );
         }
 
-        fn full_output(file: FileId, suffix: &str) -> TsObjectModelOutput {
+        fn full_output(interner: &StableKeyInterner, file: FileId, suffix: &str) -> TsObjectModelOutput {
             TsObjectModelOutput {
-                allocations: vec![allocation(file, &format!("object:{suffix}"), 10)],
-                property_writes: vec![property_write(file, &format!("write:{suffix}"), suffix)],
-                property_reads: vec![property_read(file, &format!("read:{suffix}"), suffix)],
-                receiver_bindings: vec![receiver_binding(file, &format!("receiver:{suffix}"))],
-                prototype_links: vec![prototype_link(file, &format!("prototype:{suffix}"), suffix)],
+                allocations: vec![allocation(interner, file, &format!("object:{suffix}"), 10)],
+                property_writes: vec![property_write(interner, file, &format!("write:{suffix}"), suffix)],
+                property_reads: vec![property_read(interner, file, &format!("read:{suffix}"), suffix)],
+                receiver_bindings: vec![receiver_binding(interner, file, &format!("receiver:{suffix}"))],
+                prototype_links: vec![prototype_link(interner, file, &format!("prototype:{suffix}"), suffix)],
             }
         }
 
-        fn allocation_only_output(file: FileId, suffix: &str) -> TsObjectModelOutput {
+        fn allocation_only_output(interner: &StableKeyInterner, file: FileId, suffix: &str) -> TsObjectModelOutput {
             TsObjectModelOutput {
-                allocations: vec![allocation(file, &format!("object:{suffix}"), 20)],
+                allocations: vec![allocation(interner, file, &format!("object:{suffix}"), 20)],
                 property_writes: Vec::new(),
                 property_reads: Vec::new(),
                 receiver_bindings: Vec::new(),
@@ -543,13 +546,13 @@ None,
             }
         }
 
-        fn allocation(file: FileId, stable_key: &str, id: u64) -> TsObjectAllocationFact {
+        fn allocation(interner: &StableKeyInterner, file: FileId, stable_key: &str, id: u64) -> TsObjectAllocationFact {
             TsObjectAllocationFact {
                 id: TsObjectAllocationId(id),
                 file,
                 span: test_span(file, 1),
-                stable_key: stable_key.to_string(),
-                lexical_parent_key: Some("scope:module".to_string()),
+                stable_key: interner.intern(stable_key),
+                lexical_parent_key: Some(interner.intern("scope:module")),
                 inventory_function: None,
                 inventory_function_stable_key: None,
                 inventory_callsite: None,
@@ -559,63 +562,63 @@ None,
             }
         }
 
-        fn property_write(file: FileId, stable_key: &str, suffix: &str) -> TsPropertyWriteFact {
+        fn property_write(interner: &StableKeyInterner, file: FileId, stable_key: &str, suffix: &str) -> TsPropertyWriteFact {
             TsPropertyWriteFact {
                 id: TsPropertyWriteId(99),
                 file,
                 span: test_span(file, 2),
-                stable_key: stable_key.to_string(),
-                base_object_stable_key: format!("object:{suffix}"),
+                stable_key: interner.intern(stable_key),
+                base_object_stable_key: interner.intern(format!("object:{suffix}")),
                 property_key: property_key(),
                 value_function: None,
-                value_function_stable_key: Some(format!("function:{suffix}")),
+                value_function_stable_key: Some(interner.intern(format!("function:{suffix}"))),
                 value_object_stable_key: None,
                 status: TsObjectModelStatus::resolved(),
             }
         }
 
-        fn property_read(file: FileId, stable_key: &str, suffix: &str) -> TsPropertyReadFact {
+        fn property_read(interner: &StableKeyInterner, file: FileId, stable_key: &str, suffix: &str) -> TsPropertyReadFact {
             TsPropertyReadFact {
                 id: TsPropertyReadId(99),
                 file,
                 span: test_span(file, 3),
-                stable_key: stable_key.to_string(),
-                base_object_stable_key: format!("object:{suffix}"),
+                stable_key: interner.intern(stable_key),
+                base_object_stable_key: interner.intern(format!("object:{suffix}")),
                 property_key: property_key(),
-                destination_stable_key: Some(format!("place:{suffix}")),
+                destination_stable_key: Some(interner.intern(format!("place:{suffix}"))),
                 callsite: None,
-                callsite_stable_key: Some(format!("callsite:{suffix}")),
+                callsite_stable_key: Some(interner.intern(format!("callsite:{suffix}"))),
                 status: TsObjectModelStatus::resolved(),
             }
         }
 
-        fn receiver_binding(file: FileId, stable_key: &str) -> TsReceiverBindingFact {
+        fn receiver_binding(interner: &StableKeyInterner, file: FileId, stable_key: &str) -> TsReceiverBindingFact {
             TsReceiverBindingFact {
                 id: TsReceiverBindingId(99),
                 file,
                 span: test_span(file, 4),
-                stable_key: stable_key.to_string(),
+                stable_key: interner.intern(stable_key),
                 kind: TsReceiverBindingKind::MethodCall,
                 callsite: None,
-                callsite_stable_key: Some("callsite:first".to_string()),
+                callsite_stable_key: Some(interner.intern("callsite:first")),
                 callee_function: None,
-                callee_function_stable_key: Some("function:first".to_string()),
-                receiver_object_stable_key: Some("object:first".to_string()),
-                receiver_place_stable_key: Some("place:holder".to_string()),
-                lexical_parent_key: Some("scope:module".to_string()),
+                callee_function_stable_key: Some(interner.intern("function:first")),
+                receiver_object_stable_key: Some(interner.intern("object:first")),
+                receiver_place_stable_key: Some(interner.intern("place:holder")),
+                lexical_parent_key: Some(interner.intern("scope:module")),
                 status: TsObjectModelStatus::resolved(),
             }
         }
 
-        fn prototype_link(file: FileId, stable_key: &str, suffix: &str) -> TsPrototypeLinkFact {
+        fn prototype_link(interner: &StableKeyInterner, file: FileId, stable_key: &str, suffix: &str) -> TsPrototypeLinkFact {
             TsPrototypeLinkFact {
                 id: TsPrototypeLinkId(99),
                 file,
                 span: test_span(file, 5),
-                stable_key: stable_key.to_string(),
+                stable_key: interner.intern(stable_key),
                 kind: TsPrototypeLinkKind::ClassPrototype,
-                object_stable_key: format!("object:{suffix}"),
-                prototype_stable_key: format!("object:{suffix}:prototype"),
+                object_stable_key: interner.intern(format!("object:{suffix}")),
+                prototype_stable_key: interner.intern(format!("object:{suffix}:prototype")),
                 property_key: None,
                 status: TsObjectModelStatus::resolved(),
             }

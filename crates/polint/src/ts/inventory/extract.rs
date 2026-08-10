@@ -10,7 +10,7 @@ use oxc_semantic::{AstNodes, NodeId, SemanticBuilder};
 use oxc_span::GetSpan;
 
 use crate::analysis::ids::{TsInventoryCallsiteId, TsInventoryFunctionId};
-use crate::core::{SourceFile, Span, span_from_byte_range};
+use crate::core::{SourceFile, Span, StableKeyInterner, span_from_byte_range};
 use crate::ts::inventory::facts::{
     TsCallsiteInventoryKind, TsFunctionInventoryKind, TsInventoryCallsiteFact,
     TsInventoryFunctionFact, TsInventoryStatus,
@@ -18,7 +18,10 @@ use crate::ts::inventory::facts::{
 use crate::ts::inventory::store::TsInventoryOutput;
 use crate::ts::parse::{PARTIAL_AST_REASON, parse_ts_file};
 
-pub(crate) fn extract_ts_inventory(file: &SourceFile) -> TsInventoryOutput {
+pub(crate) fn extract_ts_inventory(
+    interner: &StableKeyInterner,
+    file: &SourceFile,
+) -> TsInventoryOutput {
     let source = file.source.as_ref();
     let allocator = Allocator::default();
     let parsed = parse_ts_file(&allocator, file);
@@ -28,9 +31,14 @@ pub(crate) fn extract_ts_inventory(file: &SourceFile) -> TsInventoryOutput {
     }
 
     let semantic = SemanticBuilder::new().build(parsed.program()).semantic;
-    let mut output =
-        extract_ts_inventory_from_program(file, source, parsed.program(), semantic.nodes())
-            .normalized();
+    let mut output = extract_ts_inventory_from_program(
+        interner,
+        file,
+        source,
+        parsed.program(),
+        semantic.nodes(),
+    )
+    .normalized(interner);
     if !parsed.fully_parsed {
         mark_inventory_partial_ast(&mut output);
     }
@@ -51,6 +59,7 @@ pub(crate) fn mark_inventory_partial_ast(output: &mut TsInventoryOutput) {
 }
 
 pub(crate) fn extract_ts_inventory_from_program(
+    interner: &StableKeyInterner,
     file: &SourceFile,
     source: &str,
     _program: &Program<'_>,
@@ -70,14 +79,17 @@ pub(crate) fn extract_ts_inventory_from_program(
     for (_, _, kind, node_id, ast_kind) in node_entries {
         let span = span_from_oxc(file.id, source, ast_kind.span());
         let display_name = function_display_name(nodes, node_id, ast_kind);
-        let lexical_parent_key = lexical_parent_key(file, nodes, node_id);
-        let stable_key = function_stable_key(
+        let lexical_parent_key =
+            lexical_parent_key(file, nodes, node_id).map(|key| interner.intern(key));
+        let stable_key = interner.intern(function_stable_key(
             file,
             &span,
             kind,
-            lexical_parent_key.as_deref(),
+            lexical_parent_key
+                .map(|key| interner.resolve(key))
+                .as_deref(),
             &display_name,
-        );
+        ));
         function_rows.push(TsInventoryFunctionFact {
             id: TsInventoryFunctionId(0),
             file: file.id,
@@ -109,16 +121,19 @@ pub(crate) fn extract_ts_inventory_from_program(
                 .expect("callsite entries have normalized callsite spans"),
         );
         let display_name = callsite_display_name(ast_kind);
-        let lexical_parent_key = lexical_parent_key(file, nodes, node_id);
+        let lexical_parent_key =
+            lexical_parent_key(file, nodes, node_id).map(|key| interner.intern(key));
         let status = callsite_status(ast_kind, display_name.as_deref());
-        let stable_key = callsite_stable_key(
+        let stable_key = interner.intern(callsite_stable_key(
             file,
             &span,
             kind,
-            lexical_parent_key.as_deref(),
+            lexical_parent_key
+                .map(|key| interner.resolve(key))
+                .as_deref(),
             &display_name,
             &status,
-        );
+        ));
         callsite_rows.push(TsInventoryCallsiteFact {
             id: TsInventoryCallsiteId(0),
             file: file.id,

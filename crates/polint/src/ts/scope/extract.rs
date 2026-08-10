@@ -15,7 +15,7 @@ use oxc_semantic::{
 use oxc_span::GetSpan;
 
 use crate::analysis::ids::{TsBindingId, TsScopeId};
-use crate::core::{FileId, SourceFile, Span, span_from_byte_range};
+use crate::core::{FileId, SourceFile, Span, StableKeyInterner, span_from_byte_range};
 use crate::ts::parse::{PARTIAL_AST_REASON, parse_ts_file};
 use crate::ts::scope::facts::{
     TsBindingFact, TsBindingKind, TsBindingStatus, TsDeclarationKind, TsImportExportKind,
@@ -23,7 +23,7 @@ use crate::ts::scope::facts::{
 };
 use crate::ts::scope::store::TsScopeOutput;
 
-pub(crate) fn extract_ts_scope(file: &SourceFile) -> TsScopeOutput {
+pub(crate) fn extract_ts_scope(interner: &StableKeyInterner, file: &SourceFile) -> TsScopeOutput {
     let source = file.source.as_ref();
     let allocator = Allocator::default();
     let parsed = parse_ts_file(&allocator, file);
@@ -34,13 +34,14 @@ pub(crate) fn extract_ts_scope(file: &SourceFile) -> TsScopeOutput {
 
     let semantic = SemanticBuilder::new().build(parsed.program()).semantic;
     let mut output = extract_ts_scope_from_program(
+        interner,
         file,
         source,
         parsed.program(),
         semantic.scoping(),
         semantic.nodes(),
     )
-    .normalized();
+    .normalized(interner);
     if !parsed.fully_parsed {
         mark_scope_partial_ast(&mut output);
     }
@@ -58,51 +59,54 @@ pub(crate) fn mark_scope_partial_ast(output: &mut TsScopeOutput) {
 }
 
 pub(crate) fn extract_ts_scope_from_program(
+    interner: &StableKeyInterner,
     file: &SourceFile,
     source: &str,
     program: &Program<'_>,
     scoping: &Scoping,
     nodes: &AstNodes<'_>,
 ) -> TsScopeOutput {
-    let (scopes, scope_keys) = extract_scope_rows(file, source, scoping, nodes);
-    let mut bindings = extract_semantic_binding_rows(file, source, scoping, nodes, &scope_keys);
-    // Oxc semantic symbols record import bindings, but not each import/export
-    // specifier's module/source alias shape as a standalone row.
-    bindings.extend(extract_import_export_rows(
-        file,
-        source,
-        program,
-        &scope_keys,
-        scoping,
-    ));
-    // Oxc semantic symbols do not model local alias assignments as alias rows;
-    // this AST fallback records only direct identifier/require aliases.
-    bindings.extend(extract_alias_rows(
-        file,
-        source,
-        nodes,
-        &scope_keys,
-        scoping,
-    ));
-    // Oxc semantic symbols point destructured names at the declaration owner in
-    // some cases; this AST fallback preserves an explicit destructuring row.
-    bindings.extend(extract_destructuring_rows(
-        file,
-        source,
-        nodes,
-        &scope_keys,
-        scoping,
-    ));
-    bindings.extend(extract_boundary_rows(
-        file,
-        source,
-        nodes,
-        &scope_keys,
-        scoping,
-        &bindings,
-    ));
+    crate::ts::with_frontend_stable_keys(interner, || {
+        let (scopes, scope_keys) = extract_scope_rows(file, source, scoping, nodes);
+        let mut bindings = extract_semantic_binding_rows(file, source, scoping, nodes, &scope_keys);
+        // Oxc semantic symbols record import bindings, but not each import/export
+        // specifier's module/source alias shape as a standalone row.
+        bindings.extend(extract_import_export_rows(
+            file,
+            source,
+            program,
+            &scope_keys,
+            scoping,
+        ));
+        // Oxc semantic symbols do not model local alias assignments as alias rows;
+        // this AST fallback records only direct identifier/require aliases.
+        bindings.extend(extract_alias_rows(
+            file,
+            source,
+            nodes,
+            &scope_keys,
+            scoping,
+        ));
+        // Oxc semantic symbols point destructured names at the declaration owner in
+        // some cases; this AST fallback preserves an explicit destructuring row.
+        bindings.extend(extract_destructuring_rows(
+            file,
+            source,
+            nodes,
+            &scope_keys,
+            scoping,
+        ));
+        bindings.extend(extract_boundary_rows(
+            file,
+            source,
+            nodes,
+            &scope_keys,
+            scoping,
+            &bindings,
+        ));
 
-    TsScopeOutput { scopes, bindings }
+        TsScopeOutput { scopes, bindings }
+    })
 }
 
 fn extract_scope_rows(
@@ -127,8 +131,8 @@ fn extract_scope_rows(
             id: TsScopeId(0),
             file: file.id,
             span,
-            stable_key,
-            parent_scope_key,
+            stable_key: crate::ts::intern_frontend_stable_key(stable_key),
+            parent_scope_key: parent_scope_key.map(crate::ts::intern_frontend_stable_key),
             kind,
         });
     }
@@ -213,9 +217,9 @@ fn semantic_binding_row(
         id: TsBindingId(0),
         file: file.id,
         span,
-        stable_key,
-        scope_key,
-        parent_scope_key,
+        stable_key: crate::ts::intern_frontend_stable_key(stable_key),
+        scope_key: crate::ts::intern_frontend_stable_key(scope_key),
+        parent_scope_key: parent_scope_key.map(crate::ts::intern_frontend_stable_key),
         name,
         declaration_kind,
         binding_kind,
@@ -887,10 +891,10 @@ fn visible_binding_in_rows<'a>(
 ) -> Option<&'a TsBindingFact> {
     let mut current = Some(scope_key);
     while let Some(scope) = current {
-        if let Some(binding) = bindings
-            .iter()
-            .find(|binding| binding.scope_key == scope && binding.name == name)
-        {
+        if let Some(binding) = bindings.iter().find(|binding| {
+            crate::ts::resolve_frontend_stable_key(binding.scope_key).as_ref() == scope
+                && binding.name == name
+        }) {
             return Some(binding);
         }
         current = scope_parents
@@ -1059,8 +1063,8 @@ fn binding_row(draft: BindingRowDraft<'_>) -> TsBindingFact {
         id: TsBindingId(0),
         file: draft.file.id,
         span: draft.span,
-        stable_key,
-        scope_key: draft.scope_key,
+        stable_key: crate::ts::intern_frontend_stable_key(stable_key),
+        scope_key: crate::ts::intern_frontend_stable_key(draft.scope_key),
         parent_scope_key: None,
         name: draft.name,
         declaration_kind: draft.declaration_kind,
@@ -1379,7 +1383,8 @@ const aliasLocal = local;
 "#,
         );
 
-        let output = extract_ts_scope(file);
+        let interner = StableKeyInterner::default();
+        let output = extract_ts_scope(&interner, file);
         let kinds = output
             .bindings
             .iter()
@@ -1412,7 +1417,8 @@ const aliasLocal = local;
     #[test]
     fn import_rows_carry_external_status_and_module_source() {
         let file = fixture_file(r#"import { named as alias } from "./dep";"#);
-        let output = extract_ts_scope(file);
+        let interner = StableKeyInterner::default();
+        let output = extract_ts_scope(&interner, file);
         let import = output
             .bindings
             .iter()
@@ -1427,7 +1433,8 @@ const aliasLocal = local;
     #[test]
     fn object_literal_destructuring_rows_carry_alias_target() {
         let file = fixture_file(r#"const { destructured } = { destructured: localTarget };"#);
-        let output = extract_ts_scope(file);
+        let interner = StableKeyInterner::default();
+        let output = extract_ts_scope(&interner, file);
         let binding = output
             .bindings
             .iter()

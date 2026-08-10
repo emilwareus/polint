@@ -1,4 +1,4 @@
-use crate::core::{FileId, Span};
+use crate::core::{FileId, Span, StableKeyId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct GoSemanticPackageId(pub(crate) u64);
@@ -44,7 +44,7 @@ pub(crate) enum GoSemanticCallStatus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GoSemanticPackageFact {
     pub(crate) id: GoSemanticPackageId,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) package_id: String,
     pub(crate) package_path: String,
     pub(crate) package_name: String,
@@ -55,7 +55,7 @@ pub(crate) struct GoSemanticPackageFact {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GoSemanticFunctionFact {
     pub(crate) id: GoSemanticFunctionId,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) package_id: String,
     pub(crate) package_path: String,
     pub(crate) name: String,
@@ -71,7 +71,7 @@ pub(crate) struct GoSemanticFunctionFact {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GoSemanticCallsiteFact {
     pub(crate) id: GoSemanticCallsiteId,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) package_id: String,
     pub(crate) package_path: String,
     pub(crate) caller: String,
@@ -86,7 +86,7 @@ pub(crate) struct GoSemanticCallsiteFact {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GoSemanticMethodSetFact {
     pub(crate) id: GoSemanticMethodSetId,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) package_id: String,
     pub(crate) package_path: String,
     pub(crate) type_name: String,
@@ -96,7 +96,7 @@ pub(crate) struct GoSemanticMethodSetFact {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GoSemanticPackageErrorFact {
     pub(crate) id: GoSemanticPackageErrorId,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) package_id: String,
     pub(crate) package_path: String,
     pub(crate) message: String,
@@ -109,7 +109,7 @@ pub(crate) struct GoSemanticPackageErrorFact {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GoSemanticAddressTakenFact {
     pub(crate) id: GoSemanticAddressTakenId,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) package_id: String,
     pub(crate) package_path: String,
     pub(crate) function: String,
@@ -122,7 +122,7 @@ pub(crate) struct GoSemanticAddressTakenFact {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GoSemanticInstantiatedTypeFact {
     pub(crate) id: GoSemanticInstantiatedTypeId,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) package_id: String,
     pub(crate) package_path: String,
     pub(crate) type_name: String,
@@ -136,11 +136,11 @@ pub(crate) struct GoSemanticInstantiatedTypeFact {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GoSemanticDynamicDispatchFact {
     pub(crate) id: GoSemanticDynamicDispatchId,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) package_id: String,
     pub(crate) package_path: String,
     pub(crate) caller: String,
-    pub(crate) callsite_stable_key: String,
+    pub(crate) callsite_stable_key: StableKeyId,
     pub(crate) interface_type: Option<String>,
     pub(crate) method: Option<String>,
     pub(crate) signature: Option<String>,
@@ -156,7 +156,7 @@ pub(crate) struct GoSemanticDynamicDispatchFact {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GoSemanticRtaEdgeFact {
     pub(crate) id: GoSemanticRtaEdgeId,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) package_id: String,
     pub(crate) package_path: String,
     pub(crate) caller: String,

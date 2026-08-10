@@ -30,7 +30,8 @@ class Box {
 "#,
         );
 
-        let output = extract_ts_inventory(file);
+        let interner = crate::core::StableKeyInterner::default();
+        let output = extract_ts_inventory(&interner, file);
         let kinds = output
             .functions
             .iter()
@@ -58,14 +59,15 @@ const second = () => {};
 function first() {}
 "#,
         );
-        let mut output = extract_ts_inventory(file);
+        let interner = crate::core::StableKeyInterner::default();
+        let mut output = extract_ts_inventory(&interner, file);
         output.functions.reverse();
 
-        let normalized = output.normalized();
+        let normalized = output.normalized(&interner);
         let stable_keys = normalized
             .functions
             .iter()
-            .map(|function| function.stable_key.as_str())
+            .map(|function| interner.resolve(function.stable_key))
             .collect::<Vec<_>>();
         let mut sorted_keys = stable_keys.clone();
         sorted_keys.sort();
@@ -88,17 +90,19 @@ function outer() {
 }
 "#,
         );
-        let output = extract_ts_inventory(file);
+        let interner = crate::core::StableKeyInterner::default();
+        let output = extract_ts_inventory(&interner, file);
         let inner = output
             .functions
             .iter()
             .find(|function| function.display_name.as_deref() == Some("inner"))
             .expect("inner arrow inventory row");
 
-        assert!(inner.stable_key.contains("src/forms.ts"));
-        assert!(inner.stable_key.contains("arrow"));
-        assert!(inner.stable_key.contains("inner"));
-        assert!(inner.stable_key.contains("outer"));
+        let key = interner.resolve(inner.stable_key);
+        assert!(key.contains("src/forms.ts"));
+        assert!(key.contains("arrow"));
+        assert!(key.contains("inner"));
+        assert!(key.contains("outer"));
         assert!(inner.span.start_byte < inner.span.end_byte);
     }
 
@@ -113,7 +117,8 @@ class Box {
 }
 "#,
         );
-        let output = extract_ts_inventory(file);
+        let interner = crate::core::StableKeyInterner::default();
+        let output = extract_ts_inventory(&interner, file);
         let names = output
             .functions
             .iter()
@@ -162,7 +167,8 @@ function invoke(dynamicSpecifier, maybe) {
 "#,
         );
 
-        let output = extract_ts_inventory(file);
+        let interner = crate::core::StableKeyInterner::default();
+        let output = extract_ts_inventory(&interner, file);
         let kinds = output
             .callsites
             .iter()
@@ -191,7 +197,8 @@ function load(path) {
 "#,
         );
 
-        let output = extract_ts_inventory(file);
+        let interner = crate::core::StableKeyInterner::default();
+        let output = extract_ts_inventory(&interner, file);
         let dynamic_import = output
             .callsites
             .iter()
@@ -214,7 +221,8 @@ function invoke() {
 "#,
         );
 
-        let output = extract_ts_inventory(file);
+        let interner = crate::core::StableKeyInterner::default();
+        let output = extract_ts_inventory(&interner, file);
         let call = output
             .callsites
             .iter()
@@ -222,8 +230,9 @@ function invoke() {
             .expect("normal callsite");
 
         assert!(call.span.start_byte < call.span.end_byte);
-        assert!(call.stable_key.contains("src/calls.ts"));
-        assert!(call.stable_key.contains("call"));
+        let key = interner.resolve(call.stable_key);
+        assert!(key.contains("src/calls.ts"));
+        assert!(key.contains("call"));
     }
 
     #[test]
@@ -240,7 +249,8 @@ function h() {}
 "#;
         let file = fixture_file(source);
 
-        let output = extract_ts_inventory(file);
+        let interner = crate::core::StableKeyInterner::default();
+        let output = extract_ts_inventory(&interner, file);
         let spans = output
             .callsites
             .iter()

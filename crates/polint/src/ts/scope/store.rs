@@ -1,7 +1,7 @@
 #![allow(dead_code, reason = "kept for private internal consumers")]
 
 use crate::analysis::ids::{TsBindingId, TsScopeId};
-use crate::core::FileId;
+use crate::core::{FileId, StableKeyId, StableKeyInterner};
 use crate::ts::scope::facts::{TsBindingFact, TsBindingKind, TsScopeFact};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -11,34 +11,24 @@ pub(crate) struct TsScopeOutput {
 }
 
 impl TsScopeOutput {
-    pub(crate) fn normalized(mut self) -> Self {
-        self.scopes.sort_by(|left, right| {
+    pub(crate) fn normalized(mut self, interner: &StableKeyInterner) -> Self {
+        self.scopes.sort_by_cached_key(|scope| {
             (
-                left.stable_key.as_str(),
-                left.span.start_byte,
-                left.span.end_byte,
+                interner.resolve(scope.stable_key),
+                scope.span.start_byte,
+                scope.span.end_byte,
             )
-                .cmp(&(
-                    right.stable_key.as_str(),
-                    right.span.start_byte,
-                    right.span.end_byte,
-                ))
         });
         for (index, scope) in self.scopes.iter_mut().enumerate() {
             scope.id = TsScopeId(index as u64);
         }
 
-        self.bindings.sort_by(|left, right| {
+        self.bindings.sort_by_cached_key(|binding| {
             (
-                left.stable_key.as_str(),
-                left.span.start_byte,
-                left.span.end_byte,
+                interner.resolve(binding.stable_key),
+                binding.span.start_byte,
+                binding.span.end_byte,
             )
-                .cmp(&(
-                    right.stable_key.as_str(),
-                    right.span.start_byte,
-                    right.span.end_byte,
-                ))
         });
         for (index, binding) in self.bindings.iter_mut().enumerate() {
             binding.id = TsBindingId(index as u64);
@@ -52,18 +42,18 @@ impl TsScopeOutput {
 pub(crate) struct TsScopeStore {
     output: TsScopeOutput,
     scopes_by_file: std::collections::BTreeMap<FileId, Vec<usize>>,
-    scopes_by_stable_key: std::collections::BTreeMap<String, usize>,
+    scopes_by_stable_key: std::collections::BTreeMap<StableKeyId, usize>,
     bindings_by_file: std::collections::BTreeMap<FileId, Vec<usize>>,
     bindings_by_name: std::collections::BTreeMap<String, Vec<usize>>,
-    bindings_by_scope_name: std::collections::BTreeMap<(String, String), Vec<usize>>,
+    bindings_by_scope_name: std::collections::BTreeMap<(StableKeyId, String), Vec<usize>>,
     bindings_by_kind: std::collections::BTreeMap<TsBindingKind, Vec<usize>>,
     imports_by_module_imported: std::collections::BTreeMap<(String, String), Vec<usize>>,
     exports_by_name: std::collections::BTreeMap<String, Vec<usize>>,
 }
 
 impl TsScopeStore {
-    pub(crate) fn from_output(output: TsScopeOutput) -> Self {
-        let output = output.normalized();
+    pub(crate) fn from_output(output: TsScopeOutput, interner: &StableKeyInterner) -> Self {
+        let output = output.normalized(interner);
         let mut store = Self {
             output,
             ..Self::default()
@@ -75,9 +65,7 @@ impl TsScopeStore {
                 .entry(scope.file)
                 .or_default()
                 .push(index);
-            store
-                .scopes_by_stable_key
-                .insert(scope.stable_key.clone(), index);
+            store.scopes_by_stable_key.insert(scope.stable_key, index);
         }
 
         for (index, binding) in store.output.bindings.iter().enumerate() {
@@ -93,7 +81,7 @@ impl TsScopeStore {
                 .push(index);
             store
                 .bindings_by_scope_name
-                .entry((binding.scope_key.clone(), binding.name.clone()))
+                .entry((binding.scope_key, binding.name.clone()))
                 .or_default()
                 .push(index);
             store
@@ -137,9 +125,9 @@ impl TsScopeStore {
         self.binding_refs(self.bindings_by_file.get(&file))
     }
 
-    pub(crate) fn scope_by_stable_key(&self, stable_key: &str) -> Option<&TsScopeFact> {
+    pub(crate) fn scope_by_stable_key(&self, stable_key: StableKeyId) -> Option<&TsScopeFact> {
         self.scopes_by_stable_key
-            .get(stable_key)
+            .get(&stable_key)
             .map(|index| &self.output.scopes[*index])
     }
 
@@ -149,12 +137,12 @@ impl TsScopeStore {
 
     pub(crate) fn lookup_binding_in_scope(
         &self,
-        scope_key: &str,
+        scope_key: StableKeyId,
         name: &str,
     ) -> Vec<&TsBindingFact> {
         self.binding_refs(
             self.bindings_by_scope_name
-                .get(&(scope_key.to_string(), name.to_string())),
+                .get(&(scope_key, name.to_string())),
         )
     }
 
@@ -207,86 +195,130 @@ mod tests {
 
     #[test]
     fn normalized_assigns_dense_ids_after_stable_key_sort() {
+        let interner = StableKeyInterner::default();
         let output = TsScopeOutput {
             scopes: vec![
-                scope("scope:b", TsScopeId(22)),
-                scope("scope:a", TsScopeId(11)),
+                scope(&interner, "scope:b", TsScopeId(22)),
+                scope(&interner, "scope:a", TsScopeId(11)),
             ],
             bindings: vec![
-                binding("binding:b", TsBindingId(22), "second", "scope:b"),
-                binding("binding:a", TsBindingId(11), "first", "scope:a"),
+                binding(&interner, "binding:b", TsBindingId(22), "second", "scope:b"),
+                binding(&interner, "binding:a", TsBindingId(11), "first", "scope:a"),
             ],
         }
-        .normalized();
+        .normalized(&interner);
 
         assert_eq!(
             output
                 .scopes
                 .iter()
-                .map(|scope| (scope.stable_key.as_str(), scope.id.0))
+                .map(|scope| (interner.resolve(scope.stable_key), scope.id.0))
                 .collect::<Vec<_>>(),
-            vec![("scope:a", 0), ("scope:b", 1)]
+            vec![
+                (std::sync::Arc::from("scope:a"), 0),
+                (std::sync::Arc::from("scope:b"), 1)
+            ]
         );
         assert_eq!(
             output
                 .bindings
                 .iter()
-                .map(|binding| (binding.stable_key.as_str(), binding.id.0))
+                .map(|binding| (interner.resolve(binding.stable_key), binding.id.0))
                 .collect::<Vec<_>>(),
-            vec![("binding:a", 0), ("binding:b", 1)]
+            vec![
+                (std::sync::Arc::from("binding:a"), 0),
+                (std::sync::Arc::from("binding:b"), 1)
+            ]
         );
     }
 
     #[test]
     fn store_indexes_file_scope_name_kind_import_and_export_lookups() {
-        let mut import = binding("binding:import", TsBindingId(1), "local", "scope:a");
+        let interner = StableKeyInterner::default();
+        let mut import = binding(
+            &interner,
+            "binding:import",
+            TsBindingId(1),
+            "local",
+            "scope:a",
+        );
         import.binding_kind = TsBindingKind::NamedImport;
         import.module_source = Some("./dep".to_string());
         import.imported_name = Some("remote".to_string());
 
-        let mut export = binding("binding:export", TsBindingId(2), "reExport", "scope:a");
+        let mut export = binding(
+            &interner,
+            "binding:export",
+            TsBindingId(2),
+            "reExport",
+            "scope:a",
+        );
         export.binding_kind = TsBindingKind::ReExport;
         export.exported_name = Some("reExport".to_string());
 
-        let store = TsScopeStore::from_output(TsScopeOutput {
-            scopes: vec![scope("scope:a", TsScopeId(1))],
-            bindings: vec![
-                binding("binding:local", TsBindingId(3), "local", "scope:a"),
-                import,
-                export,
-            ],
-        });
+        let store = TsScopeStore::from_output(
+            TsScopeOutput {
+                scopes: vec![scope(&interner, "scope:a", TsScopeId(1))],
+                bindings: vec![
+                    binding(
+                        &interner,
+                        "binding:local",
+                        TsBindingId(3),
+                        "local",
+                        "scope:a",
+                    ),
+                    import,
+                    export,
+                ],
+            },
+            &interner,
+        );
 
         assert_eq!(store.scopes().len(), 1);
         assert_eq!(store.bindings().len(), 3);
         assert_eq!(store.scopes_for_file(FileId(1)).len(), 1);
         assert_eq!(store.bindings_for_file(FileId(1)).len(), 3);
-        assert!(store.scope_by_stable_key("scope:a").is_some());
+        assert!(
+            store
+                .scope_by_stable_key(interner.intern("scope:a"))
+                .is_some()
+        );
         assert_eq!(store.bindings_by_name("local").len(), 2);
-        assert_eq!(store.lookup_binding_in_scope("scope:a", "local").len(), 2);
+        assert_eq!(
+            store
+                .lookup_binding_in_scope(interner.intern("scope:a"), "local")
+                .len(),
+            2
+        );
         assert_eq!(store.bindings_by_kind(TsBindingKind::NamedImport).len(), 1);
         assert_eq!(store.import_aliases("./dep", "remote").len(), 1);
         assert_eq!(store.exports_by_name("reExport").len(), 1);
     }
 
-    fn scope(stable_key: &str, id: TsScopeId) -> TsScopeFact {
+    fn scope(interner: &StableKeyInterner, stable_key: &str, id: TsScopeId) -> TsScopeFact {
         TsScopeFact {
             id,
             file: FileId(1),
             span: span(),
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key),
             parent_scope_key: None,
             kind: TsScopeKind::Module,
         }
     }
 
-    fn binding(stable_key: &str, id: TsBindingId, name: &str, scope_key: &str) -> TsBindingFact {
+    fn binding(
+        interner: &StableKeyInterner,
+        stable_key: &str,
+        id: TsBindingId,
+        name: &str,
+        scope_key: &str,
+    ) -> TsBindingFact {
         TsBindingFact {
             id,
             file: FileId(1),
             span: span(),
-            stable_key: stable_key.to_string(),
-            scope_key: scope_key.to_string(),
+            stable_key: interner.intern(stable_key),
+            scope_key: interner.intern(scope_key),
             parent_scope_key: None,
             name: name.to_string(),
             declaration_kind: TsDeclarationKind::Const,

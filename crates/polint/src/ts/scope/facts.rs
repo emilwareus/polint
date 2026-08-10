@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::analysis::ids::{TsBindingId, TsScopeId};
-use crate::core::{FileId, Span};
+use crate::core::{FileId, Span, StableKeyId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) enum TsScopeKind {
@@ -180,24 +180,24 @@ impl TsBindingStatus {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TsScopeFact {
     pub(crate) id: TsScopeId,
     pub(crate) file: FileId,
     pub(crate) span: Span,
-    pub(crate) stable_key: String,
-    pub(crate) parent_scope_key: Option<String>,
+    pub(crate) stable_key: StableKeyId,
+    pub(crate) parent_scope_key: Option<StableKeyId>,
     pub(crate) kind: TsScopeKind,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TsBindingFact {
     pub(crate) id: TsBindingId,
     pub(crate) file: FileId,
     pub(crate) span: Span,
-    pub(crate) stable_key: String,
-    pub(crate) scope_key: String,
-    pub(crate) parent_scope_key: Option<String>,
+    pub(crate) stable_key: StableKeyId,
+    pub(crate) scope_key: StableKeyId,
+    pub(crate) parent_scope_key: Option<StableKeyId>,
     pub(crate) name: String,
     pub(crate) declaration_kind: TsDeclarationKind,
     pub(crate) binding_kind: TsBindingKind,
@@ -205,8 +205,8 @@ pub(crate) struct TsBindingFact {
     pub(crate) module_source: Option<String>,
     pub(crate) imported_name: Option<String>,
     pub(crate) exported_name: Option<String>,
-    pub(crate) inventory_function_key: Option<String>,
-    pub(crate) inventory_callsite_key: Option<String>,
+    pub(crate) inventory_function_key: Option<StableKeyId>,
+    pub(crate) inventory_callsite_key: Option<StableKeyId>,
     pub(crate) status: TsBindingStatus,
 }
 
@@ -260,12 +260,13 @@ mod tests {
 
     #[test]
     fn scope_and_binding_rows_keep_dense_ids_separate_from_stable_keys() {
+        let interner = crate::core::StableKeyInterner::default();
         let span = Span::point(FileId(1), 1, 1);
         let scope = TsScopeFact {
             id: TsScopeId(99),
             file: FileId(1),
             span: span.clone(),
-            stable_key: "scope:module".to_string(),
+            stable_key: interner.intern("scope:module"),
             parent_scope_key: None,
             kind: TsScopeKind::Module,
         };
@@ -273,9 +274,9 @@ mod tests {
             id: TsBindingId(7),
             file: FileId(1),
             span,
-            stable_key: "binding:value".to_string(),
-            scope_key: scope.stable_key.clone(),
-            parent_scope_key: scope.parent_scope_key.clone(),
+            stable_key: interner.intern("binding:value"),
+            scope_key: scope.stable_key,
+            parent_scope_key: scope.parent_scope_key,
             name: "value".to_string(),
             declaration_kind: TsDeclarationKind::Const,
             binding_kind: TsBindingKind::Const,
@@ -290,6 +291,6 @@ mod tests {
 
         assert_eq!(scope.id, TsScopeId(99));
         assert_eq!(binding.id, TsBindingId(7));
-        assert_eq!(binding.scope_key, "scope:module");
+        assert_eq!(interner.resolve(binding.scope_key).as_ref(), "scope:module");
     }
 }

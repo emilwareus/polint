@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::analysis::ids::{TsInventoryCallsiteId, TsInventoryFunctionId};
-use crate::core::{FileId, Span};
+use crate::core::{FileId, Span, StableKeyId};
 
 #[allow(
     dead_code,
@@ -104,13 +104,13 @@ impl TsInventoryStatus {
     dead_code,
     reason = " defines private inventory rows before extraction/store consumers land"
 )]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TsInventoryFunctionFact {
     pub(crate) id: TsInventoryFunctionId,
     pub(crate) file: FileId,
     pub(crate) span: Span,
-    pub(crate) stable_key: String,
-    pub(crate) lexical_parent_key: Option<String>,
+    pub(crate) stable_key: StableKeyId,
+    pub(crate) lexical_parent_key: Option<StableKeyId>,
     pub(crate) display_name: Option<String>,
     pub(crate) kind: TsFunctionInventoryKind,
     pub(crate) status: TsInventoryStatus,
@@ -120,13 +120,13 @@ pub(crate) struct TsInventoryFunctionFact {
     dead_code,
     reason = " defines private inventory rows before extraction/store consumers land"
 )]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TsInventoryCallsiteFact {
     pub(crate) id: TsInventoryCallsiteId,
     pub(crate) file: FileId,
     pub(crate) span: Span,
-    pub(crate) stable_key: String,
-    pub(crate) lexical_parent_key: Option<String>,
+    pub(crate) stable_key: StableKeyId,
+    pub(crate) lexical_parent_key: Option<StableKeyId>,
     pub(crate) display_name: Option<String>,
     pub(crate) kind: TsCallsiteInventoryKind,
     pub(crate) status: TsInventoryStatus,
@@ -186,13 +186,14 @@ mod tests {
 
     #[test]
     fn fact_rows_keep_dense_ids_separate_from_stable_keys() {
+        let interner = crate::core::StableKeyInterner::default();
         let span = Span::point(FileId(3), 10, 4);
         let function = TsInventoryFunctionFact {
             id: TsInventoryFunctionId(99),
             file: FileId(3),
             span: span.clone(),
-            stable_key: "file=src/a.ts|span=10:4|kind=arrow".to_string(),
-            lexical_parent_key: Some("file=src/a.ts|scope=module".to_string()),
+            stable_key: interner.intern("file=src/a.ts|span=10:4|kind=arrow"),
+            lexical_parent_key: Some(interner.intern("file=src/a.ts|scope=module")),
             display_name: Some("handler".to_string()),
             kind: TsFunctionInventoryKind::Arrow,
             status: TsInventoryStatus::resolved(),
@@ -201,8 +202,8 @@ mod tests {
             id: TsInventoryCallsiteId(7),
             file: FileId(3),
             span,
-            stable_key: "file=src/a.ts|span=11:2|kind=call".to_string(),
-            lexical_parent_key: Some(function.stable_key.clone()),
+            stable_key: interner.intern("file=src/a.ts|span=11:2|kind=call"),
+            lexical_parent_key: Some(function.stable_key),
             display_name: Some("handler".to_string()),
             kind: TsCallsiteInventoryKind::Call,
             status: TsInventoryStatus::unresolved("dynamic callee"),
@@ -210,7 +211,7 @@ mod tests {
 
         assert_eq!(function.id, TsInventoryFunctionId(99));
         assert_eq!(callsite.id, TsInventoryCallsiteId(7));
-        assert!(function.stable_key.contains("kind=arrow"));
+        assert!(interner.resolve(function.stable_key).contains("kind=arrow"));
         assert!(matches!(
             callsite.status,
             TsInventoryStatus::Unresolved { .. }

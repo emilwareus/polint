@@ -27,7 +27,8 @@ Box.prototype.extra();
 "#,
         );
 
-        let output = extract_ts_scope(file);
+        let interner = crate::core::StableKeyInterner::default();
+        let output = extract_ts_scope(&interner, file);
         let unsupported = output
             .bindings
             .iter()
@@ -57,7 +58,8 @@ function invoke(cb) {
 "#,
         );
 
-        let output = extract_ts_scope(file);
+        let interner = crate::core::StableKeyInterner::default();
+        let output = extract_ts_scope(&interner, file);
         let callback = output
             .bindings
             .iter()

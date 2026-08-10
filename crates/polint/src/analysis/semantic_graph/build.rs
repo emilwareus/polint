@@ -256,11 +256,19 @@ fn analyze_ts_file(interner: &crate::core::StableKeyInterner, file: &SourceFile)
     let semantic = SemanticBuilder::new().build(parsed.program()).semantic;
     let nodes = semantic.nodes();
     let mut inventory =
-        extract_ts_inventory_from_program(file, source, parsed.program(), nodes).normalized();
-    let mut scope =
-        extract_ts_scope_from_program(file, source, parsed.program(), semantic.scoping(), nodes)
-            .normalized();
+        extract_ts_inventory_from_program(interner, file, source, parsed.program(), nodes)
+            .normalized(interner);
+    let mut scope = extract_ts_scope_from_program(
+        interner,
+        file,
+        source,
+        parsed.program(),
+        semantic.scoping(),
+        nodes,
+    )
+    .normalized(interner);
     let mut object_model = extract_ts_object_model_from_program(
+        interner,
         file,
         source,
         parsed.program(),
@@ -286,14 +294,18 @@ fn analyze_ts_file(interner: &crate::core::StableKeyInterner, file: &SourceFile)
 }
 
 fn collect_ts_binding_file_analyses(db: &AnalysisDb) -> Vec<TsBindingFileAnalysis> {
+    let interner = db.stable_key_interner();
     db.files()
         .iter()
         .filter(|file| file.language.is_ts_family())
-        .map(analyze_ts_binding_file)
+        .map(|file| analyze_ts_binding_file(&interner, file))
         .collect()
 }
 
-fn analyze_ts_binding_file(file: &SourceFile) -> TsBindingFileAnalysis {
+fn analyze_ts_binding_file(
+    interner: &crate::core::StableKeyInterner,
+    file: &SourceFile,
+) -> TsBindingFileAnalysis {
     let source = file.source.as_ref();
     let allocator = Allocator::default();
     let parsed = parse_ts_file(&allocator, file);
@@ -309,10 +321,17 @@ fn analyze_ts_binding_file(file: &SourceFile) -> TsBindingFileAnalysis {
     let semantic = SemanticBuilder::new().build(parsed.program()).semantic;
     let nodes = semantic.nodes();
     let mut inventory =
-        extract_ts_inventory_from_program(file, source, parsed.program(), nodes).normalized();
-    let mut scope =
-        extract_ts_scope_from_program(file, source, parsed.program(), semantic.scoping(), nodes)
-            .normalized();
+        extract_ts_inventory_from_program(interner, file, source, parsed.program(), nodes)
+            .normalized(interner);
+    let mut scope = extract_ts_scope_from_program(
+        interner,
+        file,
+        source,
+        parsed.program(),
+        semantic.scoping(),
+        nodes,
+    )
+    .normalized(interner);
     if !parsed.fully_parsed {
         mark_inventory_partial_ast(&mut inventory);
         mark_scope_partial_ast(&mut scope);
@@ -359,8 +378,10 @@ fn collect_ts_direct_bindings_from_analyses<A: TsDirectBindingAnalysis>(
     };
 
     let mut bindings = Vec::new();
+    let interner = db.stable_key_interner();
     for analysis in analyses {
         let output = resolve_direct_bindings_with_modules(
+            &interner,
             analysis.inventory(),
             analysis.scope(),
             &module_input,
@@ -368,7 +389,7 @@ fn collect_ts_direct_bindings_from_analyses<A: TsDirectBindingAnalysis>(
         bindings.extend(output.bindings);
     }
 
-    TsDirectBindingOutput { bindings }.normalized()
+    TsDirectBindingOutput { bindings }.normalized(&interner)
 }
 
 /// Accumulates pre-normalization nodes/edges/constraints plus the lookup maps that
@@ -581,7 +602,7 @@ impl GraphBuilder {
                 continue;
             }
             let Some(callsite_node) =
-                context.callsite_node_for_binding(&binding.callsite_stable_key)
+                context.callsite_node_for_binding(&interner.resolve(binding.callsite_stable_key))
             else {
                 continue;
             };
@@ -590,13 +611,16 @@ impl GraphBuilder {
                 ConstraintKind::CallConstraint {
                     callsite: callsite_node,
                 },
-                &binding.stable_key,
+                &interner.resolve(binding.stable_key),
             );
 
-            let Some(target_key) = binding.target_function_stable_key.as_deref() else {
+            let Some(target_key) = binding
+                .target_function_stable_key
+                .map(|key| interner.resolve(key))
+            else {
                 continue;
             };
-            let Some(target_node) = context.function_node_for_binding(target_key) else {
+            let Some(target_node) = context.function_node_for_binding(&target_key) else {
                 continue;
             };
             if direct_binding_emits_copy_edge(binding.kind) {
@@ -606,7 +630,7 @@ impl GraphBuilder {
                         dst: callsite_node,
                         src: target_node,
                     },
-                    &binding.stable_key,
+                    &interner.resolve(binding.stable_key),
                 );
             }
         }
@@ -675,17 +699,17 @@ impl GraphBuilder {
             if !is_lowerable_object_model_status(&allocation.status) {
                 continue;
             }
-            let Some(dst) = context.allocation_place_node(interner, self, &allocation.stable_key)
-            else {
+            let allocation_key = interner.resolve(allocation.stable_key);
+            let Some(dst) = context.allocation_place_node(interner, self, &allocation_key) else {
                 continue;
             };
-            let Some(object) = context.object_node(interner, self, &allocation.stable_key) else {
+            let Some(object) = context.object_node(interner, self, &allocation_key) else {
                 continue;
             };
             self.push_constraint(
                 interner,
                 ConstraintKind::Alloc { dst, object },
-                &allocation.stable_key,
+                &allocation_key,
             );
         }
 
@@ -693,8 +717,8 @@ impl GraphBuilder {
             if !is_lowerable_object_model_status(&write.status) {
                 continue;
             }
-            let Some(base) = context.object_node(interner, self, &write.base_object_stable_key)
-            else {
+            let base_object_key = interner.resolve(write.base_object_stable_key);
+            let Some(base) = context.object_node(interner, self, &base_object_key) else {
                 continue;
             };
             let Some(src) = context.property_write_source_node(interner, self, write) else {
@@ -707,7 +731,7 @@ impl GraphBuilder {
                     field: property_field_label(&write.property_key),
                     src,
                 },
-                &write.stable_key,
+                &interner.resolve(write.stable_key),
             );
         }
 
@@ -715,8 +739,8 @@ impl GraphBuilder {
             if !is_lowerable_object_model_status(&read.status) {
                 continue;
             }
-            let Some(base) = context.object_node(interner, self, &read.base_object_stable_key)
-            else {
+            let base_object_key = interner.resolve(read.base_object_stable_key);
+            let Some(base) = context.object_node(interner, self, &base_object_key) else {
                 continue;
             };
             let Some(dst) = context.property_read_destination_node(interner, self, read) else {
@@ -729,13 +753,17 @@ impl GraphBuilder {
                     base,
                     field: property_field_label(&read.property_key),
                 },
-                &read.stable_key,
+                &interner.resolve(read.stable_key),
             );
-            if let Some(callsite) = context.callsite_node(read.callsite_stable_key.as_deref()) {
+            if let Some(callsite) = context.callsite_node(
+                read.callsite_stable_key
+                    .map(|key| interner.resolve(key))
+                    .as_deref(),
+            ) {
                 self.push_constraint(
                     interner,
                     ConstraintKind::CallConstraint { callsite },
-                    &read.stable_key,
+                    &interner.resolve(read.stable_key),
                 );
             }
         }
@@ -751,14 +779,19 @@ impl GraphBuilder {
                 self.push_constraint(
                     interner,
                     ConstraintKind::CopyEdge { dst, src },
-                    &binding.stable_key,
+                    &interner.resolve(binding.stable_key),
                 );
             }
-            if let Some(callsite) = context.callsite_node(binding.callsite_stable_key.as_deref()) {
+            if let Some(callsite) = context.callsite_node(
+                binding
+                    .callsite_stable_key
+                    .map(|key| interner.resolve(key))
+                    .as_deref(),
+            ) {
                 self.push_constraint(
                     interner,
                     ConstraintKind::CallConstraint { callsite },
-                    &binding.stable_key,
+                    &interner.resolve(binding.stable_key),
                 );
             }
         }
@@ -767,10 +800,12 @@ impl GraphBuilder {
             if !is_lowerable_object_model_status(&link.status) {
                 continue;
             }
-            let Some(base) = context.object_node(interner, self, &link.object_stable_key) else {
+            let object_key = interner.resolve(link.object_stable_key);
+            let Some(base) = context.object_node(interner, self, &object_key) else {
                 continue;
             };
-            let Some(src) = context.object_node(interner, self, &link.prototype_stable_key) else {
+            let prototype_key = interner.resolve(link.prototype_stable_key);
+            let Some(src) = context.object_node(interner, self, &prototype_key) else {
                 continue;
             };
             self.push_constraint(
@@ -784,7 +819,7 @@ impl GraphBuilder {
                         .unwrap_or_else(|| "$prototype".to_string()),
                     src,
                 },
-                &link.stable_key,
+                &interner.resolve(link.stable_key),
             );
         }
     }
@@ -819,7 +854,7 @@ impl GraphBuilder {
                 ConstraintKind::CallConstraint {
                     callsite: callsite_node,
                 },
-                &callsite.stable_key,
+                &interner.resolve(callsite.stable_key),
             );
             if callsite.status != GoSemanticCallStatus::ResolvedStatic {
                 continue;
@@ -836,7 +871,7 @@ impl GraphBuilder {
                     dst: callsite_node,
                     src: target_node,
                 },
-                &callsite.stable_key,
+                &interner.resolve(callsite.stable_key),
             );
         }
     }
@@ -1041,7 +1076,7 @@ fn collect_ts_token_source_flows(
     match inventory {
         Some(inventory) => collect_ts_token_source_flows_with_inventory(interner, file, inventory),
         None => {
-            let inventory = extract_ts_inventory(file);
+            let inventory = extract_ts_inventory(interner, file);
             collect_ts_token_source_flows_with_inventory(interner, file, &inventory)
         }
     }
@@ -1070,7 +1105,7 @@ fn collect_ts_token_source_flows_from_nodes(
     nodes: &AstNodes<'_>,
 ) -> Vec<TsTokenSourceFlow> {
     let source = file.source.as_ref();
-    let mut index = TsTokenSourceFlowIndex::from_inventory(inventory, nodes);
+    let mut index = TsTokenSourceFlowIndex::from_inventory(interner, inventory, nodes);
     index.collect_parameter_calls(source, nodes);
     index.collect_local_alias_assignments(nodes);
     index.collect_returned_functions(nodes);
@@ -1079,12 +1114,16 @@ fn collect_ts_token_source_flows_from_nodes(
 }
 
 impl TsTokenSourceFlowIndex {
-    fn from_inventory(inventory: &TsInventoryOutput, nodes: &AstNodes<'_>) -> Self {
+    fn from_inventory(
+        interner: &crate::core::StableKeyInterner,
+        inventory: &TsInventoryOutput,
+        nodes: &AstNodes<'_>,
+    ) -> Self {
         let mut index = Self::default();
         for function in &inventory.functions {
             let key = (function.span.start_byte, function.span.end_byte);
             let reference = TsFunctionInventoryRef {
-                stable_key: function.stable_key.clone(),
+                stable_key: interner.resolve(function.stable_key).to_string(),
                 display_name: function.display_name.clone(),
             };
             if let Some(display_name) = &reference.display_name {
@@ -1099,7 +1138,7 @@ impl TsTokenSourceFlowIndex {
         for callsite in &inventory.callsites {
             index.callsite_key_by_span.insert(
                 (callsite.span.start_byte, callsite.span.end_byte),
-                callsite.stable_key.clone(),
+                interner.resolve(callsite.stable_key).to_string(),
             );
         }
 
@@ -1717,7 +1756,7 @@ fn ts_inventory_display_matches_function_name(display: Option<&str>, function_na
 
 struct TsObjectModelNodeContext<'a> {
     direct: TsDirectBindingNodeContext<'a>,
-    object_token_by_key: BTreeMap<&'a str, ObjectTokenId>,
+    object_token_by_key: BTreeMap<Arc<str>, ObjectTokenId>,
     place_by_stable_key: BTreeMap<Arc<str>, PlaceId>,
     synthetic_place_by_key: BTreeMap<String, PlaceId>,
 }
@@ -1732,7 +1771,7 @@ impl<'a> TsObjectModelNodeContext<'a> {
         let object_token_by_key = db
             .ts_object_allocations()
             .iter()
-            .map(|allocation| allocation.stable_key.as_str())
+            .map(|allocation| interner.resolve(allocation.stable_key))
             .collect::<BTreeSet<_>>()
             .into_iter()
             .enumerate()
@@ -1749,7 +1788,10 @@ impl<'a> TsObjectModelNodeContext<'a> {
             insert_synthetic_place_key(
                 &place_by_stable_key,
                 &mut synthetic_place_keys,
-                allocation_result_place_identity(interner, &allocation.stable_key),
+                allocation_result_place_identity(
+                    interner,
+                    &interner.resolve(allocation.stable_key),
+                ),
             );
         }
         for write in db.ts_property_writes() {
@@ -1760,17 +1802,26 @@ impl<'a> TsObjectModelNodeContext<'a> {
             );
         }
         for read in db.ts_property_reads() {
-            let key = read.destination_stable_key.clone().unwrap_or_else(|| {
-                property_read_destination_place_identity(interner, &read.stable_key)
-            });
+            let key = read
+                .destination_stable_key
+                .map(|key| interner.resolve(key).to_string())
+                .unwrap_or_else(|| {
+                    property_read_destination_place_identity(
+                        interner,
+                        &interner.resolve(read.stable_key),
+                    )
+                });
             insert_synthetic_place_key(&place_by_stable_key, &mut synthetic_place_keys, key);
         }
         for binding in db.ts_receiver_bindings() {
             let key = binding
                 .receiver_place_stable_key
-                .clone()
+                .map(|key| interner.resolve(key).to_string())
                 .unwrap_or_else(|| {
-                    receiver_destination_place_identity(interner, &binding.stable_key)
+                    receiver_destination_place_identity(
+                        interner,
+                        &interner.resolve(binding.stable_key),
+                    )
                 });
             insert_synthetic_place_key(&place_by_stable_key, &mut synthetic_place_keys, key);
         }
@@ -1828,13 +1879,17 @@ impl<'a> TsObjectModelNodeContext<'a> {
         builder: &mut GraphBuilder,
         write: &TsPropertyWriteFact,
     ) -> Option<SemanticNodeId> {
-        if let Some(value_object) = write.value_object_stable_key.as_deref()
-            && let Some(node) = self.object_node(interner, builder, value_object)
+        if let Some(value_object) = write
+            .value_object_stable_key
+            .map(|key| interner.resolve(key))
+            && let Some(node) = self.object_node(interner, builder, &value_object)
         {
             return Some(node);
         }
-        if let Some(value_function) = write.value_function_stable_key.as_deref()
-            && let Some(node) = self.direct.function_node_for_binding(value_function)
+        if let Some(value_function) = write
+            .value_function_stable_key
+            .map(|key| interner.resolve(key))
+            && let Some(node) = self.direct.function_node_for_binding(&value_function)
         {
             return Some(node);
         }
@@ -1851,9 +1906,15 @@ impl<'a> TsObjectModelNodeContext<'a> {
         builder: &mut GraphBuilder,
         read: &TsPropertyReadFact,
     ) -> Option<SemanticNodeId> {
-        let destination = read.destination_stable_key.clone().unwrap_or_else(|| {
-            property_read_destination_place_identity(interner, &read.stable_key)
-        });
+        let destination = read
+            .destination_stable_key
+            .map(|key| interner.resolve(key).to_string())
+            .unwrap_or_else(|| {
+                property_read_destination_place_identity(
+                    interner,
+                    &interner.resolve(read.stable_key),
+                )
+            });
         self.place_node(interner, builder, &destination)
     }
 
@@ -1865,8 +1926,10 @@ impl<'a> TsObjectModelNodeContext<'a> {
     ) -> Option<SemanticNodeId> {
         let destination = binding
             .receiver_place_stable_key
-            .clone()
-            .unwrap_or_else(|| receiver_destination_place_identity(interner, &binding.stable_key));
+            .map(|key| interner.resolve(key).to_string())
+            .unwrap_or_else(|| {
+                receiver_destination_place_identity(interner, &interner.resolve(binding.stable_key))
+            });
         self.place_node(interner, builder, &destination)
     }
 
@@ -1876,13 +1939,16 @@ impl<'a> TsObjectModelNodeContext<'a> {
         builder: &mut GraphBuilder,
         binding: &TsReceiverBindingFact,
     ) -> Option<SemanticNodeId> {
-        if let Some(receiver_object) = binding.receiver_object_stable_key.as_deref() {
-            return self.object_node(interner, builder, receiver_object);
+        if let Some(receiver_object) = binding
+            .receiver_object_stable_key
+            .map(|key| interner.resolve(key))
+        {
+            return self.object_node(interner, builder, &receiver_object);
         }
         binding
             .receiver_place_stable_key
-            .as_deref()
-            .and_then(|place| self.place_node(interner, builder, place))
+            .map(|key| interner.resolve(key))
+            .and_then(|place| self.place_node(interner, builder, &place))
     }
 
     fn callsite_node(&self, callsite_stable_key: Option<&str>) -> Option<SemanticNodeId> {
@@ -2079,10 +2145,13 @@ fn property_write_source_place_identity(
 ) -> String {
     let source_identity = write
         .value_function_stable_key
-        .as_deref()
-        .or(write.value_object_stable_key.as_deref())
-        .unwrap_or(write.stable_key.as_str());
-    object_model_place_identity(interner, "property_write_source", source_identity)
+        .or(write.value_object_stable_key)
+        .unwrap_or(write.stable_key);
+    object_model_place_identity(
+        interner,
+        "property_write_source",
+        &interner.resolve(source_identity),
+    )
 }
 
 fn property_read_destination_place_identity(
@@ -2306,9 +2375,10 @@ mod tests {
                 result: None,
                 status: CallTargetStatus::Resolved,
                 precision: CallPrecision::SetupAware,
-                stable_key: db
-                    .stable_key_interner()
-                    .intern(format!("ts-callsite:{}", callsite.stable_key)),
+                stable_key: db.stable_key_interner().intern(format!(
+                    "ts-callsite:{}",
+                    db.resolve_stable_key(callsite.stable_key)
+                )),
             }],
             targets: Vec::new(),
             unresolved: Vec::new(),
@@ -2554,8 +2624,9 @@ function run() {
 }
 "#,
             );
-            let inventory = extract_ts_inventory(db.file(file).expect("file"));
-            let scope = extract_ts_scope(db.file(file).expect("file"));
+            let interner = db.stable_key_interner();
+            let inventory = extract_ts_inventory(&interner, db.file(file).expect("file"));
+            let scope = extract_ts_scope(&interner, db.file(file).expect("file"));
             let target = ts_function(&inventory, "f").clone();
             let caller = ts_function(&inventory, "run").clone();
             let callsite = ts_callsite(&inventory, "alias").clone();
@@ -2563,7 +2634,7 @@ function run() {
             let caller = push_ts_function(&mut db, &caller);
             replace_single_ts_callsite(&mut db, caller, &callsite);
 
-            let bindings = resolve_direct_bindings(&inventory, &scope);
+            let bindings = resolve_direct_bindings(&interner, &inventory, &scope);
             let output = build_semantic_graph_with_ts_direct_bindings(&db, &bindings.bindings);
             assert_ts_direct_projection(&db, output);
         }
@@ -2587,10 +2658,12 @@ function run() {
                 "src/m.ts".to_string(),
                 "export function f() {}".to_string(),
             );
-            let app_inventory = extract_ts_inventory(db.file(app_file).expect("app"));
-            let app_scope = extract_ts_scope(db.file(app_file).expect("app"));
-            let module_inventory = extract_ts_inventory(db.file(module_file).expect("module"));
-            let module_scope = extract_ts_scope(db.file(module_file).expect("module"));
+            let interner = db.stable_key_interner();
+            let app_inventory = extract_ts_inventory(&interner, db.file(app_file).expect("app"));
+            let app_scope = extract_ts_scope(&interner, db.file(app_file).expect("app"));
+            let module_inventory =
+                extract_ts_inventory(&interner, db.file(module_file).expect("module"));
+            let module_scope = extract_ts_scope(&interner, db.file(module_file).expect("module"));
 
             let target = ts_function(&module_inventory, "f").clone();
             let caller = ts_function(&app_inventory, "run").clone();
@@ -2648,8 +2721,12 @@ function run() {
                 module_files: &module_files,
             };
 
-            let bindings =
-                resolve_direct_bindings_with_modules(&app_inventory, &app_scope, &module_input);
+            let bindings = resolve_direct_bindings_with_modules(
+                &interner,
+                &app_inventory,
+                &app_scope,
+                &module_input,
+            );
             let output = build_semantic_graph_with_ts_direct_bindings(&db, &bindings.bindings);
             assert_ts_direct_projection(&db, output);
         }
@@ -2666,8 +2743,9 @@ function run() {
 }
 "#,
             );
-            let inventory = extract_ts_inventory(db.file(file).expect("file"));
-            let scope = extract_ts_scope(db.file(file).expect("file"));
+            let interner = db.stable_key_interner();
+            let inventory = extract_ts_inventory(&interner, db.file(file).expect("file"));
+            let scope = extract_ts_scope(&interner, db.file(file).expect("file"));
             let target = ts_function(&inventory, "f").clone();
             let caller = ts_function(&inventory, "run").clone();
             let callsite = ts_callsite(&inventory, "alias").clone();
@@ -2675,7 +2753,7 @@ function run() {
             let caller = push_ts_function(&mut db, &caller);
             replace_single_ts_callsite(&mut db, caller, &callsite);
 
-            let bindings = resolve_direct_bindings(&inventory, &scope);
+            let bindings = resolve_direct_bindings(&interner, &inventory, &scope);
             let before_targets = db.call_targets().len();
             let output = build_semantic_graph_with_ts_direct_bindings(&db, &bindings.bindings);
 
@@ -2694,6 +2772,7 @@ function run() {
         #[test]
         fn unresolved_no_solver_boundary_rows_emit_zero_target_constraints() {
             let db = AnalysisDb::new();
+            let interner = db.stable_key_interner();
             let rows = [
                 TsDirectBindingReason::TokenFlowRequired,
                 TsDirectBindingReason::PropertyFlowRequired,
@@ -2701,7 +2780,7 @@ function run() {
                 TsDirectBindingReason::ThisModelRequired,
             ]
             .into_iter()
-            .map(unresolved_binding)
+            .map(|reason| unresolved_binding(&interner, reason))
             .collect::<Vec<_>>();
 
             let output = build_semantic_graph_with_ts_direct_bindings(&db, &rows);
@@ -2742,11 +2821,14 @@ function run() {
                 .expect("TS direct graph validates");
         }
 
-        fn unresolved_binding(reason: TsDirectBindingReason) -> TsDirectBindingFact {
+        fn unresolved_binding(
+            interner: &crate::core::StableKeyInterner,
+            reason: TsDirectBindingReason,
+        ) -> TsDirectBindingFact {
             TsDirectBindingFact {
                 id: crate::analysis::ids::TsDirectBindingId(0),
                 callsite: crate::analysis::ids::TsInventoryCallsiteId(1),
-                callsite_stable_key: format!("callsite:{}", reason.as_str()),
+                callsite_stable_key: interner.intern(format!("callsite:{}", reason.as_str())),
                 target_function: None,
                 target_function_stable_key: None,
                 scope_binding: None,
@@ -2756,7 +2838,7 @@ function run() {
                 kind: TsDirectBindingKind::LocalFunction,
                 status: TsDirectBindingStatus::Unresolved,
                 reason: Some(reason),
-                stable_key: format!("ts_direct_binding:{}", reason.as_str()),
+                stable_key: interner.intern(format!("ts_direct_binding:{}", reason.as_str())),
             }
         }
     }
@@ -2775,6 +2857,7 @@ function run() {
         #[test]
         fn lowers_object_model_rows_to_closed_constraint_vocabulary() {
             let (mut db, file) = ts_db_with_file("src/app.ts", "const holder = { target: fn };\n");
+            let interner = db.stable_key_interner();
             let holder = "object:holder";
             let target_object = "object:target";
             let class_object = "object:class";
@@ -2782,25 +2865,44 @@ function run() {
 
             db.replace_ts_object_model_facts(TsObjectModelOutput {
                 allocations: vec![
-                    allocation(file, holder, TsObjectAllocationKind::ObjectLiteral, 10),
                     allocation(
+                        &interner,
+                        file,
+                        holder,
+                        TsObjectAllocationKind::ObjectLiteral,
+                        10,
+                    ),
+                    allocation(
+                        &interner,
                         file,
                         target_object,
                         TsObjectAllocationKind::FunctionObject,
                         11,
                     ),
-                    allocation(file, class_object, TsObjectAllocationKind::ClassObject, 12),
                     allocation(
+                        &interner,
+                        file,
+                        class_object,
+                        TsObjectAllocationKind::ClassObject,
+                        12,
+                    ),
+                    allocation(
+                        &interner,
                         file,
                         prototype_object,
                         TsObjectAllocationKind::PrototypeObject,
                         13,
                     ),
                 ],
-                property_writes: vec![property_write(file, holder, target_object)],
-                property_reads: vec![computed_property_read(file, holder)],
-                receiver_bindings: vec![receiver_binding(file, holder)],
-                prototype_links: vec![prototype_link(file, class_object, prototype_object)],
+                property_writes: vec![property_write(&interner, file, holder, target_object)],
+                property_reads: vec![computed_property_read(&interner, file, holder)],
+                receiver_bindings: vec![receiver_binding(&interner, file, holder)],
+                prototype_links: vec![prototype_link(
+                    &interner,
+                    file,
+                    class_object,
+                    prototype_object,
+                )],
             })
             .expect("object model replace");
 
@@ -2851,7 +2953,8 @@ function run() {
 }
 "#,
             );
-            let inventory = extract_ts_inventory(db.file(file).expect("file"));
+            let interner = db.stable_key_interner();
+            let inventory = extract_ts_inventory(&interner, db.file(file).expect("file"));
             let caller = ts_function(&inventory, "run").clone();
             let caller = push_ts_function(&mut db, &caller);
             let callsite = ts_callsite(&inventory, "holder.target").clone();
@@ -2859,6 +2962,7 @@ function run() {
 
             db.replace_ts_object_model_facts(TsObjectModelOutput {
                 allocations: vec![allocation(
+                    &interner,
                     file,
                     "object:holder",
                     TsObjectAllocationKind::ObjectLiteral,
@@ -2869,12 +2973,12 @@ function run() {
                     id: TsPropertyReadId(0),
                     file,
                     span: span(file),
-                    stable_key: "read:holder.target".to_string(),
-                    base_object_stable_key: "object:holder".to_string(),
+                    stable_key: interner.intern("read:holder.target"),
+                    base_object_stable_key: interner.intern("object:holder"),
                     property_key: static_property("target"),
                     destination_stable_key: None,
                     callsite: None,
-                    callsite_stable_key: Some(callsite.stable_key.clone()),
+                    callsite_stable_key: Some(callsite.stable_key),
                     status: TsObjectModelStatus::resolved(),
                 }],
                 receiver_bindings: Vec::new(),
@@ -2895,6 +2999,7 @@ function run() {
         }
 
         fn allocation(
+            interner: &crate::core::StableKeyInterner,
             file: FileId,
             stable_key: &str,
             kind: TsObjectAllocationKind,
@@ -2904,8 +3009,8 @@ function run() {
                 id: TsObjectAllocationId(id),
                 file,
                 span: span(file),
-                stable_key: stable_key.to_string(),
-                lexical_parent_key: Some("scope:module".to_string()),
+                stable_key: interner.intern(stable_key),
+                lexical_parent_key: Some(interner.intern("scope:module")),
                 inventory_function: None,
                 inventory_function_stable_key: None,
                 inventory_callsite: None,
@@ -2916,6 +3021,7 @@ function run() {
         }
 
         fn property_write(
+            interner: &crate::core::StableKeyInterner,
             file: FileId,
             base_object: &str,
             value_object: &str,
@@ -2924,23 +3030,27 @@ function run() {
                 id: TsPropertyWriteId(0),
                 file,
                 span: span(file),
-                stable_key: "write:holder.target".to_string(),
-                base_object_stable_key: base_object.to_string(),
+                stable_key: interner.intern("write:holder.target"),
+                base_object_stable_key: interner.intern(base_object),
                 property_key: static_property("target"),
                 value_function: None,
                 value_function_stable_key: None,
-                value_object_stable_key: Some(value_object.to_string()),
+                value_object_stable_key: Some(interner.intern(value_object)),
                 status: TsObjectModelStatus::resolved(),
             }
         }
 
-        fn computed_property_read(file: FileId, base_object: &str) -> TsPropertyReadFact {
+        fn computed_property_read(
+            interner: &crate::core::StableKeyInterner,
+            file: FileId,
+            base_object: &str,
+        ) -> TsPropertyReadFact {
             TsPropertyReadFact {
                 id: TsPropertyReadId(0),
                 file,
                 span: span(file),
-                stable_key: "read:holder[computed]".to_string(),
-                base_object_stable_key: base_object.to_string(),
+                stable_key: interner.intern("read:holder[computed]"),
+                base_object_stable_key: interner.intern(base_object),
                 property_key: TsPropertyKey {
                     kind: TsPropertyKeyKind::ComputedBucket,
                     value: None,
@@ -2952,33 +3062,42 @@ function run() {
             }
         }
 
-        fn receiver_binding(file: FileId, receiver_object: &str) -> TsReceiverBindingFact {
+        fn receiver_binding(
+            interner: &crate::core::StableKeyInterner,
+            file: FileId,
+            receiver_object: &str,
+        ) -> TsReceiverBindingFact {
             TsReceiverBindingFact {
                 id: TsReceiverBindingId(0),
                 file,
                 span: span(file),
-                stable_key: "receiver:holder.target".to_string(),
+                stable_key: interner.intern("receiver:holder.target"),
                 kind: TsReceiverBindingKind::MethodCall,
                 callsite: None,
                 callsite_stable_key: None,
                 callee_function: None,
                 callee_function_stable_key: None,
-                receiver_object_stable_key: Some(receiver_object.to_string()),
+                receiver_object_stable_key: Some(interner.intern(receiver_object)),
                 receiver_place_stable_key: None,
-                lexical_parent_key: Some("scope:module".to_string()),
+                lexical_parent_key: Some(interner.intern("scope:module")),
                 status: TsObjectModelStatus::resolved(),
             }
         }
 
-        fn prototype_link(file: FileId, object: &str, prototype: &str) -> TsPrototypeLinkFact {
+        fn prototype_link(
+            interner: &crate::core::StableKeyInterner,
+            file: FileId,
+            object: &str,
+            prototype: &str,
+        ) -> TsPrototypeLinkFact {
             TsPrototypeLinkFact {
                 id: TsPrototypeLinkId(0),
                 file,
                 span: span(file),
-                stable_key: "prototype:class".to_string(),
+                stable_key: interner.intern("prototype:class"),
                 kind: TsPrototypeLinkKind::ClassPrototype,
-                object_stable_key: object.to_string(),
-                prototype_stable_key: prototype.to_string(),
+                object_stable_key: interner.intern(object),
+                prototype_stable_key: interner.intern(prototype),
                 property_key: None,
                 status: TsObjectModelStatus::resolved(),
             }
@@ -3003,7 +3122,9 @@ function run() {
         #[test]
         fn direct_go_call_emits_call_constraint_and_static_evidence() {
             let mut db = go_semantic_db();
+            let interner = db.stable_key_interner();
             db.replace_go_semantic_facts(go_semantic_output(
+                &interner,
                 GoSemanticCallStatus::ResolvedStatic,
                 Some("example.com/p.run"),
             ))
@@ -3026,7 +3147,9 @@ function run() {
         #[test]
         fn dynamic_go_call_emits_no_static_target_evidence() {
             let mut db = go_semantic_db();
+            let interner = db.stable_key_interner();
             db.replace_go_semantic_facts(go_semantic_output(
+                &interner,
                 GoSemanticCallStatus::UnresolvedDynamic,
                 None,
             ))
@@ -3116,13 +3239,14 @@ function run() {
         }
 
         fn go_semantic_output(
+            interner: &crate::core::StableKeyInterner,
             status: GoSemanticCallStatus,
             static_callee: Option<&str>,
         ) -> GoSemanticFactsOutput {
             GoSemanticFactsOutput {
                 functions: vec![GoSemanticFunctionFact {
                     id: GoSemanticFunctionId(0),
-                    stable_key: "go-fn-run".to_string(),
+                    stable_key: interner.intern("go-fn-run"),
                     package_id: "example.com/p".to_string(),
                     package_path: "example.com/p".to_string(),
                     name: "run".to_string(),
@@ -3136,7 +3260,7 @@ function run() {
                 }],
                 callsites: vec![GoSemanticCallsiteFact {
                     id: GoSemanticCallsiteId(0),
-                    stable_key: "go-call".to_string(),
+                    stable_key: interner.intern("go-call"),
                     package_id: "example.com/p".to_string(),
                     package_path: "example.com/p".to_string(),
                     caller: "example.com/p.main".to_string(),

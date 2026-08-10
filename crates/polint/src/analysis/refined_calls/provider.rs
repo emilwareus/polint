@@ -266,7 +266,8 @@ impl<'a> SolverProjectionIndex<'a> {
             let Some(site) = core_callsite_for_go_semantic_callsite(db, callsite) else {
                 continue;
             };
-            callsite_by_stable_key.insert(callsite.stable_key.clone(), site);
+            callsite_by_stable_key
+                .insert(db.resolve_stable_key(callsite.stable_key).to_string(), site);
         }
         Self {
             function_by_node,
@@ -951,6 +952,7 @@ mod solver_projection_tests {
 
     fn db_with_solver_edge_referenced_by_go_semantic_callsite_key() -> AnalysisDb {
         let mut db = db_with_solver_edge_referenced_by_semantic_constraint_key();
+        let interner = db.stable_key_interner();
         let file = db
             .files()
             .iter()
@@ -959,12 +961,24 @@ mod solver_projection_tests {
             .expect("main.go file");
         db.replace_go_semantic_facts(GoSemanticFactsOutput {
             functions: vec![
-                go_semantic_function("go-function:caller", "pkg.caller", file, FunctionId(0)),
-                go_semantic_function("go-function:callee", "pkg.callee", file, FunctionId(1)),
+                go_semantic_function(
+                    &interner,
+                    "go-function:caller",
+                    "pkg.caller",
+                    file,
+                    FunctionId(0),
+                ),
+                go_semantic_function(
+                    &interner,
+                    "go-function:callee",
+                    "pkg.callee",
+                    file,
+                    FunctionId(1),
+                ),
             ],
             callsites: vec![GoSemanticCallsiteFact {
                 id: crate::go::semantic::facts::GoSemanticCallsiteId(0),
-                stable_key: "go-semantic-callsite:caller-callee".to_string(),
+                stable_key: interner.intern("go-semantic-callsite:caller-callee"),
                 package_id: "pkg".to_string(),
                 package_path: "pkg".to_string(),
                 caller: "pkg.caller".to_string(),
@@ -1019,6 +1033,7 @@ mod solver_projection_tests {
         let decoy_span = span_for_file(file, 90, 120);
         let callee_span = span_for_file(file, 130, 145);
         let call_span = span_for_file(file, 60, 75);
+        let interner = db.stable_key_interner();
         db.push_function(go_function_with_span(
             FunctionId(0),
             file,
@@ -1113,6 +1128,7 @@ mod solver_projection_tests {
         db.replace_go_semantic_facts(GoSemanticFactsOutput {
             functions: vec![
                 go_semantic_method_function_with_span(
+                    &interner,
                     "go-function:handler-handle",
                     "Handler.Handle",
                     "pkg.Handler.Handle",
@@ -1121,6 +1137,7 @@ mod solver_projection_tests {
                     span_for_file(file, 25, 25),
                 ),
                 go_semantic_function_with_span(
+                    &interner,
                     "go-function:speak",
                     "Speak",
                     "pkg.Speak",
@@ -1131,7 +1148,7 @@ mod solver_projection_tests {
             ],
             callsites: vec![GoSemanticCallsiteFact {
                 id: crate::go::semantic::facts::GoSemanticCallsiteId(0),
-                stable_key: "go-semantic-callsite:method-dispatch".to_string(),
+                stable_key: interner.intern("go-semantic-callsite:method-dispatch"),
                 package_id: "pkg".to_string(),
                 package_path: "pkg".to_string(),
                 caller: "pkg.Handler.Handle".to_string(),
@@ -1224,12 +1241,14 @@ mod solver_projection_tests {
     }
 
     fn go_semantic_function(
+        interner: &crate::core::StableKeyInterner,
         stable_key: &str,
         qualified: &str,
         file: FileId,
         function: FunctionId,
     ) -> GoSemanticFunctionFact {
         go_semantic_function_with_span(
+            interner,
             stable_key,
             qualified.rsplit('.').next().unwrap_or(qualified),
             qualified,
@@ -1240,6 +1259,7 @@ mod solver_projection_tests {
     }
 
     fn go_semantic_function_with_span(
+        interner: &crate::core::StableKeyInterner,
         stable_key: &str,
         name: &str,
         qualified: &str,
@@ -1249,7 +1269,7 @@ mod solver_projection_tests {
     ) -> GoSemanticFunctionFact {
         GoSemanticFunctionFact {
             id: GoSemanticFunctionId(function.0),
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key),
             package_id: "pkg".to_string(),
             package_path: "pkg".to_string(),
             name: name.to_string(),
@@ -1264,6 +1284,7 @@ mod solver_projection_tests {
     }
 
     fn go_semantic_method_function_with_span(
+        interner: &crate::core::StableKeyInterner,
         stable_key: &str,
         name: &str,
         qualified: &str,
@@ -1274,7 +1295,9 @@ mod solver_projection_tests {
         GoSemanticFunctionFact {
             kind: GoSemanticFunctionKind::Method,
             receiver: Some("pkg.Handler".to_string()),
-            ..go_semantic_function_with_span(stable_key, name, qualified, file, function, span)
+            ..go_semantic_function_with_span(
+                interner, stable_key, name, qualified, file, function, span,
+            )
         }
     }
 

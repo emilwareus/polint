@@ -211,7 +211,10 @@ impl GoRtaInputs {
                 .entry(type_name.clone())
                 .or_default()
                 .extend(method_set.methods.iter().cloned());
-            method_set_keys.insert(type_name, method_set.stable_key.clone());
+            method_set_keys.insert(
+                type_name,
+                interner.resolve(method_set.stable_key).to_string(),
+            );
         }
 
         // Instantiated runtime types (the rapid-type set) + contributing fact key.
@@ -220,7 +223,7 @@ impl GoRtaInputs {
         for fact in db.go_semantic_instantiated_types() {
             let type_name = normalize_type(&fact.type_name);
             instantiated.insert(type_name.clone());
-            instantiated_keys.insert(type_name, fact.stable_key.clone());
+            instantiated_keys.insert(type_name, interner.resolve(fact.stable_key).to_string());
         }
 
         // Address-taken functions (func-value candidates) + contributing fact key.
@@ -228,25 +231,27 @@ impl GoRtaInputs {
         let mut address_taken_keys: BTreeMap<String, String> = BTreeMap::new();
         for fact in db.go_semantic_address_taken() {
             address_taken.insert(fact.function.clone());
-            address_taken_keys.insert(fact.function.clone(), fact.stable_key.clone());
+            address_taken_keys.insert(
+                fact.function.clone(),
+                interner.resolve(fact.stable_key).to_string(),
+            );
         }
 
         // Join dynamic-dispatch detail to its callsite by `callsite_stable_key`. Only
         // `UnresolvedDynamic` callsites that map to a `CallConstraint` node are RTA
         // obligations; the rest are statically resolved or unsupported (honest).
         let callsite_by_stable_key: BTreeMap<
-            &str,
+            crate::core::StableKeyId,
             &crate::go::semantic::facts::GoSemanticCallsiteFact,
         > = db
             .go_semantic_callsites()
             .iter()
-            .map(|callsite| (callsite.stable_key.as_str(), callsite))
+            .map(|callsite| (callsite.stable_key, callsite))
             .collect();
 
         let mut callsites: Vec<GoRtaCallsite> = Vec::new();
         for dispatch in db.go_semantic_dynamic_dispatch() {
-            let Some(callsite) = callsite_by_stable_key.get(dispatch.callsite_stable_key.as_str())
-            else {
+            let Some(callsite) = callsite_by_stable_key.get(&dispatch.callsite_stable_key) else {
                 continue;
             };
             if callsite.status != GoSemanticCallStatus::UnresolvedDynamic {
@@ -266,10 +271,10 @@ impl GoRtaInputs {
             callsites.push(GoRtaCallsite {
                 caller: dispatch.caller.clone(),
                 callsite_node,
-                callsite_stable_key: callsite.stable_key.clone(),
+                callsite_stable_key: interner.resolve(callsite.stable_key).to_string(),
                 interface_method: dispatch.method.clone(),
                 signature: dispatch.signature.clone(),
-                dispatch_stable_key: dispatch.stable_key.clone(),
+                dispatch_stable_key: interner.resolve(dispatch.stable_key).to_string(),
             });
         }
         // Deterministic callsite order (by callsite stable key, then dispatch key).
@@ -944,10 +949,11 @@ mod tests {
 
         // Go-frontend facts: the function (matching the core function), an instantiated
         // type, and its method-set.
+        let interner = db.stable_key_interner();
         db.replace_go_semantic_facts(GoSemanticFactsOutput {
             functions: vec![GoSemanticFunctionFact {
                 id: crate::go::semantic::facts::GoSemanticFunctionId(0),
-                stable_key: "gofn|(pkg.File).Read".to_string(),
+                stable_key: interner.intern("gofn|(pkg.File).Read"),
                 package_id: "pkg".to_string(),
                 package_path: "pkg".to_string(),
                 name: "Read".to_string(),
@@ -961,14 +967,14 @@ mod tests {
             }],
             instantiated_types: vec![GoSemanticInstantiatedTypeFact {
                 id: crate::go::semantic::facts::GoSemanticInstantiatedTypeId(0),
-                stable_key: "inst|pkg.File".to_string(),
+                stable_key: interner.intern("inst|pkg.File"),
                 package_id: "pkg".to_string(),
                 package_path: "pkg".to_string(),
                 type_name: "pkg.File".to_string(),
             }],
             method_sets: vec![GoSemanticMethodSetFact {
                 id: crate::go::semantic::facts::GoSemanticMethodSetId(0),
-                stable_key: "ms|pkg.File".to_string(),
+                stable_key: interner.intern("ms|pkg.File"),
                 package_id: "pkg".to_string(),
                 package_path: "pkg".to_string(),
                 type_name: "pkg.File".to_string(),
@@ -978,8 +984,7 @@ mod tests {
         })
         .expect("go semantic facts store");
 
-        let inputs =
-            GoRtaInputs::from_db(&crate::core::AnalysisDb::new().stable_key_interner(), &db);
+        let inputs = GoRtaInputs::from_db(&db.stable_key_interner(), &db);
 
         // The Go function maps to its semantic node.
         assert_eq!(
@@ -1073,10 +1078,11 @@ mod tests {
         })
         .expect("semantic graph stores");
 
+        let interner = db.stable_key_interner();
         db.replace_go_semantic_facts(GoSemanticFactsOutput {
             functions: vec![GoSemanticFunctionFact {
                 id: crate::go::semantic::facts::GoSemanticFunctionId(0),
-                stable_key: "gofn|(pkg.Dog).Speak".to_string(),
+                stable_key: interner.intern("gofn|(pkg.Dog).Speak"),
                 package_id: "pkg".to_string(),
                 package_path: "pkg".to_string(),
                 // The frontend names the method `Receiver.Method` and reports a point
@@ -1092,7 +1098,7 @@ mod tests {
             }],
             method_sets: vec![GoSemanticMethodSetFact {
                 id: crate::go::semantic::facts::GoSemanticMethodSetId(0),
-                stable_key: "ms|pkg.Dog".to_string(),
+                stable_key: interner.intern("ms|pkg.Dog"),
                 package_id: "pkg".to_string(),
                 package_path: "pkg".to_string(),
                 type_name: "pkg.Dog".to_string(),
@@ -1102,8 +1108,7 @@ mod tests {
         })
         .expect("go semantic facts store");
 
-        let inputs =
-            GoRtaInputs::from_db(&crate::core::AnalysisDb::new().stable_key_interner(), &db);
+        let inputs = GoRtaInputs::from_db(&db.stable_key_interner(), &db);
 
         // The method maps to its semantic node despite the point-vs-declaration span gap.
         assert_eq!(
@@ -1393,10 +1398,11 @@ mod tests {
 
         // One semantic function: a zero-width point at 45 (inside BOTH ranges). The forward
         // map resolves 45 to the INNER declaration (innermost), so the reverse must too.
+        let interner = db.stable_key_interner();
         db.replace_go_semantic_facts(GoSemanticFactsOutput {
             functions: vec![GoSemanticFunctionFact {
                 id: crate::go::semantic::facts::GoSemanticFunctionId(0),
-                stable_key: "gofn|(*pkg.T).F".to_string(),
+                stable_key: interner.intern("gofn|(*pkg.T).F"),
                 package_id: "pkg".to_string(),
                 package_path: "pkg".to_string(),
                 name: "F".to_string(),
@@ -1591,11 +1597,12 @@ mod tests {
             .unwrap()
             .id;
 
+        let interner = db.stable_key_interner();
         db.replace_go_semantic_facts(GoSemanticFactsOutput {
             functions: vec![
                 GoSemanticFunctionFact {
                     id: crate::go::semantic::facts::GoSemanticFunctionId(0),
-                    stable_key: "gofn|a.Run".to_string(),
+                    stable_key: interner.intern("gofn|a.Run"),
                     package_id: "a".to_string(),
                     package_path: "a".to_string(),
                     name: "Run".to_string(),
@@ -1609,7 +1616,7 @@ mod tests {
                 },
                 GoSemanticFunctionFact {
                     id: crate::go::semantic::facts::GoSemanticFunctionId(1),
-                    stable_key: "gofn|b.Run".to_string(),
+                    stable_key: interner.intern("gofn|b.Run"),
                     package_id: "b".to_string(),
                     package_path: "b".to_string(),
                     name: "Run".to_string(),
@@ -1626,8 +1633,7 @@ mod tests {
         })
         .expect("go semantic facts store");
 
-        let inputs =
-            GoRtaInputs::from_db(&crate::core::AnalysisDb::new().stable_key_interner(), &db);
+        let inputs = GoRtaInputs::from_db(&db.stable_key_interner(), &db);
         // Each same-named function maps to the node in its OWN file (not collapsed).
         assert_eq!(inputs.function_node.get("a.Run"), Some(&node_a));
         assert_eq!(inputs.function_node.get("b.Run"), Some(&node_b));
@@ -1712,11 +1718,12 @@ mod tests {
             .unwrap()
             .id;
 
+        let interner = db.stable_key_interner();
         db.replace_go_semantic_facts(GoSemanticFactsOutput {
             functions: vec![
                 GoSemanticFunctionFact {
                     id: crate::go::semantic::facts::GoSemanticFunctionId(0),
-                    stable_key: "gofn|(pkg.Dog).Speak".to_string(),
+                    stable_key: interner.intern("gofn|(pkg.Dog).Speak"),
                     package_id: "pkg".to_string(),
                     package_path: "pkg".to_string(),
                     name: "Dog.Speak".to_string(),
@@ -1730,7 +1737,7 @@ mod tests {
                 },
                 GoSemanticFunctionFact {
                     id: crate::go::semantic::facts::GoSemanticFunctionId(1),
-                    stable_key: "gofn|pkg.Speak".to_string(),
+                    stable_key: interner.intern("gofn|pkg.Speak"),
                     package_id: "pkg".to_string(),
                     package_path: "pkg".to_string(),
                     name: "Speak".to_string(),
@@ -1747,8 +1754,7 @@ mod tests {
         })
         .expect("go semantic facts store");
 
-        let inputs =
-            GoRtaInputs::from_db(&crate::core::AnalysisDb::new().stable_key_interner(), &db);
+        let inputs = GoRtaInputs::from_db(&db.stable_key_interner(), &db);
         // The method and the free function each map to their OWN node (the name-keyed
         // join distinguishes `Dog.Speak` from `Speak`).
         assert_eq!(

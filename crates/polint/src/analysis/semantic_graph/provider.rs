@@ -102,7 +102,7 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
     // Step: project + normalize. The build is read-only; normalized() fixes the
     // stable-key order the digest is computed over.
     let ts_direct_binding_output_digest =
-        ts_direct_binding_output_digest(ts_direct_bindings.output());
+        ts_direct_binding_output_digest(ts_direct_bindings.output(), interner);
     let base_output =
         build_semantic_graph_with_ts_direct_binding_collection(db, &ts_direct_bindings)
             .normalized(interner);
@@ -572,17 +572,17 @@ fn go_semantic_output_digest_from_db(db: &AnalysisDb) -> String {
     parts.extend(
         db.go_semantic_packages()
             .iter()
-            .map(|fact| format!("package={}", fact.stable_key)),
+            .map(|fact| format!("package={}", db.resolve_stable_key(fact.stable_key))),
     );
     parts.extend(
         db.go_semantic_functions()
             .iter()
-            .map(|fact| format!("function={}", fact.stable_key)),
+            .map(|fact| format!("function={}", db.resolve_stable_key(fact.stable_key))),
     );
     parts.extend(
         db.go_semantic_callsites()
             .iter()
-            .map(|fact| format!("callsite={}", fact.stable_key)),
+            .map(|fact| format!("callsite={}", db.resolve_stable_key(fact.stable_key))),
     );
     parts.sort();
     if parts.is_empty() {
@@ -597,7 +597,7 @@ fn ts_object_model_output_digest_from_db(db: &AnalysisDb) -> String {
     parts.extend(db.ts_object_allocations().iter().map(|fact| {
         format!(
             "allocation={}|kind={}|status={}|reason={}",
-            fact.stable_key,
+            db.resolve_stable_key(fact.stable_key),
             fact.kind.as_str(),
             fact.status.as_str(),
             fact.status.reason().unwrap_or("")
@@ -606,8 +606,8 @@ fn ts_object_model_output_digest_from_db(db: &AnalysisDb) -> String {
     parts.extend(db.ts_property_writes().iter().map(|fact| {
         format!(
             "write={}|base={}|field={}|status={}|reason={}",
-            fact.stable_key,
-            fact.base_object_stable_key,
+            db.resolve_stable_key(fact.stable_key),
+            db.resolve_stable_key(fact.base_object_stable_key),
             fact.property_key.stable_label(),
             fact.status.as_str(),
             fact.status.reason().unwrap_or("")
@@ -616,8 +616,8 @@ fn ts_object_model_output_digest_from_db(db: &AnalysisDb) -> String {
     parts.extend(db.ts_property_reads().iter().map(|fact| {
         format!(
             "read={}|base={}|field={}|status={}|reason={}",
-            fact.stable_key,
-            fact.base_object_stable_key,
+            db.resolve_stable_key(fact.stable_key),
+            db.resolve_stable_key(fact.base_object_stable_key),
             fact.property_key.stable_label(),
             fact.status.as_str(),
             fact.status.reason().unwrap_or("")
@@ -626,7 +626,7 @@ fn ts_object_model_output_digest_from_db(db: &AnalysisDb) -> String {
     parts.extend(db.ts_receiver_bindings().iter().map(|fact| {
         format!(
             "receiver={}|kind={}|status={}|reason={}",
-            fact.stable_key,
+            db.resolve_stable_key(fact.stable_key),
             fact.kind.as_str(),
             fact.status.as_str(),
             fact.status.reason().unwrap_or("")
@@ -635,10 +635,10 @@ fn ts_object_model_output_digest_from_db(db: &AnalysisDb) -> String {
     parts.extend(db.ts_prototype_links().iter().map(|fact| {
         format!(
             "prototype={}|kind={}|object={}|prototype={}|status={}|reason={}",
-            fact.stable_key,
+            db.resolve_stable_key(fact.stable_key),
             fact.kind.as_str(),
-            fact.object_stable_key,
-            fact.prototype_stable_key,
+            db.resolve_stable_key(fact.object_stable_key),
+            db.resolve_stable_key(fact.prototype_stable_key),
             fact.status.as_str(),
             fact.status.reason().unwrap_or("")
         )

@@ -17,6 +17,7 @@ mod direct_local {
 
     #[test]
     fn resolves_same_file_function_alias_and_static_member_calls() {
+        let interner = crate::core::StableKeyInterner::default();
         let file = fixture_file(
             r#"
 function f() {}
@@ -30,7 +31,11 @@ function run() {
 "#,
         );
 
-        let output = resolve_direct_bindings(&extract_ts_inventory(file), &extract_ts_scope(file));
+        let output = resolve_direct_bindings(
+            &interner,
+            &extract_ts_inventory(&interner, file),
+            &extract_ts_scope(&interner, file),
+        );
         let resolved = output
             .bindings
             .iter()
@@ -40,22 +45,23 @@ function run() {
         assert!(
             resolved
                 .iter()
-                .any(|binding| binding.callsite_stable_key.contains("f"))
+                .any(|binding| interner.resolve(binding.callsite_stable_key).contains("f"))
         );
-        assert!(
-            resolved
-                .iter()
-                .any(|binding| binding.callsite_stable_key.contains("alias"))
-        );
-        assert!(
-            resolved
-                .iter()
-                .any(|binding| binding.callsite_stable_key.contains("ns.f"))
-        );
+        assert!(resolved.iter().any(|binding| {
+            interner
+                .resolve(binding.callsite_stable_key)
+                .contains("alias")
+        }));
+        assert!(resolved.iter().any(|binding| {
+            interner
+                .resolve(binding.callsite_stable_key)
+                .contains("ns.f")
+        }));
     }
 
     #[test]
     fn arbitrary_static_member_does_not_bind_to_same_named_function() {
+        let interner = crate::core::StableKeyInterner::default();
         let file = fixture_file(
             r#"
 function f() {}
@@ -65,8 +71,9 @@ function run(obj) {
 "#,
         );
 
-        let inventory = extract_ts_inventory(file);
-        let output = resolve_direct_bindings(&inventory, &extract_ts_scope(file));
+        let inventory = extract_ts_inventory(&interner, file);
+        let output =
+            resolve_direct_bindings(&interner, &inventory, &extract_ts_scope(&interner, file));
         let binding = binding_for_display(&output, &inventory, "obj.f");
 
         assert_eq!(binding.status, TsDirectBindingStatus::Unresolved);
@@ -75,6 +82,7 @@ function run(obj) {
 
     #[test]
     fn block_scoped_alias_does_not_escape_into_other_function() {
+        let interner = crate::core::StableKeyInterner::default();
         let file = fixture_file(
             r#"
 function target() {}
@@ -87,8 +95,9 @@ function run() {
 "#,
         );
 
-        let inventory = extract_ts_inventory(file);
-        let output = resolve_direct_bindings(&inventory, &extract_ts_scope(file));
+        let inventory = extract_ts_inventory(&interner, file);
+        let output =
+            resolve_direct_bindings(&interner, &inventory, &extract_ts_scope(&interner, file));
         let binding = binding_for_display(&output, &inventory, "alias");
 
         assert_eq!(binding.status, TsDirectBindingStatus::Unresolved);
@@ -97,6 +106,7 @@ function run() {
 
     #[test]
     fn non_function_local_alias_blocks_outer_function_resolution() {
+        let interner = crate::core::StableKeyInterner::default();
         let file = fixture_file(
             r#"
 function target() {}
@@ -107,8 +117,9 @@ function run() {
 "#,
         );
 
-        let inventory = extract_ts_inventory(file);
-        let output = resolve_direct_bindings(&inventory, &extract_ts_scope(file));
+        let inventory = extract_ts_inventory(&interner, file);
+        let output =
+            resolve_direct_bindings(&interner, &inventory, &extract_ts_scope(&interner, file));
         let binding = binding_for_display(&output, &inventory, "target");
 
         assert_eq!(binding.status, TsDirectBindingStatus::Unresolved);
@@ -117,6 +128,7 @@ function run() {
 
     #[test]
     fn alias_target_resolution_respects_shadowing_scope() {
+        let interner = crate::core::StableKeyInterner::default();
         let file = fixture_file(
             r#"
 function f() {}
@@ -127,8 +139,9 @@ function run(f) {
 "#,
         );
 
-        let inventory = extract_ts_inventory(file);
-        let output = resolve_direct_bindings(&inventory, &extract_ts_scope(file));
+        let inventory = extract_ts_inventory(&interner, file);
+        let output =
+            resolve_direct_bindings(&interner, &inventory, &extract_ts_scope(&interner, file));
         let binding = binding_for_display(&output, &inventory, "alias");
 
         assert_eq!(binding.status, TsDirectBindingStatus::Unresolved);
@@ -137,6 +150,7 @@ function run(f) {
 
     #[test]
     fn parameter_callback_boundary_is_scope_aware() {
+        let interner = crate::core::StableKeyInterner::default();
         let file = fixture_file(
             r#"
 function cb() {}
@@ -149,8 +163,9 @@ function invoke(cb) {
 "#,
         );
 
-        let inventory = extract_ts_inventory(file);
-        let output = resolve_direct_bindings(&inventory, &extract_ts_scope(file));
+        let inventory = extract_ts_inventory(&interner, file);
+        let output =
+            resolve_direct_bindings(&interner, &inventory, &extract_ts_scope(&interner, file));
         let cb_bindings = bindings_for_display(&output, &inventory, "cb");
 
         assert!(
@@ -166,6 +181,7 @@ function invoke(cb) {
 
     #[test]
     fn local_function_expression_binding_resolves_by_lexical_binding() {
+        let interner = crate::core::StableKeyInterner::default();
         let file = fixture_file(
             r#"
 const f = function() {};
@@ -175,8 +191,9 @@ function run() {
 "#,
         );
 
-        let inventory = extract_ts_inventory(file);
-        let output = resolve_direct_bindings(&inventory, &extract_ts_scope(file));
+        let inventory = extract_ts_inventory(&interner, file);
+        let output =
+            resolve_direct_bindings(&interner, &inventory, &extract_ts_scope(&interner, file));
         let binding = binding_for_display(&output, &inventory, "f");
 
         assert_eq!(binding.status, TsDirectBindingStatus::Resolved);
@@ -185,6 +202,7 @@ function run() {
 
     #[test]
     fn resolves_object_literal_destructuring_alias_call() {
+        let interner = crate::core::StableKeyInterner::default();
         let file = fixture_file(
             r#"
 function localTarget() {}
@@ -195,11 +213,19 @@ function run() {
 "#,
         );
 
-        let output = resolve_direct_bindings(&extract_ts_inventory(file), &extract_ts_scope(file));
+        let output = resolve_direct_bindings(
+            &interner,
+            &extract_ts_inventory(&interner, file),
+            &extract_ts_scope(&interner, file),
+        );
         let binding = output
             .bindings
             .iter()
-            .find(|binding| binding.callsite_stable_key.contains("destructured"))
+            .find(|binding| {
+                interner
+                    .resolve(binding.callsite_stable_key)
+                    .contains("destructured")
+            })
             .expect("destructured call binding");
 
         assert_eq!(binding.status, TsDirectBindingStatus::Resolved);
@@ -207,6 +233,7 @@ function run() {
 
     #[test]
     fn computed_property_and_parameter_callback_remain_unresolved() {
+        let interner = crate::core::StableKeyInterner::default();
         let file = fixture_file(
             r#"
 function run(cb, obj, key) {
@@ -216,7 +243,11 @@ function run(cb, obj, key) {
 "#,
         );
 
-        let output = resolve_direct_bindings(&extract_ts_inventory(file), &extract_ts_scope(file));
+        let output = resolve_direct_bindings(
+            &interner,
+            &extract_ts_inventory(&interner, file),
+            &extract_ts_scope(&interner, file),
+        );
         let reasons = output
             .bindings
             .iter()
@@ -296,6 +327,7 @@ mod direct_modules {
 
     #[test]
     fn resolves_esm_reexports_commonjs_and_path_aliases_from_module_graph_facts() {
+        let interner = crate::core::StableKeyInterner::default();
         let mut db = Box::new(AnalysisDb::new());
         let app_file = db.add_file(
             PathBuf::from("src/app.ts"),
@@ -347,18 +379,21 @@ function run() {
         );
         let db = Box::leak(db);
 
-        let app_inventory = extract_ts_inventory(db.file(app_file).expect("app file"));
-        let app_scope = extract_ts_scope(db.file(app_file).expect("app file"));
-        let m_inventory = extract_ts_inventory(db.file(m_file).expect("m file"));
-        let m_scope = extract_ts_scope(db.file(m_file).expect("m file"));
-        let default_inventory = extract_ts_inventory(db.file(default_file).expect("default file"));
-        let default_scope = extract_ts_scope(db.file(default_file).expect("default file"));
-        let ns_inventory = extract_ts_inventory(db.file(ns_file).expect("ns file"));
-        let ns_scope = extract_ts_scope(db.file(ns_file).expect("ns file"));
-        let barrel_inventory = extract_ts_inventory(db.file(barrel_file).expect("barrel file"));
-        let barrel_scope = extract_ts_scope(db.file(barrel_file).expect("barrel file"));
-        let cjs_inventory = extract_ts_inventory(db.file(cjs_file).expect("cjs file"));
-        let cjs_scope = extract_ts_scope(db.file(cjs_file).expect("cjs file"));
+        let app_inventory = extract_ts_inventory(&interner, db.file(app_file).expect("app file"));
+        let app_scope = extract_ts_scope(&interner, db.file(app_file).expect("app file"));
+        let m_inventory = extract_ts_inventory(&interner, db.file(m_file).expect("m file"));
+        let m_scope = extract_ts_scope(&interner, db.file(m_file).expect("m file"));
+        let default_inventory =
+            extract_ts_inventory(&interner, db.file(default_file).expect("default file"));
+        let default_scope =
+            extract_ts_scope(&interner, db.file(default_file).expect("default file"));
+        let ns_inventory = extract_ts_inventory(&interner, db.file(ns_file).expect("ns file"));
+        let ns_scope = extract_ts_scope(&interner, db.file(ns_file).expect("ns file"));
+        let barrel_inventory =
+            extract_ts_inventory(&interner, db.file(barrel_file).expect("barrel file"));
+        let barrel_scope = extract_ts_scope(&interner, db.file(barrel_file).expect("barrel file"));
+        let cjs_inventory = extract_ts_inventory(&interner, db.file(cjs_file).expect("cjs file"));
+        let cjs_scope = extract_ts_scope(&interner, db.file(cjs_file).expect("cjs file"));
 
         let app_node = ModuleNodeId(0);
         let m_node = ModuleNodeId(1);
@@ -435,8 +470,12 @@ function run() {
             module_files: &module_files,
         };
 
-        let output =
-            resolve_direct_bindings_with_modules(&app_inventory, &app_scope, &module_input);
+        let output = resolve_direct_bindings_with_modules(
+            &interner,
+            &app_inventory,
+            &app_scope,
+            &module_input,
+        );
 
         assert_call(
             &output,
@@ -498,6 +537,7 @@ function run() {
 
     #[test]
     fn local_parameter_shadowing_import_requires_token_flow() {
+        let interner = crate::core::StableKeyInterner::default();
         let mut db = Box::new(AnalysisDb::new());
         let app_file = db.add_file(
             PathBuf::from("src/app.ts"),
@@ -517,10 +557,10 @@ function run(f) {
         );
         let db = Box::leak(db);
 
-        let app_inventory = extract_ts_inventory(db.file(app_file).expect("app file"));
-        let app_scope = extract_ts_scope(db.file(app_file).expect("app file"));
-        let m_inventory = extract_ts_inventory(db.file(m_file).expect("m file"));
-        let m_scope = extract_ts_scope(db.file(m_file).expect("m file"));
+        let app_inventory = extract_ts_inventory(&interner, db.file(app_file).expect("app file"));
+        let app_scope = extract_ts_scope(&interner, db.file(app_file).expect("app file"));
+        let m_inventory = extract_ts_inventory(&interner, db.file(m_file).expect("m file"));
+        let m_scope = extract_ts_scope(&interner, db.file(m_file).expect("m file"));
 
         let m_node = ModuleNodeId(1);
         let imports = vec![import(0, app_file, "./m")];
@@ -543,8 +583,12 @@ function run(f) {
             module_files: &module_files,
         };
 
-        let output =
-            resolve_direct_bindings_with_modules(&app_inventory, &app_scope, &module_input);
+        let output = resolve_direct_bindings_with_modules(
+            &interner,
+            &app_inventory,
+            &app_scope,
+            &module_input,
+        );
 
         assert_call(
             &output,
@@ -558,6 +602,7 @@ function run(f) {
 
     #[test]
     fn module_imports_resolve_only_explicit_exports_and_local_export_aliases() {
+        let interner = crate::core::StableKeyInterner::default();
         let mut db = Box::new(AnalysisDb::new());
         let app_file = db.add_file(
             PathBuf::from("src/app.ts"),
@@ -583,10 +628,10 @@ export { real as g };
         );
         let db = Box::leak(db);
 
-        let app_inventory = extract_ts_inventory(db.file(app_file).expect("app file"));
-        let app_scope = extract_ts_scope(db.file(app_file).expect("app file"));
-        let m_inventory = extract_ts_inventory(db.file(m_file).expect("m file"));
-        let m_scope = extract_ts_scope(db.file(m_file).expect("m file"));
+        let app_inventory = extract_ts_inventory(&interner, db.file(app_file).expect("app file"));
+        let app_scope = extract_ts_scope(&interner, db.file(app_file).expect("app file"));
+        let m_inventory = extract_ts_inventory(&interner, db.file(m_file).expect("m file"));
+        let m_scope = extract_ts_scope(&interner, db.file(m_file).expect("m file"));
 
         let m_node = ModuleNodeId(1);
         let imports = vec![import(0, app_file, "./m")];
@@ -609,8 +654,12 @@ export { real as g };
             module_files: &module_files,
         };
 
-        let output =
-            resolve_direct_bindings_with_modules(&app_inventory, &app_scope, &module_input);
+        let output = resolve_direct_bindings_with_modules(
+            &interner,
+            &app_inventory,
+            &app_scope,
+            &module_input,
+        );
 
         assert_call(
             &output,
@@ -632,6 +681,7 @@ export { real as g };
 
     #[test]
     fn local_export_alias_does_not_resolve_non_visible_nested_function() {
+        let interner = crate::core::StableKeyInterner::default();
         let mut db = Box::new(AnalysisDb::new());
         let app_file = db.add_file(
             PathBuf::from("src/app.ts"),
@@ -657,10 +707,10 @@ export { hidden as g };
         );
         let db = Box::leak(db);
 
-        let app_inventory = extract_ts_inventory(db.file(app_file).expect("app file"));
-        let app_scope = extract_ts_scope(db.file(app_file).expect("app file"));
-        let m_inventory = extract_ts_inventory(db.file(m_file).expect("m file"));
-        let m_scope = extract_ts_scope(db.file(m_file).expect("m file"));
+        let app_inventory = extract_ts_inventory(&interner, db.file(app_file).expect("app file"));
+        let app_scope = extract_ts_scope(&interner, db.file(app_file).expect("app file"));
+        let m_inventory = extract_ts_inventory(&interner, db.file(m_file).expect("m file"));
+        let m_scope = extract_ts_scope(&interner, db.file(m_file).expect("m file"));
 
         let m_node = ModuleNodeId(1);
         let imports = vec![import(0, app_file, "./m")];
@@ -683,8 +733,12 @@ export { hidden as g };
             module_files: &module_files,
         };
 
-        let output =
-            resolve_direct_bindings_with_modules(&app_inventory, &app_scope, &module_input);
+        let output = resolve_direct_bindings_with_modules(
+            &interner,
+            &app_inventory,
+            &app_scope,
+            &module_input,
+        );
 
         assert_call(
             &output,
