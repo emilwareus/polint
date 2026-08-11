@@ -28,6 +28,7 @@ pub mod local_db;
 pub mod metrics;
 pub mod mir_body;
 pub mod mir_op;
+pub mod module_graph;
 pub mod places;
 pub mod points_to;
 pub mod reachability;

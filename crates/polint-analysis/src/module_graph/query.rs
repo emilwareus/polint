@@ -1,8 +1,9 @@
-use crate::core::{ModuleEdge, ModuleNodeId};
+use polint_analysis_api::ModuleEdge;
+use polint_core::ModuleNodeId;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 #[allow(dead_code)]
-pub(crate) trait EdgeLike {
+pub trait EdgeLike {
     fn endpoints(&self) -> (ModuleNodeId, ModuleNodeId);
 }
 
@@ -25,23 +26,17 @@ impl EdgeLike for (ModuleNodeId, ModuleNodeId) {
 }
 
 #[allow(dead_code)]
-pub(crate) fn outgoing(
-    edges: &[ModuleEdge],
-    node: ModuleNodeId,
-) -> impl Iterator<Item = &ModuleEdge> {
+pub fn outgoing(edges: &[ModuleEdge], node: ModuleNodeId) -> impl Iterator<Item = &ModuleEdge> {
     edges.iter().filter(move |edge| edge.from == node)
 }
 
 #[allow(dead_code)]
-pub(crate) fn incoming(
-    edges: &[ModuleEdge],
-    node: ModuleNodeId,
-) -> impl Iterator<Item = &ModuleEdge> {
+pub fn incoming(edges: &[ModuleEdge], node: ModuleNodeId) -> impl Iterator<Item = &ModuleEdge> {
     edges.iter().filter(move |edge| edge.to == node)
 }
 
 #[allow(dead_code)]
-pub(crate) fn reachable_from<E>(
+pub fn reachable_from<E>(
     start: ModuleNodeId,
     edges: impl IntoIterator<Item = E>,
 ) -> Vec<ModuleNodeId>
@@ -84,7 +79,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::reachable_from;
-    use crate::core::ModuleNodeId;
+    use polint_core::ModuleNodeId;
 
     #[test]
     fn module_graph_ts_determinism_reachable_from_uses_deterministic_id_order() {

@@ -2,7 +2,6 @@ pub(crate) mod formats;
 pub(crate) mod go;
 pub(crate) mod model;
 pub(crate) mod paths;
-pub(crate) mod query;
 pub(crate) mod topology;
 pub(crate) mod ts;
 
@@ -2259,7 +2258,7 @@ fn setup_missing_diagnostic(entry: &CapabilitySupport, rule_id: &str) -> Diagnos
 #[cfg(test)]
 mod tests {
     use super::model::ModuleGraphBuilder;
-    use super::{derive_requested_module_graph, paths, query, ts};
+    use super::{derive_requested_module_graph, paths, ts};
     use crate::analysis_kernel::incremental::{
         CacheNode, DependencyKind, Digest, DigestKind, InputSnapshot, LayerKey, ShapeKind,
     };
@@ -3598,17 +3597,17 @@ mod tests {
         ];
 
         assert_eq!(
-            query::reachable_from(ModuleNodeId(0), tuple_edges),
+            polint_analysis::module_graph::query::reachable_from(ModuleNodeId(0), tuple_edges),
             vec![ModuleNodeId(1), ModuleNodeId(2), ModuleNodeId(3)]
         );
         assert_eq!(
-            query::outgoing(&module_edges, ModuleNodeId(0))
+            polint_analysis::module_graph::query::outgoing(&module_edges, ModuleNodeId(0))
                 .map(|edge| edge.to)
                 .collect::<Vec<_>>(),
             vec![ModuleNodeId(2)]
         );
         assert_eq!(
-            query::incoming(&module_edges, ModuleNodeId(0))
+            polint_analysis::module_graph::query::incoming(&module_edges, ModuleNodeId(0))
                 .map(|edge| edge.from)
                 .collect::<Vec<_>>(),
             vec![ModuleNodeId(1)]
