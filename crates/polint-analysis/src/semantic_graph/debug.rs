@@ -1,13 +1,11 @@
-#![cfg(test)]
-
 use std::collections::BTreeMap;
 
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::analysis::semantic_graph::constraints::ConstraintFact;
-use crate::analysis::semantic_graph::facts::{SemanticEdgeFact, SemanticNodeFact};
-use crate::core::AnalysisDb;
+use crate::AnalysisHost;
+use crate::semantic_graph::constraints::ConstraintFact;
+use crate::semantic_graph::facts::{SemanticEdgeFact, SemanticNodeFact};
 
 /// Produces a byte-stable debug JSON snapshot of all stored semantic-graph facts.
 ///
@@ -15,7 +13,7 @@ use crate::core::AnalysisDb;
 /// as identity, never raw source, never absolute paths. Total-ordered by stable key
 /// per family so the snapshot is byte-identical across provider-order / row-order
 /// shuffles. Used by the Plan 03 snapshot fixtures.
-pub(crate) fn metadata_debug_json_for_test(db: &AnalysisDb) -> Value {
+pub fn metadata_debug_json_for_test(db: &impl AnalysisHost) -> Value {
     let report = SemanticGraphDebugReport {
         counts: counts(db),
         nodes: node_rows(db),
@@ -69,7 +67,7 @@ struct ConstraintRow {
     stable_key_text: String,
 }
 
-fn counts(db: &AnalysisDb) -> SemanticGraphCounts {
+fn counts(db: &impl AnalysisHost) -> SemanticGraphCounts {
     let mut counts = SemanticGraphCounts {
         total_nodes: db.semantic_nodes().len(),
         total_edges: db.semantic_edges().len(),
@@ -88,7 +86,7 @@ fn counts(db: &AnalysisDb) -> SemanticGraphCounts {
     counts
 }
 
-fn node_rows(db: &AnalysisDb) -> Vec<NodeRow> {
+fn node_rows(db: &impl AnalysisHost) -> Vec<NodeRow> {
     let interner = db.stable_key_interner();
     let mut rows: Vec<NodeRow> = db
         .semantic_nodes()
@@ -103,7 +101,7 @@ fn node_rows(db: &AnalysisDb) -> Vec<NodeRow> {
     rows
 }
 
-fn edge_rows(db: &AnalysisDb) -> Vec<EdgeRow> {
+fn edge_rows(db: &impl AnalysisHost) -> Vec<EdgeRow> {
     let interner = db.stable_key_interner();
     let mut rows: Vec<EdgeRow> = db
         .semantic_edges()
@@ -118,7 +116,7 @@ fn edge_rows(db: &AnalysisDb) -> Vec<EdgeRow> {
     rows
 }
 
-fn constraint_rows(db: &AnalysisDb) -> Vec<ConstraintRow> {
+fn constraint_rows(db: &impl AnalysisHost) -> Vec<ConstraintRow> {
     let interner = db.stable_key_interner();
     let mut rows: Vec<ConstraintRow> = db
         .semantic_constraints()
@@ -153,22 +151,24 @@ fn increment(counts: &mut BTreeMap<String, usize>, key: &str) {
 
 #[cfg(test)]
 mod tests {
-    use crate::analysis::ids::SemanticNodeId;
-    use crate::analysis::points_to::facts::{PointsToPrecision, PointsToStatus};
-    use crate::analysis::semantic_graph::constraints::{ConstraintFact, ConstraintKind};
-    use crate::analysis::semantic_graph::facts::{NodeKind, SemanticNodeFact, SemanticPrecision};
-    use crate::analysis::semantic_graph::store::SemanticGraphOutput;
-    use crate::core::{AnalysisDb, FunctionId};
+    use crate::LocalAnalysisDb;
+    use crate::ids::SemanticNodeId;
+    use crate::points_to::facts::{PointsToPrecision, PointsToStatus};
+    use crate::semantic_graph::constraints::{ConstraintFact, ConstraintKind};
+    use crate::semantic_graph::facts::{NodeKind, SemanticNodeFact, SemanticPrecision};
+    use crate::semantic_graph::store::SemanticGraphOutput;
+    use polint_core::FunctionId;
 
     use super::*;
 
     #[test]
     fn debug_json_marks_ts_direct_binding_constraints_with_node_refs() {
-        let mut db = AnalysisDb::new();
-        db.replace_semantic_graph_facts(SemanticGraphOutput {
+        let mut db = LocalAnalysisDb::new();
+        let interner = db.stable_key_interner();
+        let output = SemanticGraphOutput {
             nodes: vec![
-                node(&db, 0, FunctionId(1), "node:function:target"),
-                node(&db, 1, FunctionId(2), "node:function:callsite"),
+                node(&interner, 0, FunctionId(1), "node:function:target"),
+                node(&interner, 1, FunctionId(2), "node:function:callsite"),
             ],
             edges: Vec::new(),
             constraints: vec![ConstraintFact {
@@ -179,12 +179,10 @@ mod tests {
                 },
                 status: PointsToStatus::Present,
                 precision: PointsToPrecision::FlowInsensitive,
-                stable_key: db
-                    .stable_key_interner()
-                    .intern("constraint:ts_direct_binding:copy"),
+                stable_key: interner.intern("constraint:ts_direct_binding:copy"),
             }],
-        })
-        .expect("store graph");
+        };
+        crate::AnalysisHost::replace_semantic_graph_facts(&mut db, output).expect("store graph");
 
         let json = metadata_debug_json_for_test(&db);
         let constraints = json["constraints"].as_array().expect("constraints array");
@@ -195,12 +193,17 @@ mod tests {
         );
     }
 
-    fn node(db: &AnalysisDb, id: u64, function: FunctionId, stable_key: &str) -> SemanticNodeFact {
+    fn node(
+        interner: &polint_core::StableKeyInterner,
+        id: u64,
+        function: FunctionId,
+        stable_key: &str,
+    ) -> SemanticNodeFact {
         SemanticNodeFact {
             id: SemanticNodeId(id),
             kind: NodeKind::Function(function),
             precision: SemanticPrecision::Conservative,
-            stable_key: db.stable_key_interner().intern(stable_key),
+            stable_key: interner.intern(stable_key),
         }
     }
 }

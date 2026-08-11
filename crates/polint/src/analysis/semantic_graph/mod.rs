@@ -4,6 +4,6 @@ pub(crate) use polint_analysis::semantic_graph::store;
 pub(crate) mod build;
 pub(crate) use polint_analysis::semantic_graph::cache_key;
 #[cfg(test)]
-pub(crate) mod debug;
+pub(crate) use polint_analysis::semantic_graph::debug;
 pub(crate) mod provider;
 pub(crate) use polint_analysis::semantic_graph::validate;

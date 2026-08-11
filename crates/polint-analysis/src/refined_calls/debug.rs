@@ -1,19 +1,16 @@
-#![cfg(test)]
-
 use std::collections::BTreeMap;
 
 use serde::Serialize;
 use serde_json::json;
 
-use crate::analysis::calls::facts::{
+use crate::AnalysisHost;
+use crate::calls::facts::{
     CallAlgorithm, CallPrecision, CallProvenance, CallTargetStatus, UnresolvedCallReason,
 };
-use crate::analysis::refined_calls::facts::RefinedCallTier;
-use crate::analysis_kernel::{FactFamily, FactRef};
-use crate::core::AnalysisDb;
+use crate::refined_calls::facts::RefinedCallTier;
+use polint_analysis_api::{FactFamily, FactRef};
 
-#[cfg(test)]
-pub(crate) fn refined_calls_debug_json_for_test(db: &AnalysisDb) -> serde_json::Value {
+pub fn refined_calls_debug_json_for_test(db: &impl AnalysisHost) -> serde_json::Value {
     let edges = db
         .refined_call_edges()
         .iter()
@@ -90,8 +87,7 @@ struct RefinedCallDebugRow {
     input_count: usize,
 }
 
-#[cfg(test)]
-fn counts(db: &AnalysisDb) -> serde_json::Value {
+fn counts(db: &impl AnalysisHost) -> serde_json::Value {
     let mut by_language = BTreeMap::new();
     let mut by_algorithm = BTreeMap::new();
     let mut by_tier = BTreeMap::new();
@@ -139,8 +135,7 @@ fn counts(db: &AnalysisDb) -> serde_json::Value {
     })
 }
 
-#[cfg(test)]
-fn deltas(db: &AnalysisDb) -> serde_json::Value {
+fn deltas(db: &impl AnalysisHost) -> serde_json::Value {
     let direct_edges = db.call_targets().len();
     let refined_edges = db.refined_call_edges().len();
     let extension_edges = db
@@ -169,7 +164,6 @@ fn deltas(db: &AnalysisDb) -> serde_json::Value {
     })
 }
 
-#[cfg(test)]
 fn increment(map: &mut BTreeMap<String, usize>, key: String) {
     *map.entry(key).or_default() += 1;
 }
