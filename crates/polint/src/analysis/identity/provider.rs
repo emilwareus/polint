@@ -348,7 +348,7 @@ mod tests {
     };
     use crate::analysis::identity::store::IdentityProviderOutput;
     use crate::analysis_kernel::AnalysisKernel;
-    use crate::analysis_kernel::incremental::{Digest, DigestKind, InputSnapshot};
+    use crate::analysis_kernel::incremental::{Digest, DigestKind};
     use crate::analysis_plan::AnalysisPlan;
     use crate::config::load_config;
     use crate::core::{
@@ -524,7 +524,7 @@ mod tests {
         fs::write(temp.path().join(".polint.toml"), "").expect("config");
         let loaded = load_config(temp.path()).expect("config loads");
         let db = AnalysisDb::new();
-        let snapshot = InputSnapshot::from_run_inputs(
+        let snapshot = crate::analysis_kernel::incremental::input_snapshot_from_run_inputs(
             &loaded,
             &db,
             "config-a",
@@ -601,7 +601,7 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         fs::write(temp.path().join(".polint.toml"), "").expect("config");
         let loaded = load_config(temp.path()).expect("config loads");
-        let snapshot = InputSnapshot::from_run_inputs(
+        let snapshot = crate::analysis_kernel::incremental::input_snapshot_from_run_inputs(
             &loaded,
             &db,
             "config-a",
@@ -698,7 +698,7 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         fs::write(temp.path().join(".polint.toml"), "").expect("config");
         let loaded = load_config(temp.path()).expect("config loads");
-        let snapshot = InputSnapshot::from_run_inputs(
+        let snapshot = crate::analysis_kernel::incremental::input_snapshot_from_run_inputs(
             &loaded,
             &db,
             "config-a",

@@ -339,7 +339,7 @@ pub(crate) fn callable_stable_key_map(
 mod direct_summaries_provider {
     use super::*;
     use crate::analysis_kernel::AnalysisKernel;
-    use crate::analysis_kernel::incremental::{Digest, DigestKind, InputSnapshot};
+    use crate::analysis_kernel::incremental::{Digest, DigestKind};
     use crate::analysis_plan::AnalysisPlan;
     use crate::config::load_config;
     use crate::core::AnalysisDb;
@@ -352,7 +352,7 @@ mod direct_summaries_provider {
         let temp = tempdir().expect("tempdir");
         fs::write(temp.path().join(".polint.toml"), "").expect("config");
         let loaded = load_config(temp.path()).expect("config loads");
-        let input_snapshot = InputSnapshot::from_run_inputs(
+        let input_snapshot = crate::analysis_kernel::incremental::input_snapshot_from_run_inputs(
             &loaded,
             &db,
             "config",

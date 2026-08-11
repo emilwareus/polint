@@ -716,7 +716,7 @@ mod semantic_mir_provider {
             .iter()
             .find(|manifest| manifest.id == "polint.semantic_mir")
             .expect("semantic MIR manifest");
-        let input_snapshot = crate::analysis_kernel::incremental::InputSnapshot::from_run_inputs(
+        let input_snapshot = crate::analysis_kernel::incremental::input_snapshot_from_run_inputs(
             &loaded,
             &db,
             "config",

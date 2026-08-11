@@ -1,10 +1,10 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use super::{Digest, DigestKind};
 use crate::analysis::extensions::discovery::{DiscoveredExtension, discover_local_extensions};
-use crate::analysis_kernel::{CachePolicy, PrecisionCeiling, ProviderManifest};
+use crate::analysis_kernel::ProviderManifest;
 use crate::config::LoadedConfig;
-use crate::core::{AnalysisDb, Language, SourceFile};
+use crate::core::AnalysisDb;
 use crate::module_graph::paths::{
     TOPOLOGY_LOCKFILE_MAX_BYTES, TOPOLOGY_MANIFEST_MAX_BYTES, normalize_repo_relative,
     normalize_repo_relative_input, read_repo_file_to_string_with_limit, read_repo_file_with_limit,
@@ -13,329 +13,127 @@ use crate::module_graph::paths::{
 use std::collections::BTreeSet;
 use std::path::{Path as FsPath, PathBuf};
 
-pub(crate) const INPUT_SNAPSHOT_SCHEMA_VERSION: &str = "polint-input-snapshot-1";
+pub(crate) use polint_analysis_api::{
+    FileSnapshot, GoLifecycleSnapshot, INPUT_SNAPSHOT_SCHEMA_VERSION, InputComponent,
+    InputComponentStatus, InputSnapshot, ProviderSchemaSnapshot, TsJsLifecycleSnapshot,
+};
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct InputSnapshot {
-    pub(crate) schema_version: String,
-    pub(crate) files: Vec<FileSnapshot>,
-    pub(crate) config: InputComponent,
-    pub(crate) go_lifecycle: GoLifecycleSnapshot,
-    pub(crate) ts_js_lifecycle: TsJsLifecycleSnapshot,
-    pub(crate) rules: Vec<InputComponent>,
-    pub(crate) models: Vec<InputComponent>,
-    pub(crate) extensions: Vec<InputComponent>,
-    pub(crate) tool_invocations: Vec<InputComponent>,
-    pub(crate) provider_schemas: Vec<ProviderSchemaSnapshot>,
-}
+pub(crate) fn input_snapshot_from_run_inputs(
+    loaded: &LoadedConfig,
+    db: &AnalysisDb,
+    config_digest: &str,
+    rule_digest: &str,
+    plan_digest: &str,
+    provider_manifests: &[ProviderManifest],
+) -> InputSnapshot {
+    let mut files = db
+        .files()
+        .iter()
+        .map(FileSnapshot::from_source_file)
+        .collect::<Vec<_>>();
+    files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct FileSnapshot {
-    pub(crate) relative_path: String,
-    pub(crate) language: Language,
-    pub(crate) source_text_digest: Digest,
-    pub(crate) size_bytes: usize,
-    pub(crate) mtime_hint_present: bool,
-}
+    let mut provider_schemas = provider_manifests
+        .iter()
+        .map(ProviderSchemaSnapshot::from_manifest)
+        .collect::<Vec<_>>();
+    provider_schemas.sort_by(|left, right| left.provider_id.cmp(&right.provider_id));
+    let go_lifecycle = go_lifecycle_snapshot_from_loaded(loaded, db);
+    let ts_js_lifecycle = ts_js_lifecycle_snapshot_from_loaded(loaded, db);
+    let mut tool_invocations = vec![
+        tool_invocation_component(&go_lifecycle.components, "go.tool_invocation").clone(),
+        tool_invocation_component(&ts_js_lifecycle.components, "ts_js.tool_invocation").clone(),
+    ];
+    tool_invocations.sort_by(|left, right| left.name.cmp(&right.name));
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct GoLifecycleSnapshot {
-    pub(crate) components: Vec<InputComponent>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct TsJsLifecycleSnapshot {
-    pub(crate) components: Vec<InputComponent>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) enum InputComponentStatus {
-    Present,
-    Absent,
-    Unsupported,
-    SetupMissing,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct InputComponent {
-    pub(crate) name: String,
-    pub(crate) status: InputComponentStatus,
-    pub(crate) digest: Digest,
-    pub(crate) detail: Vec<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct ProviderSchemaSnapshot {
-    pub(crate) provider_id: String,
-    pub(crate) schema_versions: Vec<String>,
-    pub(crate) language_scope: String,
-    pub(crate) cache_policy: String,
-    pub(crate) precision_ceiling: String,
-    pub(crate) provider_manifest_digest: Digest,
-}
-
-impl InputSnapshot {
-    pub(crate) fn from_run_inputs(
-        loaded: &LoadedConfig,
-        db: &AnalysisDb,
-        config_digest: &str,
-        rule_digest: &str,
-        plan_digest: &str,
-        provider_manifests: &[ProviderManifest],
-    ) -> Self {
-        let mut files = db
-            .files()
-            .iter()
-            .map(FileSnapshot::from_source_file)
-            .collect::<Vec<_>>();
-        files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-
-        let mut provider_schemas = provider_manifests
-            .iter()
-            .map(ProviderSchemaSnapshot::from_manifest)
-            .collect::<Vec<_>>();
-        provider_schemas.sort_by(|left, right| left.provider_id.cmp(&right.provider_id));
-        let go_lifecycle = GoLifecycleSnapshot::from_loaded(loaded, db);
-        let ts_js_lifecycle = TsJsLifecycleSnapshot::from_loaded(loaded, db);
-        let mut tool_invocations = vec![
-            go_lifecycle.tool_invocation_component().clone(),
-            ts_js_lifecycle.tool_invocation_component().clone(),
-        ];
-        tool_invocations.sort_by(|left, right| left.name.cmp(&right.name));
-
-        Self {
-            schema_version: INPUT_SNAPSHOT_SCHEMA_VERSION.to_string(),
-            files,
-            config: config_component(loaded, config_digest),
-            go_lifecycle,
-            ts_js_lifecycle,
-            rules: rule_components(rule_digest, plan_digest),
-            models: vec![InputComponent::absent(
-                "model.files",
-                DigestKind::ModelFile,
-                "no model files configured",
-            )],
-            extensions: extension_components_from_repo(&loaded.root),
-            tool_invocations,
-            provider_schemas,
-        }
+    InputSnapshot {
+        schema_version: INPUT_SNAPSHOT_SCHEMA_VERSION.to_string(),
+        files,
+        config: config_component(loaded, config_digest),
+        go_lifecycle,
+        ts_js_lifecycle,
+        rules: rule_components(rule_digest, plan_digest),
+        models: vec![InputComponent::absent(
+            "model.files",
+            DigestKind::ModelFile,
+            "no model files configured",
+        )],
+        extensions: extension_components_from_repo(&loaded.root),
+        tool_invocations,
+        provider_schemas,
     }
 }
 
-impl GoLifecycleSnapshot {
-    fn from_loaded(loaded: &LoadedConfig, db: &AnalysisDb) -> Self {
-        let components = match crate::go::lifecycle::GoAnalysisConfig::from_settings(
+fn go_lifecycle_snapshot_from_loaded(
+    loaded: &LoadedConfig,
+    db: &AnalysisDb,
+) -> GoLifecycleSnapshot {
+    let components = match crate::go::lifecycle::GoAnalysisConfig::from_settings(
+        &loaded.root,
+        &loaded.config.languages.go,
+        db,
+    ) {
+        Ok(config) => go_lifecycle_components(loaded, &config),
+        Err(error) => go_lifecycle_error_components(loaded, error.reason()),
+    };
+
+    GoLifecycleSnapshot {
+        components: sorted_components(components),
+    }
+}
+
+fn ts_js_lifecycle_snapshot_from_loaded(
+    loaded: &LoadedConfig,
+    db: &AnalysisDb,
+) -> TsJsLifecycleSnapshot {
+    let source_paths = ts_js_source_paths(db);
+    let lifecycle_dirs = ts_js_lifecycle_dirs(&source_paths);
+    let components = vec![
+        file_digest_component(
+            "ts_js.package_manifests",
+            DigestKind::TsJsLifecycle,
             &loaded.root,
-            &loaded.config.languages.go,
-            db,
-        ) {
-            Ok(config) => go_lifecycle_components(loaded, &config),
-            Err(error) => go_lifecycle_error_components(loaded, error.reason()),
-        };
+            lifecycle_candidates(&lifecycle_dirs, package_manifest_names()),
+        ),
+        file_digest_component(
+            "ts_js.lockfiles",
+            DigestKind::TsJsLifecycle,
+            &loaded.root,
+            lifecycle_candidates(&lifecycle_dirs, lock_file_names()),
+        ),
+        file_digest_component(
+            "ts_js.config_files",
+            DigestKind::TsJsLifecycle,
+            &loaded.root,
+            ts_js_config_candidates(&loaded.root, &lifecycle_dirs),
+        ),
+        settings_component(
+            "ts_js.resolver_options",
+            DigestKind::TsJsLifecycle,
+            &loaded.config.languages.ts,
+        ),
+        values_component(
+            "ts_js.source_set_membership",
+            DigestKind::TsJsLifecycle,
+            source_paths,
+        ),
+        InputComponent::unsupported(
+            "ts_js.tool_invocation",
+            DigestKind::ToolInvocation,
+            "not invoked by input snapshot",
+        ),
+    ];
 
-        Self {
-            components: sorted_components(components),
-        }
-    }
-
-    fn tool_invocation_component(&self) -> &InputComponent {
-        component_by_name(&self.components, "go.tool_invocation")
-    }
-}
-
-impl TsJsLifecycleSnapshot {
-    fn from_loaded(loaded: &LoadedConfig, db: &AnalysisDb) -> Self {
-        let source_paths = ts_js_source_paths(db);
-        let lifecycle_dirs = ts_js_lifecycle_dirs(&source_paths);
-        let components = vec![
-            file_digest_component(
-                "ts_js.package_manifests",
-                DigestKind::TsJsLifecycle,
-                &loaded.root,
-                lifecycle_candidates(&lifecycle_dirs, package_manifest_names()),
-            ),
-            file_digest_component(
-                "ts_js.lockfiles",
-                DigestKind::TsJsLifecycle,
-                &loaded.root,
-                lifecycle_candidates(&lifecycle_dirs, lock_file_names()),
-            ),
-            file_digest_component(
-                "ts_js.config_files",
-                DigestKind::TsJsLifecycle,
-                &loaded.root,
-                ts_js_config_candidates(&loaded.root, &lifecycle_dirs),
-            ),
-            settings_component(
-                "ts_js.resolver_options",
-                DigestKind::TsJsLifecycle,
-                &loaded.config.languages.ts,
-            ),
-            values_component(
-                "ts_js.source_set_membership",
-                DigestKind::TsJsLifecycle,
-                source_paths,
-            ),
-            InputComponent::unsupported(
-                "ts_js.tool_invocation",
-                DigestKind::ToolInvocation,
-                "not invoked by input snapshot",
-            ),
-        ];
-
-        Self {
-            components: sorted_components(components),
-        }
-    }
-
-    fn tool_invocation_component(&self) -> &InputComponent {
-        component_by_name(&self.components, "ts_js.tool_invocation")
+    TsJsLifecycleSnapshot {
+        components: sorted_components(components),
     }
 }
 
-impl FileSnapshot {
-    fn from_source_file(file: &SourceFile) -> Self {
-        Self {
-            relative_path: normalize_relative_path(&file.relative_path),
-            language: file.language,
-            source_text_digest: Digest {
-                kind: DigestKind::SourceText,
-                value: file.content_hash.clone(),
-            },
-            size_bytes: file.source.len(),
-            mtime_hint_present: std::fs::metadata(&file.path).is_ok(),
-        }
-    }
-}
-
-impl InputComponent {
-    fn present(
-        name: impl Into<String>,
-        digest_kind: DigestKind,
-        digest_label: &str,
-        digest_value: &str,
-        detail: Vec<String>,
-    ) -> Self {
-        Self::new(
-            name,
-            InputComponentStatus::Present,
-            Digest::from_parts(digest_kind, digest_label, &[digest_value]),
-            detail,
-        )
-    }
-
-    fn absent(name: impl Into<String>, digest_kind: DigestKind, reason: &str) -> Self {
-        let name = name.into();
-        Self::new(
-            name.clone(),
-            InputComponentStatus::Absent,
-            Digest::absent(digest_kind, &name),
-            vec![reason.to_string()],
-        )
-    }
-
-    fn unsupported(name: impl Into<String>, digest_kind: DigestKind, reason: &str) -> Self {
-        let name = name.into();
-        Self::new(
-            name.clone(),
-            InputComponentStatus::Unsupported,
-            Digest::unsupported(digest_kind, &name, reason),
-            vec![reason.to_string()],
-        )
-    }
-
-    fn setup_missing(
-        name: impl Into<String>,
-        digest_kind: DigestKind,
-        detail: Vec<String>,
-    ) -> Self {
-        let name = name.into();
-        let details = sorted_normalized_details(detail);
-        let detail_refs = details.iter().map(String::as_str).collect::<Vec<_>>();
-        Self::new(
-            name,
-            InputComponentStatus::SetupMissing,
-            Digest::from_parts(digest_kind, "setup_missing", &detail_refs),
-            details,
-        )
-    }
-
-    fn setup_missing_with_digest_parts(
-        name: impl Into<String>,
-        digest_kind: DigestKind,
-        detail: Vec<String>,
-        digest_parts: Vec<String>,
-    ) -> Self {
-        let name = name.into();
-        let details = sorted_normalized_details(detail);
-        let mut digest_inputs = sorted_normalized_details(digest_parts);
-        digest_inputs.insert(0, format!("component={name}"));
-        let digest_refs = digest_inputs.iter().map(String::as_str).collect::<Vec<_>>();
-        Self::new(
-            name,
-            InputComponentStatus::SetupMissing,
-            Digest::from_parts(digest_kind, "setup_missing", &digest_refs),
-            details,
-        )
-    }
-
-    fn new(
-        name: impl Into<String>,
-        status: InputComponentStatus,
-        digest: Digest,
-        mut detail: Vec<String>,
-    ) -> Self {
-        detail = sorted_normalized_details(detail);
-        Self {
-            name: name.into(),
-            status,
-            digest,
-            detail,
-        }
-    }
-}
-
-impl ProviderSchemaSnapshot {
-    fn from_manifest(manifest: &ProviderManifest) -> Self {
-        let schema_versions = sorted_schema_labels(manifest.schema_versions);
-        let language_scope = manifest.language_scope_label().to_string();
-        let cache_policy = cache_policy_label(manifest.cache_policy);
-        let precision_ceiling = precision_ceiling_label(manifest.precision_ceiling).to_string();
-        let sorted_inputs = sorted_static_strings(manifest.inputs);
-        let sorted_outputs = sorted_static_strings(manifest.outputs);
-
-        let mut digest_parts = vec![
-            format!("provider_id={}", manifest.id),
-            format!("language_scope={language_scope}"),
-            format!("cache_policy={cache_policy}"),
-            format!("precision_ceiling={precision_ceiling}"),
-        ];
-        digest_parts.extend(
-            schema_versions
-                .iter()
-                .map(|schema| format!("schema_version={schema}")),
-        );
-        digest_parts.extend(sorted_inputs.iter().map(|input| format!("input={input}")));
-        digest_parts.extend(
-            sorted_outputs
-                .iter()
-                .map(|output| format!("output={output}")),
-        );
-        let digest_refs = digest_parts.iter().map(String::as_str).collect::<Vec<_>>();
-
-        Self {
-            provider_id: manifest.id.to_string(),
-            schema_versions,
-            language_scope,
-            cache_policy,
-            precision_ceiling,
-            provider_manifest_digest: Digest::from_parts(
-                DigestKind::ProviderParameters,
-                "provider_manifest",
-                &digest_refs,
-            ),
-        }
-    }
+fn tool_invocation_component<'a>(
+    components: &'a [InputComponent],
+    name: &str,
+) -> &'a InputComponent {
+    component_by_name(components, name)
 }
 
 fn go_lifecycle_components(
@@ -1019,21 +817,6 @@ fn bool_snapshot_setting(
         .unwrap_or(default)
 }
 
-fn sorted_schema_labels(schemas: &[crate::analysis_kernel::SchemaVersion]) -> Vec<String> {
-    let mut labels = schemas
-        .iter()
-        .map(|schema| format!("{}:{}", schema.name, schema.version))
-        .collect::<Vec<_>>();
-    labels.sort();
-    labels
-}
-
-fn sorted_static_strings(values: &[&'static str]) -> Vec<&'static str> {
-    let mut values = values.to_vec();
-    values.sort();
-    values
-}
-
 fn sorted_components(mut components: Vec<InputComponent>) -> Vec<InputComponent> {
     components.sort_by(|left, right| left.name.cmp(&right.name));
     components
@@ -1093,24 +876,6 @@ fn stable_hash_bytes(bytes: &[u8]) -> String {
         hash = hash.wrapping_mul(0x100000001b3);
     }
     format!("{hash:016x}")
-}
-
-fn cache_policy_label(policy: CachePolicy) -> String {
-    match policy {
-        CachePolicy::NoCache => "no_cache".to_string(),
-        CachePolicy::ExistingFileFactCache { schema } => {
-            format!("existing_file_fact_cache:{schema}")
-        }
-        CachePolicy::InMemoryDerived => "in_memory_derived".to_string(),
-    }
-}
-
-fn precision_ceiling_label(precision: PrecisionCeiling) -> &'static str {
-    match precision {
-        PrecisionCeiling::Exact => "exact",
-        PrecisionCeiling::Syntax => "syntax",
-        PrecisionCeiling::SetupAware => "setup_aware",
-    }
 }
 
 fn extension_activation_status_label(
@@ -1173,7 +938,7 @@ mod source_config_rule_model_extension {
         db: &AnalysisDb,
         provider_manifests: &[ProviderManifest],
     ) -> InputSnapshot {
-        InputSnapshot::from_run_inputs(
+        crate::analysis_kernel::incremental::input_snapshot_from_run_inputs(
             loaded,
             db,
             "config-digest",
@@ -1445,7 +1210,7 @@ mod lifecycle {
         db: &AnalysisDb,
         provider_manifests: &[ProviderManifest],
     ) -> InputSnapshot {
-        InputSnapshot::from_run_inputs(
+        crate::analysis_kernel::incremental::input_snapshot_from_run_inputs(
             loaded,
             db,
             "config-digest",

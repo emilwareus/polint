@@ -2372,7 +2372,7 @@ mod tests {
         plan: &AnalysisPlan,
         config_digest: &str,
     ) -> InputSnapshot {
-        InputSnapshot::from_run_inputs(
+        crate::analysis_kernel::incremental::input_snapshot_from_run_inputs(
             loaded,
             db,
             config_digest,
@@ -5297,7 +5297,7 @@ mod module_topology_layer_cache {
         module_topology_layer_dependency_edges, module_topology_layer_key,
         module_topology_layer_payload, write_module_topology_layer_payload,
     };
-    use crate::analysis_kernel::incremental::{CacheStats, Digest, DigestKind, InputSnapshot};
+    use crate::analysis_kernel::incremental::{CacheStats, Digest, DigestKind};
     use crate::analysis_plan::AnalysisPlan;
     use crate::cache::Cache;
     use crate::config::load_config;
@@ -5500,7 +5500,7 @@ mod module_topology_layer_cache {
             precision: TopologyPrecision::Unknown,
             status: ImportToPackageStatus::Unresolved,
         }]);
-        let snapshot = InputSnapshot::from_run_inputs(
+        let snapshot = crate::analysis_kernel::incremental::input_snapshot_from_run_inputs(
             &loaded,
             &db,
             "config",
@@ -5529,7 +5529,7 @@ mod module_topology_layer_cache {
         let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
         let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
         let mut first = db_with_import_to_package_inputs();
-        let first_snapshot = InputSnapshot::from_run_inputs(
+        let first_snapshot = crate::analysis_kernel::incremental::input_snapshot_from_run_inputs(
             &loaded,
             &first,
             "config",
@@ -5553,7 +5553,7 @@ mod module_topology_layer_cache {
             .collect::<Vec<_>>();
 
         let mut second = db_with_import_to_package_inputs();
-        let second_snapshot = InputSnapshot::from_run_inputs(
+        let second_snapshot = crate::analysis_kernel::incremental::input_snapshot_from_run_inputs(
             &loaded,
             &second,
             "config",
@@ -5590,7 +5590,7 @@ mod module_topology_layer_cache {
         let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
         let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
         let mut first = db_with_import_to_package_inputs();
-        let snapshot = InputSnapshot::from_run_inputs(
+        let snapshot = crate::analysis_kernel::incremental::input_snapshot_from_run_inputs(
             &loaded,
             &first,
             "config",
@@ -5663,7 +5663,7 @@ mod module_topology_layer_cache {
         .expect("corrupt module topology payload writes");
 
         let mut second = db_with_import_to_package_inputs();
-        let second_snapshot = InputSnapshot::from_run_inputs(
+        let second_snapshot = crate::analysis_kernel::incremental::input_snapshot_from_run_inputs(
             &loaded,
             &second,
             "config",

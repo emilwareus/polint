@@ -630,7 +630,7 @@ mod tests {
         plan: &AnalysisPlan,
         config_digest: &str,
     ) -> InputSnapshot {
-        InputSnapshot::from_run_inputs(
+        crate::analysis_kernel::incremental::input_snapshot_from_run_inputs(
             loaded,
             db,
             config_digest,

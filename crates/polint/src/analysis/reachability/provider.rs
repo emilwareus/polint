@@ -301,7 +301,7 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         fs::write(temp.path().join(".polint.toml"), "").expect("config");
         let loaded = load_config(temp.path()).expect("config loads");
-        InputSnapshot::from_run_inputs(
+        crate::analysis_kernel::incremental::input_snapshot_from_run_inputs(
             &loaded,
             db,
             "config-a",

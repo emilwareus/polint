@@ -1322,7 +1322,7 @@ mod symbol_graph_derivation {
         plan: &AnalysisPlan,
         config_digest: &str,
     ) -> InputSnapshot {
-        InputSnapshot::from_run_inputs(
+        crate::analysis_kernel::incremental::input_snapshot_from_run_inputs(
             loaded,
             db,
             config_digest,
@@ -2095,7 +2095,7 @@ export function answer() {
         let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
         let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
         let mut db = fixture_db(temp.path());
-        let snapshot = InputSnapshot::from_run_inputs(
+        let snapshot = crate::analysis_kernel::incremental::input_snapshot_from_run_inputs(
             &loaded,
             &db,
             "config",

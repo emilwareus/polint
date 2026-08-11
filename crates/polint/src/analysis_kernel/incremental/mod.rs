@@ -74,6 +74,7 @@ pub(crate) use digest::{Digest, DigestBuilder, DigestKind};
 pub(crate) use input_snapshot::{
     FileSnapshot, GoLifecycleSnapshot, INPUT_SNAPSHOT_SCHEMA_VERSION, InputComponent,
     InputComponentStatus, InputSnapshot, ProviderSchemaSnapshot, TsJsLifecycleSnapshot,
+    input_snapshot_from_run_inputs,
 };
 #[cfg_attr(
     test,

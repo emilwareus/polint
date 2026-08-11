@@ -699,7 +699,7 @@ mod tests {
     }
 
     fn snapshot_from_loaded(db: &AnalysisDb, loaded: &LoadedConfig) -> InputSnapshot {
-        InputSnapshot::from_run_inputs(
+        crate::analysis_kernel::incremental::input_snapshot_from_run_inputs(
             loaded,
             db,
             "config-a",

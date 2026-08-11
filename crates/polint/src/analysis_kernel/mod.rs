@@ -20,8 +20,10 @@ pub(crate) use metadata::{
 };
 #[cfg(test)]
 pub(crate) use provider::ProviderKind;
+#[cfg(test)]
+pub(crate) use provider::{CachePolicy, SchemaVersion};
 pub(crate) use provider::{
-    CachePolicy, PrecisionCeiling, ProviderCtx, ProviderManifest, ProviderRunResult, SchemaVersion,
+    PrecisionCeiling, ProviderCtx, ProviderManifest, ProviderRunResult,
     providers_enabled_by_boolean_gates, providers_enabled_by_capability_closure,
     run_named_provider, scheduled_order, scheduled_order_for,
 };
@@ -253,7 +255,7 @@ impl AnalysisKernel {
             crate::fs::load_analysis_files_scoped(input.loaded, rule_scope.as_ref())?;
         log_loaded_source_files(&db);
 
-        let input_snapshot = incremental::InputSnapshot::from_run_inputs(
+        let input_snapshot = incremental::input_snapshot_from_run_inputs(
             input.loaded,
             &db,
             input.config_digest,

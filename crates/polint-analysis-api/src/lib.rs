@@ -20,7 +20,11 @@ pub use cache_api::{
 pub use callable_names::{
     ANONYMOUS_CALLABLE_PREFIX, anonymous_callable_name, is_anonymous_callable_name,
 };
-pub use digest::{CacheStats, Digest, DigestBuilder, DigestKind};
+pub use digest::{
+    CacheStats, Digest, DigestBuilder, DigestKind, FileSnapshot, GoLifecycleSnapshot,
+    INPUT_SNAPSHOT_SCHEMA_VERSION, InputComponent, InputComponentStatus, InputSnapshot,
+    ProviderSchemaSnapshot, TsJsLifecycleSnapshot,
+};
 pub use fact_store::{FactStore, FactStoreEntry};
 pub use metadata::{
     FactConfidence, FactFamily, FactMeta, FactMetaInsert, FactMetaStore, FactPrecision, FactRef,

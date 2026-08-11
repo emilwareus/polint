@@ -57,7 +57,7 @@ impl LanguageIdRegistryExt for LanguageId {
 mod tests {
     use super::*;
     use super::{LanguageIdRegistryExt, LanguageRegistryExt};
-    use crate::analysis_kernel::incremental::{CacheStats, InputSnapshot};
+    use crate::analysis_kernel::incremental::CacheStats;
     use crate::analysis_kernel::{AnalysisKernel, ProviderCtx, ProviderRunResult};
     use crate::analysis_plan::AnalysisPlan;
     use crate::cache::Cache;
@@ -135,7 +135,7 @@ mod tests {
             "// noop\n".to_string(),
         );
 
-        let input_snapshot = InputSnapshot::from_run_inputs(
+        let input_snapshot = crate::analysis_kernel::incremental::input_snapshot_from_run_inputs(
             &loaded,
             &db,
             "config",

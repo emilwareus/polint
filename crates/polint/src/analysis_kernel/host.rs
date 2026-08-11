@@ -326,7 +326,7 @@ mod tests {
         let cache = Cache::new("", false);
         let plan = AnalysisPlan::empty();
         let db = AnalysisDb::default();
-        let input_snapshot = InputSnapshot::from_run_inputs(
+        let input_snapshot = crate::analysis_kernel::incremental::input_snapshot_from_run_inputs(
             &loaded,
             &db,
             "config",

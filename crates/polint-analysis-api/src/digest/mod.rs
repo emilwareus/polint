@@ -1,4 +1,10 @@
+mod input_snapshot;
 mod stats;
+
+pub use input_snapshot::{
+    FileSnapshot, GoLifecycleSnapshot, INPUT_SNAPSHOT_SCHEMA_VERSION, InputComponent,
+    InputComponentStatus, InputSnapshot, ProviderSchemaSnapshot, TsJsLifecycleSnapshot,
+};
 pub use stats::CacheStats;
 
 use serde::{Deserialize, Serialize};

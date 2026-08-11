@@ -252,7 +252,7 @@ mod entrypoints_provider {
         };
         use crate::analysis::entrypoints::store::EntrypointOutput;
         use crate::analysis::ids::EntrypointId;
-        use crate::analysis_kernel::incremental::{DigestKind, InputSnapshot};
+        use crate::analysis_kernel::incremental::DigestKind;
         use crate::analysis_plan::AnalysisPlan;
         use crate::config::load_config;
         use crate::core::{FileId, FunctionId, Language, Span};
@@ -261,7 +261,7 @@ mod entrypoints_provider {
         let temp = tempfile::tempdir().expect("tempdir");
         std::fs::write(temp.path().join(".polint.toml"), "").expect("config");
         let loaded = load_config(temp.path()).expect("config loads");
-        let snapshot = InputSnapshot::from_run_inputs(
+        let snapshot = crate::analysis_kernel::incremental::input_snapshot_from_run_inputs(
             &loaded,
             &db,
             "config-a",
@@ -333,7 +333,7 @@ mod entrypoints_provider {
         };
         use crate::analysis::entrypoints::store::EntrypointOutput;
         use crate::analysis::ids::EntrypointId;
-        use crate::analysis_kernel::incremental::{DigestKind, InputSnapshot};
+        use crate::analysis_kernel::incremental::DigestKind;
         use crate::analysis_plan::AnalysisPlan;
         use crate::config::load_config;
         use crate::core::{FileId, FunctionId, Language, Span};
@@ -342,7 +342,7 @@ mod entrypoints_provider {
         let temp = tempfile::tempdir().expect("tempdir");
         std::fs::write(temp.path().join(".polint.toml"), "").expect("config");
         let loaded = load_config(temp.path()).expect("config loads");
-        let snapshot = InputSnapshot::from_run_inputs(
+        let snapshot = crate::analysis_kernel::incremental::input_snapshot_from_run_inputs(
             &loaded,
             &db,
             "config-a",
@@ -429,7 +429,7 @@ mod entrypoints_provider {
         };
         use crate::analysis::entrypoints::store::EntrypointOutput;
         use crate::analysis::ids::EntrypointId;
-        use crate::analysis_kernel::incremental::{DigestKind, InputSnapshot};
+        use crate::analysis_kernel::incremental::DigestKind;
         use crate::analysis_plan::AnalysisPlan;
         use crate::config::load_config;
         use crate::core::{FileId, FunctionId, Language, Span};
@@ -438,7 +438,7 @@ mod entrypoints_provider {
         let temp = tempfile::tempdir().expect("tempdir");
         std::fs::write(temp.path().join(".polint.toml"), "").expect("config");
         let loaded = load_config(temp.path()).expect("config loads");
-        let snapshot = InputSnapshot::from_run_inputs(
+        let snapshot = crate::analysis_kernel::incremental::input_snapshot_from_run_inputs(
             &loaded,
             &db,
             "config-a",
@@ -531,7 +531,7 @@ mod entrypoints_provider {
         };
         use crate::analysis::entrypoints::store::EntrypointOutput;
         use crate::analysis::ids::EntrypointId;
-        use crate::analysis_kernel::incremental::{DigestKind, InputSnapshot};
+        use crate::analysis_kernel::incremental::DigestKind;
         use crate::analysis_plan::AnalysisPlan;
         use crate::config::load_config;
         use crate::core::{FileId, FunctionId, Language, Span};
@@ -540,7 +540,7 @@ mod entrypoints_provider {
         let temp = tempfile::tempdir().expect("tempdir");
         std::fs::write(temp.path().join(".polint.toml"), "").expect("config");
         let loaded = load_config(temp.path()).expect("config loads");
-        let snapshot = InputSnapshot::from_run_inputs(
+        let snapshot = crate::analysis_kernel::incremental::input_snapshot_from_run_inputs(
             &loaded,
             &db,
             "config-a",
@@ -653,14 +653,14 @@ mod entrypoints_provider {
     }
 
     fn derive_for_test(db: &mut crate::core::AnalysisDb) -> super::EntrypointsProviderOutput {
-        use crate::analysis_kernel::incremental::{DigestKind, InputSnapshot};
+        use crate::analysis_kernel::incremental::DigestKind;
         use crate::analysis_plan::AnalysisPlan;
         use crate::config::load_config;
 
         let temp = tempfile::tempdir().expect("tempdir");
         std::fs::write(temp.path().join(".polint.toml"), "").expect("config");
         let loaded = load_config(temp.path()).expect("config loads");
-        let snapshot = InputSnapshot::from_run_inputs(
+        let snapshot = crate::analysis_kernel::incremental::input_snapshot_from_run_inputs(
             &loaded,
             db,
             "config-a",
