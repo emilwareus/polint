@@ -15,16 +15,36 @@ use polint_core::StableKeyId;
 use crate::summaries::facts::SummaryDomainKind;
 use crate::{POLINT_ABSTRACT_DOMAINS_PROVIDER_ID, POLINT_DIRECT_SUMMARIES_PROVIDER_ID};
 
+use crate::access_paths::facts::AccessPathFact;
 use crate::access_paths::store::AccessPathStore;
+use crate::aliases::facts::AliasAnswerFact;
 use crate::aliases::store::AliasStore;
 use crate::calls::facts::{CallSiteFact, CallTargetFact, UnresolvedCallFact};
 use crate::calls::store::{CallOutput, CallStore};
+use crate::cfg::facts::{
+    BasicBlockFact, CfgEdgeFact, CfgFunctionFact, CfgNodeFact, ControlDependenceFact,
+    DominatorFact, PostDominatorFact, ReachabilityFact, UnsupportedControlFlowFact,
+};
 use crate::cfg::store::CfgOutput;
-use crate::data_flow::store::DataFlowStore;
+use crate::data_flow::facts::{
+    DataFlowBudgetFact, DataFlowEdgeFact, DataFlowModelFact, DataFlowNodeFact,
+};
+use crate::data_flow::store::{DataFlowOutput, DataFlowStore};
+use crate::domains::facts::{DomainEventFact, DomainObservationFact};
 use crate::domains::store::{DomainOutput, DomainStore};
+use crate::entrypoints::facts::{
+    EntrypointFact, FrameworkDispatchEdgeFact, TrustBoundaryFact, UnresolvedFrameworkFact,
+};
 use crate::entrypoints::store::{EntrypointOutput, EntrypointStore};
 use crate::error::AnalysisError;
-use crate::evidence::store::EvidenceStore;
+use crate::evidence::facts::{
+    EvidenceBundleFact, EvidenceEdgeFact, EvidenceNodeFact, EvidenceOmittedRegionFact,
+    EvidencePathFact, EvidenceReplayKeyFact, EvidenceSliceFact, EvidenceUnknownFact,
+};
+use crate::evidence::store::{EvidenceOutput, EvidenceStore};
+use crate::extensions::store::{
+    AcceptedExtensionFact, ExtensionActivationRow, ExtensionOutput, RejectedExtensionFact,
+};
 use crate::fact_store::{
     ACCESS_PATH_STORE_FAMILY, ADAPTATION_STORE_FAMILY, ALIAS_STORE_FAMILY, AdaptationFactStore,
     CALL_STORE_FAMILY, CFG_STORE_FAMILY, CfgFactStore, DATA_FLOW_STORE_FAMILY, DOMAIN_STORE_FAMILY,
@@ -33,21 +53,33 @@ use crate::fact_store::{
     REFINED_CALL_STORE_FAMILY, SEMANTIC_GRAPH_STORE_FAMILY, SEMANTIC_MIR_STORE_FAMILY,
     SOLVER_STORE_FAMILY, SUMMARY_STORE_FAMILY, TYPE_STORE_FAMILY, VALUE_STORE_FAMILY,
 };
+use crate::identity::facts::IdentityRecord;
 use crate::identity::store::IdentityStore;
+use crate::ids::CallSiteId;
 use crate::mir_body::MirOutput;
 use crate::mir_body::{MirBlock, MirBody};
+use crate::mir_body::{MirStatement, MirTerminator};
 use crate::mir_op::MirOperation;
 use crate::mir_op::UnsupportedSemanticFact;
 use crate::places::{PlaceFact, PlaceTypeFact};
+use crate::points_to::facts::{PointsToConstraintFact, PointsToSetFact};
 use crate::points_to::store::PointsToStore;
-use crate::reachability::store::ReachabilityStore;
+use crate::reachability::facts::ReachabilityRootFact;
+use crate::reachability::store::{ReachabilityProviderOutput, ReachabilityStore};
+use crate::refined_calls::facts::RefinedCallEdgeFact;
 use crate::refined_calls::store::{RefinedCallOutput, RefinedCallStore};
+use crate::semantic_graph::constraints::ConstraintFact;
+use crate::semantic_graph::facts::{SemanticEdgeFact, SemanticNodeFact};
 use crate::semantic_graph::store::{SemanticGraphOutput, SemanticGraphStore};
-use crate::solver::store::SolverStore;
+use crate::solver::budget::BudgetStatus;
+use crate::solver::facts::DerivedEdgeFact;
+use crate::solver::store::{SolverOutput, SolverStore};
 use crate::store::SemanticStore;
 use crate::summaries::facts::{SummaryEventFact, SummaryFact};
 use crate::summaries::store::{SummaryOutput, SummaryStore};
-use crate::types::store::TypeStore;
+use crate::types::facts::{NarrowedTypeFact, TypeFact};
+use crate::types::store::{TypeStore, TypeValueAliasOutput};
+use crate::values::facts::{AllocationTokenFact, ValueFact};
 use crate::values::store::ValueStore;
 
 fn store_ref<T: FactStore + 'static>(db: &(impl FactDatabase + ?Sized), family: FactFamily) -> &T {
@@ -239,6 +271,247 @@ pub trait AnalysisHost: FactDatabase {
         *store_mut::<DomainStore>(self, DOMAIN_STORE_FAMILY) =
             DomainStore::from_output(output, &interner);
         refresh_abstract_domain_metadata(self);
+    }
+
+    fn mir_statements(&self) -> &[MirStatement] {
+        self.semantic_mir_store().mir_statements()
+    }
+
+    fn mir_terminators(&self) -> &[MirTerminator] {
+        self.semantic_mir_store().mir_terminators()
+    }
+
+    fn cfg_functions(&self) -> &[CfgFunctionFact] {
+        self.cfg_store().functions()
+    }
+    fn cfg_nodes(&self) -> &[CfgNodeFact] {
+        self.cfg_store().nodes()
+    }
+    fn cfg_blocks(&self) -> &[BasicBlockFact] {
+        self.cfg_store().blocks()
+    }
+    fn cfg_edges(&self) -> &[CfgEdgeFact] {
+        self.cfg_store().edges()
+    }
+    fn cfg_reachability(&self) -> &[ReachabilityFact] {
+        self.cfg_store().reachability()
+    }
+    fn cfg_dominators(&self) -> &[DominatorFact] {
+        self.cfg_store().dominators()
+    }
+    fn cfg_postdominators(&self) -> &[PostDominatorFact] {
+        self.cfg_store().postdominators()
+    }
+    fn cfg_control_dependence(&self) -> &[ControlDependenceFact] {
+        self.cfg_store().control_dependence()
+    }
+    fn unsupported_control_flow(&self) -> &[UnsupportedControlFlowFact] {
+        self.cfg_store().unsupported()
+    }
+
+    fn refined_call_edges(&self) -> &[RefinedCallEdgeFact] {
+        self.refined_call_store_inner().edges()
+    }
+
+    fn data_flow_nodes(&self) -> &[DataFlowNodeFact] {
+        self.data_flow_store_inner().nodes()
+    }
+    fn data_flow_edges(&self) -> &[DataFlowEdgeFact] {
+        self.data_flow_store_inner().edges()
+    }
+    fn data_flow_models(&self) -> &[DataFlowModelFact] {
+        self.data_flow_store_inner().models()
+    }
+    fn data_flow_budgets(&self) -> &[DataFlowBudgetFact] {
+        self.data_flow_store_inner().budgets()
+    }
+
+    fn evidence_nodes(&self) -> &[EvidenceNodeFact] {
+        self.evidence_store_inner().nodes()
+    }
+    fn evidence_edges(&self) -> &[EvidenceEdgeFact] {
+        self.evidence_store_inner().edges()
+    }
+    fn evidence_bundles(&self) -> &[EvidenceBundleFact] {
+        self.evidence_store_inner().bundles()
+    }
+    fn evidence_paths(&self) -> &[EvidencePathFact] {
+        self.evidence_store_inner().paths()
+    }
+    fn evidence_slices(&self) -> &[EvidenceSliceFact] {
+        self.evidence_store_inner().slices()
+    }
+    fn evidence_unknowns(&self) -> &[EvidenceUnknownFact] {
+        self.evidence_store_inner().unknowns()
+    }
+    fn evidence_omitted_regions(&self) -> &[EvidenceOmittedRegionFact] {
+        self.evidence_store_inner().omitted_regions()
+    }
+    fn evidence_replay_keys(&self) -> &[EvidenceReplayKeyFact] {
+        self.evidence_store_inner().replay_keys()
+    }
+
+    fn abstract_domain_observations(&self) -> &[DomainObservationFact] {
+        self.domain_store_inner().observations()
+    }
+    fn abstract_domain_events(&self) -> &[DomainEventFact] {
+        self.domain_store_inner().events()
+    }
+
+    fn entrypoint_facts(&self) -> &[EntrypointFact] {
+        self.entrypoint_store_inner().entrypoints()
+    }
+    fn trust_boundary_facts(&self) -> &[TrustBoundaryFact] {
+        self.entrypoint_store_inner().trust_boundaries()
+    }
+    fn dispatch_edge_facts(&self) -> &[FrameworkDispatchEdgeFact] {
+        self.entrypoint_store_inner().dispatch_edges()
+    }
+    fn unresolved_framework_facts(&self) -> &[UnresolvedFrameworkFact] {
+        self.entrypoint_store_inner().unresolved()
+    }
+
+    fn type_facts(&self) -> &[TypeFact] {
+        self.type_store_inner().types()
+    }
+    fn narrowed_type_facts(&self) -> &[NarrowedTypeFact] {
+        self.type_store_inner().narrowed()
+    }
+    fn value_facts(&self) -> &[ValueFact] {
+        self.value_store_inner().values()
+    }
+    fn allocation_tokens(&self) -> &[AllocationTokenFact] {
+        self.value_store_inner().allocations()
+    }
+    fn access_path_facts(&self) -> &[AccessPathFact] {
+        self.access_path_store_inner().access_paths()
+    }
+    fn points_to_constraints(&self) -> &[PointsToConstraintFact] {
+        self.points_to_store_inner().constraints()
+    }
+    fn points_to_sets(&self) -> &[PointsToSetFact] {
+        self.points_to_store_inner().sets()
+    }
+    fn alias_answers(&self) -> &[AliasAnswerFact] {
+        self.alias_store_inner().answers()
+    }
+
+    fn identity_records(&self) -> &[IdentityRecord] {
+        self.identity_store_inner().records()
+    }
+
+    fn reachability_roots(&self) -> &[ReachabilityRootFact] {
+        self.reachability_store_inner().roots()
+    }
+
+    fn semantic_nodes(&self) -> &[SemanticNodeFact] {
+        self.semantic_graph_store_inner().nodes()
+    }
+    fn semantic_edges(&self) -> &[SemanticEdgeFact] {
+        self.semantic_graph_store_inner().edges()
+    }
+    fn semantic_constraints(&self) -> &[ConstraintFact] {
+        self.semantic_graph_store_inner().constraints()
+    }
+
+    fn solver_derived_edges(&self) -> &[DerivedEdgeFact] {
+        self.solver_store_inner().derived_edges()
+    }
+    fn solver_budget_status(&self) -> BudgetStatus {
+        self.solver_store_inner().budget_status()
+    }
+    fn solver_budget_reasons(&self) -> &std::collections::BTreeSet<String> {
+        self.solver_store_inner().budget_reasons()
+    }
+
+    fn extension_facts(&self) -> &[AcceptedExtensionFact] {
+        self.extension_store_inner().accepted.as_slice()
+    }
+    fn extension_activations(&self) -> &[ExtensionActivationRow] {
+        self.extension_store_inner().activations.as_slice()
+    }
+    fn rejected_extension_facts(&self) -> &[RejectedExtensionFact] {
+        self.extension_store_inner().rejected.as_slice()
+    }
+
+    fn call_sites_by_caller(&self, caller: polint_core::FunctionId) -> Vec<&CallSiteFact> {
+        self.calls_store().sites_by_caller(caller)
+    }
+    fn call_targets_by_site(&self, site: CallSiteId) -> Vec<&CallTargetFact> {
+        self.calls_store().targets_by_site(site)
+    }
+
+    fn metadata_for(&self, fact_ref: FactRef) -> Option<&FactMeta> {
+        self.fact_meta().get(fact_ref)
+    }
+
+    fn replace_data_flow_facts(&mut self, output: DataFlowOutput) -> Result<(), AnalysisError> {
+        let interner = self.stable_key_interner();
+        *store_mut::<DataFlowStore>(self, DATA_FLOW_STORE_FAMILY) =
+            DataFlowStore::from_output(output, &interner)?;
+        Ok(())
+    }
+
+    fn replace_evidence_facts(&mut self, output: EvidenceOutput) -> Result<(), AnalysisError> {
+        let interner = self.stable_key_interner();
+        *store_mut::<EvidenceStore>(self, EVIDENCE_STORE_FAMILY) =
+            EvidenceStore::from_output(output, &interner)?;
+        Ok(())
+    }
+
+    fn replace_reachability_facts(
+        &mut self,
+        output: ReachabilityProviderOutput,
+    ) -> Result<(), AnalysisError> {
+        let interner = self.stable_key_interner();
+        let valid_function_ids = self
+            .functions()
+            .iter()
+            .map(|row| row.id)
+            .collect::<std::collections::BTreeSet<_>>();
+        let valid_entrypoint_ids = self
+            .entrypoint_facts()
+            .iter()
+            .map(|row| row.id)
+            .collect::<std::collections::BTreeSet<_>>();
+        let store = ReachabilityStore::from_output(
+            output,
+            &interner,
+            &valid_function_ids,
+            &valid_entrypoint_ids,
+        )?;
+        *store_mut::<ReachabilityStore>(self, REACHABILITY_STORE_FAMILY) = store;
+        Ok(())
+    }
+
+    fn replace_solver_facts(&mut self, output: SolverOutput) -> Result<(), AnalysisError> {
+        let interner = self.stable_key_interner();
+        *store_mut::<SolverStore>(self, SOLVER_STORE_FAMILY) =
+            SolverStore::from_output(output, &interner)?;
+        Ok(())
+    }
+
+    fn replace_type_value_alias_facts(&mut self, output: TypeValueAliasOutput) {
+        let interner = self.stable_key_interner();
+        let output = output.normalized(&interner);
+        *store_mut::<TypeStore>(self, TYPE_STORE_FAMILY) =
+            TypeStore::from_normalized_output(output.types);
+        *store_mut::<ValueStore>(self, VALUE_STORE_FAMILY) =
+            ValueStore::from_normalized_output(output.values);
+        *store_mut::<AccessPathStore>(self, ACCESS_PATH_STORE_FAMILY) =
+            AccessPathStore::from_normalized_output(output.access_paths);
+        *store_mut::<PointsToStore>(self, POINTS_TO_STORE_FAMILY) =
+            PointsToStore::from_normalized_output(output.points_to);
+        *store_mut::<AliasStore>(self, ALIAS_STORE_FAMILY) =
+            AliasStore::from_normalized_output(output.aliases);
+    }
+
+    fn replace_extension_facts(&mut self, output: ExtensionOutput) {
+        let output = output.normalized(&self.stable_key_interner());
+        let store = store_mut::<ExtensionFactStore>(self, EXTENSION_STORE_FAMILY);
+        store.activations = output.activations;
+        store.accepted = output.accepted;
+        store.rejected = output.rejected;
     }
 
     fn replace_semantic_graph_facts(

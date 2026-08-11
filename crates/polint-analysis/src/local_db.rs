@@ -238,6 +238,37 @@ impl LocalAnalysisDb {
         crate::AnalysisHost::unsupported_semantics(self)
     }
 
+    pub fn cfg_functions(&self) -> &[crate::cfg::facts::CfgFunctionFact] {
+        crate::AnalysisHost::cfg_functions(self)
+    }
+    pub fn cfg_nodes(&self) -> &[crate::cfg::facts::CfgNodeFact] {
+        crate::AnalysisHost::cfg_nodes(self)
+    }
+    pub fn cfg_edges(&self) -> &[crate::cfg::facts::CfgEdgeFact] {
+        crate::AnalysisHost::cfg_edges(self)
+    }
+    pub fn refined_call_edges(&self) -> &[crate::refined_calls::facts::RefinedCallEdgeFact] {
+        crate::AnalysisHost::refined_call_edges(self)
+    }
+    pub fn replace_call_facts(
+        &mut self,
+        output: crate::calls::store::CallOutput,
+    ) -> Result<(), crate::AnalysisError> {
+        crate::AnalysisHost::replace_call_facts(self, output)
+    }
+    pub fn replace_refined_call_facts(
+        &mut self,
+        output: crate::refined_calls::store::RefinedCallOutput,
+    ) -> Result<(), crate::AnalysisError> {
+        crate::AnalysisHost::replace_refined_call_facts(self, output)
+    }
+    pub fn metadata_for(
+        &self,
+        fact_ref: polint_analysis_api::FactRef,
+    ) -> Option<&polint_analysis_api::FactMeta> {
+        crate::AnalysisHost::metadata_for(self, fact_ref)
+    }
+
     pub fn replace_semantic_mir(
         &mut self,
         output: crate::mir_body::MirOutput,
