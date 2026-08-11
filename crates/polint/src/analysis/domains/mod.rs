@@ -1,10 +1,7 @@
 pub(crate) use polint_analysis::domains::core;
 pub(crate) use polint_analysis::domains::facts;
 pub(crate) use polint_analysis::domains::lattice;
-pub(crate) use polint_analysis::domains::results;
-pub(crate) use polint_analysis::domains::state;
 pub(crate) use polint_analysis::domains::store;
-pub(crate) use polint_analysis::domains::transfer;
 pub(crate) mod cache_key;
 pub(crate) mod provider;
 pub(crate) mod solver;
