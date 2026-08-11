@@ -78,7 +78,6 @@ pub(crate) mod rule;
 mod span;
 mod stable_key;
 
-pub(crate) use facts::is_synthetic_ts_js_module_function;
 pub use facts::{
     BranchObligation, ComplexityMetricFact, CoverageFact, DefinitionFact, DefinitionKind,
     FileMetricFact, FunctionFact, FunctionMetricFact, ImportFact, JsxAttributeFact, ModuleEdge,

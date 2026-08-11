@@ -9,37 +9,38 @@ use oxc_ast::ast::{
 };
 use oxc_span::GetSpan;
 
-use crate::analysis::ids::{
-    CallSiteId, MirBodyId, MirOpId, MirPredicateId, MirStatementId, MirTerminatorId, PlaceId,
-    UnsupportedId,
-};
-use crate::analysis::mir::body::{
-    MirBlock, MirBlockId, MirBody, MirOutput, MirStatement, MirStatus, MirTerminator,
-    MirTerminatorKind, SuspendKind,
-};
-use crate::analysis::mir::op::{
-    AssignMode, ConservativeAction, MirAggregateField, MirAggregateKind, MirOperation,
-    MirOperationKind, MirValue, UnsupportedDomain, UnsupportedPrecision, UnsupportedSemanticFact,
-};
-use crate::analysis::places::{
-    PlaceInsert, PlaceProjection, PlaceRoot, PlaceStableContext, PlaceStatus, PlaceTableBuilder,
-};
-use crate::analysis::stable_key::semantic_stable_key;
-use crate::analysis::types::facts::TypeShape;
-use crate::analysis_kernel::FactFamily;
-use crate::core::{
-    AnalysisDb, FileId, FunctionFact, FunctionId, Language, SourceFile, Span, StableKeyId,
-    is_synthetic_ts_js_module_function,
-};
-use crate::ts::{
+use crate::{
     PARSER_RECOVERY_CONSTRUCT, anonymous_callable_name, class_callable_name, parse_ts_file,
     spans::{
         normalized_call_expression_span, normalized_new_expression_span,
         normalized_tagged_template_span,
     },
 };
+use polint_analysis::AnalysisHost;
+use polint_analysis::ids::{
+    CallSiteId, MirBodyId, MirOpId, MirPredicateId, MirStatementId, MirTerminatorId, PlaceId,
+    UnsupportedId,
+};
+use polint_analysis::mir_body::{
+    MirBlock, MirBlockId, MirBody, MirOutput, MirStatement, MirStatus, MirTerminator,
+    MirTerminatorKind, SuspendKind,
+};
+use polint_analysis::mir_op::{
+    AssignMode, ConservativeAction, MirAggregateField, MirAggregateKind, MirOperation,
+    MirOperationKind, MirValue, UnsupportedDomain, UnsupportedPrecision, UnsupportedSemanticFact,
+};
+use polint_analysis::places::{
+    PlaceInsert, PlaceProjection, PlaceRoot, PlaceStableContext, PlaceStatus, PlaceTableBuilder,
+};
+use polint_analysis::stable_key::semantic_stable_key;
+use polint_analysis::types::facts::TypeShape;
+use polint_analysis_api::{
+    FactFamily, FunctionFact, SourceFile, is_synthetic_ts_js_module_function,
+};
+use polint_core::{FileId, FunctionId, Language, Span, StableKeyId};
 
-pub(crate) fn lower_ts_mir(db: &AnalysisDb) -> MirOutput {
+#[doc(hidden)]
+pub fn lower_ts_mir(db: &impl AnalysisHost) -> MirOutput {
     let interner_handle = db.stable_key_interner();
     let interner = &interner_handle;
     let mut lowering = TsMirLowering::default();
@@ -105,7 +106,7 @@ pub(crate) fn lower_ts_mir(db: &AnalysisDb) -> MirOutput {
 }
 
 fn lower_control_flow(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     bodies: &[MirBody],
     operations: &[MirOperation],
     control_shapes: &BTreeMap<MirOpId, ControlShape>,
@@ -369,8 +370,8 @@ struct TsMirLowering {
 impl TsMirLowering {
     fn lower_file(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
-        db: &AnalysisDb,
+        interner: &polint_core::StableKeyInterner,
+        db: &impl AnalysisHost,
         file: &SourceFile,
     ) {
         let allocator = Allocator::default();
@@ -378,7 +379,7 @@ impl TsMirLowering {
         for error in &parsed.errors {
             let span = match (error.start_byte, error.end_byte) {
                 (Some(start), Some(end)) => {
-                    crate::core::span_from_byte_range(file.id, file.source.as_ref(), start, end)
+                    polint_core::span_from_byte_range(file.id, file.source.as_ref(), start, end)
                 }
                 _ => Span::point(file.id, 1, 1),
             };
@@ -447,7 +448,7 @@ impl TsMirLowering {
             closure_capture_names(db, file.id, file.source.as_ref(), &prepared);
 
         if let Some(module_function) = matching_module_function(db, file.id, file.language) {
-            let span = crate::core::span_from_byte_range(
+            let span = polint_core::span_from_byte_range(
                 file.id,
                 file.source.as_ref(),
                 0,
@@ -523,8 +524,8 @@ impl TsMirLowering {
 
     fn push_body(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
-        db: &AnalysisDb,
+        interner: &polint_core::StableKeyInterner,
+        db: &impl AnalysisHost,
         file: &SourceFile,
         function: &FunctionFact,
         span: Span,
@@ -580,7 +581,7 @@ impl TsMirLowering {
 
     fn finish_unsupported(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         place_ids: &BTreeMap<String, PlaceId>,
     ) -> Vec<UnsupportedSemanticFact> {
         self.unsupported
@@ -599,7 +600,7 @@ struct TsFunctionCandidate<'ast> {
 }
 
 fn closure_capture_names(
-    db: &AnalysisDb,
+    db: &impl AnalysisHost,
     file: FileId,
     source: &str,
     functions: &[(TsFunctionCandidate<'_>, FunctionId, MirBody)],
@@ -609,6 +610,7 @@ fn closure_capture_names(
         .map(|(function, _, _)| {
             let mut names = db
                 .references_for_file(file)
+                .into_iter()
                 .filter(|reference| {
                     reference.primary_span.as_ref().is_some_and(|span| {
                         span.start_byte >= function.span.start && span.end_byte <= function.span.end
@@ -1348,7 +1350,7 @@ struct FunctionLowering<'source> {
 
 impl<'source> FunctionLowering<'source> {
     fn new(
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         file: &SourceFile,
         source: &'source str,
         function: FunctionId,
@@ -1376,7 +1378,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_parameters(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         names: &[String],
         places: &mut PlaceTableBuilder,
     ) {
@@ -1393,7 +1395,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_statements(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         statements: &[Statement<'_>],
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -1406,7 +1408,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_statement(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         statement: &Statement<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -1750,7 +1752,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_variable_declarator(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         declarator: &VariableDeclarator<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -1798,7 +1800,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_for_statement_init(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         init: &oxc_ast::ast::ForStatementInit<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -1839,7 +1841,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_for_statement_left(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         left: &oxc_ast::ast::ForStatementLeft<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -1894,7 +1896,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_value(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         expression: &Expression<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -2058,7 +2060,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn closure_value(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         span: oxc_span::Span,
         places: &mut PlaceTableBuilder,
     ) -> Option<ValueDraft> {
@@ -2089,7 +2091,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_expression(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         expression: &Expression<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -2710,7 +2712,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_chain_element(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         element: &oxc_ast::ast::ChainElement<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -2752,7 +2754,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_private_field(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         private: &oxc_ast::ast::PrivateFieldExpression<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -2795,7 +2797,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn keyword_shape(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         evidence: &str,
         span: oxc_span::Span,
@@ -2822,7 +2824,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_jsx_element(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         element: &oxc_ast::ast::JSXElement<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -2866,7 +2868,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_jsx_attribute_value(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         value: &oxc_ast::ast::JSXAttributeValue<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -2900,7 +2902,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_jsx_children(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         children: &[oxc_ast::ast::JSXChild<'_>],
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -2954,7 +2956,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_jsx_expression(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         expression: &oxc_ast::ast::JSXExpression<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -2977,7 +2979,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_static_member(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         member: &oxc_ast::ast::StaticMemberExpression<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -3012,7 +3014,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_computed_member(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         member: &oxc_ast::ast::ComputedMemberExpression<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -3069,7 +3071,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_identifier(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         name: &str,
         places: &mut PlaceTableBuilder,
         assignment_destination: bool,
@@ -3106,7 +3108,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn assignment_target_shape(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         target: &oxc_ast::ast::AssignmentTarget<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -3176,7 +3178,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn simple_assignment_target_shape(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         target: &oxc_ast::ast::SimpleAssignmentTarget<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -3236,7 +3238,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn insert_local(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         name: &str,
     ) -> String {
@@ -3245,7 +3247,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn insert_local_typed(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         name: &str,
         ty: Option<TypeShape>,
@@ -3267,7 +3269,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn temporary_shape(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         span: oxc_span::Span,
     ) -> PlaceShape {
@@ -3283,7 +3285,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn temporary_shape_typed(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         span: oxc_span::Span,
         ty: TypeShape,
@@ -3310,7 +3312,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn insert_temporary(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         span: oxc_span::Span,
         status: PlaceStatus,
@@ -3329,7 +3331,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn insert_shape(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         shape: &PlaceShape,
     ) -> String {
@@ -3344,7 +3346,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn insert_place(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         root: PlaceRoot,
         projections: Vec<PlaceProjection>,
@@ -3355,7 +3357,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn insert_typed_place(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         root: PlaceRoot,
         projections: Vec<PlaceProjection>,
@@ -3379,7 +3381,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn push_assign(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         operations: &mut Vec<OperationDraft>,
         span: oxc_span::Span,
         place_key: String,
@@ -3401,7 +3403,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_call(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         call: &oxc_ast::ast::CallExpression<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -3493,7 +3495,7 @@ impl<'source> FunctionLowering<'source> {
     /// (offset by the implicit `strings` array at index 0).
     fn lower_tagged_template_expression(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         tagged: &oxc_ast::ast::TaggedTemplateExpression<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -3554,7 +3556,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_new_expression(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         expression: &oxc_ast::ast::NewExpression<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -3621,7 +3623,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn argument_shape(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         argument: &Argument<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -3659,7 +3661,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn push_branch(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         operations: &mut Vec<OperationDraft>,
         span: oxc_span::Span,
         shape: ControlShape,
@@ -3679,7 +3681,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn push_unsupported(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         operations: &mut Vec<OperationDraft>,
         unsupported: &mut Vec<UnsupportedDraft>,
         span: oxc_span::Span,
@@ -3723,7 +3725,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn push_operation(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         operations: &mut Vec<OperationDraft>,
         span: oxc_span::Span,
         kind: OperationKindDraft,
@@ -3763,7 +3765,7 @@ struct OperationDraft {
 
 impl OperationDraft {
     fn new(
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         id: MirOpId,
         body: MirBodyId,
         body_stable_key: &str,
@@ -4103,7 +4105,7 @@ impl UnsupportedDraft {
 
     fn to_fact(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         place_ids: &BTreeMap<String, PlaceId>,
     ) -> UnsupportedSemanticFact {
         UnsupportedSemanticFact {
@@ -4191,7 +4193,7 @@ fn unsupported_domains_for(construct: &str) -> Vec<UnsupportedDomain> {
 }
 
 fn operation_stable_key(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     body_stable_key: &str,
     ordinal: u32,
     span: &Span,
@@ -4226,7 +4228,7 @@ fn operation_place_label(index: usize) -> &'static str {
 }
 
 fn unsupported_stable_key(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     draft: &UnsupportedDraft,
 ) -> String {
     semantic_stable_key(
@@ -4304,7 +4306,7 @@ fn source_text(source: &str, span: oxc_span::Span) -> Option<&str> {
 }
 
 fn matching_function<'db>(
-    db: &'db AnalysisDb,
+    db: &'db impl AnalysisHost,
     file: FileId,
     language: Language,
     name: &str,
@@ -4319,7 +4321,7 @@ fn matching_function<'db>(
 }
 
 fn matching_module_function(
-    db: &AnalysisDb,
+    db: &impl AnalysisHost,
     file: FileId,
     language: Language,
 ) -> Option<&FunctionFact> {
@@ -4331,7 +4333,7 @@ fn matching_module_function(
 }
 
 fn enclosing_function<'db>(
-    db: &'db AnalysisDb,
+    db: &'db impl AnalysisHost,
     file: FileId,
     language: Language,
     span: &Span,
@@ -4352,7 +4354,7 @@ fn span_contains(outer: &Span, inner: &Span) -> bool {
 }
 
 fn owner_stable_key(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     file: &SourceFile,
     function: &FunctionFact,
 ) -> String {
@@ -4371,7 +4373,7 @@ fn owner_stable_key(
 }
 
 fn span_from_oxc(file: FileId, source: &str, span: oxc_span::Span) -> Span {
-    crate::core::span_from_byte_range(file, source, span.start as usize, span.end as usize)
+    polint_core::span_from_byte_range(file, source, span.start as usize, span.end as usize)
 }
 
 fn call_site_for_span(span: oxc_span::Span) -> CallSiteId {
@@ -4392,14 +4394,16 @@ fn language_label(language: Language) -> &'static str {
 #[cfg(test)]
 mod places {
     use super::*;
-    use crate::analysis::places::{PlaceProjection, PlaceRoot};
-    use crate::core::{AnalysisDb, Language, TS_JS_MODULE_FUNCTION_NAME};
+    use polint_analysis::LocalAnalysisDb;
+    use polint_analysis::places::{PlaceProjection, PlaceRoot};
+    use polint_analysis_api::TS_JS_MODULE_FUNCTION_NAME;
+    use polint_core::Language;
     use std::path::PathBuf;
 
-    fn lower(path: &str, source: &str) -> (MirOutput, crate::core::StableKeyInterner) {
-        let mut db = AnalysisDb::new();
+    fn lower(path: &str, source: &str) -> (MirOutput, polint_core::StableKeyInterner) {
+        let mut db = LocalAnalysisDb::new();
         db.add_file(PathBuf::from(path), path.to_string(), source.to_string());
-        let diagnostics = crate::ts::analyze_with_options(
+        let diagnostics = crate::analyze_with_options(
             &mut db,
             &polint_analysis_api::DisabledAnalysisCache,
             "",
@@ -4411,10 +4415,10 @@ mod places {
         (output, db.stable_key_interner())
     }
 
-    fn lower_allowing_parser_diagnostics(path: &str, source: &str) -> (AnalysisDb, MirOutput) {
-        let mut db = AnalysisDb::new();
+    fn lower_allowing_parser_diagnostics(path: &str, source: &str) -> (LocalAnalysisDb, MirOutput) {
+        let mut db = LocalAnalysisDb::new();
         db.add_file(PathBuf::from(path), path.to_string(), source.to_string());
-        let _diagnostics = crate::ts::analyze_with_options(
+        let _diagnostics = crate::analyze_with_options(
             &mut db,
             &polint_analysis_api::DisabledAnalysisCache,
             "",
@@ -4426,64 +4430,6 @@ mod places {
     }
 
     #[test]
-    fn a_recoverable_syntax_error_is_recorded_as_unsupported_not_ignored() {
-        let mut db = AnalysisDb::new();
-        db.add_file(
-            PathBuf::from("ok.ts"),
-            "ok.ts".to_string(),
-            "export function ok(value: number) { return value + 1; }".to_string(),
-        );
-        db.add_file(
-            PathBuf::from("broken.tsx"),
-            "broken.tsx".to_string(),
-            "const x = <div></span>;".to_string(),
-        );
-        let diagnostics = crate::ts::analyze_with_options(
-            &mut db,
-            &polint_analysis_api::DisabledAnalysisCache,
-            "",
-            "",
-            false,
-        );
-        assert!(
-            diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.rule_id == "parser/ts"
-                    && diagnostic.file == "broken.tsx"),
-            "primary adapter must still emit parser/ts for the broken file: {diagnostics:?}"
-        );
-        assert!(
-            diagnostics
-                .iter()
-                .all(|diagnostic| diagnostic.file != "ok.ts" || diagnostic.rule_id != "parser/ts"),
-            "valid file must stay free of parser/ts diagnostics"
-        );
-
-        db.replace_semantic_mir(lower_ts_mir(&db))
-            .expect("store MIR unsupported rows");
-
-        let rows = crate::analysis::unknown_taxonomy::collect::graph_engine_unknowns(&db);
-        assert!(
-            rows.iter().any(|row| {
-                row.family.as_deref() == Some("UnsupportedSemantic")
-                    && row.file == "broken.tsx"
-                    && row.reason.as_deref() == Some(crate::ts::PARSER_RECOVERY_CONSTRUCT)
-            }),
-            "inspect unknowns must surface parser-recovery unsupported rows: {rows:?}"
-        );
-        assert!(
-            rows.iter().all(|row| row.file != "ok.ts"),
-            "valid file must not gain parser-recovery unknowns: {rows:?}"
-        );
-        assert!(
-            db.functions()
-                .iter()
-                .any(|function| function.name == "ok" && db.path_for(function.file) == "ok.ts"),
-            "valid file analysis must remain intact"
-        );
-    }
-
-    #[test]
     fn catastrophic_and_recoverable_fixtures_both_record_parser_recovery() {
         let (_db, recoverable) =
             lower_allowing_parser_diagnostics("recoverable.tsx", "const x = <div></span>;");
@@ -4491,7 +4437,7 @@ mod places {
             recoverable
                 .unsupported
                 .iter()
-                .any(|row| row.construct == crate::ts::PARSER_RECOVERY_CONSTRUCT),
+                .any(|row| row.construct == crate::PARSER_RECOVERY_CONSTRUCT),
             "recoverable syntax error must record parser recovery: {:?}",
             recoverable.unsupported
         );
@@ -4504,7 +4450,7 @@ mod places {
             catastrophic
                 .unsupported
                 .iter()
-                .any(|row| row.construct == crate::ts::PARSER_RECOVERY_CONSTRUCT),
+                .any(|row| row.construct == crate::PARSER_RECOVERY_CONSTRUCT),
             "catastrophic syntax error must record parser recovery: {:?}",
             catastrophic.unsupported
         );
@@ -4643,13 +4589,13 @@ class View {
   }
 }
 "#;
-        let mut db = AnalysisDb::new();
+        let mut db = LocalAnalysisDb::new();
         db.add_file(
             PathBuf::from("src/view.tsx"),
             "src/view.tsx".to_string(),
             source.to_string(),
         );
-        let diagnostics = crate::ts::analyze_with_options(
+        let diagnostics = crate::analyze_with_options(
             &mut db,
             &polint_analysis_api::DisabledAnalysisCache,
             "",
@@ -4729,17 +4675,18 @@ export function render(user) {
 #[cfg(test)]
 mod operations {
     use super::*;
-    use crate::analysis::mir::op::{
+    use polint_analysis::LocalAnalysisDb;
+    use polint_analysis::mir_op::{
         AssignMode, ConservativeAction, MirOperationKind, UnsupportedDomain,
     };
-    use crate::core::TS_JS_MODULE_FUNCTION_NAME;
+    use polint_analysis_api::TS_JS_MODULE_FUNCTION_NAME;
     use std::collections::BTreeSet;
     use std::path::PathBuf;
 
-    fn lower(path: &str, source: &str) -> (MirOutput, crate::core::StableKeyInterner) {
-        let mut db = AnalysisDb::new();
+    fn lower(path: &str, source: &str) -> (MirOutput, polint_core::StableKeyInterner) {
+        let mut db = LocalAnalysisDb::new();
         db.add_file(PathBuf::from(path), path.to_string(), source.to_string());
-        let diagnostics = crate::ts::analyze_with_options(
+        let diagnostics = crate::analyze_with_options(
             &mut db,
             &polint_analysis_api::DisabledAnalysisCache,
             "",

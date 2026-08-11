@@ -1375,6 +1375,7 @@ name = "polint-go"
 version = "0.1.17"
 dependencies = [
  "anyhow",
+ "polint-analysis",
  "polint-analysis-api",
  "polint-core",
  "polint-frontend-api",
@@ -1416,6 +1417,7 @@ dependencies = [
  "oxc_parser",
  "oxc_semantic",
  "oxc_span",
+ "polint-analysis",
  "polint-analysis-api",
  "polint-core",
  "polint-frontend-api",

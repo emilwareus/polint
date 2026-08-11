@@ -8,6 +8,9 @@ mod frontend;
 mod hash;
 pub mod lifecycle;
 mod local_db;
+mod mir;
+#[doc(hidden)]
+pub use mir::lower_go_mir;
 #[allow(dead_code)]
 mod repo_fs;
 pub mod semantic;

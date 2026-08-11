@@ -2,29 +2,29 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use tree_sitter::{Node, Parser};
 
-use crate::analysis::ids::{
+use polint_analysis::AnalysisHost;
+use polint_analysis::ids::{
     CallSiteId, MirBodyId, MirOpId, MirPredicateId, MirStatementId, MirTerminatorId, PlaceId,
     UnsupportedId,
 };
-use crate::analysis::mir::body::{
+use polint_analysis::mir_body::{
     MirBlock, MirBlockId, MirBody, MirOutput, MirStatement, MirStatus, MirTerminator,
     MirTerminatorKind, SuspendKind,
 };
-use crate::analysis::mir::op::{
+use polint_analysis::mir_op::{
     AssignMode, ConservativeAction, MirAggregateField, MirAggregateKind, MirOperation,
     MirOperationKind, MirValue, UnsupportedDomain, UnsupportedPrecision, UnsupportedSemanticFact,
 };
-use crate::analysis::places::{
+use polint_analysis::places::{
     PlaceInsert, PlaceProjection, PlaceRoot, PlaceStableContext, PlaceStatus, PlaceTableBuilder,
 };
-use crate::analysis::stable_key::semantic_stable_key;
-use crate::analysis::types::facts::TypeShape;
-use crate::analysis_kernel::FactFamily;
-use crate::core::{
-    AnalysisDb, FileId, FunctionFact, FunctionId, Language, SourceFile, Span, StableKeyId,
-};
+use polint_analysis::stable_key::semantic_stable_key;
+use polint_analysis::types::facts::TypeShape;
+use polint_analysis_api::{FactFamily, FunctionFact, SourceFile};
+use polint_core::{FileId, FunctionId, Language, Span, StableKeyId};
 
-pub(crate) fn lower_go_mir(db: &AnalysisDb) -> MirOutput {
+#[doc(hidden)]
+pub fn lower_go_mir(db: &impl AnalysisHost) -> MirOutput {
     let interner_handle = db.stable_key_interner();
     let interner = &interner_handle;
     let mut lowering = GoMirLowering::default();
@@ -90,7 +90,7 @@ pub(crate) fn lower_go_mir(db: &AnalysisDb) -> MirOutput {
 }
 
 fn lower_control_flow(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     bodies: &[MirBody],
     operations: &[MirOperation],
     control_shapes: &BTreeMap<MirOpId, ControlShape>,
@@ -339,8 +339,8 @@ struct GoMirLowering {
 impl GoMirLowering {
     fn lower_file(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
-        db: &AnalysisDb,
+        interner: &polint_core::StableKeyInterner,
+        db: &impl AnalysisHost,
         file: &SourceFile,
     ) {
         let mut parser = Parser::new();
@@ -471,8 +471,8 @@ impl GoMirLowering {
 
     fn push_body(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
-        db: &AnalysisDb,
+        interner: &polint_core::StableKeyInterner,
+        db: &impl AnalysisHost,
         file: &SourceFile,
         function: &FunctionFact,
         span: Span,
@@ -521,7 +521,7 @@ impl GoMirLowering {
 
     fn lower_parser_errors(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         file: &SourceFile,
         body: MirBodyId,
         body_stable_key: &str,
@@ -571,7 +571,7 @@ impl GoMirLowering {
 
     fn finish_unsupported(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         place_ids: &BTreeMap<String, PlaceId>,
     ) -> Vec<UnsupportedSemanticFact> {
         self.unsupported
@@ -582,7 +582,7 @@ impl GoMirLowering {
 }
 
 fn go_closure_capture_names(
-    db: &AnalysisDb,
+    db: &impl AnalysisHost,
     file: FileId,
     source: &str,
     spans: impl IntoIterator<Item = (u32, u32)>,
@@ -592,6 +592,7 @@ fn go_closure_capture_names(
         .map(|span| {
             let mut names = db
                 .references_for_file(file)
+                .into_iter()
                 .filter(|reference| {
                     reference
                         .primary_span
@@ -642,7 +643,7 @@ struct FunctionLowering<'source> {
 
 impl<'source> FunctionLowering<'source> {
     fn new(
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         file: &SourceFile,
         source: &'source str,
         function: FunctionId,
@@ -669,7 +670,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_parameters(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         node: Node<'_>,
         places: &mut PlaceTableBuilder,
     ) {
@@ -704,7 +705,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_body(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         body: Node<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -720,7 +721,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_statement(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         statement: Node<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -895,7 +896,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn assignment_left_places(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         statement: Node<'_>,
         places: &mut PlaceTableBuilder,
     ) -> Vec<PlaceShape> {
@@ -962,7 +963,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn insert_local(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         name: &str,
     ) -> String {
@@ -971,7 +972,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn insert_local_typed(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         name: &str,
         ty: Option<TypeShape>,
@@ -993,7 +994,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_value(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         node: Node<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -1092,7 +1093,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn closure_value(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         node: Node<'_>,
         places: &mut PlaceTableBuilder,
     ) -> Option<ValueDraft> {
@@ -1123,7 +1124,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_expression(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         node: Node<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -1234,7 +1235,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_expression_children(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         node: Node<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -1262,7 +1263,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_identifier(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         node: Node<'_>,
         places: &mut PlaceTableBuilder,
         assignment_destination: bool,
@@ -1296,7 +1297,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_selector(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         node: Node<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -1328,7 +1329,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_index(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         node: Node<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -1357,7 +1358,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_call(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         node: Node<'_>,
         places: &mut PlaceTableBuilder,
         operations: &mut Vec<OperationDraft>,
@@ -1422,7 +1423,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_unsupported(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         node: Node<'_>,
         operations: &mut Vec<OperationDraft>,
         unsupported: &mut Vec<UnsupportedDraft>,
@@ -1485,7 +1486,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn push_unsupported(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         operations: &mut Vec<OperationDraft>,
         unsupported: &mut Vec<UnsupportedDraft>,
         node: Node<'_>,
@@ -1524,7 +1525,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn push_assign(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         operations: &mut Vec<OperationDraft>,
         node: Node<'_>,
         place_key: String,
@@ -1546,7 +1547,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn push_branch(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         operations: &mut Vec<OperationDraft>,
         node: Node<'_>,
     ) {
@@ -1572,7 +1573,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn push_operation(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         operations: &mut Vec<OperationDraft>,
         node: Node<'_>,
         kind: OperationKindDraft,
@@ -1600,7 +1601,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn insert_temporary(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         node: Node<'_>,
         status: PlaceStatus,
@@ -1618,7 +1619,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn insert_temporary_typed(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         node: Node<'_>,
         status: PlaceStatus,
@@ -1639,7 +1640,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn insert_shape(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         shape: &PlaceShape,
     ) -> String {
@@ -1654,7 +1655,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn insert_place(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         root: PlaceRoot,
         projections: Vec<PlaceProjection>,
@@ -1665,7 +1666,7 @@ impl<'source> FunctionLowering<'source> {
 
     fn insert_typed_place(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         root: PlaceRoot,
         projections: Vec<PlaceProjection>,
@@ -1709,7 +1710,7 @@ struct OperationDraft {
 
 impl OperationDraft {
     fn new(
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         id: MirOpId,
         body: MirBodyId,
         body_stable_key: &str,
@@ -2038,7 +2039,7 @@ impl UnsupportedDraft {
 
     fn to_fact(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         place_ids: &BTreeMap<String, PlaceId>,
     ) -> UnsupportedSemanticFact {
         UnsupportedSemanticFact {
@@ -2072,7 +2073,7 @@ impl UnsupportedDraft {
 }
 
 fn operation_stable_key(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     body_stable_key: &str,
     ordinal: u32,
     span: &Span,
@@ -2107,7 +2108,7 @@ fn operation_place_label(index: usize) -> &'static str {
 }
 
 fn unsupported_stable_key(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     draft: &UnsupportedDraft,
 ) -> String {
     semantic_stable_key(
@@ -2156,7 +2157,7 @@ fn unsupported_domains_for(construct: &str) -> Vec<UnsupportedDomain> {
 }
 
 fn matching_function<'db>(
-    db: &'db AnalysisDb,
+    db: &'db impl AnalysisHost,
     file: FileId,
     name: &str,
     span: &Span,
@@ -2174,7 +2175,7 @@ fn span_contains(outer: &Span, inner: &Span) -> bool {
 }
 
 fn owner_stable_key(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     file: &SourceFile,
     function: &FunctionFact,
 ) -> String {
@@ -2193,7 +2194,7 @@ fn owner_stable_key(
 }
 
 fn node_span(file: FileId, source: &str, node: Node<'_>) -> Span {
-    crate::core::span_from_byte_range(file, source, node.start_byte(), node.end_byte())
+    polint_core::span_from_byte_range(file, source, node.start_byte(), node.end_byte())
 }
 
 fn node_text<'source>(source: &'source str, node: Node<'_>) -> Option<&'source str> {
@@ -2395,19 +2396,20 @@ where
 #[cfg(test)]
 mod places {
     use super::*;
-    use crate::analysis::places::{PlaceProjection, PlaceRoot};
-    use crate::core::{AnalysisDb, FunctionId, Language};
+    use polint_analysis::LocalAnalysisDb;
+    use polint_analysis::places::{PlaceProjection, PlaceRoot};
+    use polint_core::Language;
     use std::path::PathBuf;
 
-    fn lower(source: &str) -> (MirOutput, crate::core::StableKeyInterner) {
-        let mut db = AnalysisDb::new();
+    fn lower(source: &str) -> (MirOutput, polint_core::StableKeyInterner) {
+        let mut db = LocalAnalysisDb::new();
         db.add_file(
             PathBuf::from("auth.go"),
             "auth.go".to_string(),
             source.to_string(),
         );
         let cache = polint_analysis_api::DisabledAnalysisCache;
-        let diagnostics = crate::go::analyze_with_options(&mut db, &cache, "", "", false);
+        let diagnostics = crate::analyze_with_options(&mut db, &cache, "", "", false);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         let output = lower_go_mir(&db);
         (output, db.stable_key_interner())
@@ -2582,7 +2584,7 @@ func make(seed int) func() int {
 
     #[test]
     fn go_method_receiver_is_parameter_zero_and_function_name_contract_is_preserved() {
-        let mut db = AnalysisDb::new();
+        let mut db = LocalAnalysisDb::new();
         db.add_file(
             PathBuf::from("service.go"),
             "service.go".to_string(),
@@ -2599,7 +2601,7 @@ func (svc *Service) authorize(user User) bool {
             .to_string(),
         );
         let cache = polint_analysis_api::DisabledAnalysisCache;
-        let diagnostics = crate::go::analyze_with_options(&mut db, &cache, "", "", false);
+        let diagnostics = crate::analyze_with_options(&mut db, &cache, "", "", false);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
 
         let function = db
@@ -2649,20 +2651,21 @@ func authorize(user User) bool {
 #[cfg(test)]
 mod operations {
     use super::*;
-    use crate::analysis::mir::op::{
+    use polint_analysis::LocalAnalysisDb;
+    use polint_analysis::mir_op::{
         AssignMode, ConservativeAction, MirOperationKind, UnsupportedDomain,
     };
     use std::path::PathBuf;
 
-    fn lower(source: &str) -> (MirOutput, crate::core::StableKeyInterner) {
-        let mut db = AnalysisDb::new();
+    fn lower(source: &str) -> (MirOutput, polint_core::StableKeyInterner) {
+        let mut db = LocalAnalysisDb::new();
         db.add_file(
             PathBuf::from("flow.go"),
             "flow.go".to_string(),
             source.to_string(),
         );
         let cache = polint_analysis_api::DisabledAnalysisCache;
-        let diagnostics = crate::go::analyze_with_options(&mut db, &cache, "", "", false);
+        let diagnostics = crate::analyze_with_options(&mut db, &cache, "", "", false);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         let output = lower_go_mir(&db);
         (output, db.stable_key_interner())
@@ -2839,7 +2842,7 @@ func flow(token string, count int) bool {
         );
         assert!(
             first_calls[0].2
-                != &crate::analysis::mir::op::MirValue::Unknown {
+                != &polint_analysis::mir_op::MirValue::Unknown {
                     evidence: "direct target".to_string()
                 }
         );

@@ -11,6 +11,9 @@ mod hash;
 pub mod ids;
 pub mod inventory;
 mod local_db;
+mod mir;
+#[doc(hidden)]
+pub use mir::lower_ts_mir;
 pub mod object_model;
 pub mod parse;
 #[allow(dead_code)]

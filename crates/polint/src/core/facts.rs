@@ -1,3 +1,4 @@
+pub(crate) use polint_analysis_api::CachedFileFacts;
 pub use polint_analysis_api::{
     BranchObligation, ComplexityMetricFact, CoverageFact, DefinitionFact, DefinitionKind,
     FileMetricFact, FunctionFact, FunctionMetricFact, ImportFact, JsxAttributeFact, ModuleEdge,
@@ -8,4 +9,3 @@ pub use polint_analysis_api::{
 };
 #[cfg(test)]
 pub(crate) use polint_analysis_api::{CachedFileAnalysis, TS_JS_MODULE_FUNCTION_NAME};
-pub(crate) use polint_analysis_api::{CachedFileFacts, is_synthetic_ts_js_module_function};

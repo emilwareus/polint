@@ -2,6 +2,7 @@
 #![cfg(test)]
 
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 
 use crate::analysis::cfg::facts::{BasicBlockKind, CfgEdgeKind};
 use crate::core::AnalysisDb;
@@ -26,7 +27,7 @@ fn ts_cfg_lowers_edges_from_production_mir_terminators() {
         )
         .is_empty()
     );
-    let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+    let mir = polint_ts::lower_ts_mir(&db);
     db.replace_semantic_mir(mir)
         .expect("MIR output should store");
 
@@ -60,7 +61,7 @@ fn ts_cfg_throw_prevents_impossible_fallthrough() {
         )
         .is_empty()
     );
-    let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+    let mir = polint_ts::lower_ts_mir(&db);
     db.replace_semantic_mir(mir)
         .expect("MIR output should store");
     let output = lower_cfg(&db);
@@ -121,7 +122,7 @@ export function* values(value) { yield value; }
         )
         .is_empty()
     );
-    let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+    let mir = polint_ts::lower_ts_mir(&db);
     db.replace_semantic_mir(mir)
         .expect("MIR output should store");
     let output = lower_cfg(&db);
@@ -145,4 +146,61 @@ export function* values(value) { yield value; }
     assert!(edge_kinds.contains(&CfgEdgeKind::OptionalChain));
     assert!(edge_kinds.contains(&CfgEdgeKind::Unknown));
     assert!(unsupported.contains("dynamic import"));
+}
+
+#[test]
+fn a_recoverable_syntax_error_is_recorded_as_unsupported_not_ignored() {
+    let mut db = AnalysisDb::new();
+    db.add_file(
+        PathBuf::from("ok.ts"),
+        "ok.ts".to_string(),
+        "export function ok(value: number) { return value + 1; }".to_string(),
+    );
+    db.add_file(
+        PathBuf::from("broken.tsx"),
+        "broken.tsx".to_string(),
+        "const x = <div></span>;".to_string(),
+    );
+    let diagnostics = crate::ts::analyze_with_options(
+        &mut db,
+        &polint_analysis_api::DisabledAnalysisCache,
+        "",
+        "",
+        false,
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.rule_id == "parser/ts" && diagnostic.file == "broken.tsx"),
+        "primary adapter must still emit parser/ts for the broken file: {diagnostics:?}"
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.file != "ok.ts" || diagnostic.rule_id != "parser/ts"),
+        "valid file must stay free of parser/ts diagnostics"
+    );
+
+    db.replace_semantic_mir(polint_ts::lower_ts_mir(&db))
+        .expect("store MIR unsupported rows");
+
+    let rows = crate::analysis::unknown_taxonomy::collect::graph_engine_unknowns(&db);
+    assert!(
+        rows.iter().any(|row| {
+            row.family.as_deref() == Some("UnsupportedSemantic")
+                && row.file == "broken.tsx"
+                && row.reason.as_deref() == Some(crate::ts::PARSER_RECOVERY_CONSTRUCT)
+        }),
+        "inspect unknowns must surface parser-recovery unsupported rows: {rows:?}"
+    );
+    assert!(
+        rows.iter().all(|row| row.file != "ok.ts"),
+        "valid file must not gain parser-recovery unknowns: {rows:?}"
+    );
+    assert!(
+        db.functions()
+            .iter()
+            .any(|function| function.name == "ok" && db.path_for(function.file) == "ok.ts"),
+        "valid file analysis must remain intact"
+    );
 }

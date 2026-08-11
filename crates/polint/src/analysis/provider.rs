@@ -2,8 +2,6 @@ use crate::analysis::ids::{
     MirBodyId, MirOpId, MirStatementId, MirTerminatorId, PlaceId, UnsupportedId,
 };
 use crate::analysis::mir::body::{MirBlockId, MirOutput, MirTerminatorKind};
-use crate::analysis::mir::lower_go::lower_go_mir;
-use crate::analysis::mir::lower_ts::lower_ts_mir;
 use crate::analysis::mir::op::{MirOperationKind, MirValue};
 use crate::analysis::places::{PlaceProjection, PlaceRoot};
 use crate::analysis_kernel::ProviderManifest;
@@ -12,6 +10,8 @@ use crate::analysis_kernel::incremental::{
 };
 use crate::core::AnalysisDb;
 use crate::diagnostics::{Diagnostic, TextRange};
+use polint_go::lower_go_mir;
+use polint_ts::lower_ts_mir;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SemanticMirProviderOutput {

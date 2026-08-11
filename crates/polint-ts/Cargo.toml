@@ -15,6 +15,7 @@ oxc_ast.workspace = true
 oxc_parser.workspace = true
 oxc_semantic.workspace = true
 oxc_span.workspace = true
+polint-analysis.workspace = true
 polint-analysis-api.workspace = true
 polint-core.workspace = true
 polint-frontend-api.workspace = true

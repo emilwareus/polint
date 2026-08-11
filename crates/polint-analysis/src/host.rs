@@ -134,6 +134,22 @@ pub trait AnalysisHost: FactDatabase {
             .collect()
     }
 
+    /// Return the primary definition for a symbol, falling back to the first
+    /// definition when no primary marker is present.
+    fn definition_for_symbol(
+        &self,
+        symbol: polint_core::SymbolId,
+    ) -> Option<&polint_analysis_api::DefinitionFact> {
+        let mut definitions = FactDatabase::definitions(self)
+            .iter()
+            .filter(|definition| definition.symbol == symbol);
+        let first = definitions.next();
+        first
+            .filter(|definition| definition.is_primary)
+            .or_else(|| definitions.find(|definition| definition.is_primary))
+            .or(first)
+    }
+
     fn fact_meta_mut_for_test(&mut self) -> &mut FactMetaStore {
         self.fact_meta_mut()
     }
