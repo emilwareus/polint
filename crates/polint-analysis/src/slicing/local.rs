@@ -1,18 +1,18 @@
 use std::collections::{BTreeSet, VecDeque};
 
-use crate::analysis::evidence::facts::{
+use crate::evidence::facts::{
     EvidenceEdgeKind, EvidencePrecision, EvidenceQueryMode, EvidenceStatus,
 };
-use crate::analysis::evidence::store::EvidenceStore;
-use crate::analysis::ids::{EvidenceEdgeId, EvidenceNodeId};
+use crate::evidence::store::EvidenceStore;
+use crate::ids::{EvidenceEdgeId, EvidenceNodeId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct SliceQuery {
-    pub(crate) root: EvidenceNodeId,
-    pub(crate) direction: SliceDirection,
-    pub(crate) mode: SliceMode,
-    pub(crate) edge_filter: EdgeFilter,
-    pub(crate) budget: SliceBudget,
+pub struct SliceQuery {
+    pub root: EvidenceNodeId,
+    pub direction: SliceDirection,
+    pub mode: SliceMode,
+    pub edge_filter: EdgeFilter,
+    pub budget: SliceBudget,
 }
 
 #[allow(
@@ -20,7 +20,7 @@ pub(crate) struct SliceQuery {
     reason = "Forward slicing is part of the private query contract before public callers exist."
 )]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SliceDirection {
+pub enum SliceDirection {
     Backward,
     Forward,
 }
@@ -30,7 +30,7 @@ pub(crate) enum SliceDirection {
     reason = "All slice modes are part of the private query contract before public callers exist."
 )]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SliceMode {
+pub enum SliceMode {
     ThinBackward,
     FullBackward,
     FullLocal,
@@ -38,16 +38,16 @@ pub(crate) enum SliceMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum EdgeFilter {
+pub enum EdgeFilter {
     Thin,
     FullLocal,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct SliceBudget {
-    pub(crate) max_nodes: usize,
-    pub(crate) max_edges: usize,
-    pub(crate) max_depth: usize,
+pub struct SliceBudget {
+    pub max_nodes: usize,
+    pub max_edges: usize,
+    pub max_depth: usize,
 }
 
 impl Default for SliceBudget {
@@ -61,25 +61,25 @@ impl Default for SliceBudget {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SliceResult {
-    pub(crate) nodes: Vec<EvidenceNodeId>,
-    pub(crate) edges: Vec<EvidenceEdgeId>,
-    pub(crate) omitted_regions: Vec<SliceOmittedRegion>,
-    pub(crate) unknown_edges: Vec<EvidenceEdgeId>,
-    pub(crate) status: EvidenceStatus,
-    pub(crate) precision: EvidencePrecision,
-    pub(crate) stats: SliceStats,
+pub struct SliceResult {
+    pub nodes: Vec<EvidenceNodeId>,
+    pub edges: Vec<EvidenceEdgeId>,
+    pub omitted_regions: Vec<SliceOmittedRegion>,
+    pub unknown_edges: Vec<EvidenceEdgeId>,
+    pub status: EvidenceStatus,
+    pub precision: EvidencePrecision,
+    pub stats: SliceStats,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SliceOmittedRegion {
-    pub(crate) reason: SliceOmittedReason,
-    pub(crate) hidden_node_count: u32,
-    pub(crate) hidden_edge_count: u32,
+pub struct SliceOmittedRegion {
+    pub reason: SliceOmittedReason,
+    pub hidden_node_count: u32,
+    pub hidden_edge_count: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SliceOmittedReason {
+pub enum SliceOmittedReason {
     NodeLimit,
     EdgeLimit,
     DepthLimit,
@@ -87,14 +87,14 @@ pub(crate) enum SliceOmittedReason {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct SliceStats {
-    pub(crate) visited_nodes: usize,
-    pub(crate) visited_edges: usize,
-    pub(crate) filtered_edges: usize,
-    pub(crate) max_depth_reached: usize,
+pub struct SliceStats {
+    pub visited_nodes: usize,
+    pub visited_edges: usize,
+    pub filtered_edges: usize,
+    pub max_depth_reached: usize,
 }
 
-pub(crate) fn local_slice(store: &EvidenceStore, query: SliceQuery) -> SliceResult {
+pub fn local_slice(store: &EvidenceStore, query: SliceQuery) -> SliceResult {
     let mut nodes = BTreeSet::from([query.root]);
     let mut edges = BTreeSet::new();
     let mut unknown_edges = BTreeSet::new();
@@ -198,7 +198,7 @@ impl SliceMode {
         dead_code,
         reason = "Mode-to-evidence-key mapping is consumed by subsequent cache/debug plans."
     )]
-    pub(crate) fn query_mode(self) -> EvidenceQueryMode {
+    pub fn query_mode(self) -> EvidenceQueryMode {
         match self {
             Self::ThinBackward => EvidenceQueryMode::ThinBackward,
             Self::FullBackward | Self::FullLocal => EvidenceQueryMode::FullBackward,
@@ -211,7 +211,7 @@ fn candidate_edges(
     store: &EvidenceStore,
     node: EvidenceNodeId,
     direction: SliceDirection,
-) -> Vec<&crate::analysis::evidence::facts::EvidenceEdgeFact> {
+) -> Vec<&crate::evidence::facts::EvidenceEdgeFact> {
     match direction {
         SliceDirection::Backward => store.incoming(node),
         SliceDirection::Forward => store.outgoing(node),
@@ -219,7 +219,7 @@ fn candidate_edges(
 }
 
 fn next_node(
-    edge: &crate::analysis::evidence::facts::EvidenceEdgeFact,
+    edge: &crate::evidence::facts::EvidenceEdgeFact,
     direction: SliceDirection,
 ) -> EvidenceNodeId {
     match direction {
@@ -255,12 +255,12 @@ fn edge_allowed(kind: EvidenceEdgeKind, filter: EdgeFilter) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::evidence::facts::{
+    use crate::evidence::facts::{
         EvidenceConfidence, EvidenceEdgeFact, EvidenceExpansion, EvidenceNodeFact,
         EvidenceNodeKind, EvidenceProvenance, EvidenceValidation,
     };
-    use crate::analysis::evidence::store::EvidenceOutput;
-    use crate::core::Language;
+    use crate::evidence::store::EvidenceOutput;
+    use polint_core::Language;
 
     #[test]
     fn thin_backward_is_subset_of_full_backward() {
@@ -345,7 +345,7 @@ mod tests {
                 omitted_regions: Vec::new(),
                 replay_keys: Vec::new(),
             },
-            &crate::core::test_stable_key_interner(),
+            &polint_core::test_stable_key_interner(),
         )
         .expect("valid evidence store")
     }
@@ -372,7 +372,7 @@ mod tests {
             confidence: EvidenceConfidence::High,
             compact_label: None,
             source_fact_stable_keys: Vec::new(),
-            stable_key: crate::core::stable_key_for_test(&format!("node:{id}")),
+            stable_key: polint_core::stable_key_for_test(&format!("node:{id}")),
         }
     }
 
@@ -393,7 +393,7 @@ mod tests {
             expansion: EvidenceExpansion::None,
             compact_label: None,
             source_fact_stable_keys: Vec::new(),
-            stable_key: crate::core::stable_key_for_test(&format!("edge:{id}")),
+            stable_key: polint_core::stable_key_for_test(&format!("edge:{id}")),
         }
     }
 }

@@ -1,38 +1,38 @@
 use std::collections::{BTreeSet, VecDeque};
 
-use crate::analysis::evidence::facts::{EvidenceEdgeFact, EvidenceEdgeKind, EvidenceStatus};
-use crate::analysis::evidence::rank::{PathRankScore, compare_scores, rank_score_for_edges};
-use crate::analysis::evidence::store::EvidenceStore;
-use crate::analysis::ids::{CallSiteId, EvidenceEdgeId, EvidenceNodeId};
-use crate::analysis::slicing::paths::{
+use crate::evidence::facts::{EvidenceEdgeFact, EvidenceEdgeKind, EvidenceStatus};
+use crate::evidence::rank::{PathRankScore, compare_scores, rank_score_for_edges};
+use crate::evidence::store::EvidenceStore;
+use crate::ids::{CallSiteId, EvidenceEdgeId, EvidenceNodeId};
+use crate::slicing::paths::{
     PathBudget, PathMode, PathOmittedReason, PathOmittedRegion, path_edge_allowed,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct InterproceduralPathQuery {
-    pub(crate) source: EvidenceNodeId,
-    pub(crate) sink: EvidenceNodeId,
-    pub(crate) budget: PathBudget,
-    pub(crate) max_interprocedural_depth: usize,
+pub struct InterproceduralPathQuery {
+    pub source: EvidenceNodeId,
+    pub sink: EvidenceNodeId,
+    pub budget: PathBudget,
+    pub max_interprocedural_depth: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct InterproceduralPathResult {
-    pub(crate) paths: Vec<InterproceduralPath>,
-    pub(crate) omitted_regions: Vec<PathOmittedRegion>,
-    pub(crate) unknown_edges: Vec<EvidenceEdgeId>,
-    pub(crate) status: EvidenceStatus,
+pub struct InterproceduralPathResult {
+    pub paths: Vec<InterproceduralPath>,
+    pub omitted_regions: Vec<PathOmittedRegion>,
+    pub unknown_edges: Vec<EvidenceEdgeId>,
+    pub status: EvidenceStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct InterproceduralPath {
-    pub(crate) nodes: Vec<EvidenceNodeId>,
-    pub(crate) edges: Vec<EvidenceEdgeId>,
-    pub(crate) score: PathRankScore,
-    pub(crate) stable_key_text: String,
+pub struct InterproceduralPath {
+    pub nodes: Vec<EvidenceNodeId>,
+    pub edges: Vec<EvidenceEdgeId>,
+    pub score: PathRankScore,
+    pub stable_key_text: String,
 }
 
-pub(crate) fn find_interprocedural_paths(
+pub fn find_interprocedural_paths(
     store: &EvidenceStore,
     query: InterproceduralPathQuery,
 ) -> InterproceduralPathResult {
@@ -275,13 +275,13 @@ struct PathFrame {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::evidence::facts::{
+    use crate::evidence::facts::{
         EvidenceConfidence, EvidenceEdgeFact, EvidenceExpansion, EvidenceNodeFact,
         EvidenceNodeKind, EvidencePrecision, EvidenceProvenance, EvidenceQueryMode,
         EvidenceValidation,
     };
-    use crate::analysis::evidence::store::EvidenceOutput;
-    use crate::core::Language;
+    use crate::evidence::store::EvidenceOutput;
+    use polint_core::Language;
 
     #[test]
     fn call_site_stack_allows_only_matching_caller_to_reach_sink() {
@@ -415,7 +415,7 @@ mod tests {
                 omitted_regions: Vec::new(),
                 replay_keys: Vec::new(),
             },
-            &crate::core::test_stable_key_interner(),
+            &polint_core::test_stable_key_interner(),
         )
         .expect("valid evidence");
 
@@ -492,7 +492,7 @@ mod tests {
                 omitted_regions: Vec::new(),
                 replay_keys: Vec::new(),
             },
-            &crate::core::test_stable_key_interner(),
+            &polint_core::test_stable_key_interner(),
         )
         .expect("valid evidence")
     }
@@ -518,7 +518,7 @@ mod tests {
                 omitted_regions: Vec::new(),
                 replay_keys: Vec::new(),
             },
-            &crate::core::test_stable_key_interner(),
+            &polint_core::test_stable_key_interner(),
         )
         .expect("valid evidence")
     }
@@ -547,7 +547,7 @@ mod tests {
                     expansion: EvidenceExpansion::None,
                     compact_label: Some("dynamic_call".to_string()),
                     source_fact_stable_keys: Vec::new(),
-                    stable_key: crate::core::stable_key_for_test("edge:unknown-call"),
+                    stable_key: polint_core::stable_key_for_test("edge:unknown-call"),
                 }],
                 bundles: Vec::new(),
                 paths: Vec::new(),
@@ -556,7 +556,7 @@ mod tests {
                 omitted_regions: Vec::new(),
                 replay_keys: Vec::new(),
             },
-            &crate::core::test_stable_key_interner(),
+            &polint_core::test_stable_key_interner(),
         )
         .expect("valid evidence")
     }
@@ -583,7 +583,7 @@ mod tests {
             confidence: EvidenceConfidence::High,
             compact_label: None,
             source_fact_stable_keys: Vec::new(),
-            stable_key: crate::core::stable_key_for_test(&format!("node:{id}")),
+            stable_key: polint_core::stable_key_for_test(&format!("node:{id}")),
         }
     }
 
@@ -611,7 +611,7 @@ mod tests {
             expansion: EvidenceExpansion::None,
             compact_label: None,
             source_fact_stable_keys: Vec::new(),
-            stable_key: crate::core::stable_key_for_test(stable_key),
+            stable_key: polint_core::stable_key_for_test(stable_key),
         }
     }
 }

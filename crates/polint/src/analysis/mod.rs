@@ -34,7 +34,6 @@ pub(crate) mod provider;
 pub(crate) mod reachability;
 pub(crate) mod refined_calls;
 pub(crate) mod semantic_graph;
-pub(crate) mod slicing;
 pub(crate) mod solver;
 pub(crate) mod summaries;
 pub(crate) mod types;

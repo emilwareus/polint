@@ -1,20 +1,20 @@
 use std::collections::{BTreeSet, VecDeque};
 
-use crate::analysis::evidence::facts::{EvidenceEdgeKind, EvidencePrecision, EvidenceStatus};
-use crate::analysis::evidence::rank::{PathRankScore, compare_scores, rank_score_for_edges};
-use crate::analysis::evidence::store::EvidenceStore;
-use crate::analysis::ids::{EvidenceEdgeId, EvidenceNodeId};
+use crate::evidence::facts::{EvidenceEdgeKind, EvidencePrecision, EvidenceStatus};
+use crate::evidence::rank::{PathRankScore, compare_scores, rank_score_for_edges};
+use crate::evidence::store::EvidenceStore;
+use crate::ids::{EvidenceEdgeId, EvidenceNodeId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct PathQuery {
-    pub(crate) source: EvidenceNodeId,
-    pub(crate) sink: EvidenceNodeId,
-    pub(crate) mode: PathMode,
-    pub(crate) budget: PathBudget,
+pub struct PathQuery {
+    pub source: EvidenceNodeId,
+    pub sink: EvidenceNodeId,
+    pub mode: PathMode,
+    pub budget: PathBudget,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PathMode {
+pub enum PathMode {
     #[allow(
         dead_code,
         reason = "Local path mode is part of the private query contract and is exercised by later bundle rendering plans."
@@ -24,11 +24,11 @@ pub(crate) enum PathMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct PathBudget {
-    pub(crate) max_paths: usize,
-    pub(crate) max_nodes: usize,
-    pub(crate) max_edges: usize,
-    pub(crate) max_depth: usize,
+pub struct PathBudget {
+    pub max_paths: usize,
+    pub max_nodes: usize,
+    pub max_edges: usize,
+    pub max_depth: usize,
 }
 
 impl Default for PathBudget {
@@ -43,31 +43,31 @@ impl Default for PathBudget {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PathResult {
-    pub(crate) paths: Vec<EvidencePath>,
-    pub(crate) omitted_regions: Vec<PathOmittedRegion>,
-    pub(crate) status: EvidenceStatus,
+pub struct PathResult {
+    pub paths: Vec<EvidencePath>,
+    pub omitted_regions: Vec<PathOmittedRegion>,
+    pub status: EvidenceStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct EvidencePath {
-    pub(crate) nodes: Vec<EvidenceNodeId>,
-    pub(crate) edges: Vec<EvidenceEdgeId>,
-    pub(crate) score: PathRankScore,
-    pub(crate) status: EvidenceStatus,
-    pub(crate) precision: EvidencePrecision,
-    pub(crate) stable_key_text: String,
+pub struct EvidencePath {
+    pub nodes: Vec<EvidenceNodeId>,
+    pub edges: Vec<EvidenceEdgeId>,
+    pub score: PathRankScore,
+    pub status: EvidenceStatus,
+    pub precision: EvidencePrecision,
+    pub stable_key_text: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct PathOmittedRegion {
-    pub(crate) reason: PathOmittedReason,
-    pub(crate) hidden_node_count: u32,
-    pub(crate) hidden_edge_count: u32,
+pub struct PathOmittedRegion {
+    pub reason: PathOmittedReason,
+    pub hidden_node_count: u32,
+    pub hidden_edge_count: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PathOmittedReason {
+pub enum PathOmittedReason {
     PathCount,
     NodeLimit,
     EdgeLimit,
@@ -75,19 +75,19 @@ pub(crate) enum PathOmittedReason {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ChopQuery {
-    pub(crate) source: EvidenceNodeId,
-    pub(crate) sink: EvidenceNodeId,
-    pub(crate) budget: PathBudget,
+pub struct ChopQuery {
+    pub source: EvidenceNodeId,
+    pub sink: EvidenceNodeId,
+    pub budget: PathBudget,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ChopResult {
-    pub(crate) nodes: Vec<EvidenceNodeId>,
-    pub(crate) status: EvidenceStatus,
+pub struct ChopResult {
+    pub nodes: Vec<EvidenceNodeId>,
+    pub status: EvidenceStatus,
 }
 
-pub(crate) fn find_paths(store: &EvidenceStore, query: PathQuery) -> PathResult {
+pub fn find_paths(store: &EvidenceStore, query: PathQuery) -> PathResult {
     if query.budget.max_paths == 0 {
         return PathResult {
             paths: Vec::new(),
@@ -235,7 +235,7 @@ fn unavailable_node_status(
     }
 }
 
-pub(crate) fn chop(store: &EvidenceStore, query: ChopQuery) -> ChopResult {
+pub fn chop(store: &EvidenceStore, query: ChopQuery) -> ChopResult {
     let forward = reachable(store, query.source, Direction::Forward, query.budget);
     let backward = reachable(store, query.sink, Direction::Backward, query.budget);
     let nodes = forward
@@ -253,33 +253,33 @@ pub(crate) fn chop(store: &EvidenceStore, query: ChopQuery) -> ChopResult {
     ChopResult { status, nodes }
 }
 
-pub(crate) mod summary {
-    use crate::analysis::evidence::facts::{
+pub mod summary {
+    use crate::evidence::facts::{
         EvidenceEdgeKind, EvidenceExpansion, EvidencePrecision, EvidenceProvenance, EvidenceStatus,
     };
-    use crate::analysis::evidence::store::EvidenceStore;
-    use crate::analysis::ids::{EvidenceEdgeId, EvidenceNodeId};
+    use crate::evidence::store::EvidenceStore;
+    use crate::ids::{EvidenceEdgeId, EvidenceNodeId};
 
     #[derive(Debug, Clone, PartialEq, Eq)]
-    pub(crate) struct EvidenceSummaryStep {
-        pub(crate) edge: EvidenceEdgeId,
-        pub(crate) stable_key_text: String,
-        pub(crate) summary_stable_key_text: String,
-        pub(crate) callable_stable_key_text: Option<String>,
-        pub(crate) domain: Option<String>,
-        pub(crate) input_endpoint: EvidenceNodeId,
-        pub(crate) output_endpoint: EvidenceNodeId,
-        pub(crate) status: EvidenceStatus,
-        pub(crate) precision: EvidencePrecision,
-        pub(crate) provenance: EvidenceProvenance,
-        pub(crate) expansion: EvidenceExpansion,
+    pub struct EvidenceSummaryStep {
+        pub edge: EvidenceEdgeId,
+        pub stable_key_text: String,
+        pub summary_stable_key_text: String,
+        pub callable_stable_key_text: Option<String>,
+        pub domain: Option<String>,
+        pub input_endpoint: EvidenceNodeId,
+        pub output_endpoint: EvidenceNodeId,
+        pub status: EvidenceStatus,
+        pub precision: EvidencePrecision,
+        pub provenance: EvidenceProvenance,
+        pub expansion: EvidenceExpansion,
     }
 
     #[allow(
         dead_code,
         reason = "Private compressed summary rendering is consumed by current bundle renderers."
     )]
-    pub(crate) fn compressed_steps(store: &EvidenceStore) -> Vec<EvidenceSummaryStep> {
+    pub fn compressed_steps(store: &EvidenceStore) -> Vec<EvidenceSummaryStep> {
         let mut steps = store
             .edges()
             .iter()
@@ -289,7 +289,7 @@ pub(crate) mod summary {
         steps
     }
 
-    pub(crate) fn compressed_step_for_edge(
+    pub fn compressed_step_for_edge(
         store: &EvidenceStore,
         edge_id: EvidenceEdgeId,
     ) -> Option<EvidenceSummaryStep> {
@@ -356,12 +356,12 @@ pub(crate) mod summary {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use crate::analysis::evidence::facts::{
+        use crate::evidence::facts::{
             EvidenceConfidence, EvidenceEdgeFact, EvidenceNodeFact, EvidenceNodeKind,
             EvidenceQueryMode, EvidenceValidation,
         };
-        use crate::analysis::evidence::store::EvidenceOutput;
-        use crate::core::Language;
+        use crate::evidence::store::EvidenceOutput;
+        use polint_core::Language;
 
         #[test]
         fn summary_projected_edge_becomes_one_compressed_step() {
@@ -441,7 +441,7 @@ pub(crate) mod summary {
                             "summary:tito".to_string(),
                             "callable:fn".to_string(),
                         ],
-                        stable_key: crate::core::stable_key_for_test("edge:summary"),
+                        stable_key: polint_core::stable_key_for_test("edge:summary"),
                     }],
                     bundles: Vec::new(),
                     paths: Vec::new(),
@@ -450,7 +450,7 @@ pub(crate) mod summary {
                     omitted_regions: Vec::new(),
                     replay_keys: Vec::new(),
                 },
-                &crate::core::test_stable_key_interner(),
+                &polint_core::test_stable_key_interner(),
             )
             .expect("valid evidence")
         }
@@ -477,7 +477,7 @@ pub(crate) mod summary {
                 confidence: EvidenceConfidence::High,
                 compact_label: None,
                 source_fact_stable_keys: Vec::new(),
-                stable_key: crate::core::stable_key_for_test(&format!("node:{id}")),
+                stable_key: polint_core::stable_key_for_test(&format!("node:{id}")),
             }
         }
     }
@@ -517,7 +517,7 @@ fn path_from_frame(store: &EvidenceStore, frame: PathFrame) -> EvidencePath {
 fn outgoing_ranked_edges(
     store: &EvidenceStore,
     node: EvidenceNodeId,
-) -> Vec<&crate::analysis::evidence::facts::EvidenceEdgeFact> {
+) -> Vec<&crate::evidence::facts::EvidenceEdgeFact> {
     let mut edges = store.outgoing(node);
     edges.sort_by(|left, right| {
         store
@@ -527,7 +527,7 @@ fn outgoing_ranked_edges(
     edges
 }
 
-pub(crate) fn path_edge_allowed(kind: EvidenceEdgeKind, mode: PathMode) -> bool {
+pub fn path_edge_allowed(kind: EvidenceEdgeKind, mode: PathMode) -> bool {
     match mode {
         PathMode::Local => !matches!(
             kind,
@@ -641,12 +641,12 @@ enum Direction {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::evidence::facts::{
+    use crate::evidence::facts::{
         EvidenceConfidence, EvidenceEdgeFact, EvidenceExpansion, EvidenceNodeFact,
         EvidenceNodeKind, EvidenceProvenance, EvidenceQueryMode, EvidenceValidation,
     };
-    use crate::analysis::evidence::store::EvidenceOutput;
-    use crate::core::Language;
+    use crate::evidence::store::EvidenceOutput;
+    use polint_core::Language;
 
     #[test]
     fn path_search_returns_bounded_path_for_direct_flow() {
@@ -862,7 +862,7 @@ mod tests {
                 omitted_regions: Vec::new(),
                 replay_keys: Vec::new(),
             },
-            &crate::core::test_stable_key_interner(),
+            &polint_core::test_stable_key_interner(),
         )
         .expect("valid evidence");
 
@@ -908,7 +908,7 @@ mod tests {
                 omitted_regions: Vec::new(),
                 replay_keys: Vec::new(),
             },
-            &crate::core::test_stable_key_interner(),
+            &polint_core::test_stable_key_interner(),
         )
         .expect("valid evidence")
     }
@@ -932,7 +932,7 @@ mod tests {
                 omitted_regions: Vec::new(),
                 replay_keys: Vec::new(),
             },
-            &crate::core::test_stable_key_interner(),
+            &polint_core::test_stable_key_interner(),
         )
         .expect("valid evidence")
     }
@@ -956,7 +956,7 @@ mod tests {
                 omitted_regions: Vec::new(),
                 replay_keys: Vec::new(),
             },
-            &crate::core::test_stable_key_interner(),
+            &polint_core::test_stable_key_interner(),
         )
         .expect("valid evidence")
     }
@@ -982,7 +982,7 @@ mod tests {
                 omitted_regions: Vec::new(),
                 replay_keys: Vec::new(),
             },
-            &crate::core::test_stable_key_interner(),
+            &polint_core::test_stable_key_interner(),
         )
         .expect("valid evidence")
     }
@@ -1009,7 +1009,7 @@ mod tests {
             confidence: EvidenceConfidence::High,
             compact_label: None,
             source_fact_stable_keys: Vec::new(),
-            stable_key: crate::core::stable_key_for_test(&format!("node:{id}")),
+            stable_key: polint_core::stable_key_for_test(&format!("node:{id}")),
         }
     }
 
@@ -1048,7 +1048,7 @@ mod tests {
             expansion: EvidenceExpansion::None,
             compact_label: None,
             source_fact_stable_keys: Vec::new(),
-            stable_key: crate::core::stable_key_for_test(stable_key),
+            stable_key: polint_core::stable_key_for_test(stable_key),
         }
     }
 }

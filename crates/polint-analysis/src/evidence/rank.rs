@@ -1,25 +1,22 @@
-use crate::analysis::evidence::facts::{
+use crate::evidence::facts::{
     EvidenceEdgeKind, EvidenceExpansion, EvidencePrecision, EvidenceProvenance, EvidenceStatus,
     EvidenceValidation,
 };
-use crate::analysis::evidence::store::EvidenceStore;
-use crate::analysis::ids::EvidenceEdgeId;
+use crate::evidence::store::EvidenceStore;
+use crate::ids::EvidenceEdgeId;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct PathRankScore {
-    pub(crate) unknown_penalty: u32,
-    pub(crate) unvalidated_penalty: u32,
-    pub(crate) model_or_heuristic_penalty: u32,
-    pub(crate) length_penalty: u32,
-    pub(crate) summary_opaque_penalty: u32,
-    pub(crate) native_exact_bonus: u32,
-    pub(crate) direct_source_sink_bonus: u32,
+pub struct PathRankScore {
+    pub unknown_penalty: u32,
+    pub unvalidated_penalty: u32,
+    pub model_or_heuristic_penalty: u32,
+    pub length_penalty: u32,
+    pub summary_opaque_penalty: u32,
+    pub native_exact_bonus: u32,
+    pub direct_source_sink_bonus: u32,
 }
 
-pub(crate) fn rank_score_for_edges(
-    store: &EvidenceStore,
-    edges: &[EvidenceEdgeId],
-) -> PathRankScore {
+pub fn rank_score_for_edges(store: &EvidenceStore, edges: &[EvidenceEdgeId]) -> PathRankScore {
     let mut score = PathRankScore {
         length_penalty: edges.len() as u32,
         ..PathRankScore::default()
@@ -63,7 +60,7 @@ pub(crate) fn rank_score_for_edges(
     score
 }
 
-pub(crate) fn compare_scores(left: PathRankScore, right: PathRankScore) -> std::cmp::Ordering {
+pub fn compare_scores(left: PathRankScore, right: PathRankScore) -> std::cmp::Ordering {
     (
         left.unknown_penalty,
         left.unvalidated_penalty,
@@ -87,12 +84,12 @@ pub(crate) fn compare_scores(left: PathRankScore, right: PathRankScore) -> std::
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::evidence::facts::{
+    use crate::evidence::facts::{
         EvidenceConfidence, EvidenceEdgeFact, EvidenceNodeFact, EvidenceNodeKind, EvidenceQueryMode,
     };
-    use crate::analysis::evidence::store::EvidenceOutput;
-    use crate::analysis::ids::EvidenceNodeId;
-    use crate::core::Language;
+    use crate::evidence::store::EvidenceOutput;
+    use crate::ids::EvidenceNodeId;
+    use polint_core::Language;
 
     #[test]
     fn exact_native_short_paths_sort_before_unknown_heuristic_paths() {
@@ -154,7 +151,7 @@ mod tests {
                 omitted_regions: Vec::new(),
                 replay_keys: Vec::new(),
             },
-            &crate::core::test_stable_key_interner(),
+            &polint_core::test_stable_key_interner(),
         )
         .expect("valid evidence")
     }
@@ -181,7 +178,7 @@ mod tests {
             confidence: EvidenceConfidence::High,
             compact_label: None,
             source_fact_stable_keys: Vec::new(),
-            stable_key: crate::core::stable_key_for_test(&format!("node:{id}")),
+            stable_key: polint_core::stable_key_for_test(&format!("node:{id}")),
         }
     }
 
@@ -213,7 +210,7 @@ mod tests {
             expansion: EvidenceExpansion::None,
             compact_label: None,
             source_fact_stable_keys: Vec::new(),
-            stable_key: crate::core::stable_key_for_test(&format!("edge:{id}")),
+            stable_key: polint_core::stable_key_for_test(&format!("edge:{id}")),
         }
     }
 }
