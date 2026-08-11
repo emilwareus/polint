@@ -265,12 +265,51 @@ impl FactDatabase for AnalysisDb {
         AnalysisDb::jsx_attributes(self)
     }
 
+    fn module_nodes(&self) -> &[polint_analysis_api::ModuleNode] {
+        AnalysisDb::module_nodes(self)
+    }
+
     fn facts_for_file(&self, file: FileId) -> CachedFileFacts {
         AnalysisDb::facts_for_file(self, file)
     }
 
     fn restore_file_facts(&mut self, file: FileId, facts: CachedFileFacts) {
         AnalysisDb::restore_file_facts(self, file, facts)
+    }
+}
+
+impl polint_analysis_api::CaptureEnrichment for AnalysisDb {
+    fn primary_definition_outside_span(
+        &self,
+        _file: polint_core::FileId,
+        symbol: polint_core::SymbolId,
+        span_start: u32,
+        span_end: u32,
+    ) -> Option<String> {
+        let definition = self.definition_for_symbol(symbol)?;
+        let definition_span = definition.primary_span.as_ref()?;
+        (definition_span.start_byte < span_start || definition_span.end_byte > span_end)
+            .then(|| definition.name.clone())
+    }
+
+    fn reference_targets_in_span(
+        &self,
+        file: polint_core::FileId,
+        span_start: u32,
+        span_end: u32,
+    ) -> Vec<(String, Option<polint_core::SymbolId>)> {
+        self.references_for_file(file)
+            .filter(|reference| {
+                reference
+                    .primary_span
+                    .as_ref()
+                    .is_some_and(|reference_span| {
+                        reference_span.start_byte >= span_start
+                            && reference_span.end_byte <= span_end
+                    })
+            })
+            .map(|reference| (reference.name.clone(), reference.target))
+            .collect()
     }
 }
 

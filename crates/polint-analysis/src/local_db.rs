@@ -185,6 +185,65 @@ impl LocalAnalysisDb {
     pub fn fact_meta_mut_for_test(&mut self) -> &mut FactMetaStore {
         crate::AnalysisHost::fact_meta_mut_for_test(self)
     }
+
+    pub fn files(&self) -> &[SourceFile] {
+        FactDatabase::files(self)
+    }
+
+    pub fn path_for(&self, file: FileId) -> String {
+        FactDatabase::path_for(self, file)
+    }
+
+    pub fn packages(&self) -> &[PackageFact] {
+        FactDatabase::packages(self)
+    }
+
+    pub fn imports(&self) -> &[ImportFact] {
+        FactDatabase::imports(self)
+    }
+
+    pub fn mir_bodies(&self) -> &[crate::mir_body::MirBody] {
+        crate::AnalysisHost::mir_bodies(self)
+    }
+
+    pub fn mir_operations(&self) -> &[crate::mir_op::MirOperation] {
+        crate::AnalysisHost::mir_operations(self)
+    }
+
+    pub fn mir_blocks(&self) -> &[crate::mir_body::MirBlock] {
+        crate::AnalysisHost::mir_blocks(self)
+    }
+
+    pub fn mir_places(&self) -> &[crate::places::PlaceFact] {
+        crate::AnalysisHost::mir_places(self)
+    }
+
+    pub fn mir_place_types(&self) -> &[crate::places::PlaceTypeFact] {
+        crate::AnalysisHost::mir_place_types(self)
+    }
+
+    pub fn call_sites(&self) -> &[crate::calls::facts::CallSiteFact] {
+        crate::AnalysisHost::call_sites(self)
+    }
+
+    pub fn call_targets(&self) -> &[crate::calls::facts::CallTargetFact] {
+        crate::AnalysisHost::call_targets(self)
+    }
+
+    pub fn unresolved_calls(&self) -> &[crate::calls::facts::UnresolvedCallFact] {
+        crate::AnalysisHost::unresolved_calls(self)
+    }
+
+    pub fn unsupported_semantics(&self) -> &[crate::mir_op::UnsupportedSemanticFact] {
+        crate::AnalysisHost::unsupported_semantics(self)
+    }
+
+    pub fn replace_semantic_mir(
+        &mut self,
+        output: crate::mir_body::MirOutput,
+    ) -> Result<(), crate::AnalysisError> {
+        crate::AnalysisHost::replace_semantic_mir(self, output)
+    }
 }
 
 impl FactDatabase for LocalAnalysisDb {
@@ -354,6 +413,10 @@ impl FactDatabase for LocalAnalysisDb {
 
     fn jsx_attributes(&self) -> &[JsxAttributeFact] {
         &self.jsx_attributes
+    }
+
+    fn module_nodes(&self) -> &[polint_analysis_api::ModuleNode] {
+        &[]
     }
 
     fn facts_for_file(&self, file: FileId) -> CachedFileFacts {

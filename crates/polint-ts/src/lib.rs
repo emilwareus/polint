@@ -80,11 +80,11 @@ pub use adapter::analyze_with_options;
 #[allow(unused_imports)]
 pub use adapter::{
     DYNAMIC_IMPORT_SPECIFIER, analyze_files_with_plan_options_and_cache_stats,
-    analyze_with_plan_options, analyze_with_plan_options_and_cache_stats, anonymous_callable_name,
-    class_callable_name, is_anonymous_callable_name,
+    analyze_with_plan_options, analyze_with_plan_options_and_cache_stats, class_callable_name,
 };
 #[cfg(test)]
 pub(crate) use adapter::{analyze, analyze_with_cache};
+pub use polint_analysis_api::{anonymous_callable_name, is_anonymous_callable_name};
 
 pub use frontend::{FAMILY_TYPESCRIPT_JAVASCRIPT, TS_FRONTEND_PROFILE, TsJsFrontend};
 pub use syntax_store::{TS_SYNTAX_STORE_FAMILY, TsSyntaxStore};

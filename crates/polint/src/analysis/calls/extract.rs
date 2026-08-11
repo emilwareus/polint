@@ -245,7 +245,7 @@ fn evidence_callee(
         );
     }
 
-    if crate::ts::is_anonymous_callable_name(evidence) {
+    if polint_analysis_api::is_anonymous_callable_name(evidence) {
         return (
             CallCallee::Identifier {
                 reference: None,
@@ -526,7 +526,7 @@ mod tests {
     use crate::analysis::mir::op::{MirOperation, MirOperationKind, MirValue};
     use crate::analysis::places::{PlaceFact, PlaceProjection, PlaceRoot, PlaceStatus};
     use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, Span};
-    use crate::ts::anonymous_callable_name;
+    use polint_analysis_api::anonymous_callable_name;
 
     fn span(file: FileId, line: u32, start_byte: u32) -> Span {
         Span {

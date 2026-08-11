@@ -3,6 +3,7 @@
 //! Depends only on `polint-core` and `polint-ir`. Must not import concrete analyses or frontends.
 
 mod cache_api;
+mod callable_names;
 mod digest;
 mod fact_store;
 mod metadata;
@@ -16,6 +17,9 @@ pub use cache_api::{
     FileCacheReadStatus, LayerCacheKeyParts, LayerCacheKind, LayerCachePrecision,
     LayerCacheReadOutcome, LayerCacheReadStatus, LayerCacheWriteStatus,
 };
+pub use callable_names::{
+    ANONYMOUS_CALLABLE_PREFIX, anonymous_callable_name, is_anonymous_callable_name,
+};
 pub use digest::{CacheStats, Digest, DigestBuilder, DigestKind};
 pub use fact_store::{FactStore, FactStoreEntry};
 pub use metadata::{
@@ -28,9 +32,9 @@ pub use module_facts::{
     ResolvedImportFact, UnresolvedReason,
 };
 pub use provider::{
-    CachePolicy, FactDatabase, HostAttachment, NullHostAttachment, PrecisionCeiling, Provider,
-    ProviderCtx, ProviderHostServices, ProviderKind, ProviderManifest, ProviderRunResult,
-    SchemaVersion,
+    CachePolicy, CaptureEnrichment, FactDatabase, HostAttachment, NullCaptureEnrichment,
+    NullHostAttachment, PrecisionCeiling, Provider, ProviderCtx, ProviderHostServices,
+    ProviderKind, ProviderManifest, ProviderRunResult, SchemaVersion,
 };
 pub use source_file::SourceFile;
 pub use syntax_facts::{

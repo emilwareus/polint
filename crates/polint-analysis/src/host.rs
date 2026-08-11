@@ -11,7 +11,7 @@ use polint_core::StableKeyId;
 
 use crate::access_paths::store::AccessPathStore;
 use crate::aliases::store::AliasStore;
-use crate::calls::facts::UnresolvedCallFact;
+use crate::calls::facts::{CallSiteFact, CallTargetFact, UnresolvedCallFact};
 use crate::calls::store::{CallOutput, CallStore};
 use crate::cfg::store::CfgOutput;
 use crate::data_flow::store::DataFlowStore;
@@ -29,7 +29,10 @@ use crate::fact_store::{
 };
 use crate::identity::store::IdentityStore;
 use crate::mir_body::MirOutput;
+use crate::mir_body::{MirBlock, MirBody};
+use crate::mir_op::MirOperation;
 use crate::mir_op::UnsupportedSemanticFact;
+use crate::places::{PlaceFact, PlaceTypeFact};
 use crate::points_to::store::PointsToStore;
 use crate::reachability::store::ReachabilityStore;
 use crate::refined_calls::store::{RefinedCallOutput, RefinedCallStore};
@@ -152,6 +155,34 @@ pub trait AnalysisHost: FactDatabase {
 
     fn unsupported_semantics(&self) -> &[UnsupportedSemanticFact] {
         self.semantic_mir_store().unsupported_semantics()
+    }
+
+    fn mir_bodies(&self) -> &[MirBody] {
+        self.semantic_mir_store().mir_bodies()
+    }
+
+    fn mir_operations(&self) -> &[MirOperation] {
+        self.semantic_mir_store().mir_operations()
+    }
+
+    fn mir_blocks(&self) -> &[MirBlock] {
+        self.semantic_mir_store().mir_blocks()
+    }
+
+    fn mir_places(&self) -> &[PlaceFact] {
+        self.semantic_mir_store().places()
+    }
+
+    fn mir_place_types(&self) -> &[PlaceTypeFact] {
+        self.semantic_mir_store().place_types()
+    }
+
+    fn call_sites(&self) -> &[CallSiteFact] {
+        self.calls_store().sites()
+    }
+
+    fn call_targets(&self) -> &[CallTargetFact] {
+        self.calls_store().targets()
     }
 
     fn replace_summary_facts(&mut self, output: SummaryOutput) {

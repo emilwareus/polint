@@ -19,6 +19,38 @@ use crate::syntax_facts::{
     PackageFact, StringLiteralFact, TestFact, TsClassFact, TsComponentFact,
 };
 
+/// Optional symbol-aware enrichment for MIR closure-capture lowering.
+///
+/// Frontends and analysis crates must not depend on facade symbol stores; the
+/// composition root implements this when symbol facts are available. Default
+/// methods return no enrichment so unit fixtures can omit symbols.
+pub trait CaptureEnrichment {
+    fn primary_definition_outside_span(
+        &self,
+        _file: FileId,
+        _symbol: polint_core::SymbolId,
+        _span_start: u32,
+        _span_end: u32,
+    ) -> Option<String> {
+        None
+    }
+
+    fn reference_targets_in_span(
+        &self,
+        _file: FileId,
+        _span_start: u32,
+        _span_end: u32,
+    ) -> Vec<(String, Option<polint_core::SymbolId>)> {
+        Vec::new()
+    }
+}
+
+/// Empty enrichment used by unit fixtures without symbol facts.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NullCaptureEnrichment;
+
+impl CaptureEnrichment for NullCaptureEnrichment {}
+
 /// Host fact registry neck used by providers and frontends.
 pub trait FactDatabase: Any + Send {
     fn as_any(&self) -> &dyn Any;
@@ -64,6 +96,9 @@ pub trait FactDatabase: Any + Send {
     fn ts_components(&self) -> &[TsComponentFact];
     fn ts_classes(&self) -> &[TsClassFact];
     fn jsx_attributes(&self) -> &[JsxAttributeFact];
+
+    /// Module graph nodes when the composition root has installed them.
+    fn module_nodes(&self) -> &[crate::module_facts::ModuleNode];
 
     fn facts_for_file(&self, file: FileId) -> CachedFileFacts;
     fn restore_file_facts(&mut self, file: FileId, facts: CachedFileFacts);

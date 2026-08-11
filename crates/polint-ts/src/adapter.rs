@@ -35,11 +35,8 @@ const TS_SYNTAX_LAYER_SCHEMA: &str = "ts-syntax-layer-v11";
 
 // Relationship resolution converts this non-string import expression sentinel to Dynamic.
 pub const DYNAMIC_IMPORT_SPECIFIER: &str = "<dynamic>";
-const ANONYMOUS_CALLABLE_PREFIX: &str = "<polint:anonymous:";
 
-pub fn anonymous_callable_name(start: u32, end: u32) -> String {
-    format!("{ANONYMOUS_CALLABLE_PREFIX}{start}:{end}>")
-}
+pub(crate) use polint_analysis_api::anonymous_callable_name;
 
 /// The callable name for a class: its own identifier if named, otherwise the
 /// anonymous-callable name derived from its span. Shared by the frontend
@@ -51,10 +48,6 @@ pub fn class_callable_name(class: &Class<'_>) -> String {
         .as_ref()
         .map(|id| id.name.to_string())
         .unwrap_or_else(|| anonymous_callable_name(class.span.start, class.span.end))
-}
-
-pub fn is_anonymous_callable_name(value: &str) -> bool {
-    value.starts_with(ANONYMOUS_CALLABLE_PREFIX) && value.ends_with('>')
 }
 
 /// Convenience wrapper used by TS-adapter unit tests (no cache, sequential).

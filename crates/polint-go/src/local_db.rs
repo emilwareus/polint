@@ -231,6 +231,10 @@ impl FactDatabase for LocalFactDb {
         &self.jsx_attributes
     }
 
+    fn module_nodes(&self) -> &[polint_analysis_api::ModuleNode] {
+        &[]
+    }
+
     fn facts_for_file(&self, file: FileId) -> CachedFileFacts {
         CachedFileFacts {
             packages: self

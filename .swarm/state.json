@@ -899,7 +899,7 @@
         "T-INTERN-C"
       ],
       "created_at": "2026-08-10T10:04:15+02:00",
-      "note": "CLAIMED exclusive; polint-go+polint-ts compiler-green; polint-analysis CP1 foundations+AnalysisHost+LocalAnalysisDb committed; providers/lang edges still in facade; remaining Q4 CP2/CP3",
+      "note": "CLAIMED exclusive; polint-go+polint-ts compiler-green; polint-analysis CP1 foundations committed; CP2 cycle-break API (CaptureEnrichment/module_nodes/callable_names/AnalysisHost mir accessors) committed; providers/lang lowerers still in facade; remaining Q4 algorithm+lang physical moves + CP3",
       "dispatched_at": "2026-08-11T00:26:45+0200",
       "claimed_at": "2026-08-11T00:26:45+0200",
       "attempts": 1,
@@ -907,7 +907,7 @@
       "source_commit": "6e95a33c302d6d135dd3724b5b669f457cfe7a10",
       "worker": "T-SPLIT-exclusive-writer",
       "exclusive_lock": true,
-      "updated_at": "2026-08-11T02:17:07+0200"
+      "updated_at": "2026-08-11T02:25:02+0200"
     },
     "T-ARCH-DOC": {
       "state": "BLOCKED",
@@ -1038,7 +1038,8 @@
       "at": "2026-08-08T20:27:05+02:00",
       "text": "M3+M4 authorized; W3.1 READY"
     },
-    "2026-08-11T02:17:07+0200: T-SPLIT polint-analysis CP1 foundations committed; still IN_FLIGHT/exclusive"
+    "2026-08-11T02:17:07+0200: T-SPLIT polint-analysis CP1 foundations committed; still IN_FLIGHT/exclusive",
+    "2026-08-11T02:25:02+0200: T-SPLIT polint-analysis CP2 cycle-break API committed; still IN_FLIGHT/exclusive; lang/algorithm moves remain"
   ],
   "m1_gate": {
     "status": "PASS",
@@ -1197,7 +1198,8 @@
     },
     "2026-08-11T01:58:51+0200: T-SPLIT polint-ts extraction compiler-green; still IN_FLIGHT/exclusive; next polint-analysis",
     "2026-08-11T02:11:25+0200: T-SPLIT polint-analysis CP1 foundations compiler-green; still IN_FLIGHT/exclusive",
-    "2026-08-11T02:17:07+0200: T-SPLIT polint-analysis CP1 foundations committed; still IN_FLIGHT/exclusive"
+    "2026-08-11T02:17:07+0200: T-SPLIT polint-analysis CP1 foundations committed; still IN_FLIGHT/exclusive",
+    "2026-08-11T02:25:02+0200: T-SPLIT polint-analysis CP2 cycle-break API committed; still IN_FLIGHT/exclusive; lang/algorithm moves remain"
   ],
   "ready": [],
   "BLOCKED": [],
