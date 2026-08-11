@@ -603,6 +603,10 @@ pub(super) fn place_status_metadata(status: PlaceStatus) -> (FactPrecision, Fact
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "Retained for AnalysisDb CFG metadata until dual accessors are removed."
+)]
 pub(super) fn cfg_status_metadata(
     status: CfgStatus,
     precision: CfgPrecision,

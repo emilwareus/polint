@@ -2759,7 +2759,7 @@ mod symbol_graph_semantic_layer_key {
 #[cfg(test)]
 mod cfg_layer_key {
     use super::*;
-    use crate::analysis::cfg::cache_key::cfg_provider_parameter_digest;
+    use polint_analysis::cfg::cache_key::cfg_provider_parameter_digest;
 
     fn manifest() -> &'static crate::analysis_kernel::ProviderManifest {
         crate::analysis_kernel::AnalysisKernel::provider_manifests()

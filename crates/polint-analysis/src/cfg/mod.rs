@@ -1,6 +1,10 @@
 pub mod builder;
+pub mod cache_key;
 pub mod derived;
 pub mod facts;
 pub mod graph;
 pub mod ids;
+pub mod lower;
+pub mod provider;
 pub mod store;
+pub mod validate;

@@ -1,6 +1,6 @@
-use crate::analysis_kernel::incremental::{Digest, DigestKind};
+use polint_analysis_api::{Digest, DigestKind};
 
-pub(crate) fn cfg_provider_parameter_digest() -> Digest {
+pub fn cfg_provider_parameter_digest() -> Digest {
     Digest::from_parts(
         DigestKind::ProviderParameters,
         "cfg_provider_parameters",

@@ -523,6 +523,10 @@ pub(super) fn evidence_validation_label(validation: EvidenceValidation) -> &'sta
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "Retained for AnalysisDb CFG metadata until dual accessors are removed."
+)]
 pub(super) fn cfg_status_label(status: CfgStatus) -> &'static str {
     match status {
         CfgStatus::Resolved => "resolved",
@@ -532,6 +536,10 @@ pub(super) fn cfg_status_label(status: CfgStatus) -> &'static str {
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "Retained for AnalysisDb CFG metadata until dual accessors are removed."
+)]
 pub(super) fn cfg_precision_label(precision: CfgPrecision) -> &'static str {
     match precision {
         CfgPrecision::ExactSyntax => "exact_syntax",
@@ -544,6 +552,10 @@ pub(super) fn cfg_precision_label(precision: CfgPrecision) -> &'static str {
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "Retained for AnalysisDb CFG metadata until dual accessors are removed."
+)]
 pub(super) fn cfg_view_label(view: crate::analysis::cfg::facts::CfgView) -> &'static str {
     match view {
         crate::analysis::cfg::facts::CfgView::NormalControl => "normal_control",
@@ -552,6 +564,10 @@ pub(super) fn cfg_view_label(view: crate::analysis::cfg::facts::CfgView) -> &'st
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "Retained for AnalysisDb CFG metadata until dual accessors are removed."
+)]
 pub(super) fn cfg_node_kind_label(kind: crate::analysis::cfg::facts::CfgNodeKind) -> &'static str {
     use crate::analysis::cfg::facts::CfgNodeKind;
 
@@ -579,6 +595,10 @@ pub(super) fn cfg_node_kind_label(kind: crate::analysis::cfg::facts::CfgNodeKind
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "Retained for AnalysisDb CFG metadata until dual accessors are removed."
+)]
 pub(super) fn basic_block_kind_label(
     kind: crate::analysis::cfg::facts::BasicBlockKind,
 ) -> &'static str {
@@ -599,6 +619,10 @@ pub(super) fn basic_block_kind_label(
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "Retained for AnalysisDb CFG metadata until dual accessors are removed."
+)]
 pub(super) fn cfg_edge_kind_label(kind: crate::analysis::cfg::facts::CfgEdgeKind) -> &'static str {
     use crate::analysis::cfg::facts::CfgEdgeKind;
 

@@ -333,6 +333,10 @@ impl AnalysisDb {
             .expect("CfgFactStore is installed when AnalysisDb is constructed")
     }
 
+    #[allow(
+        dead_code,
+        reason = "CFG writes go through AnalysisHost in polint-analysis; kept for AnalysisDb test helpers."
+    )]
     fn cfg_store_mut(&mut self) -> &mut CfgFactStore {
         self.fact_store_mut(CFG_STORE_FAMILY)
             .expect("CfgFactStore is installed when AnalysisDb is constructed")
@@ -943,6 +947,10 @@ impl AnalysisDb {
         Ok(())
     }
 
+    #[allow(
+        dead_code,
+        reason = "CFG writes go through AnalysisHost in polint-analysis; kept for AnalysisDb test helpers."
+    )]
     pub(crate) fn replace_cfg_facts(&mut self, output: CfgOutput) -> Result<(), AnalysisError> {
         let interner_handle = self.stable_key_interner();
         let output = output.normalized(&interner_handle);
@@ -2317,6 +2325,10 @@ impl AnalysisDb {
         }
     }
 
+    #[allow(
+        dead_code,
+        reason = "CFG writes go through AnalysisHost in polint-analysis; kept for AnalysisDb test helpers."
+    )]
     fn refresh_cfg_metadata(&mut self) {
         self.fact_meta.remove_family(FactFamily::CfgFunction);
         self.fact_meta.remove_family(FactFamily::CfgNode);
@@ -3272,14 +3284,26 @@ impl AnalysisDb {
         self.semantic_mir_store_inner().mir_operations()
     }
 
+    #[allow(
+        dead_code,
+        reason = "MIR accessors retained for tests; production reads go through AnalysisHost."
+    )]
     pub(crate) fn mir_blocks(&self) -> &[MirBlock] {
         self.semantic_mir_store_inner().mir_blocks()
     }
 
+    #[allow(
+        dead_code,
+        reason = "MIR accessors retained for tests; production reads go through AnalysisHost."
+    )]
     pub(crate) fn mir_statements(&self) -> &[MirStatement] {
         self.semantic_mir_store_inner().mir_statements()
     }
 
+    #[allow(
+        dead_code,
+        reason = "MIR accessors retained for tests; production reads go through AnalysisHost."
+    )]
     pub(crate) fn mir_terminators(&self) -> &[MirTerminator] {
         self.semantic_mir_store_inner().mir_terminators()
     }
@@ -4990,6 +5014,10 @@ impl AnalysisDb {
         )
     }
 
+    #[allow(
+        dead_code,
+        reason = "CFG metadata helpers retained for AnalysisDb tests until dual accessors are removed."
+    )]
     fn cfg_function_metadata(&self, fact: &CfgFunctionFact) -> FactMeta {
         let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
         fact_meta_from_stable_key(
@@ -5012,6 +5040,10 @@ impl AnalysisDb {
         )
     }
 
+    #[allow(
+        dead_code,
+        reason = "CFG metadata helpers retained for AnalysisDb tests until dual accessors are removed."
+    )]
     fn cfg_node_metadata(&self, fact: &CfgNodeFact) -> FactMeta {
         let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
         fact_meta_from_stable_key(
@@ -5034,6 +5066,10 @@ impl AnalysisDb {
         )
     }
 
+    #[allow(
+        dead_code,
+        reason = "CFG metadata helpers retained for AnalysisDb tests until dual accessors are removed."
+    )]
     fn cfg_block_metadata(&self, fact: &BasicBlockFact) -> FactMeta {
         let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
         fact_meta_from_stable_key(
@@ -5056,6 +5092,10 @@ impl AnalysisDb {
         )
     }
 
+    #[allow(
+        dead_code,
+        reason = "CFG metadata helpers retained for AnalysisDb tests until dual accessors are removed."
+    )]
     fn cfg_edge_metadata(&self, fact: &CfgEdgeFact) -> FactMeta {
         let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
         fact_meta_from_stable_key(
@@ -5079,6 +5119,10 @@ impl AnalysisDb {
         )
     }
 
+    #[allow(
+        dead_code,
+        reason = "CFG metadata helpers retained for AnalysisDb tests until dual accessors are removed."
+    )]
     fn cfg_reachability_metadata(&self, fact: &ReachabilityFact) -> FactMeta {
         let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
         fact_meta_from_stable_key(
@@ -5097,6 +5141,10 @@ impl AnalysisDb {
         )
     }
 
+    #[allow(
+        dead_code,
+        reason = "CFG metadata helpers retained for AnalysisDb tests until dual accessors are removed."
+    )]
     fn cfg_dominator_metadata(&self, fact: &DominatorFact) -> FactMeta {
         let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
         fact_meta_from_stable_key(
@@ -5116,6 +5164,10 @@ impl AnalysisDb {
         )
     }
 
+    #[allow(
+        dead_code,
+        reason = "CFG metadata helpers retained for AnalysisDb tests until dual accessors are removed."
+    )]
     fn cfg_postdominator_metadata(&self, fact: &PostDominatorFact) -> FactMeta {
         let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
         fact_meta_from_stable_key(
@@ -5135,6 +5187,10 @@ impl AnalysisDb {
         )
     }
 
+    #[allow(
+        dead_code,
+        reason = "CFG metadata helpers retained for AnalysisDb tests until dual accessors are removed."
+    )]
     fn cfg_control_dependence_metadata(&self, fact: &ControlDependenceFact) -> FactMeta {
         let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
         fact_meta_from_stable_key(
@@ -5157,6 +5213,10 @@ impl AnalysisDb {
         )
     }
 
+    #[allow(
+        dead_code,
+        reason = "CFG metadata helpers retained for AnalysisDb tests until dual accessors are removed."
+    )]
     fn unsupported_control_flow_metadata(&self, fact: &UnsupportedControlFlowFact) -> FactMeta {
         let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
         fact_meta_from_stable_key(

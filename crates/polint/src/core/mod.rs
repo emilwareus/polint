@@ -40,6 +40,10 @@ pub(super) const MODULE_GRAPH_PROVIDER_ID: &str = "polint.module_graph";
 pub(super) const MODULE_TOPOLOGY_PROVIDER_ID: &str = "polint.module_topology";
 pub(super) const SYMBOL_GRAPH_PROVIDER_ID: &str = "polint.symbol_graph";
 pub(crate) const SEMANTIC_MIR_PROVIDER_ID: &str = "polint.semantic_mir";
+#[allow(
+    dead_code,
+    reason = "Used by AnalysisDb CFG metadata writers retained until dual accessors are removed."
+)]
 pub(crate) const CFG_PROVIDER_ID: &str = "polint.cfg";
 #[allow(
     dead_code,

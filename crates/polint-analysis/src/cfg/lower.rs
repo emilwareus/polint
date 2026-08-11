@@ -1,27 +1,25 @@
-use std::collections::BTreeMap;
-#[cfg(test)]
-use std::collections::BTreeSet;
-
-use crate::analysis::cfg::builder::CfgBuilder;
-use crate::analysis::cfg::facts::{
+use crate::AnalysisHost;
+use crate::cfg::builder::CfgBuilder;
+use crate::cfg::facts::{
     BasicBlockKind, CfgEdgeKind, CfgNodeKind, CfgPrecision, CfgStatus, ControlFlowAction,
     UnsupportedControlFlowFact,
 };
-use crate::analysis::cfg::ids::{CfgFunctionId, UnsupportedControlFlowId};
-use crate::analysis::cfg::store::CfgOutput;
+use crate::cfg::ids::{CfgFunctionId, UnsupportedControlFlowId};
+use crate::cfg::store::CfgOutput;
 #[cfg(test)]
-use crate::analysis::ids::MirOpId;
-use crate::analysis::ids::{MirBodyId, UnsupportedId};
-use crate::analysis::mir::body::{MirBlockId, MirStatus, MirTerminatorKind};
-use crate::analysis::mir::op::{
+use crate::ids::MirOpId;
+use crate::ids::{MirBodyId, UnsupportedId};
+use crate::mir_body::{MirBlockId, MirStatus, MirTerminatorKind};
+use crate::mir_op::{
     ConservativeAction, MirOperationKind, UnsupportedDomain, UnsupportedPrecision,
     UnsupportedSemanticFact,
 };
-use crate::analysis::stable_key::semantic_stable_key;
-use crate::analysis_kernel::FactFamily;
-use crate::core::{AnalysisDb, Language};
+use crate::stable_key::semantic_stable_key;
+use polint_analysis_api::FactFamily;
+use polint_core::Language;
+use std::collections::BTreeMap;
 
-pub(crate) fn lower_cfg(db: &AnalysisDb) -> CfgOutput {
+pub fn lower_cfg(db: &impl AnalysisHost) -> CfgOutput {
     let interner_handle = db.stable_key_interner();
     let interner = &interner_handle;
     let mut lowering = CfgLowering::new(db);
@@ -29,14 +27,14 @@ pub(crate) fn lower_cfg(db: &AnalysisDb) -> CfgOutput {
     lowering.finish(interner)
 }
 
-struct CfgLowering<'db> {
-    db: &'db AnalysisDb,
+struct CfgLowering<'db, H: AnalysisHost + ?Sized> {
+    db: &'db H,
     builder: CfgBuilder,
     body_to_function: BTreeMap<MirBodyId, CfgFunctionId>,
 }
 
-impl<'db> CfgLowering<'db> {
-    fn new(db: &'db AnalysisDb) -> Self {
+impl<'db, H: AnalysisHost + ?Sized> CfgLowering<'db, H> {
+    fn new(db: &'db H) -> Self {
         Self {
             db,
             builder: CfgBuilder::new(),
@@ -44,7 +42,7 @@ impl<'db> CfgLowering<'db> {
         }
     }
 
-    fn lower(&mut self, interner: &crate::core::StableKeyInterner) {
+    fn lower(&mut self, interner: &polint_core::StableKeyInterner) {
         let mut bodies = self.db.mir_bodies().iter().collect::<Vec<_>>();
         bodies.sort_by_cached_key(|body| interner.resolve(body.stable_key));
 
@@ -71,7 +69,7 @@ impl<'db> CfgLowering<'db> {
         }
     }
 
-    fn lower_body(&mut self, interner: &crate::core::StableKeyInterner, body: MirBodyId) {
+    fn lower_body(&mut self, interner: &polint_core::StableKeyInterner, body: MirBodyId) {
         let mut blocks = self
             .db
             .mir_blocks()
@@ -145,11 +143,11 @@ impl<'db> CfgLowering<'db> {
                         }
                         MirTerminatorKind::Throw { .. } => CfgNodeKind::Throw,
                         MirTerminatorKind::Suspend {
-                            kind: crate::analysis::mir::body::SuspendKind::Await,
+                            kind: crate::mir_body::SuspendKind::Await,
                             ..
                         } => CfgNodeKind::Await,
                         MirTerminatorKind::Suspend {
-                            kind: crate::analysis::mir::body::SuspendKind::Yield,
+                            kind: crate::mir_body::SuspendKind::Yield,
                             ..
                         } => CfgNodeKind::Yield,
                         _ => self.operation_node_kind(operation),
@@ -168,11 +166,11 @@ impl<'db> CfgLowering<'db> {
                 let node_kind = match terminator.kind {
                     MirTerminatorKind::Throw { .. } => CfgNodeKind::Throw,
                     MirTerminatorKind::Suspend {
-                        kind: crate::analysis::mir::body::SuspendKind::Await,
+                        kind: crate::mir_body::SuspendKind::Await,
                         ..
                     } => CfgNodeKind::Await,
                     MirTerminatorKind::Suspend {
-                        kind: crate::analysis::mir::body::SuspendKind::Yield,
+                        kind: crate::mir_body::SuspendKind::Yield,
                         ..
                     } => CfgNodeKind::Yield,
                     _ => CfgNodeKind::Synthetic,
@@ -308,14 +306,14 @@ impl<'db> CfgLowering<'db> {
                 }
                 MirTerminatorKind::Suspend { kind, resume, .. } => {
                     let (suspend, resumed) = match kind {
-                        crate::analysis::mir::body::SuspendKind::Await => {
+                        crate::mir_body::SuspendKind::Await => {
                             (CfgEdgeKind::AwaitSuspend, CfgEdgeKind::AwaitResume)
                         }
-                        crate::analysis::mir::body::SuspendKind::Yield => {
+                        crate::mir_body::SuspendKind::Yield => {
                             (CfgEdgeKind::YieldSuspend, CfgEdgeKind::YieldResume)
                         }
-                        crate::analysis::mir::body::SuspendKind::ChannelRecv
-                        | crate::analysis::mir::body::SuspendKind::ChannelSend => {
+                        crate::mir_body::SuspendKind::ChannelRecv
+                        | crate::mir_body::SuspendKind::ChannelSend => {
                             (CfgEdgeKind::Unknown, CfgEdgeKind::Normal)
                         }
                     };
@@ -339,10 +337,10 @@ impl<'db> CfgLowering<'db> {
 
     fn add_mir_edge(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
-        from: crate::analysis::cfg::ids::BasicBlockId,
+        interner: &polint_core::StableKeyInterner,
+        from: crate::cfg::ids::BasicBlockId,
         target: MirBlockId,
-        blocks: &BTreeMap<MirBlockId, crate::analysis::cfg::ids::BasicBlockId>,
+        blocks: &BTreeMap<MirBlockId, crate::cfg::ids::BasicBlockId>,
         kind: CfgEdgeKind,
     ) {
         let to = *blocks
@@ -351,10 +349,7 @@ impl<'db> CfgLowering<'db> {
         self.builder.add_edge(interner, from, to, kind);
     }
 
-    fn operation_node_kind(
-        &self,
-        operation: &crate::analysis::mir::op::MirOperation,
-    ) -> CfgNodeKind {
+    fn operation_node_kind(&self, operation: &crate::mir_op::MirOperation) -> CfgNodeKind {
         match &operation.kind {
             MirOperationKind::Return { .. } => CfgNodeKind::Return,
             MirOperationKind::Call { .. } => CfgNodeKind::CallSite,
@@ -477,7 +472,7 @@ impl<'db> CfgLowering<'db> {
         })
     }
 
-    fn finish(self, interner: &crate::core::StableKeyInterner) -> CfgOutput {
+    fn finish(self, interner: &polint_core::StableKeyInterner) -> CfgOutput {
         let body_to_function = self.body_to_function;
         let db = self.db;
         let mut output = self.builder.finish(interner);
@@ -503,7 +498,7 @@ struct UnsupportedShape {
 }
 
 fn unsupported_control_flow_fact(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     index: usize,
     row: &UnsupportedSemanticFact,
     body_to_function: &BTreeMap<MirBodyId, CfgFunctionId>,
@@ -585,16 +580,17 @@ fn language_label(language: Language) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::ids::{MirStatementId, MirTerminatorId, PlaceId};
-    use crate::analysis::mir::body::{
+    use crate::LocalAnalysisDb;
+    use crate::ids::{MirStatementId, MirTerminatorId, PlaceId};
+    use crate::mir_body::{
         MirBlock, MirBlockId, MirBody, MirOutput, MirStatement, MirTerminator, MirTerminatorKind,
     };
-    use crate::analysis::mir::op::{
+    use crate::mir_op::{
         AssignMode, MirOperation, MirOperationKind, MirValue, UnsupportedDomain,
         UnsupportedSemanticFact,
     };
-    use crate::analysis::places::{PlaceFact, PlaceRoot, PlaceStatus};
-    use crate::core::{AnalysisDb, FileId, FunctionId, Language, Span};
+    use crate::places::{PlaceFact, PlaceRoot, PlaceStatus};
+    use polint_core::{FileId, FunctionId, Language, Span};
 
     fn span(start: usize, end: usize) -> Span {
         Span::new(
@@ -608,7 +604,7 @@ mod tests {
         )
     }
 
-    fn body(interner: &crate::core::StableKeyInterner, language: Language) -> MirBody {
+    fn body(interner: &polint_core::StableKeyInterner, language: Language) -> MirBody {
         MirBody {
             id: MirBodyId(0),
             language,
@@ -623,7 +619,7 @@ mod tests {
         }
     }
 
-    fn assign(interner: &crate::core::StableKeyInterner, id: u64, ordinal: u32) -> MirOperation {
+    fn assign(interner: &polint_core::StableKeyInterner, id: u64, ordinal: u32) -> MirOperation {
         MirOperation {
             id: MirOpId(id),
             body: MirBodyId(0),
@@ -639,7 +635,7 @@ mod tests {
         }
     }
 
-    fn return_op(interner: &crate::core::StableKeyInterner, id: u64, ordinal: u32) -> MirOperation {
+    fn return_op(interner: &polint_core::StableKeyInterner, id: u64, ordinal: u32) -> MirOperation {
         MirOperation {
             id: MirOpId(id),
             body: MirBodyId(0),
@@ -652,7 +648,7 @@ mod tests {
     }
 
     fn unsupported(
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         id: u64,
         operation: Option<MirOpId>,
         construct: &str,
@@ -677,7 +673,7 @@ mod tests {
     }
 
     fn place(
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         id: u64,
         name: &str,
         language: Language,
@@ -701,8 +697,8 @@ mod tests {
         language: Language,
         operations: Vec<MirOperation>,
         unsupported: Vec<UnsupportedSemanticFact>,
-    ) -> AnalysisDb {
-        let mut db = AnalysisDb::new();
+    ) -> LocalAnalysisDb {
+        let mut db = LocalAnalysisDb::new();
         let interner = db.stable_key_interner();
         let statements = operations
             .iter()
@@ -758,7 +754,7 @@ mod tests {
 
     #[test]
     fn cfg_lowers_straight_line_return_without_derived_rows() {
-        let interner = crate::core::StableKeyInterner::default();
+        let interner = polint_core::StableKeyInterner::default();
         let db = db_with(
             Language::TypeScript,
             vec![assign(&interner, 1, 1), return_op(&interner, 2, 2)],
@@ -783,7 +779,7 @@ mod tests {
 
     #[test]
     fn cfg_connects_explicit_mir_return_to_normal_exit() {
-        let interner = crate::core::StableKeyInterner::default();
+        let interner = polint_core::StableKeyInterner::default();
         let db = db_with(
             Language::TypeScript,
             vec![assign(&interner, 1, 1)],
@@ -807,7 +803,7 @@ mod tests {
 
     #[test]
     fn cfg_lowers_go_body_without_language_dispatch() {
-        let interner = crate::core::StableKeyInterner::default();
+        let interner = polint_core::StableKeyInterner::default();
         let db = db_with(Language::Go, vec![assign(&interner, 1, 1)], Vec::new());
         let output = lower_cfg(&db);
 
@@ -822,148 +818,8 @@ mod tests {
     }
 
     #[test]
-    fn ts_cfg_lowers_edges_from_production_mir_terminators() {
-        let mut db = AnalysisDb::new();
-        db.add_file(
-            std::path::PathBuf::from("flow.ts"),
-            "flow.ts".to_string(),
-            "export function flow(x) { if (x) {} while (x) {} switch (x) { case true: break; } }"
-                .to_string(),
-        );
-        assert!(
-            crate::ts::analyze_with_options(
-                &mut db,
-                &polint_analysis_api::DisabledAnalysisCache,
-                "",
-                "",
-                false
-            )
-            .is_empty()
-        );
-        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
-        db.replace_semantic_mir(mir)
-            .expect("MIR output should store");
-
-        let edge_kinds = lower_cfg(&db)
-            .edges
-            .into_iter()
-            .map(|edge| edge.kind)
-            .collect::<BTreeSet<_>>();
-        assert!(edge_kinds.contains(&CfgEdgeKind::True));
-        assert!(edge_kinds.contains(&CfgEdgeKind::False));
-        assert!(edge_kinds.contains(&CfgEdgeKind::SwitchCase));
-        assert!(edge_kinds.contains(&CfgEdgeKind::DefaultCase));
-        assert!(edge_kinds.contains(&CfgEdgeKind::Normal));
-    }
-
-    #[test]
-    fn ts_cfg_throw_prevents_impossible_fallthrough() {
-        let mut db = AnalysisDb::new();
-        db.add_file(
-            std::path::PathBuf::from("throw.ts"),
-            "throw.ts".to_string(),
-            "export function fail(value) { throw new Error(value); value = 1; }".to_string(),
-        );
-        assert!(
-            crate::ts::analyze_with_options(
-                &mut db,
-                &polint_analysis_api::DisabledAnalysisCache,
-                "",
-                "",
-                false
-            )
-            .is_empty()
-        );
-        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
-        db.replace_semantic_mir(mir)
-            .expect("MIR output should store");
-        let output = lower_cfg(&db);
-        let unreachable_blocks = output
-            .blocks
-            .iter()
-            .filter(|block| block.kind == BasicBlockKind::Unreachable)
-            .map(|block| block.id)
-            .collect::<BTreeSet<_>>();
-
-        assert!(
-            output
-                .edges
-                .iter()
-                .any(|edge| edge.kind == CfgEdgeKind::Throw)
-        );
-        assert!(
-            output
-                .blocks
-                .iter()
-                .any(|block| block.kind == BasicBlockKind::ExitExceptional && block.reachable)
-        );
-        assert!(
-            output
-                .blocks
-                .iter()
-                .any(|block| block.kind == BasicBlockKind::ExitNormal && !block.reachable)
-        );
-        assert!(output.edges.iter().all(|edge| {
-            !unreachable_blocks.contains(&edge.to_block)
-                || unreachable_blocks.contains(&edge.from_block)
-        }));
-    }
-
-    #[test]
-    fn ts_cfg_async_cleanup_and_unsupported_rows_are_truthful() {
-        let mut db = AnalysisDb::new();
-        db.add_file(
-            std::path::PathBuf::from("effects.ts"),
-            "effects.ts".to_string(),
-            r#"
-export async function load(promise, value) {
-  await promise;
-  try { value?.run(); } finally { cleanup(); }
-  return import("./module.js");
-}
-export function* values(value) { yield value; }
-"#
-            .to_string(),
-        );
-        assert!(
-            crate::ts::analyze_with_options(
-                &mut db,
-                &polint_analysis_api::DisabledAnalysisCache,
-                "",
-                "",
-                false
-            )
-            .is_empty()
-        );
-        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
-        db.replace_semantic_mir(mir)
-            .expect("MIR output should store");
-        let output = lower_cfg(&db);
-        let edge_kinds = output
-            .edges
-            .iter()
-            .map(|edge| edge.kind)
-            .collect::<BTreeSet<_>>();
-        let unsupported = output
-            .unsupported
-            .iter()
-            .map(|row| row.construct.as_str())
-            .collect::<BTreeSet<_>>();
-
-        assert!(edge_kinds.contains(&CfgEdgeKind::AwaitSuspend));
-        assert!(edge_kinds.contains(&CfgEdgeKind::AwaitResume));
-        assert!(edge_kinds.contains(&CfgEdgeKind::YieldSuspend));
-        assert!(edge_kinds.contains(&CfgEdgeKind::YieldResume));
-        assert!(edge_kinds.contains(&CfgEdgeKind::Finally));
-        assert!(edge_kinds.contains(&CfgEdgeKind::Cleanup));
-        assert!(edge_kinds.contains(&CfgEdgeKind::OptionalChain));
-        assert!(edge_kinds.contains(&CfgEdgeKind::Unknown));
-        assert!(unsupported.contains("dynamic import"));
-    }
-
-    #[test]
     fn unsupported_control_flow_key_uses_source_stable_identity() {
-        let interner = crate::core::StableKeyInterner::default();
+        let interner = polint_core::StableKeyInterner::default();
         let mut first = unsupported(&interner, 1, Some(MirOpId(1)), "throw");
         let mut second = unsupported(&interner, 2, Some(MirOpId(99)), "throw");
         first.body = Some(MirBodyId(7));

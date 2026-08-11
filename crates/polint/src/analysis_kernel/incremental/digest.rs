@@ -1,1 +1,1 @@
-pub(crate) use polint_analysis_api::{Digest, DigestBuilder, DigestKind};
+pub(crate) use polint_analysis_api::{Digest, DigestKind};

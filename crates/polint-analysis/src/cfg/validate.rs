@@ -1,15 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::analysis::cfg::facts::{
+use crate::AnalysisHost;
+use crate::cfg::facts::{
     BasicBlockFact, BasicBlockKind, CfgEdgeFact, CfgFunctionFact, CfgNodeFact, CfgPrecision,
     CfgStatus, CfgView,
 };
-use crate::analysis::cfg::ids::{BasicBlockId, CfgEdgeId, CfgFunctionId, CfgNodeId};
-use crate::analysis::ids::MirBodyId;
-use crate::core::AnalysisDb;
-use crate::diagnostics::{Diagnostic, TextRange};
+use crate::cfg::ids::{BasicBlockId, CfgEdgeId, CfgFunctionId, CfgNodeId};
+use crate::ids::MirBodyId;
+use polint_core::{Diagnostic, DiagnosticRange};
 
-pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
+pub fn validate_cfg(db: &impl AnalysisHost, diagnostics: &mut Vec<Diagnostic>) {
     let index = CfgValidationIndex::from_db(db);
     let interner = db.stable_key_interner();
 
@@ -328,7 +328,7 @@ struct CfgValidationIndex<'a> {
 }
 
 impl<'a> CfgValidationIndex<'a> {
-    fn from_db(db: &'a AnalysisDb) -> Self {
+    fn from_db(db: &'a impl AnalysisHost) -> Self {
         let functions = db
             .cfg_functions()
             .iter()
@@ -410,7 +410,7 @@ impl<'a> CfgValidationIndex<'a> {
 }
 
 fn validate_function_graph_shapes(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     index: &CfgValidationIndex<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -496,8 +496,8 @@ fn reachable_blocks(
 fn check_duplicate_stable_keys(
     diagnostics: &mut Vec<Diagnostic>,
     family: &'static str,
-    interner: &crate::core::StableKeyInterner,
-    stable_keys: impl Iterator<Item = crate::core::StableKeyId>,
+    interner: &polint_core::StableKeyInterner,
+    stable_keys: impl Iterator<Item = polint_core::StableKeyId>,
 ) {
     let mut seen = BTreeSet::new();
     for stable_key in stable_keys {
@@ -522,7 +522,7 @@ fn synthetic_block_kind(kind: BasicBlockKind) -> bool {
 
 fn check_optional_node(
     diagnostics: &mut Vec<Diagnostic>,
-    nodes: &BTreeMap<CfgNodeId, &crate::analysis::cfg::facts::CfgNodeFact>,
+    nodes: &BTreeMap<CfgNodeId, &crate::cfg::facts::CfgNodeFact>,
     node: Option<CfgNodeId>,
     family: &'static str,
     stable_key: &str,
@@ -543,7 +543,7 @@ fn check_optional_node(
 
 fn check_edge_node(
     diagnostics: &mut Vec<Diagnostic>,
-    nodes: &BTreeMap<CfgNodeId, &crate::analysis::cfg::facts::CfgNodeFact>,
+    nodes: &BTreeMap<CfgNodeId, &crate::cfg::facts::CfgNodeFact>,
     node: CfgNodeId,
     function: CfgFunctionId,
     family: &'static str,
@@ -571,7 +571,7 @@ fn check_edge_node(
 
 fn check_edge_block(
     diagnostics: &mut Vec<Diagnostic>,
-    blocks: &BTreeMap<BasicBlockId, &crate::analysis::cfg::facts::BasicBlockFact>,
+    blocks: &BTreeMap<BasicBlockId, &crate::cfg::facts::BasicBlockFact>,
     block: BasicBlockId,
     function: CfgFunctionId,
     family: &'static str,
@@ -599,7 +599,7 @@ fn check_edge_block(
 
 fn check_block_ref(
     diagnostics: &mut Vec<Diagnostic>,
-    blocks: &BTreeMap<BasicBlockId, &crate::analysis::cfg::facts::BasicBlockFact>,
+    blocks: &BTreeMap<BasicBlockId, &crate::cfg::facts::BasicBlockFact>,
     block: BasicBlockId,
     function: CfgFunctionId,
     family: &'static str,
@@ -619,7 +619,7 @@ fn check_block_ref(
 
 fn check_edge_ref(
     diagnostics: &mut Vec<Diagnostic>,
-    edges: &BTreeMap<CfgEdgeId, &crate::analysis::cfg::facts::CfgEdgeFact>,
+    edges: &BTreeMap<CfgEdgeId, &crate::cfg::facts::CfgEdgeFact>,
     edge: CfgEdgeId,
     function: CfgFunctionId,
     family: &'static str,
@@ -656,7 +656,7 @@ fn push_cfg_diagnostic(
         Diagnostic::error(
             "polint/internal",
             "<workspace>",
-            TextRange::point(1, 1),
+            DiagnosticRange::point(1, 1),
             format!("CFG validation failed for {family} stable key."),
         )
         .with_evidence("family", family)
