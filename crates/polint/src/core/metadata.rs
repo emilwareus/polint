@@ -51,7 +51,8 @@ pub(super) fn normalize_semantic_import_facts(
 ) {
     for fact in facts.iter_mut() {
         if interner.resolve(fact.stable_key).is_empty() {
-            fact.stable_key = fact.computed_stable_key(interner);
+            fact.stable_key =
+                crate::symbol_graph::semantic::semantic_import_computed_stable_key(fact, interner);
         }
     }
     facts.sort_by_key(|fact| interner.resolve(fact.stable_key));

@@ -269,6 +269,43 @@ impl FactDatabase for AnalysisDb {
         AnalysisDb::module_nodes(self)
     }
 
+    fn symbols(&self) -> &[polint_analysis_api::SymbolFact] {
+        AnalysisDb::symbols(self)
+    }
+
+    fn definitions(&self) -> &[polint_analysis_api::DefinitionFact] {
+        AnalysisDb::definitions(self)
+    }
+
+    fn references(&self) -> &[polint_analysis_api::ReferenceFact] {
+        AnalysisDb::references(self)
+    }
+
+    fn replace_symbol_facts(
+        &mut self,
+        symbols: Vec<polint_analysis_api::SymbolFact>,
+        definitions: Vec<polint_analysis_api::DefinitionFact>,
+        references: Vec<polint_analysis_api::ReferenceFact>,
+    ) {
+        AnalysisDb::replace_symbol_graph_facts(self, symbols, definitions, references);
+    }
+
+    fn semantic_imports(&self) -> &[polint_analysis_api::SemanticImportFact] {
+        AnalysisDb::semantic_imports(self)
+    }
+
+    fn file_metrics(&self) -> &[polint_analysis_api::FileMetricFact] {
+        AnalysisDb::file_metrics(self)
+    }
+
+    fn function_metrics(&self) -> &[polint_analysis_api::FunctionMetricFact] {
+        AnalysisDb::function_metrics(self)
+    }
+
+    fn complexity_metrics(&self) -> &[polint_analysis_api::ComplexityMetricFact] {
+        AnalysisDb::complexity_metrics(self)
+    }
+
     fn facts_for_file(&self, file: FileId) -> CachedFileFacts {
         AnalysisDb::facts_for_file(self, file)
     }

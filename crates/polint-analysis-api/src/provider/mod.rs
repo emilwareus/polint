@@ -100,6 +100,30 @@ pub trait FactDatabase: Any + Send {
     /// Module graph nodes when the composition root has installed them.
     fn module_nodes(&self) -> &[crate::module_facts::ModuleNode];
 
+    /// Symbol-graph rows when the composition root has installed them.
+    fn symbols(&self) -> &[crate::symbol_facts::SymbolFact];
+    fn definitions(&self) -> &[crate::symbol_facts::DefinitionFact];
+    fn references(&self) -> &[crate::symbol_facts::ReferenceFact];
+    fn replace_symbol_facts(
+        &mut self,
+        symbols: Vec<crate::symbol_facts::SymbolFact>,
+        definitions: Vec<crate::symbol_facts::DefinitionFact>,
+        references: Vec<crate::symbol_facts::ReferenceFact>,
+    );
+    /// Semantic import bindings used by call-target / module linking. Default empty.
+    fn semantic_imports(&self) -> &[crate::symbol_facts::SemanticImportFact] {
+        &[]
+    }
+    fn file_metrics(&self) -> &[crate::symbol_facts::FileMetricFact] {
+        &[]
+    }
+    fn function_metrics(&self) -> &[crate::symbol_facts::FunctionMetricFact] {
+        &[]
+    }
+    fn complexity_metrics(&self) -> &[crate::symbol_facts::ComplexityMetricFact] {
+        &[]
+    }
+
     fn facts_for_file(&self, file: FileId) -> CachedFileFacts;
     fn restore_file_facts(&mut self, file: FileId, facts: CachedFileFacts);
 }

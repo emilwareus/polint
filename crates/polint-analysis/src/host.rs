@@ -103,6 +103,25 @@ pub trait AnalysisHost: FactDatabase {
         self.stable_key_interner().resolve(id)
     }
 
+    fn replace_symbol_graph_facts(
+        &mut self,
+        symbols: Vec<polint_analysis_api::SymbolFact>,
+        definitions: Vec<polint_analysis_api::DefinitionFact>,
+        references: Vec<polint_analysis_api::ReferenceFact>,
+    ) {
+        FactDatabase::replace_symbol_facts(self, symbols, definitions, references);
+    }
+
+    fn references_for_file(
+        &self,
+        file: polint_core::FileId,
+    ) -> Vec<&polint_analysis_api::ReferenceFact> {
+        FactDatabase::references(self)
+            .iter()
+            .filter(|reference| reference.file == Some(file))
+            .collect()
+    }
+
     fn fact_meta_mut_for_test(&mut self) -> &mut FactMetaStore {
         self.fact_meta_mut()
     }

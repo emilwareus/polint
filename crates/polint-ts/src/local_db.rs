@@ -265,6 +265,26 @@ impl FactDatabase for LocalFactDb {
         &[]
     }
 
+    fn symbols(&self) -> &[polint_analysis_api::SymbolFact] {
+        &[]
+    }
+
+    fn definitions(&self) -> &[polint_analysis_api::DefinitionFact] {
+        &[]
+    }
+
+    fn references(&self) -> &[polint_analysis_api::ReferenceFact] {
+        &[]
+    }
+
+    fn replace_symbol_facts(
+        &mut self,
+        _symbols: Vec<polint_analysis_api::SymbolFact>,
+        _definitions: Vec<polint_analysis_api::DefinitionFact>,
+        _references: Vec<polint_analysis_api::ReferenceFact>,
+    ) {
+    }
+
     fn facts_for_file(&self, file: FileId) -> CachedFileFacts {
         CachedFileFacts {
             packages: self

@@ -10,6 +10,7 @@ mod metadata;
 mod module_facts;
 mod provider;
 mod source_file;
+mod symbol_facts;
 mod syntax_facts;
 
 pub use cache_api::{
@@ -41,6 +42,12 @@ pub use provider::{
     ProviderKind, ProviderManifest, ProviderRunResult, SchemaVersion,
 };
 pub use source_file::SourceFile;
+pub use symbol_facts::{
+    ComplexityMetricFact, DefinitionFact, DefinitionKind, FileMetricFact, FunctionMetricFact,
+    ReferenceFact, ReferenceKind, ScopeId, SemanticImportFact, SemanticImportId,
+    SemanticImportKind, SemanticStatus, SymbolFact, SymbolKind, SymbolNamespace, SymbolPrecision,
+    SymbolResolutionStatus,
+};
 pub use syntax_facts::{
     BranchObligation, CachedFileAnalysis, CachedFileFacts, CoverageFact, FunctionFact, ImportFact,
     JsxAttributeFact, PackageFact, StringLiteralFact, TS_JS_MODULE_FUNCTION_NAME, TestFact,

@@ -7,9 +7,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use polint_analysis_api::{
-    BranchObligation, CachedFileFacts, CoverageFact, FactDatabase, FactFamily, FactMetaStore,
-    FactStore, FactStoreEntry, FunctionFact, ImportFact, JsxAttributeFact, PackageFact, SourceFile,
-    StringLiteralFact, TestFact, TsClassFact, TsComponentFact,
+    BranchObligation, CachedFileFacts, ComplexityMetricFact, CoverageFact, DefinitionFact,
+    FactDatabase, FactFamily, FactMetaStore, FactStore, FactStoreEntry, FileMetricFact,
+    FunctionFact, FunctionMetricFact, ImportFact, JsxAttributeFact, PackageFact, ReferenceFact,
+    SemanticImportFact, SourceFile, StringLiteralFact, SymbolFact, TestFact, TsClassFact,
+    TsComponentFact,
 };
 #[cfg(test)]
 use polint_core::test_stable_key_interner;
@@ -59,6 +61,13 @@ pub struct LocalAnalysisDb {
     ts_components: Vec<TsComponentFact>,
     ts_classes: Vec<TsClassFact>,
     jsx_attributes: Vec<JsxAttributeFact>,
+    symbols: Vec<SymbolFact>,
+    definitions: Vec<DefinitionFact>,
+    references: Vec<ReferenceFact>,
+    semantic_imports: Vec<SemanticImportFact>,
+    file_metrics: Vec<FileMetricFact>,
+    function_metrics: Vec<FunctionMetricFact>,
+    complexity_metrics: Vec<ComplexityMetricFact>,
 }
 
 impl Default for LocalAnalysisDb {
@@ -122,6 +131,13 @@ impl LocalAnalysisDb {
             ts_components: Vec::new(),
             ts_classes: Vec::new(),
             jsx_attributes: Vec::new(),
+            symbols: Vec::new(),
+            definitions: Vec::new(),
+            references: Vec::new(),
+            semantic_imports: Vec::new(),
+            file_metrics: Vec::new(),
+            function_metrics: Vec::new(),
+            complexity_metrics: Vec::new(),
         }
     }
 
@@ -274,6 +290,23 @@ impl LocalAnalysisDb {
         output: crate::mir_body::MirOutput,
     ) -> Result<(), crate::AnalysisError> {
         crate::AnalysisHost::replace_semantic_mir(self, output)
+    }
+
+    pub fn replace_symbol_graph_facts(
+        &mut self,
+        symbols: Vec<SymbolFact>,
+        definitions: Vec<DefinitionFact>,
+        references: Vec<ReferenceFact>,
+    ) {
+        FactDatabase::replace_symbol_facts(self, symbols, definitions, references);
+    }
+
+    pub fn symbols(&self) -> &[SymbolFact] {
+        FactDatabase::symbols(self)
+    }
+
+    pub fn references(&self) -> &[ReferenceFact] {
+        FactDatabase::references(self)
     }
 }
 
@@ -448,6 +481,45 @@ impl FactDatabase for LocalAnalysisDb {
 
     fn module_nodes(&self) -> &[polint_analysis_api::ModuleNode] {
         &[]
+    }
+
+    fn symbols(&self) -> &[SymbolFact] {
+        &self.symbols
+    }
+
+    fn definitions(&self) -> &[DefinitionFact] {
+        &self.definitions
+    }
+
+    fn references(&self) -> &[ReferenceFact] {
+        &self.references
+    }
+
+    fn replace_symbol_facts(
+        &mut self,
+        symbols: Vec<SymbolFact>,
+        definitions: Vec<DefinitionFact>,
+        references: Vec<ReferenceFact>,
+    ) {
+        self.symbols = symbols;
+        self.definitions = definitions;
+        self.references = references;
+    }
+
+    fn semantic_imports(&self) -> &[SemanticImportFact] {
+        &self.semantic_imports
+    }
+
+    fn file_metrics(&self) -> &[FileMetricFact] {
+        &self.file_metrics
+    }
+
+    fn function_metrics(&self) -> &[FunctionMetricFact] {
+        &self.function_metrics
+    }
+
+    fn complexity_metrics(&self) -> &[ComplexityMetricFact] {
+        &self.complexity_metrics
     }
 
     fn facts_for_file(&self, file: FileId) -> CachedFileFacts {

@@ -6,13 +6,11 @@ use crate::diagnostics::{Diagnostic, TextRange};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+pub(crate) use polint_analysis_api::{
+    ScopeId, SemanticImportFact, SemanticImportId, SemanticImportKind, SemanticStatus,
+};
+
 const SYMBOL_GRAPH_PRODUCER_ID: &str = "polint.symbol_graph";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub(crate) struct ScopeId(pub(crate) u64);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub(crate) struct SemanticImportId(pub(crate) u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) struct ExportId(pub(crate) u64);
@@ -39,23 +37,6 @@ pub(crate) struct ScopeFact {
     pub(crate) parent: Option<ScopeId>,
     pub(crate) scope_path: Vec<String>,
     pub(crate) kind: ScopeKind,
-    pub(crate) stable_key: StableKeyId,
-    pub(crate) status: SemanticStatus,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SemanticImportFact {
-    pub(crate) id: SemanticImportId,
-    pub(crate) language: Language,
-    pub(crate) file: Option<FileId>,
-    pub(crate) package: Option<PackageId>,
-    pub(crate) module: Option<ModuleNodeId>,
-    pub(crate) scope: Option<ScopeId>,
-    pub(crate) import_path: String,
-    pub(crate) local_name: Option<String>,
-    pub(crate) imported_name: Option<String>,
-    pub(crate) namespace: SymbolNamespace,
-    pub(crate) kind: SemanticImportKind,
     pub(crate) stable_key: StableKeyId,
     pub(crate) status: SemanticStatus,
 }
@@ -591,29 +572,6 @@ pub(crate) enum ScopeKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub(crate) enum SemanticImportKind {
-    StaticNamed,
-    StaticDefault,
-    StaticNamespace,
-    SideEffect,
-    TypeOnly,
-    CommonJsRequire,
-    DynamicImport,
-    GoDefault,
-    GoNamed,
-    GoDot,
-    GoBlank,
-    GoImplicit,
-    EsNamed,
-    EsDefault,
-    EsNamespace,
-    ReExport,
-    CommonJs,
-    Dynamic,
-    Unknown,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) enum ExportKind {
     Named,
     Default,
@@ -658,19 +616,6 @@ pub(crate) enum ResolutionStepKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub(crate) enum SemanticStatus {
-    Resolved,
-    Ambiguous,
-    Unresolved,
-    Cycle,
-    Generated,
-    Dynamic,
-    External,
-    SetupMissing,
-    Unsupported,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) enum GeneratedSymbolKind {
     FrameworkEntrypoint,
     Route,
@@ -707,7 +652,7 @@ impl SemanticIndexBuilder {
         let id = SemanticImportId(self.semantic_imports.len() as u64);
         fact.id = id;
         if interner.resolve(fact.stable_key).is_empty() {
-            fact.stable_key = fact.computed_stable_key(interner);
+            fact.stable_key = semantic_import_computed_stable_key(&fact, interner);
         }
         self.semantic_imports.push(fact);
         id
@@ -1113,39 +1058,37 @@ impl ScopeFact {
     }
 }
 
-impl SemanticImportFact {
-    pub(crate) fn computed_stable_key(
-        &self,
-        interner: &crate::core::StableKeyInterner,
-    ) -> StableKeyId {
-        stable_key_from_parts(
-            interner,
-            FactFamily::SemanticImport,
-            &[
-                ("language", language_label(self.language).to_string()),
-                (
-                    "file",
-                    self.file.map(file_id_key).unwrap_or_else(none_value),
-                ),
-                (
-                    "package",
-                    self.package.map(package_id_key).unwrap_or_else(none_value),
-                ),
-                (
-                    "module",
-                    self.module
-                        .map(module_node_id_key)
-                        .unwrap_or_else(none_value),
-                ),
-                ("name", option_key(self.local_name.clone())),
-                ("import_path", self.import_path.clone()),
-                ("imported_name", option_key(self.imported_name.clone())),
-                ("namespace", namespace_label(self.namespace).to_string()),
-                ("kind", semantic_import_kind_label(self.kind).to_string()),
-                ("status", semantic_status_label(self.status).to_string()),
-            ],
-        )
-    }
+pub(crate) fn semantic_import_computed_stable_key(
+    fact: &SemanticImportFact,
+    interner: &crate::core::StableKeyInterner,
+) -> StableKeyId {
+    stable_key_from_parts(
+        interner,
+        FactFamily::SemanticImport,
+        &[
+            ("language", language_label(fact.language).to_string()),
+            (
+                "file",
+                fact.file.map(file_id_key).unwrap_or_else(none_value),
+            ),
+            (
+                "package",
+                fact.package.map(package_id_key).unwrap_or_else(none_value),
+            ),
+            (
+                "module",
+                fact.module
+                    .map(module_node_id_key)
+                    .unwrap_or_else(none_value),
+            ),
+            ("name", option_key(fact.local_name.clone())),
+            ("import_path", fact.import_path.clone()),
+            ("imported_name", option_key(fact.imported_name.clone())),
+            ("namespace", namespace_label(fact.namespace).to_string()),
+            ("kind", semantic_import_kind_label(fact.kind).to_string()),
+            ("status", semantic_status_label(fact.status).to_string()),
+        ],
+    )
 }
 
 impl ExportFact {
