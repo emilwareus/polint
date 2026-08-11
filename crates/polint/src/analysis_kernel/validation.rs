@@ -108,7 +108,7 @@ pub(crate) fn validate_fact_metadata(
     validate_spans(db, &ids.files, &mut diagnostics);
     validate_semantic_index(db, &ids, &mut diagnostics);
     validate_topology_facts(db, &ids, &mut diagnostics);
-    validate_semantic_mir(db, &ids, &mut diagnostics);
+    validate_semantic_mir(db, &mut diagnostics);
     validate_cfg(db, &mut diagnostics);
     validate_calls(db, &mut diagnostics);
     validate_identity(db, &mut diagnostics);

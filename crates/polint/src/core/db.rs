@@ -41,8 +41,7 @@ use crate::analysis::extensions::store::{
     AcceptedExtensionFact, ExtensionActivationRow, ExtensionOutput, RejectedExtensionFact,
 };
 use crate::analysis::identity::facts::IdentityRecord;
-use crate::analysis::identity::provider::valid_call_site_ids;
-use crate::analysis::identity::store::{IdentityProviderOutput, IdentityStore};
+use crate::analysis::identity::store::IdentityStore;
 use crate::analysis::ids::CallSiteId;
 use crate::analysis::mir::body::{MirBlock, MirBody, MirOutput, MirStatement, MirTerminator};
 use crate::analysis::mir::op::{MirOperation, UnsupportedSemanticFact};
@@ -438,11 +437,6 @@ impl AnalysisDb {
 
     fn identity_store_inner(&self) -> &IdentityStore {
         self.fact_store(IDENTITY_STORE_FAMILY)
-            .expect("IdentityStore is installed when AnalysisDb is constructed")
-    }
-
-    fn identity_store_mut(&mut self) -> &mut IdentityStore {
-        self.fact_store_mut(IDENTITY_STORE_FAMILY)
             .expect("IdentityStore is installed when AnalysisDb is constructed")
     }
 
@@ -995,22 +989,6 @@ impl AnalysisDb {
         Ok(())
     }
 
-    pub(crate) fn replace_identity_facts(
-        &mut self,
-        output: IdentityProviderOutput,
-    ) -> Result<(), AnalysisError> {
-        let valid_sites = valid_call_site_ids(self);
-        let valid_targets = self
-            .call_targets()
-            .iter()
-            .map(|target| target.id)
-            .collect::<BTreeSet<_>>();
-        let interner = self.stable_key_interner();
-        let store = IdentityStore::from_output(output, &interner, &valid_sites, &valid_targets)?;
-        *self.identity_store_mut() = store;
-        Ok(())
-    }
-
     #[allow(
         dead_code,
         reason = "Retained for AnalysisDb until dual accessors are removed."
@@ -1026,7 +1004,9 @@ impl AnalysisDb {
     pub(crate) fn set_identity_records_for_test(&mut self, records: Vec<IdentityRecord>) {
         let mut store = IdentityStore::default();
         store.records = records;
-        *self.identity_store_mut() = store;
+        *self
+            .fact_store_mut(IDENTITY_STORE_FAMILY)
+            .expect("IdentityStore is installed when AnalysisDb is constructed") = store;
     }
 
     #[allow(dead_code)]

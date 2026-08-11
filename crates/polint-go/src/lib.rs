@@ -15,6 +15,7 @@ pub use mir::lower_go_mir;
 #[allow(dead_code)]
 mod repo_fs;
 pub mod semantic;
+pub mod semantic_graph;
 mod stable_key;
 pub mod symbol_graph;
 mod syntax_store;

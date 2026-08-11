@@ -1,4 +1,5 @@
 pub mod facts;
+pub mod provider;
 pub mod store;
 
 pub mod cache_key;

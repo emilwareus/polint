@@ -17,12 +17,15 @@ pub mod module_graph;
 pub use mir::lower_ts_mir;
 pub mod object_model;
 pub mod parse;
+pub mod points_to;
 #[allow(dead_code)]
 mod repo_fs;
 pub mod scope;
+pub mod semantic_graph;
 pub mod spans;
 pub mod symbol_graph;
 pub mod syntax_store;
+pub mod token_flow;
 
 use std::cell::RefCell;
 use std::sync::Arc;

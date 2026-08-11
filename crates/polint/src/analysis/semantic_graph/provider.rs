@@ -12,7 +12,6 @@ use crate::analysis::semantic_graph::build::{
     build_semantic_graph_with_ts_direct_binding_collection_and_adaptation_models,
     collect_ts_direct_binding_collection,
 };
-use crate::analysis::semantic_graph::cache_key::semantic_graph_provider_parameter_digest;
 use crate::analysis::semantic_graph::store::{SEMANTIC_GRAPH_PROVIDER_ID, SemanticGraphOutput};
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
@@ -472,10 +471,6 @@ fn semantic_graph_output_digest(
     output: &SemanticGraphOutput,
 ) -> Digest {
     let mut parts = vec![
-        format!("provider_id={}", manifest.id),
-        format!("provider_version={}", manifest.provider_version()),
-        format!("schema={}", manifest.primary_schema_label()),
-        format!("parameters={}", semantic_graph_provider_parameter_digest()),
         format!("calls_output={calls_output_digest}"),
         format!("identity_output={identity_output_digest}"),
         format!("abstract_domains_output={abstract_domains_output_digest}"),
@@ -503,68 +498,18 @@ fn semantic_graph_output_digest(
             ts_object_model_output_digest_from_db(db)
         ),
     ];
-    extend_component_parts(
-        &mut parts,
-        "go_lifecycle",
-        &input_snapshot.go_lifecycle.components,
-    );
-    extend_component_parts(
-        &mut parts,
-        "ts_js_lifecycle",
-        &input_snapshot.ts_js_lifecycle.components,
-    );
-
-    // Post-normalize node dense id (== position) -> stable key, so a constraint can
-    // contribute its endpoints by their stable keys rather than dense handles.
-    let interner = db.stable_key_interner();
-    let node_key_by_id: Vec<_> = output
-        .nodes
-        .iter()
-        .map(|node| interner.resolve(node.stable_key))
-        .collect();
-
-    parts.extend(output.nodes.iter().map(|node| {
-        format!(
-            "node={}|prec={:?}",
-            interner.resolve(node.stable_key),
-            node.precision
-        )
-    }));
-    parts.extend(output.edges.iter().map(|edge| {
-        format!(
-            "edge={}|prec={:?}",
-            interner.resolve(edge.stable_key),
-            edge.precision
-        )
-    }));
-    parts.extend(output.constraints.iter().map(|constraint| {
-        let mut refs: Vec<_> = constraint
-            .kind
-            .referenced_nodes()
-            .into_iter()
-            .map(|node| {
-                node_key_by_id
-                    .get(node.0 as usize)
-                    .cloned()
-                    .unwrap_or_else(|| "<unresolved>".into())
-            })
-            .collect();
-        refs.sort_unstable();
-        format!(
-            "constraint={}|status={:?}|prec={:?}|refs=[{}]",
-            interner.resolve(constraint.stable_key),
-            constraint.status,
-            constraint.precision,
-            refs.join(","),
-        )
-    }));
-    if output.nodes.is_empty() && output.edges.is_empty() && output.constraints.is_empty() {
-        parts.push("semantic_graph_output=empty".to_string());
-    }
-
-    parts.sort();
-    let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
-    Digest::from_parts(DigestKind::ProviderOutput, "semantic_graph_output", &refs)
+    extend_component_parts(&mut parts, "model", &input_snapshot.models);
+    extend_component_parts(&mut parts, "extension", &input_snapshot.extensions);
+    extend_component_parts(&mut parts, "tool", &input_snapshot.tool_invocations);
+    // The neutral helper folds the lifecycle components and graph rows, and adds
+    // provider/schema/algorithm identity before sorting all digest parts.
+    polint_analysis::semantic_graph::digest::semantic_graph_output_digest(
+        manifest,
+        input_snapshot,
+        parts,
+        &db.stable_key_interner(),
+        output,
+    )
 }
 
 fn go_semantic_output_digest_from_db(db: &AnalysisDb) -> String {

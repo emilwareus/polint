@@ -22,18 +22,13 @@ use std::collections::BTreeSet;
 
 use crate::analysis::ids::SemanticNodeId;
 use crate::analysis::solver::budget::{BudgetStatus, SolverBudget};
-use crate::analysis::solver::cache_key::{
-    solver_budget_digest_parts, solver_provider_parameter_digest,
-};
 use crate::analysis::solver::engine::SolverEngine;
 use crate::analysis::solver::go_rta::GoRtaInputs;
-use crate::analysis::solver::policy::{
-    GoRtaPolicy, SolverPolicy, TsPointsToInputs, TsPointsToPolicy,
-};
+use crate::analysis::solver::policy::{GoRtaPolicy, SolverPolicy, TsPointsToPolicy};
 use crate::analysis::solver::store::{SOLVER_PROVIDER_ID, SolverOutput};
 use crate::analysis::solver::validate::{detect_solver_summary_cycle, validate_derived_edges};
 use crate::analysis_kernel::ProviderManifest;
-use crate::analysis_kernel::incremental::{CacheStats, Digest, DigestKind, InputSnapshot};
+use crate::analysis_kernel::incremental::{CacheStats, Digest, InputSnapshot};
 use crate::core::AnalysisDb;
 use crate::diagnostics::{Diagnostic, TextRange};
 
@@ -138,7 +133,9 @@ fn solver_policies_for_db(db: &AnalysisDb, _budget: &SolverBudget) -> Vec<Box<dy
     let policies: Vec<Box<dyn SolverPolicy>> = vec![
         // The real Go RTA policy (GO-05): contributes resolved call edges.
         Box::new(GoRtaPolicy::new(GoRtaInputs::from_db(interner, db))),
-        Box::new(TsPointsToPolicy::new(TsPointsToInputs::from_db(db))),
+        Box::new(TsPointsToPolicy::new(
+            super::policy::ts_points_to_inputs_from_db(db),
+        )),
     ];
     policies
 }
@@ -166,51 +163,15 @@ fn solver_output_digest(
     go_semantic_output_digest: &Digest,
     output: &SolverOutput,
 ) -> Digest {
-    let mut parts = vec![
-        format!("provider_id={}", manifest.id),
-        format!("provider_version={}", manifest.provider_version()),
-        format!("schema={}", manifest.primary_schema_label()),
-        format!("parameters={}", solver_provider_parameter_digest(budget)),
-        format!("semantic_graph_output={semantic_graph_output_digest}"),
-        format!("type_value_alias_output={type_value_alias_output_digest}"),
-        // The Go RTA policy reads the stored `polint.go.semantic` RTA-signal families
-        // (instantiated_types / address_taken / dynamic_dispatch / method_sets) to resolve
-        // dynamic dispatch, so a Go edit touching ONLY those families changes the resolved
-        // edges and MUST invalidate the solver cache (FIX 4). Fold the go.semantic output
-        // digest like the other consumed upstream digests.
-        format!("go_semantic_output={go_semantic_output_digest}"),
-        // Run-level budget status (WR-06): two runs over the same inputs that produce
-        // the same SURVIVING edge set but differ in whether the budget was exhausted
-        // (WithinBudget vs BudgetExceeded) must NOT share an output digest. A fixpoint
-        // that aborted BEFORE reaching an edge leaves no per-edge trace, so the
-        // run-level status is the only carrier of the truncation signal — fold it in so
-        // a cache hit can never serve a truncated result under a complete run's digest.
-        format!("budget_status={}", output.budget_status.as_str()),
-    ];
-    parts.extend(solver_budget_digest_parts(budget));
-
-    parts.extend(output.derived_edges.iter().map(|edge| {
-        format!(
-            "edge={}|status={:?}|prec={:?}|prov={}",
-            interner.resolve(edge.stable_key),
-            edge.status,
-            edge.precision,
-            edge.provenance.stable_key_fragment(interner),
-        )
-    }));
-    if output.derived_edges.is_empty() {
-        parts.push("solver_output=empty".to_string());
-    }
-    parts.extend(
-        output
-            .budget_reasons
-            .iter()
-            .map(|reason| format!("budget_exceeded_reason={reason}")),
-    );
-
-    parts.sort();
-    let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
-    Digest::from_parts(DigestKind::ProviderOutput, "solver_output", &refs)
+    polint_analysis::solver::digest::solver_output_digest(
+        interner,
+        manifest,
+        budget,
+        semantic_graph_output_digest,
+        type_value_alias_output_digest,
+        go_semantic_output_digest,
+        output,
+    )
 }
 
 /// Honest budget-exhaustion signal (D-06): emitted when the solver truncated a
