@@ -6,8 +6,14 @@
 
 use std::sync::Arc;
 
-use polint_analysis_api::{FactDatabase, FactFamily, FactMetaStore, FactStore};
+use polint_analysis_api::{
+    FactConfidence, FactDatabase, FactFamily, FactMeta, FactMetaStore, FactPrecision, FactRef,
+    FactStore, ValidationStatus,
+};
 use polint_core::StableKeyId;
+
+use crate::summaries::facts::SummaryDomainKind;
+use crate::{POLINT_ABSTRACT_DOMAINS_PROVIDER_ID, POLINT_DIRECT_SUMMARIES_PROVIDER_ID};
 
 use crate::access_paths::store::AccessPathStore;
 use crate::aliases::store::AliasStore;
@@ -190,6 +196,7 @@ pub trait AnalysisHost: FactDatabase {
         let store = SummaryStore::from_output(output, &interner)
             .expect("summary output should produce a valid store");
         *self.summary_store_mut() = store;
+        refresh_summary_metadata(self);
     }
 
     fn replace_call_facts(&mut self, output: CallOutput) -> Result<(), AnalysisError> {
@@ -231,6 +238,7 @@ pub trait AnalysisHost: FactDatabase {
         let interner = self.stable_key_interner();
         *store_mut::<DomainStore>(self, DOMAIN_STORE_FAMILY) =
             DomainStore::from_output(output, &interner);
+        refresh_abstract_domain_metadata(self);
     }
 
     fn replace_semantic_graph_facts(
@@ -245,3 +253,105 @@ pub trait AnalysisHost: FactDatabase {
 }
 
 impl<T: FactDatabase + ?Sized> AnalysisHost for T {}
+
+fn host_fact_meta(
+    producer_id: &'static str,
+    stable_key: StableKeyId,
+    payload_digest: String,
+) -> FactMeta {
+    FactMeta {
+        stable_key,
+        producer_id,
+        layer_id: producer_id,
+        precision: FactPrecision::Heuristic,
+        confidence: FactConfidence::Medium,
+        validation: ValidationStatus::NativeTrusted,
+        payload_digest,
+    }
+}
+
+fn summary_domain_family(domain: SummaryDomainKind) -> FactFamily {
+    match domain {
+        SummaryDomainKind::ControlEffects => FactFamily::SummaryControl,
+        SummaryDomainKind::CallEffects => FactFamily::SummaryCall,
+        SummaryDomainKind::MemoryEffects => FactFamily::SummaryMemory,
+        SummaryDomainKind::DataFlowTito => FactFamily::SummaryTito,
+    }
+}
+
+fn refresh_summary_metadata(db: &mut (impl AnalysisHost + ?Sized)) {
+    let summaries = db.summary_facts().to_vec();
+    let events = db.summary_events().to_vec();
+
+    {
+        let meta = db.fact_meta_mut();
+        meta.remove_family(FactFamily::SummaryControl);
+        meta.remove_family(FactFamily::SummaryCall);
+        meta.remove_family(FactFamily::SummaryMemory);
+        meta.remove_family(FactFamily::SummaryTito);
+        meta.remove_family(FactFamily::SummaryEvent);
+        for fact in &summaries {
+            let family = summary_domain_family(fact.domain);
+            meta.insert(
+                FactRef::new(family, fact.id.0),
+                host_fact_meta(
+                    POLINT_DIRECT_SUMMARIES_PROVIDER_ID,
+                    fact.stable_key,
+                    format!("summary:{}", fact.id.0),
+                ),
+            );
+        }
+        for fact in &events {
+            meta.insert(
+                FactRef::new(FactFamily::SummaryEvent, fact.id.0),
+                host_fact_meta(
+                    POLINT_DIRECT_SUMMARIES_PROVIDER_ID,
+                    fact.stable_key,
+                    format!("summary-event:{}", fact.id.0),
+                ),
+            );
+        }
+        for family in [
+            FactFamily::SummaryControl,
+            FactFamily::SummaryCall,
+            FactFamily::SummaryMemory,
+            FactFamily::SummaryTito,
+            FactFamily::SummaryEvent,
+        ] {
+            meta.finish_family_insertions(family);
+        }
+    }
+}
+
+fn refresh_abstract_domain_metadata(db: &mut (impl AnalysisHost + ?Sized)) {
+    let observations = db.domain_store_inner().observations().to_vec();
+    let events = db.domain_store_inner().events().to_vec();
+
+    {
+        let meta = db.fact_meta_mut();
+        meta.remove_family(FactFamily::DomainObservation);
+        meta.remove_family(FactFamily::DomainEvent);
+        for fact in &observations {
+            meta.insert(
+                FactRef::new(FactFamily::DomainObservation, fact.id.0),
+                host_fact_meta(
+                    POLINT_ABSTRACT_DOMAINS_PROVIDER_ID,
+                    fact.stable_key,
+                    format!("domain-obs:{}", fact.id.0),
+                ),
+            );
+        }
+        for fact in &events {
+            meta.insert(
+                FactRef::new(FactFamily::DomainEvent, fact.id.0),
+                host_fact_meta(
+                    POLINT_ABSTRACT_DOMAINS_PROVIDER_ID,
+                    fact.stable_key,
+                    format!("domain-event:{}", fact.id.0),
+                ),
+            );
+        }
+        meta.finish_family_insertions(FactFamily::DomainObservation);
+        meta.finish_family_insertions(FactFamily::DomainEvent);
+    }
+}
