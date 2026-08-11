@@ -1,14 +1,5 @@
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Private semantic contracts are introduced before lowering/provider integration in later plans."
-    )
-)]
-
 pub(crate) use polint_analysis::access_paths;
 pub(crate) use polint_analysis::aliases;
-pub(crate) mod cache_key;
 pub(crate) use polint_analysis::error;
 pub(crate) mod error_convert;
 pub(crate) use polint_analysis::ids;

@@ -8,18 +8,23 @@ use std::sync::Arc;
 
 use polint_analysis_api::{
     FactConfidence, FactDatabase, FactFamily, FactMeta, FactMetaStore, FactPrecision, FactRef,
-    FactStore, ValidationStatus,
+    FactStore, ValidationStatus, stable_key_text_from_parts,
 };
-use polint_core::StableKeyId;
+use polint_core::{Language, StableKeyId, StableKeyInterner};
 
 use crate::summaries::facts::SummaryDomainKind;
-use crate::{POLINT_ABSTRACT_DOMAINS_PROVIDER_ID, POLINT_DIRECT_SUMMARIES_PROVIDER_ID};
+use crate::{
+    CALLS_PROVIDER_ID, POLINT_ABSTRACT_DOMAINS_PROVIDER_ID, POLINT_DIRECT_SUMMARIES_PROVIDER_ID,
+};
 
 use crate::access_paths::facts::AccessPathFact;
 use crate::access_paths::store::AccessPathStore;
 use crate::aliases::facts::AliasAnswerFact;
 use crate::aliases::store::AliasStore;
-use crate::calls::facts::{CallSiteFact, CallTargetFact, UnresolvedCallFact};
+use crate::calls::facts::{
+    CallAlgorithm, CallEdgeKind, CallPrecision, CallSiteFact, CallSyntaxKind, CallTargetFact,
+    CallTargetStatus, UnresolvedCallFact, UnresolvedCallReason,
+};
 use crate::calls::store::{CallOutput, CallStore};
 use crate::cfg::facts::{
     BasicBlockFact, CfgEdgeFact, CfgFunctionFact, CfgNodeFact, ControlDependenceFact,
@@ -258,6 +263,7 @@ pub trait AnalysisHost: FactDatabase {
         let interner = self.stable_key_interner();
         let store = CallStore::from_output(output, &interner)?;
         *self.calls_store_mut() = store;
+        refresh_call_metadata(self);
         Ok(())
     }
 
@@ -710,5 +716,554 @@ fn refresh_abstract_domain_metadata(db: &mut (impl AnalysisHost + ?Sized)) {
         }
         meta.finish_family_insertions(FactFamily::DomainObservation);
         meta.finish_family_insertions(FactFamily::DomainEvent);
+    }
+}
+
+fn refresh_call_metadata(db: &mut (impl AnalysisHost + ?Sized)) {
+    let interner = db.stable_key_interner();
+    let call_sites = db.call_sites().to_vec();
+    let call_targets = db.call_targets().to_vec();
+    let unresolved_calls = db.unresolved_calls().to_vec();
+
+    {
+        let meta = db.fact_meta_mut();
+        for family in [
+            FactFamily::CallSite,
+            FactFamily::CallTarget,
+            FactFamily::UnresolvedCall,
+        ] {
+            meta.remove_family(family);
+        }
+    }
+
+    let site_metadata = call_sites
+        .iter()
+        .map(|fact| call_site_metadata(db, &interner, fact))
+        .collect::<Vec<_>>();
+    {
+        let meta = db.fact_meta_mut();
+        for (fact, metadata) in call_sites.iter().zip(site_metadata) {
+            meta.insert(FactRef::new(FactFamily::CallSite, fact.id.0), metadata);
+        }
+    }
+
+    let target_metadata = call_targets
+        .iter()
+        .map(|fact| call_target_metadata(db, &interner, fact))
+        .collect::<Vec<_>>();
+    {
+        let meta = db.fact_meta_mut();
+        for (fact, metadata) in call_targets.iter().zip(target_metadata) {
+            meta.insert(FactRef::new(FactFamily::CallTarget, fact.id.0), metadata);
+        }
+    }
+
+    let unresolved_metadata = unresolved_calls
+        .iter()
+        .map(|fact| unresolved_call_metadata(db, &interner, fact))
+        .collect::<Vec<_>>();
+    {
+        let meta = db.fact_meta_mut();
+        for (run_id, metadata) in unresolved_metadata.into_iter().enumerate() {
+            meta.insert(
+                FactRef::new(FactFamily::UnresolvedCall, run_id as u64),
+                metadata,
+            );
+        }
+        for family in [
+            FactFamily::CallSite,
+            FactFamily::CallTarget,
+            FactFamily::UnresolvedCall,
+        ] {
+            meta.finish_family_insertions(family);
+        }
+    }
+}
+
+fn call_site_metadata(
+    db: &(impl AnalysisHost + ?Sized),
+    interner: &StableKeyInterner,
+    fact: &CallSiteFact,
+) -> FactMeta {
+    let (precision, confidence) = call_status_metadata(fact.status, fact.precision);
+    call_fact_metadata(
+        interner,
+        precision,
+        confidence,
+        fact.stable_key,
+        [
+            ("status", call_status_label(fact.status).to_string()),
+            (
+                "precision",
+                call_precision_label(fact.precision).to_string(),
+            ),
+            ("kind", call_syntax_kind_label(fact.kind).to_string()),
+            ("language", language_label(fact.language).to_string()),
+            ("file_key", source_file_key(db, fact.file)),
+            (
+                "caller_key",
+                function_key(db, interner, fact.caller, "", &fact.span),
+            ),
+            (
+                "owner_symbol_key",
+                fact.owner_symbol
+                    .map(|symbol| fact_stable_key(db, FactFamily::Symbol, symbol.0))
+                    .unwrap_or_else(none_value),
+            ),
+            (
+                "body_key",
+                fact_stable_key(db, FactFamily::MirBody, fact.body.0),
+            ),
+            (
+                "operation_key",
+                fact_stable_key(db, FactFamily::MirOperation, fact.operation.0),
+            ),
+            ("span", span_metadata_value(&fact.span)),
+        ],
+    )
+}
+
+fn call_target_metadata(
+    db: &(impl AnalysisHost + ?Sized),
+    interner: &StableKeyInterner,
+    fact: &CallTargetFact,
+) -> FactMeta {
+    let (precision, confidence) = call_status_metadata(fact.status, fact.precision);
+    call_fact_metadata(
+        interner,
+        precision,
+        confidence,
+        fact.stable_key,
+        [
+            ("status", call_status_label(fact.status).to_string()),
+            (
+                "precision",
+                call_precision_label(fact.precision).to_string(),
+            ),
+            (
+                "algorithm",
+                call_algorithm_label(fact.algorithm).to_string(),
+            ),
+            (
+                "edge_kind",
+                call_edge_kind_label(fact.edge_kind).to_string(),
+            ),
+            (
+                "reason",
+                fact.reason
+                    .map(call_unresolved_reason_label)
+                    .map(str::to_string)
+                    .unwrap_or_else(none_value),
+            ),
+            (
+                "site_key",
+                fact_stable_key(db, FactFamily::CallSite, fact.site.0),
+            ),
+            (
+                "caller_key",
+                fact_stable_key(db, FactFamily::Function, fact.caller.0),
+            ),
+            (
+                "target_function_key",
+                fact.target_function
+                    .map(|function| fact_stable_key(db, FactFamily::Function, function.0))
+                    .unwrap_or_else(none_value),
+            ),
+            (
+                "target_symbol_key",
+                fact.target_symbol
+                    .map(|symbol| fact_stable_key(db, FactFamily::Symbol, symbol.0))
+                    .unwrap_or_else(none_value),
+            ),
+        ],
+    )
+}
+
+fn unresolved_call_metadata(
+    db: &(impl AnalysisHost + ?Sized),
+    interner: &StableKeyInterner,
+    fact: &UnresolvedCallFact,
+) -> FactMeta {
+    let (precision, confidence) = call_status_metadata(fact.status, fact.precision);
+    call_fact_metadata(
+        interner,
+        precision,
+        confidence,
+        fact.stable_key,
+        [
+            ("status", call_status_label(fact.status).to_string()),
+            (
+                "precision",
+                call_precision_label(fact.precision).to_string(),
+            ),
+            (
+                "algorithm",
+                call_algorithm_label(fact.algorithm).to_string(),
+            ),
+            (
+                "reason",
+                call_unresolved_reason_label(fact.reason).to_string(),
+            ),
+            (
+                "site_key",
+                fact_stable_key(db, FactFamily::CallSite, fact.site.0),
+            ),
+            (
+                "caller_key",
+                fact_stable_key(db, FactFamily::Function, fact.caller.0),
+            ),
+        ],
+    )
+}
+
+fn call_fact_metadata<const N: usize>(
+    interner: &StableKeyInterner,
+    precision: FactPrecision,
+    confidence: FactConfidence,
+    stable_key: StableKeyId,
+    payload_parts: [(&str, String); N],
+) -> FactMeta {
+    FactMeta {
+        stable_key,
+        producer_id: CALLS_PROVIDER_ID,
+        layer_id: CALLS_PROVIDER_ID,
+        precision,
+        confidence,
+        validation: ValidationStatus::NativeTrusted,
+        payload_digest: metadata_payload_digest(interner, stable_key, &payload_parts),
+    }
+}
+
+fn metadata_payload_digest(
+    interner: &StableKeyInterner,
+    stable_key: StableKeyId,
+    payload_parts: &[(&str, String)],
+) -> String {
+    let mut normalized = payload_parts
+        .iter()
+        .map(|(label, value)| format!("{label}={}", value.replace('\\', "/")))
+        .collect::<Vec<_>>();
+    normalized.sort();
+
+    let stable_key = interner.resolve(stable_key);
+    let mut parts = Vec::with_capacity(normalized.len() + 1);
+    parts.push(stable_key.as_ref());
+    parts.extend(normalized.iter().map(String::as_str));
+    crate::hash::stable_hash(&parts)
+}
+
+fn fact_stable_key(db: &(impl AnalysisHost + ?Sized), family: FactFamily, run_id: u64) -> String {
+    db.metadata_for(FactRef::new(family, run_id))
+        .map(|metadata| db.resolve_stable_key(metadata.stable_key).to_string())
+        .unwrap_or_else(|| format!("<missing:{}:{run_id}>", family.label()))
+}
+
+fn source_file_key(db: &(impl AnalysisHost + ?Sized), file: polint_core::FileId) -> String {
+    db.metadata_for(FactRef::new(FactFamily::SourceFile, u64::from(file.0)))
+        .map(|metadata| db.resolve_stable_key(metadata.stable_key).to_string())
+        .unwrap_or_else(|| db.path_for(file).replace('\\', "/"))
+}
+
+fn function_key(
+    db: &(impl AnalysisHost + ?Sized),
+    interner: &StableKeyInterner,
+    function: polint_core::FunctionId,
+    name: &str,
+    span: &polint_core::Span,
+) -> String {
+    db.metadata_for(FactRef::new(FactFamily::Function, function.0))
+        .map(|metadata| db.resolve_stable_key(metadata.stable_key).to_string())
+        .unwrap_or_else(|| {
+            stable_key_text_from_parts(
+                interner,
+                FactFamily::Function,
+                &[
+                    ("path", db.path_for(span.file)),
+                    ("name", name.to_string()),
+                    ("span", span_metadata_value(span)),
+                ],
+            )
+        })
+}
+
+fn span_metadata_value(span: &polint_core::Span) -> String {
+    format!(
+        "{}-{}:{}:{}-{}:{}",
+        span.start_byte,
+        span.end_byte,
+        span.start_line,
+        span.start_col,
+        span.end_line,
+        span.end_col
+    )
+}
+
+fn none_value() -> String {
+    "none".to_string()
+}
+
+fn language_label(language: Language) -> &'static str {
+    match language {
+        Language::Go => "go",
+        Language::TypeScript => "typescript",
+        Language::Tsx => "tsx",
+        Language::JavaScript => "javascript",
+        Language::Jsx => "jsx",
+        Language::Unknown => "unknown",
+        _ => "unknown",
+    }
+}
+
+fn call_status_metadata(
+    status: CallTargetStatus,
+    precision: CallPrecision,
+) -> (FactPrecision, FactConfidence) {
+    let fact_precision = match status {
+        CallTargetStatus::Resolved => match precision {
+            CallPrecision::Exact | CallPrecision::SetupAware => FactPrecision::SetupAware,
+            CallPrecision::Conservative | CallPrecision::Heuristic => FactPrecision::Heuristic,
+            CallPrecision::Ambiguous => FactPrecision::Ambiguous,
+            CallPrecision::Unknown => FactPrecision::Unresolved,
+            CallPrecision::Unsupported => FactPrecision::Unsupported,
+        },
+        CallTargetStatus::Ambiguous => FactPrecision::Ambiguous,
+        CallTargetStatus::Unresolved | CallTargetStatus::BudgetExceeded => {
+            FactPrecision::Unresolved
+        }
+        CallTargetStatus::Unsupported | CallTargetStatus::Rejected => FactPrecision::Unsupported,
+        CallTargetStatus::SetupMissing => FactPrecision::SetupMissing,
+    };
+    let confidence = match status {
+        CallTargetStatus::Resolved => FactConfidence::High,
+        CallTargetStatus::Ambiguous => FactConfidence::Medium,
+        CallTargetStatus::Unresolved
+        | CallTargetStatus::Unsupported
+        | CallTargetStatus::SetupMissing
+        | CallTargetStatus::BudgetExceeded
+        | CallTargetStatus::Rejected => FactConfidence::Low,
+    };
+    (fact_precision, confidence)
+}
+
+fn call_status_label(status: CallTargetStatus) -> &'static str {
+    match status {
+        CallTargetStatus::Resolved => "resolved",
+        CallTargetStatus::Ambiguous => "ambiguous",
+        CallTargetStatus::Unresolved => "unresolved",
+        CallTargetStatus::Unsupported => "unsupported",
+        CallTargetStatus::SetupMissing => "setup_missing",
+        CallTargetStatus::BudgetExceeded => "budget_exceeded",
+        CallTargetStatus::Rejected => "rejected",
+    }
+}
+
+fn call_precision_label(precision: CallPrecision) -> &'static str {
+    match precision {
+        CallPrecision::Exact => "exact",
+        CallPrecision::SetupAware => "setup_aware",
+        CallPrecision::Conservative => "conservative",
+        CallPrecision::Heuristic => "heuristic",
+        CallPrecision::Ambiguous => "ambiguous",
+        CallPrecision::Unknown => "unknown",
+        CallPrecision::Unsupported => "unsupported",
+    }
+}
+
+fn call_syntax_kind_label(kind: CallSyntaxKind) -> &'static str {
+    match kind {
+        CallSyntaxKind::Function => "function",
+        CallSyntaxKind::Method => "method",
+        CallSyntaxKind::Constructor => "constructor",
+        CallSyntaxKind::StaticMember => "static_member",
+        CallSyntaxKind::Member => "member",
+        CallSyntaxKind::Index => "index",
+        CallSyntaxKind::Super => "super",
+        CallSyntaxKind::Import => "import",
+        CallSyntaxKind::New => "new",
+        CallSyntaxKind::TaggedTemplate => "tagged_template",
+        CallSyntaxKind::GoRoutine => "go_routine",
+        CallSyntaxKind::Deferred => "deferred",
+        CallSyntaxKind::DynamicImport => "dynamic_import",
+        CallSyntaxKind::Require => "require",
+        CallSyntaxKind::FunctionValue => "function_value",
+        CallSyntaxKind::Unknown => "unknown",
+    }
+}
+
+fn call_edge_kind_label(kind: CallEdgeKind) -> &'static str {
+    match kind {
+        CallEdgeKind::Direct => "direct",
+        CallEdgeKind::Constructor => "constructor",
+        CallEdgeKind::StaticMember => "static_member",
+        CallEdgeKind::MethodDirect => "method_direct",
+        CallEdgeKind::Method => "method",
+        CallEdgeKind::FunctionValue => "function_value",
+        CallEdgeKind::Synthetic => "synthetic",
+        CallEdgeKind::Spawn => "spawn",
+        CallEdgeKind::Deferred => "deferred",
+        CallEdgeKind::Unknown => "unknown",
+    }
+}
+
+fn call_algorithm_label(algorithm: CallAlgorithm) -> &'static str {
+    match algorithm {
+        CallAlgorithm::SyntaxOnly => "syntax_only",
+        CallAlgorithm::DirectReference => "direct_reference",
+        CallAlgorithm::ImportBinding => "import_binding",
+        CallAlgorithm::ConstructorBinding => "constructor_binding",
+        CallAlgorithm::StaticMember => "static_member",
+        CallAlgorithm::DirectMember => "direct_member",
+        CallAlgorithm::GoStatic => "go_static",
+        CallAlgorithm::GoCha => "go_cha",
+        CallAlgorithm::GoRta => "go_rta",
+        CallAlgorithm::GoVta => "go_vta",
+        CallAlgorithm::TypeHierarchy => "type_hierarchy",
+        CallAlgorithm::PointsTo => "points_to",
+        CallAlgorithm::SummaryAssisted => "summary_assisted",
+        CallAlgorithm::FrameworkModel => "framework_model",
+        CallAlgorithm::RepoModel => "repo_model",
+        CallAlgorithm::Unsupported => "unsupported",
+    }
+}
+
+fn call_unresolved_reason_label(reason: UnresolvedCallReason) -> &'static str {
+    match reason {
+        UnresolvedCallReason::FunctionValue => "function_value",
+        UnresolvedCallReason::DynamicProperty => "dynamic_property",
+        UnresolvedCallReason::InterfaceDispatch => "interface_dispatch",
+        UnresolvedCallReason::Eval => "eval",
+        UnresolvedCallReason::CallApplyBind => "call_apply_bind",
+        UnresolvedCallReason::FrameworkDispatch => "framework_dispatch",
+        UnresolvedCallReason::Reflection => "reflection",
+        UnresolvedCallReason::GoroutineBoundary => "goroutine_boundary",
+        UnresolvedCallReason::DynamicImport => "dynamic_import",
+        UnresolvedCallReason::ProxyOrAccessor => "proxy_or_accessor",
+        UnresolvedCallReason::MissingSemanticReference => "missing_semantic_reference",
+        UnresolvedCallReason::MissingImportResolution => "missing_import_resolution",
+        UnresolvedCallReason::SetupMissing => "setup_missing",
+        UnresolvedCallReason::UnsupportedSyntax => "unsupported_syntax",
+        UnresolvedCallReason::BudgetExceeded => "budget_exceeded",
+        UnresolvedCallReason::UnknownCallee => "unknown_callee",
+        UnresolvedCallReason::Unknown => "unknown",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::LocalAnalysisDb;
+    use crate::calls::facts::{
+        CallCallee, CallEdgeKind, CallPrecision, CallProvenance, CallSiteFact, CallSyntaxKind,
+        CallTargetFact, CallTargetStatus, UnresolvedCallFact, UnresolvedCallReason,
+    };
+    use crate::calls::store::CallOutput;
+    use crate::ids::{CallSiteId, CallTargetId, MirBodyId, MirOpId};
+    use polint_analysis_api::{FactFamily, FactRef};
+    use polint_core::{FunctionId, Language, Span};
+    use std::path::PathBuf;
+
+    #[test]
+    fn replacing_calls_refreshes_metadata_for_all_call_families() {
+        let mut db = LocalAnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            "function app() { target(); }\n".to_string(),
+        );
+        let interner = db.stable_key_interner();
+        let site_key = interner.intern("call-site:metadata");
+        let target_key = interner.intern("call-target:metadata");
+        let unresolved_key = interner.intern("unresolved:metadata");
+        let site = CallSiteFact {
+            id: CallSiteId(0),
+            language: Language::TypeScript,
+            file,
+            caller: FunctionId(0),
+            owner_symbol: None,
+            body: MirBodyId(0),
+            operation: MirOpId(0),
+            span: Span::point(file, 1, 24),
+            kind: CallSyntaxKind::Function,
+            callee: CallCallee::Identifier {
+                reference: None,
+                name: "target".to_string(),
+            },
+            receiver: None,
+            arguments: Vec::new(),
+            result: None,
+            status: CallTargetStatus::Unsupported,
+            precision: CallPrecision::Unsupported,
+            in_throw: false,
+            stable_key: site_key,
+        };
+        let target = CallTargetFact {
+            id: CallTargetId(0),
+            site: site.id,
+            caller: site.caller,
+            target_function: None,
+            target_symbol: None,
+            edge_kind: CallEdgeKind::Unknown,
+            algorithm: crate::calls::facts::CallAlgorithm::Unsupported,
+            status: CallTargetStatus::SetupMissing,
+            reason: Some(UnresolvedCallReason::SetupMissing),
+            provenance: CallProvenance::Native,
+            precision: CallPrecision::Unknown,
+            stable_key: target_key,
+        };
+        let unresolved = UnresolvedCallFact {
+            site: site.id,
+            caller: site.caller,
+            status: CallTargetStatus::Unresolved,
+            reason: UnresolvedCallReason::Unknown,
+            algorithm: crate::calls::facts::CallAlgorithm::SyntaxOnly,
+            provenance: CallProvenance::MirShape,
+            precision: CallPrecision::Unknown,
+            stable_key: unresolved_key,
+        };
+
+        db.replace_call_facts(CallOutput {
+            sites: vec![site],
+            targets: vec![target],
+            unresolved: vec![unresolved],
+        })
+        .expect("call facts should install");
+
+        for (family, stable_key) in [
+            (FactFamily::CallSite, "call-site:metadata"),
+            (FactFamily::CallTarget, "call-target:metadata"),
+            (FactFamily::UnresolvedCall, "unresolved:metadata"),
+        ] {
+            let metadata = db
+                .metadata_for(FactRef::new(family, 0))
+                .expect("call metadata should be installed");
+            assert_eq!(metadata.producer_id, crate::CALLS_PROVIDER_ID);
+            assert_eq!(metadata.layer_id, crate::CALLS_PROVIDER_ID);
+            assert_eq!(
+                metadata.validation,
+                polint_analysis_api::ValidationStatus::NativeTrusted
+            );
+            assert_ne!(
+                metadata.precision,
+                polint_analysis_api::FactPrecision::Exact
+            );
+            assert_eq!(
+                db.resolve_stable_key(metadata.stable_key).as_ref(),
+                stable_key
+            );
+            assert!(!metadata.payload_digest.is_empty());
+        }
+
+        db.replace_call_facts(CallOutput::empty())
+            .expect("empty call facts should install");
+        for family in [
+            FactFamily::CallSite,
+            FactFamily::CallTarget,
+            FactFamily::UnresolvedCall,
+        ] {
+            assert!(
+                db.metadata_for(FactRef::new(family, 0)).is_none(),
+                "stale metadata should be removed for {family:?}"
+            );
+        }
+        assert!(db.call_sites().is_empty());
     }
 }

@@ -1,7 +1,7 @@
-use crate::analysis_kernel::incremental::{Digest, DigestKind};
+use polint_analysis_api::{Digest, DigestKind};
 
 /// Schema label for the `polint.semantic_graph` provider manifest.
-pub(crate) const SEMANTIC_GRAPH_SCHEMA_LABEL: &str = "semantic-graph-facts-1";
+pub const SEMANTIC_GRAPH_SCHEMA_LABEL: &str = "semantic-graph-facts-1";
 
 /// Provider parameter digest for `polint.semantic_graph`.
 ///
@@ -47,7 +47,7 @@ pub(crate) const SEMANTIC_GRAPH_SCHEMA_LABEL: &str = "semantic-graph-facts-1";
 ///
 /// This is a comment/doc addition only: ZERO deferred inputs are digested here, and
 /// the runtime behavior is unchanged.
-pub(crate) fn semantic_graph_provider_parameter_digest() -> Digest {
+pub fn semantic_graph_provider_parameter_digest() -> Digest {
     Digest::from_parts(
         DigestKind::ProviderParameters,
         "semantic_graph_provider_parameters",
@@ -72,7 +72,7 @@ pub(crate) fn semantic_graph_provider_parameter_digest() -> Digest {
 
 #[cfg(test)]
 mod tests {
-    use crate::analysis_kernel::incremental::{Digest, DigestKind};
+    use polint_analysis_api::{Digest, DigestKind};
 
     #[test]
     fn semantic_graph_provider_parameter_digest_locks_parts_list() {

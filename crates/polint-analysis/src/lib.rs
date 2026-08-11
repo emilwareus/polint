@@ -4,7 +4,6 @@
 //! crates. Must not depend on concrete frontends (`polint-go` / `polint-ts`) or the
 //! facade.
 
-#![allow(dead_code)]
 pub mod access_paths;
 pub mod adaptation;
 pub mod aliases;
@@ -19,12 +18,14 @@ pub mod error;
 pub mod evidence;
 pub mod extensions;
 pub mod fact_store;
+pub mod graph;
 pub mod hash;
 pub mod host;
 pub mod identity;
 pub mod ids;
 pub mod ifds;
 pub mod local_db;
+pub mod metrics;
 pub mod mir_body;
 pub mod mir_op;
 pub mod places;
@@ -38,6 +39,7 @@ pub mod stable_key;
 pub mod store;
 pub mod summaries;
 pub mod types;
+pub mod unknown_taxonomy;
 pub mod values;
 
 pub use error::AnalysisError;

@@ -1,21 +1,21 @@
+use crate::AnalysisHost;
 use std::collections::BTreeSet;
 
 use super::facts::{
     RefinedCallConfidence, RefinedCallEdgeFact, RefinedCallTier, RefinedCallValidation,
 };
 use super::store::RefinedCallOutput;
-use crate::analysis::calls::facts::{
+use crate::calls::facts::{
     CallAlgorithm, CallCallee, CallEdgeKind, CallProvenance, CallTargetStatus, UnresolvedCallFact,
     UnresolvedCallReason,
 };
-use crate::analysis::ids::{PlaceId, RefinedCallEdgeId};
-use crate::analysis::points_to::facts::PointsToStatus;
-use crate::analysis::semantic_graph::constraints::ConstraintKind;
-use crate::analysis::semantic_graph::facts::NodeKind;
-use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
-use crate::core::AnalysisDb;
+use crate::ids::{PlaceId, RefinedCallEdgeId};
+use crate::points_to::facts::PointsToStatus;
+use crate::semantic_graph::constraints::ConstraintKind;
+use crate::semantic_graph::facts::NodeKind;
+use polint_analysis_api::{FactFamily, stable_key_from_parts};
 
-pub(crate) fn derive_ts_js_refinements(db: &AnalysisDb) -> RefinedCallOutput {
+pub fn derive_ts_js_refinements(db: &impl AnalysisHost) -> RefinedCallOutput {
     let interner_handle = db.stable_key_interner();
     let interner = &interner_handle;
     let edges = db
@@ -27,7 +27,7 @@ pub(crate) fn derive_ts_js_refinements(db: &AnalysisDb) -> RefinedCallOutput {
 }
 
 fn unresolved_edge(
-    db: &AnalysisDb,
+    db: &impl AnalysisHost,
     unresolved: &UnresolvedCallFact,
 ) -> Option<RefinedCallEdgeFact> {
     let interner_handle = db.stable_key_interner();
@@ -80,7 +80,7 @@ fn unresolved_edge(
     })
 }
 
-fn solver_resolved_site(db: &AnalysisDb, site: crate::analysis::ids::CallSiteId) -> bool {
+fn solver_resolved_site(db: &impl AnalysisHost, site: crate::ids::CallSiteId) -> bool {
     let Some(callsite_node) = db.semantic_nodes().iter().find_map(|node| match node.kind {
         NodeKind::Callsite(candidate) if candidate == site => Some(node.id),
         _ => None,
@@ -107,7 +107,7 @@ fn solver_resolved_site(db: &AnalysisDb, site: crate::analysis::ids::CallSiteId)
     })
 }
 
-fn callable_place(site: &crate::analysis::calls::facts::CallSiteFact) -> Option<PlaceId> {
+fn callable_place(site: &crate::calls::facts::CallSiteFact) -> Option<PlaceId> {
     match site.callee {
         CallCallee::FunctionValue { place } => Some(place),
         _ => site.receiver,
@@ -117,16 +117,16 @@ fn callable_place(site: &crate::analysis::calls::facts::CallSiteFact) -> Option<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::calls::facts::{
-        CallPrecision, CallSiteFact, CallSyntaxKind, UnresolvedCallFact,
-    };
-    use crate::analysis::calls::store::CallOutput;
-    use crate::analysis::ids::{CallSiteId, MirBodyId, MirOpId};
-    use crate::core::{FileId, FunctionFact, FunctionId, Language, Span};
+    use crate::LocalAnalysisDb;
+    use crate::calls::facts::{CallPrecision, CallSiteFact, CallSyntaxKind, UnresolvedCallFact};
+    use crate::calls::store::CallOutput;
+    use crate::ids::{CallSiteId, MirBodyId, MirOpId};
+    use polint_analysis_api::FunctionFact;
+    use polint_core::{FileId, FunctionId, Language, Span};
 
     #[test]
     fn unresolved_ts_call_is_reported_as_points_to_unresolved() {
-        let mut db = AnalysisDb::new();
+        let mut db = LocalAnalysisDb::new();
         let file = db.add_file(
             "src/app.ts".into(),
             "src/app.ts".to_string(),
@@ -160,7 +160,7 @@ mod tests {
             result: None,
             status: CallTargetStatus::Unresolved,
             precision: CallPrecision::Unknown,
-            stable_key: crate::core::StableKeyId(0),
+            stable_key: polint_core::StableKeyId(0),
         };
         db.replace_call_facts(CallOutput {
             sites: vec![site],
@@ -173,7 +173,7 @@ mod tests {
                 algorithm: CallAlgorithm::Unsupported,
                 provenance: CallProvenance::MirShape,
                 precision: CallPrecision::Unknown,
-                stable_key: crate::core::StableKeyId(1),
+                stable_key: polint_core::StableKeyId(1),
             }],
         })
         .expect("valid call facts");

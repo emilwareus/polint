@@ -3,6 +3,7 @@
 
 use polint_analysis::error::AnalysisError;
 
+#[cfg(test)]
 pub(crate) fn from_go(error: polint_go::error::AnalysisError) -> AnalysisError {
     match error {
         polint_go::error::AnalysisError::MissingFactFamily { family } => {

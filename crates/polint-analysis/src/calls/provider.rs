@@ -297,8 +297,3 @@ fn provider_error_diagnostic(message: String) -> Diagnostic {
         format!("Calls provider failed: {message}"),
     )
 }
-
-#[cfg(test)]
-fn calls_output_digest_for_test(parts: &[&str]) -> Digest {
-    Digest::from_parts(DigestKind::ProviderOutput, "calls_output", parts)
-}

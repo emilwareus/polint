@@ -132,10 +132,6 @@ impl RefinedCallStore {
         &self.output.edges
     }
 
-    #[allow(
-        dead_code,
-        reason = "Private query indexes are exposed to later refined-call plan slices."
-    )]
     pub fn by_site(&self, site: CallSiteId) -> Vec<&RefinedCallEdgeFact> {
         self.edge_refs(self.by_site.get(&site))
     }
@@ -144,50 +140,26 @@ impl RefinedCallStore {
         self.edge_refs(self.by_tier.get(&tier))
     }
 
-    #[allow(
-        dead_code,
-        reason = "Private query indexes are exposed to later refined-call plan slices."
-    )]
     pub fn by_status(&self, status: CallTargetStatus) -> Vec<&RefinedCallEdgeFact> {
         self.edge_refs(self.by_status.get(&status))
     }
 
-    #[allow(
-        dead_code,
-        reason = "Private query indexes are exposed to later refined-call plan slices."
-    )]
     pub fn by_algorithm(&self, algorithm: CallAlgorithm) -> Vec<&RefinedCallEdgeFact> {
         self.edge_refs(self.by_algorithm.get(&algorithm))
     }
 
-    #[allow(
-        dead_code,
-        reason = "Private query indexes are exposed to later refined-call plan slices."
-    )]
     pub fn by_provenance(&self, provenance: CallProvenance) -> Vec<&RefinedCallEdgeFact> {
         self.edge_refs(self.by_provenance.get(&provenance))
     }
 
-    #[allow(
-        dead_code,
-        reason = "Private query indexes are exposed to later refined-call plan slices."
-    )]
     pub fn by_caller(&self, caller: FunctionId) -> Vec<&RefinedCallEdgeFact> {
         self.edge_refs(self.by_caller.get(&caller))
     }
 
-    #[allow(
-        dead_code,
-        reason = "Private query indexes are exposed to later refined-call plan slices."
-    )]
     pub fn by_target_function(&self, target: FunctionId) -> Vec<&RefinedCallEdgeFact> {
         self.edge_refs(self.by_target_function.get(&target))
     }
 
-    #[allow(
-        dead_code,
-        reason = "Private query indexes are exposed to later refined-call plan slices."
-    )]
     pub fn by_target_symbol(&self, target: SymbolId) -> Vec<&RefinedCallEdgeFact> {
         self.edge_refs(self.by_target_symbol.get(&target))
     }

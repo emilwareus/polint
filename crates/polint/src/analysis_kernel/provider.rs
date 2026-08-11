@@ -489,6 +489,7 @@ impl Provider for DirectSummariesProvider {
                     ctx.dependency_digest("polint.ts.syntax"),
                 ],
             );
+        debug_assert!(derivation.output_digest.is_some());
         let mut diagnostics = derivation.diagnostics;
         let cache_stats = derivation.cache_stats;
 
@@ -1223,7 +1224,7 @@ const EVIDENCE_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
 }];
 
 const EXTENSIONS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
-    name: crate::analysis::extensions::cache_key::EXTENSION_FACTS_SCHEMA_LABEL,
+    name: crate::analysis::extensions::EXTENSION_FACTS_SCHEMA_LABEL,
     version: 1,
 }];
 
@@ -1925,7 +1926,7 @@ mod tests {
 
     #[test]
     fn v13_cache_dependency_ledger_matches_provider_manifest_inputs() {
-        for dependency in crate::analysis::cache_key::v13_cache_dependency_ledger() {
+        for dependency in polint_analysis::cache_key::v13_cache_dependency_ledger() {
             let manifest = provider_manifests()
                 .iter()
                 .find(|manifest| manifest.id == dependency.provider_id)

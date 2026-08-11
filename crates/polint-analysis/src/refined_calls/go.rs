@@ -2,22 +2,19 @@ use super::facts::{
     RefinedCallConfidence, RefinedCallEdgeFact, RefinedCallTier, RefinedCallValidation,
 };
 use super::store::RefinedCallOutput;
-use crate::analysis::calls::facts::{
+use crate::AnalysisHost;
+use crate::calls::facts::{
     CallAlgorithm, CallEdgeKind, CallPrecision, CallProvenance, CallTargetFact, CallTargetStatus,
     UnresolvedCallFact, UnresolvedCallReason,
 };
-#[cfg(test)]
-use crate::analysis::ids::CallSiteId;
-use crate::analysis::ids::{PlaceId, RefinedCallEdgeId};
-use crate::analysis::points_to::facts::{PointsToBudgetStatus, PointsToSetFact, PointsToStatus};
-use crate::analysis::points_to::vars::place_var;
-use crate::analysis::types::facts::{TypeFact, TypePrecision, TypeStatus, TypeSubject};
-use crate::analysis_kernel::{FactFamily, FactRef, stable_key_from_parts};
-#[cfg(test)]
-use crate::core::FunctionId;
-use crate::core::{AnalysisDb, Language};
+use crate::ids::{PlaceId, RefinedCallEdgeId};
+use crate::points_to::facts::{PointsToBudgetStatus, PointsToSetFact, PointsToStatus};
+use crate::points_to::vars::place_var;
+use crate::types::facts::{TypeFact, TypePrecision, TypeStatus, TypeSubject};
+use polint_analysis_api::{FactFamily, FactRef, stable_key_from_parts};
+use polint_core::Language;
 
-pub(crate) fn derive_go_refinements(db: &AnalysisDb) -> RefinedCallOutput {
+pub fn derive_go_refinements(db: &impl AnalysisHost) -> RefinedCallOutput {
     let interner_handle = db.stable_key_interner();
     let interner = &interner_handle;
     let mut edges = Vec::new();
@@ -135,7 +132,7 @@ pub(crate) fn derive_go_refinements(db: &AnalysisDb) -> RefinedCallOutput {
 }
 
 fn type_edge_from_target(
-    db: &AnalysisDb,
+    db: &impl AnalysisHost,
     target: &CallTargetFact,
     type_fact: Option<&TypeFact>,
     index: usize,
@@ -171,7 +168,7 @@ fn type_edge_from_target(
 }
 
 fn points_to_edge_from_target(
-    db: &AnalysisDb,
+    db: &impl AnalysisHost,
     target: &CallTargetFact,
     points_to: Option<&PointsToSetFact>,
     index: usize,
@@ -213,7 +210,7 @@ struct TargetRefinement {
     precision: CallPrecision,
     evidence: Vec<String>,
     input_stable_keys: Vec<String>,
-    stable_key: crate::core::StableKeyId,
+    stable_key: polint_core::StableKeyId,
 }
 
 fn edge_from_target(
@@ -246,7 +243,7 @@ fn edge_from_target(
 }
 
 fn unresolved_go_edge(
-    db: &AnalysisDb,
+    db: &impl AnalysisHost,
     unresolved: &UnresolvedCallFact,
     status: CallTargetStatus,
     reason: UnresolvedCallReason,
@@ -305,14 +302,14 @@ fn unresolved_go_edge(
     }
 }
 
-fn type_facts_for_place(db: &AnalysisDb, place: PlaceId) -> Vec<&TypeFact> {
+fn type_facts_for_place(db: &impl AnalysisHost, place: PlaceId) -> Vec<&TypeFact> {
     db.type_facts()
         .iter()
         .filter(|fact| matches!(fact.subject, TypeSubject::Place(subject) if subject == place))
         .collect()
 }
 
-fn points_to_sets_for_place(db: &AnalysisDb, place: PlaceId) -> Vec<&PointsToSetFact> {
+fn points_to_sets_for_place(db: &impl AnalysisHost, place: PlaceId) -> Vec<&PointsToSetFact> {
     let var = place_var(place);
     db.points_to_sets()
         .iter()
@@ -320,7 +317,7 @@ fn points_to_sets_for_place(db: &AnalysisDb, place: PlaceId) -> Vec<&PointsToSet
         .collect()
 }
 
-fn has_setup_missing_type(db: &AnalysisDb, place: PlaceId) -> bool {
+fn has_setup_missing_type(db: &impl AnalysisHost, place: PlaceId) -> bool {
     type_facts_for_place(db, place)
         .iter()
         .any(|fact| fact.status == TypeStatus::SetupMissing)
@@ -349,10 +346,10 @@ fn confidence_for_status(status: CallTargetStatus) -> RefinedCallConfidence {
 }
 
 fn metadata_key(
-    db: &AnalysisDb,
+    db: &impl AnalysisHost,
     family: FactFamily,
     run_id: u64,
-    fallback: crate::core::StableKeyId,
+    fallback: polint_core::StableKeyId,
 ) -> String {
     db.metadata_for(FactRef::new(family, run_id))
         .map(|metadata| db.resolve_stable_key(metadata.stable_key).to_string())
@@ -362,19 +359,18 @@ fn metadata_key(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::calls::facts::{CallCallee, CallSiteFact, CallSyntaxKind, CallTargetFact};
-    use crate::analysis::calls::store::CallOutput;
-    use crate::analysis::ids::{
-        CallTargetId, MirBodyId, MirOpId, PointsToSetId, TypeFactId, TypeSetId,
-    };
-    use crate::analysis::places::{PlaceFact, PlaceRoot, PlaceStatus};
-    use crate::analysis::points_to::facts::{PointsToPrecision, PointsToSetFact};
-    use crate::analysis::points_to::store::PointsToOutput;
-    use crate::analysis::types::facts::{
-        TypeConfidence, TypeFact, TypePhase, TypeProvenance, TypeShape,
-    };
-    use crate::analysis::types::store::{TypeOutput, TypeValueAliasOutput};
-    use crate::core::{FileId, FunctionFact, Span, SymbolId};
+    use crate::LocalAnalysisDb;
+    use crate::calls::facts::{CallCallee, CallSiteFact, CallSyntaxKind, CallTargetFact};
+    use crate::calls::store::CallOutput;
+    use crate::ids::CallSiteId;
+    use crate::ids::{CallTargetId, MirBodyId, MirOpId, PointsToSetId, TypeFactId, TypeSetId};
+    use crate::places::{PlaceFact, PlaceRoot, PlaceStatus};
+    use crate::points_to::facts::{PointsToPrecision, PointsToSetFact};
+    use crate::points_to::store::PointsToOutput;
+    use crate::types::facts::{TypeConfidence, TypeFact, TypePhase, TypeProvenance, TypeShape};
+    use crate::types::store::{TypeOutput, TypeValueAliasOutput};
+    use polint_analysis_api::FunctionFact;
+    use polint_core::{FileId, FunctionId, Language, Span, SymbolId};
 
     #[test]
     fn go_receiver_with_concrete_type_creates_type_refined_edge() {
@@ -482,7 +478,7 @@ mod tests {
         assert_eq!(output.edges[0].status, CallTargetStatus::BudgetExceeded);
     }
 
-    fn go_db_with_target() -> AnalysisDb {
+    fn go_db_with_target() -> LocalAnalysisDb {
         let mut db = go_db_base();
         db.replace_call_facts(CallOutput {
             sites: vec![go_call_site()],
@@ -493,11 +489,11 @@ mod tests {
         db
     }
 
-    fn go_db_with_unresolved_receiver() -> AnalysisDb {
+    fn go_db_with_unresolved_receiver() -> LocalAnalysisDb {
         go_db_with_unresolved_reason(UnresolvedCallReason::InterfaceDispatch)
     }
 
-    fn go_db_with_unresolved_reason(reason: UnresolvedCallReason) -> AnalysisDb {
+    fn go_db_with_unresolved_reason(reason: UnresolvedCallReason) -> LocalAnalysisDb {
         let mut db = go_db_base();
         db.replace_call_facts(CallOutput {
             sites: vec![go_call_site()],
@@ -510,15 +506,15 @@ mod tests {
                 algorithm: CallAlgorithm::Unsupported,
                 provenance: CallProvenance::Native,
                 precision: CallPrecision::Unknown,
-                stable_key: crate::core::StableKeyId(0),
+                stable_key: polint_core::StableKeyId(0),
             }],
         })
         .expect("valid call facts");
         db
     }
 
-    fn go_db_base() -> AnalysisDb {
-        let mut db = AnalysisDb::new();
+    fn go_db_base() -> LocalAnalysisDb {
+        let mut db = LocalAnalysisDb::new();
         let interner = db.stable_key_interner();
         let file = db.add_file(
             "handler.go".into(),
@@ -547,7 +543,7 @@ mod tests {
             cyclomatic_complexity: 1,
             calls: Vec::new(),
         });
-        db.replace_semantic_mir(crate::analysis::mir::body::MirOutput {
+        db.replace_semantic_mir(crate::mir_body::MirOutput {
             bodies: Vec::new(),
             operations: Vec::new(),
             places: vec![PlaceFact {
@@ -565,7 +561,7 @@ mod tests {
                 status: PlaceStatus::Resolved,
             }],
             unsupported: Vec::new(),
-            ..crate::analysis::mir::body::MirOutput::default()
+            ..crate::mir_body::MirOutput::default()
         })
         .expect("valid MIR");
         db
@@ -591,7 +587,7 @@ mod tests {
             result: None,
             status: CallTargetStatus::Ambiguous,
             precision: CallPrecision::Unknown,
-            stable_key: crate::core::StableKeyId(0),
+            stable_key: polint_core::StableKeyId(0),
         }
     }
 
@@ -608,7 +604,7 @@ mod tests {
             reason: None,
             provenance: CallProvenance::Native,
             precision: CallPrecision::SetupAware,
-            stable_key: crate::core::StableKeyId(1),
+            stable_key: polint_core::StableKeyId(1),
         }
     }
 
@@ -632,7 +628,7 @@ mod tests {
             confidence: TypeConfidence::High,
             status,
             provenance: TypeProvenance::Native,
-            stable_key: crate::core::stable_key_for_test("type:receiver"),
+            stable_key: polint_core::stable_key_for_test("type:receiver"),
         }
     }
 
@@ -644,7 +640,7 @@ mod tests {
             status,
             precision: PointsToPrecision::FlowInsensitive,
             budget,
-            stable_key: crate::core::stable_key_for_test("points-to:receiver"),
+            stable_key: polint_core::stable_key_for_test("points-to:receiver"),
         }
     }
 

@@ -31,8 +31,6 @@ pub(crate) mod fs;
 pub(crate) mod git;
 pub(crate) use polint_go as go;
 pub(crate) mod golden_cost;
-#[cfg(test)]
-pub(crate) mod graph;
 pub(crate) mod ignores;
 pub(crate) mod measure;
 pub(crate) mod metrics;

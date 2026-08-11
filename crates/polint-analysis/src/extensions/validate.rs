@@ -1,3 +1,4 @@
+use crate::AnalysisHost;
 use std::collections::BTreeSet;
 
 use super::sinks::{
@@ -8,21 +9,20 @@ use super::sinks::{
     has_required_type_value_alias_payload, is_type_value_alias_fact_family,
 };
 use super::store::{AcceptedExtensionFact, ExtensionOutput, RejectedExtensionFact};
-use crate::analysis::calls::facts::CallCallee;
-use crate::core::AnalysisDb;
+use crate::calls::facts::CallCallee;
 
-pub(crate) use super::store::ExtensionRejectionReason;
+pub use super::store::ExtensionRejectionReason;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ExtensionValidationInput {
-    pub(crate) declared_outputs: BTreeSet<String>,
-    pub(crate) native_stable_keys: BTreeSet<String>,
-    pub(crate) exact_validation_evidence: BTreeSet<String>,
-    pub(crate) candidates: Vec<ExtensionFactCandidate>,
+pub struct ExtensionValidationInput {
+    pub declared_outputs: BTreeSet<String>,
+    pub native_stable_keys: BTreeSet<String>,
+    pub exact_validation_evidence: BTreeSet<String>,
+    pub candidates: Vec<ExtensionFactCandidate>,
 }
 
-pub(crate) fn validate_extension_output(
-    db: &AnalysisDb,
+pub fn validate_extension_output(
+    db: &(impl AnalysisHost + ?Sized),
     input: ExtensionValidationInput,
 ) -> ExtensionOutput {
     let ExtensionValidationInput {
@@ -40,7 +40,7 @@ pub(crate) fn validate_extension_output(
     };
     let mut accepted = Vec::new();
     let mut rejected = Vec::new();
-    let mut accepted_keys = BTreeSet::<crate::core::StableKeyId>::new();
+    let mut accepted_keys = BTreeSet::<polint_core::StableKeyId>::new();
 
     let mut type_value_alias_refs = TypeValueAliasRefContext::from_db(db);
     let mut relation_candidates = Vec::new();
@@ -96,7 +96,7 @@ pub(crate) fn validate_extension_output(
 }
 
 fn sorted_candidates(
-    db: &AnalysisDb,
+    db: &(impl AnalysisHost + ?Sized),
     mut candidates: Vec<ExtensionFactCandidate>,
 ) -> Vec<ExtensionFactCandidate> {
     let interner = db.stable_key_interner();
@@ -125,10 +125,10 @@ fn is_framework_fact_family(family: &str) -> bool {
 }
 
 fn rejection_reason(
-    db: &AnalysisDb,
+    db: &(impl AnalysisHost + ?Sized),
     input: &ExtensionValidationInput,
     candidate: &ExtensionFactCandidate,
-    accepted_keys: &BTreeSet<crate::core::StableKeyId>,
+    accepted_keys: &BTreeSet<polint_core::StableKeyId>,
     type_value_alias_refs: &TypeValueAliasRefContext,
 ) -> Option<ExtensionRejectionReason> {
     let stable_key_text = db.resolve_stable_key(candidate.stable_key);
@@ -208,7 +208,10 @@ fn is_type_value_alias_relation_family(family: &str) -> bool {
     )
 }
 
-fn refined_call_refs_resolve(db: &AnalysisDb, candidate: &ExtensionFactCandidate) -> bool {
+fn refined_call_refs_resolve(
+    db: &(impl AnalysisHost + ?Sized),
+    candidate: &ExtensionFactCandidate,
+) -> bool {
     payload_value(candidate, "site=").is_some_and(|site| resolve_call_site_ref(db, site))
         && payload_value(candidate, "target_function=")
             .is_none_or(|function| resolve_function_ref(db, function))
@@ -216,7 +219,7 @@ fn refined_call_refs_resolve(db: &AnalysisDb, candidate: &ExtensionFactCandidate
             .is_none_or(|symbol| resolve_symbol_ref(db, symbol))
 }
 
-fn resolve_call_site_ref(db: &AnalysisDb, value: &str) -> bool {
+fn resolve_call_site_ref(db: &(impl AnalysisHost + ?Sized), value: &str) -> bool {
     if let Some(id) = value.strip_prefix("call_site:") {
         return id.parse::<u64>().map_or_else(
             |_| {
@@ -227,7 +230,7 @@ fn resolve_call_site_ref(db: &AnalysisDb, value: &str) -> bool {
             |id| {
                 db.call_sites()
                     .iter()
-                    .any(|site| site.id == crate::analysis::ids::CallSiteId(id))
+                    .any(|site| site.id == crate::ids::CallSiteId(id))
             },
         );
     }
@@ -243,7 +246,7 @@ fn resolve_call_site_ref(db: &AnalysisDb, value: &str) -> bool {
             .is_some_and(|file_callee| resolve_call_site_file_callee_ref(db, file_callee))
 }
 
-fn resolve_call_site_file_span_ref(db: &AnalysisDb, value: &str) -> bool {
+fn resolve_call_site_file_span_ref(db: &(impl AnalysisHost + ?Sized), value: &str) -> bool {
     let Some((relative_path, start_byte)) = value.rsplit_once(':') else {
         return false;
     };
@@ -258,7 +261,7 @@ fn resolve_call_site_file_span_ref(db: &AnalysisDb, value: &str) -> bool {
     })
 }
 
-fn resolve_call_site_file_callee_ref(db: &AnalysisDb, value: &str) -> bool {
+fn resolve_call_site_file_callee_ref(db: &(impl AnalysisHost + ?Sized), value: &str) -> bool {
     let Some((relative_path, callee)) = value.rsplit_once(':') else {
         return false;
     };
@@ -282,25 +285,25 @@ fn call_site_callee_label(callee: &CallCallee) -> Option<&str> {
     }
 }
 
-fn resolve_function_ref(db: &AnalysisDb, value: &str) -> bool {
+fn resolve_function_ref(db: &(impl AnalysisHost + ?Sized), value: &str) -> bool {
     value
         .strip_prefix("function:")
         .and_then(|id| id.parse::<u64>().ok())
         .is_some_and(|id| {
             db.functions()
                 .iter()
-                .any(|function| function.id == crate::core::FunctionId(id))
+                .any(|function| function.id == polint_core::FunctionId(id))
         })
 }
 
-fn resolve_symbol_ref(db: &AnalysisDb, value: &str) -> bool {
+fn resolve_symbol_ref(db: &(impl AnalysisHost + ?Sized), value: &str) -> bool {
     value
         .strip_prefix("symbol:")
         .and_then(|id| id.parse::<u64>().ok())
         .is_some_and(|id| {
             db.symbols()
                 .iter()
-                .any(|symbol| symbol.id == crate::core::SymbolId(id))
+                .any(|symbol| symbol.id == polint_core::SymbolId(id))
         })
 }
 
@@ -313,7 +316,7 @@ struct TypeValueAliasRefContext {
 }
 
 impl TypeValueAliasRefContext {
-    fn from_db(db: &AnalysisDb) -> Self {
+    fn from_db(db: &(impl AnalysisHost + ?Sized)) -> Self {
         Self {
             places: db.mir_places().iter().map(|place| place.id.0).collect(),
             ..Self::default()
@@ -441,7 +444,7 @@ fn payload_value<'a>(candidate: &'a ExtensionFactCandidate, prefix: &str) -> Opt
         .find_map(|label| label.strip_prefix(prefix))
 }
 
-fn bindings_exist(db: &AnalysisDb, bindings: &[String]) -> bool {
+fn bindings_exist(db: &(impl AnalysisHost + ?Sized), bindings: &[String]) -> bool {
     if bindings.is_empty() {
         return false;
     }
@@ -456,7 +459,7 @@ fn bindings_exist(db: &AnalysisDb, bindings: &[String]) -> bool {
     })
 }
 
-fn span_is_valid(db: &AnalysisDb, candidate: &ExtensionFactCandidate) -> bool {
+fn span_is_valid(db: &(impl AnalysisHost + ?Sized), candidate: &ExtensionFactCandidate) -> bool {
     let Some(span) = &candidate.span else {
         return true;
     };
@@ -471,22 +474,24 @@ fn span_is_valid(db: &AnalysisDb, candidate: &ExtensionFactCandidate) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::calls::facts::{
+    use crate::LocalAnalysisDb;
+    use crate::calls::facts::{
         CallCallee, CallPrecision, CallSiteFact, CallSyntaxKind, CallTargetStatus,
     };
-    use crate::analysis::calls::store::CallOutput;
-    use crate::analysis::extensions::sinks::{
+    use crate::calls::store::CallOutput;
+    use crate::extensions::sinks::{
         ExtensionFactConfidence, ExtensionFactStatus, ExtensionSpanRef, REFINED_CALL_EDGE_FAMILY,
         TYPE_VALUE_ALIAS_ALIAS_ANSWER_FAMILY,
     };
-    use crate::analysis::ids::{CallSiteId, MirBodyId, MirOpId, PlaceId};
-    use crate::analysis::mir::body::MirOutput;
-    use crate::analysis::places::{PlaceFact, PlaceRoot, PlaceStatus};
-    use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, Span};
+    use crate::ids::{CallSiteId, MirBodyId, MirOpId, PlaceId};
+    use crate::mir_body::MirOutput;
+    use crate::places::{PlaceFact, PlaceRoot, PlaceStatus};
+    use polint_analysis_api::FunctionFact;
+    use polint_core::{FileId, FunctionId, Language, Span};
     use std::sync::Arc;
 
-    fn db() -> AnalysisDb {
-        let mut db = AnalysisDb::new();
+    fn db() -> LocalAnalysisDb {
+        let mut db = LocalAnalysisDb::new();
         let file = db.add_source_file(
             "src/app.ts".into(),
             "src/app.ts".to_string(),
@@ -535,7 +540,7 @@ mod tests {
                 result: None,
                 status: CallTargetStatus::Ambiguous,
                 precision: CallPrecision::Heuristic,
-                stable_key: crate::core::StableKeyId(0),
+                stable_key: polint_core::StableKeyId(0),
             }],
             targets: Vec::new(),
             unresolved: Vec::new(),
@@ -548,7 +553,7 @@ mod tests {
         Span::point(FileId(0), 1, 1)
     }
 
-    fn test_place(interner: &crate::core::StableKeyInterner, id: u64) -> PlaceFact {
+    fn test_place(interner: &polint_core::StableKeyInterner, id: u64) -> PlaceFact {
         PlaceFact {
             id: PlaceId(id),
             language: Language::TypeScript,
@@ -569,7 +574,7 @@ mod tests {
             extension_id: "demo".to_string(),
             provider_id: "routes".to_string(),
             fact_family: "extension.routes".to_string(),
-            stable_key: crate::core::stable_key_for_test(stable_key),
+            stable_key: polint_core::stable_key_for_test(stable_key),
             binding_refs: vec!["file:src/app.ts".to_string()],
             span: Some(ExtensionSpanRef {
                 relative_path: "src/app.ts".to_string(),

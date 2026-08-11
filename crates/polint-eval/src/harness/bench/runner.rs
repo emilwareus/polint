@@ -325,8 +325,8 @@ fn run_check_kernel_with_store_mode(
 ///   `DomainStatus::BudgetExceeded` (the domain solver's iteration/round cap).
 fn budget_counters(db: &AnalysisDb) -> BudgetExhaustionCounters {
     use crate::analysis::calls::facts::CallTargetStatus;
-    use crate::analysis::domains::facts::DomainStatus;
     use crate::analysis::summaries::facts::SummaryStatus;
+    use polint_analysis::domains::facts::DomainStatus;
 
     let budget_exceeded = db
         .summary_facts()

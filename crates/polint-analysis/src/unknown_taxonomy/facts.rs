@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum UnknownCategory {
+pub enum UnknownCategory {
     SetupMissing,
     UnsupportedSemantic,
     MissingFact,
@@ -16,7 +16,7 @@ pub(crate) enum UnknownCategory {
 }
 
 impl UnknownCategory {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::SetupMissing => "setup_missing",
             Self::UnsupportedSemantic => "unsupported_semantic",
@@ -33,13 +33,13 @@ impl UnknownCategory {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub(crate) struct UnknownSpan {
-    pub(crate) line: u32,
-    pub(crate) column: u32,
+pub struct UnknownSpan {
+    pub line: u32,
+    pub column: u32,
 }
 
 impl UnknownSpan {
-    pub(crate) fn from_span(span: &crate::core::Span) -> Self {
+    pub fn from_span(span: &polint_core::Span) -> Self {
         let range = span.diagnostic_range();
         Self {
             line: range.start_line,
@@ -49,24 +49,24 @@ impl UnknownSpan {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct UnknownRow {
-    pub(crate) category: UnknownCategory,
-    pub(crate) capability: Option<String>,
-    pub(crate) family: Option<String>,
-    pub(crate) provider: String,
-    pub(crate) file: String,
-    pub(crate) span: Option<UnknownSpan>,
-    pub(crate) status: String,
-    pub(crate) reason: Option<String>,
-    pub(crate) precision: Option<String>,
-    pub(crate) docs_path: Option<String>,
-    pub(crate) suggested_artifact: Option<String>,
-    pub(crate) source_stable_key: Option<String>,
-    pub(crate) stable_sort_key: String,
+pub struct UnknownRow {
+    pub category: UnknownCategory,
+    pub capability: Option<String>,
+    pub family: Option<String>,
+    pub provider: String,
+    pub file: String,
+    pub span: Option<UnknownSpan>,
+    pub status: String,
+    pub reason: Option<String>,
+    pub precision: Option<String>,
+    pub docs_path: Option<String>,
+    pub suggested_artifact: Option<String>,
+    pub source_stable_key: Option<String>,
+    pub stable_sort_key: String,
 }
 
 impl UnknownRow {
-    pub(crate) fn new(interner: &crate::core::StableKeyInterner, input: UnknownRowInput) -> Self {
+    pub fn new(interner: &polint_core::StableKeyInterner, input: UnknownRowInput) -> Self {
         let stable_sort_key = stable_sort_key(
             interner,
             input.file.as_str(),
@@ -95,29 +95,29 @@ impl UnknownRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct UnknownRowInput {
-    pub(crate) category: UnknownCategory,
-    pub(crate) capability: Option<String>,
-    pub(crate) family: Option<String>,
-    pub(crate) provider: String,
-    pub(crate) file: String,
-    pub(crate) span: Option<UnknownSpan>,
-    pub(crate) status: String,
-    pub(crate) reason: Option<String>,
-    pub(crate) precision: Option<String>,
-    pub(crate) docs_path: Option<String>,
-    pub(crate) suggested_artifact: Option<String>,
-    pub(crate) source_stable_key: Option<String>,
+pub struct UnknownRowInput {
+    pub category: UnknownCategory,
+    pub capability: Option<String>,
+    pub family: Option<String>,
+    pub provider: String,
+    pub file: String,
+    pub span: Option<UnknownSpan>,
+    pub status: String,
+    pub reason: Option<String>,
+    pub precision: Option<String>,
+    pub docs_path: Option<String>,
+    pub suggested_artifact: Option<String>,
+    pub source_stable_key: Option<String>,
 }
 
-pub(crate) fn normalize_rows(mut rows: Vec<UnknownRow>) -> Vec<UnknownRow> {
+pub fn normalize_rows(mut rows: Vec<UnknownRow>) -> Vec<UnknownRow> {
     rows.sort_by(|left, right| left.stable_sort_key.cmp(&right.stable_sort_key));
     rows.dedup_by(|left, right| left.stable_sort_key == right.stable_sort_key);
     rows
 }
 
 fn stable_sort_key(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     file: &str,
     span: Option<&UnknownSpan>,
     category: UnknownCategory,
@@ -126,9 +126,9 @@ fn stable_sort_key(
     source_stable_key: Option<&str>,
 ) -> String {
     let (line, column) = span.map_or((0, 0), |span| (span.line, span.column));
-    crate::analysis_kernel::stable_key_text_from_parts(
+    polint_analysis_api::stable_key_text_from_parts(
         interner,
-        crate::analysis_kernel::FactFamily::UnsupportedSemantic,
+        polint_analysis_api::FactFamily::UnsupportedSemantic,
         &[
             ("file", file.to_string()),
             ("line", line.to_string()),
@@ -144,6 +144,7 @@ fn stable_sort_key(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::LocalAnalysisDb;
 
     #[test]
     fn category_labels_are_stable_snake_case() {
@@ -170,7 +171,7 @@ mod tests {
 
     fn row(file: &str, line: u32, source: &str) -> UnknownRow {
         UnknownRow::new(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &LocalAnalysisDb::new().stable_key_interner(),
             UnknownRowInput {
                 category: UnknownCategory::SetupMissing,
                 capability: Some("references".to_string()),

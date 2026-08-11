@@ -1,9 +1,9 @@
+pub(crate) use polint_analysis::extensions::EXTENSION_FACTS_SCHEMA_LABEL;
 pub(crate) use polint_analysis::extensions::manifest;
 pub(crate) use polint_analysis::extensions::protocol;
 pub(crate) use polint_analysis::extensions::sinks;
 pub(crate) use polint_analysis::extensions::store;
-pub(crate) mod cache_key;
 pub(crate) mod discovery;
 pub(crate) mod host;
 pub(crate) mod provider;
-pub(crate) mod validate;
+pub(crate) use polint_analysis::extensions::validate;

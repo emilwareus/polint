@@ -17,8 +17,11 @@
 
 use std::collections::BTreeSet;
 
+#[cfg(test)]
 use crate::analysis::points_to::facts::PointsToConstraintFact;
-use crate::analysis::points_to::solver::{PointsToSolveResult, solve_points_to};
+use crate::analysis::points_to::solver::PointsToSolveResult;
+#[cfg(test)]
+use crate::analysis::points_to::solver::solve_points_to;
 
 use super::budget::{BudgetStatus, SolverBudget};
 use super::facts::DerivedEdgeFact;
@@ -54,6 +57,7 @@ pub(crate) struct PolicyOutcome {
 impl PolicyOutcome {
     /// An honest-empty outcome: zero derivation, within budget, zero steps. Stays
     /// semantically empty: no points-to result, no derived edges.
+    #[cfg(test)]
     pub(crate) fn empty() -> Self {
         Self {
             points_to: None,
@@ -90,16 +94,19 @@ pub(crate) trait SolverPolicy {
 /// The points-to policy folds in the points-to sub-domain by
 /// composition (D-03). It owns a closed snapshot of points-to constraints and
 /// delegates to the existing `solve_points_to` fixpoint unchanged.
+#[cfg(test)]
 pub(crate) struct PointsToPolicy {
     constraints: Vec<PointsToConstraintFact>,
 }
 
+#[cfg(test)]
 impl PointsToPolicy {
     pub(crate) fn new(constraints: Vec<PointsToConstraintFact>) -> Self {
         Self { constraints }
     }
 }
 
+#[cfg(test)]
 impl SolverPolicy for PointsToPolicy {
     fn id(&self) -> &'static str {
         "points_to"

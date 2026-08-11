@@ -1,24 +1,23 @@
+use crate::AnalysisHost;
 use std::collections::BTreeMap;
 
 use super::facts::{
     RefinedCallConfidence, RefinedCallEdgeFact, RefinedCallTier, RefinedCallValidation,
 };
 use super::store::RefinedCallOutput;
-use crate::analysis::calls::facts::{
+use crate::calls::facts::{
     CallAlgorithm, CallEdgeKind, CallPrecision, CallProvenance, CallTargetStatus,
     UnresolvedCallReason,
 };
-use crate::analysis::entrypoints::facts::{
+use crate::entrypoints::facts::{
     EntrypointFact, EntrypointPrecision, FrameworkDispatchEdgeFact, UnresolvedFrameworkFact,
     UnresolvedFrameworkReason,
 };
-use crate::analysis::ids::{CallSiteId, RefinedCallEdgeId};
-use crate::analysis_kernel::{FactFamily, FactRef, stable_key_from_parts};
-#[cfg(test)]
-use crate::core::Language;
-use crate::core::{AnalysisDb, FunctionId, SymbolId};
+use crate::ids::{CallSiteId, RefinedCallEdgeId};
+use polint_analysis_api::{FactFamily, FactRef, stable_key_from_parts};
+use polint_core::{FunctionId, SymbolId};
 
-pub(crate) fn derive_framework_refinements(db: &AnalysisDb) -> RefinedCallOutput {
+pub fn derive_framework_refinements(db: &impl AnalysisHost) -> RefinedCallOutput {
     let interner_handle = db.stable_key_interner();
     let interner = &interner_handle;
     let entrypoints_by_key = db
@@ -44,7 +43,7 @@ pub(crate) fn derive_framework_refinements(db: &AnalysisDb) -> RefinedCallOutput
 }
 
 fn edge_from_dispatch(
-    db: &AnalysisDb,
+    db: &impl AnalysisHost,
     dispatch: &FrameworkDispatchEdgeFact,
     entrypoint: &EntrypointFact,
     index: usize,
@@ -107,7 +106,7 @@ fn edge_from_dispatch(
 }
 
 fn edge_from_unresolved(
-    db: &AnalysisDb,
+    db: &impl AnalysisHost,
     unresolved: &UnresolvedFrameworkFact,
     caller: FunctionId,
     index: usize,
@@ -155,14 +154,14 @@ fn edge_from_unresolved(
     }
 }
 
-fn call_site_for_function(db: &AnalysisDb, function: FunctionId) -> Option<CallSiteId> {
+fn call_site_for_function(db: &impl AnalysisHost, function: FunctionId) -> Option<CallSiteId> {
     db.call_sites()
         .iter()
         .find(|site| site.caller == function)
         .map(|site| site.id)
 }
 
-fn fallback_caller(db: &AnalysisDb, framework_id: &str) -> Option<FunctionId> {
+fn fallback_caller(db: &impl AnalysisHost, framework_id: &str) -> Option<FunctionId> {
     db.entrypoint_facts()
         .iter()
         .find(|entrypoint| entrypoint.framework_id == framework_id)
@@ -222,7 +221,7 @@ fn reason_for_unresolved(reason: UnresolvedFrameworkReason) -> UnresolvedCallRea
 }
 
 fn function_or_symbol_key(
-    db: &AnalysisDb,
+    db: &impl AnalysisHost,
     function: Option<FunctionId>,
     symbol: Option<SymbolId>,
 ) -> String {
@@ -232,7 +231,7 @@ fn function_or_symbol_key(
         .unwrap_or_else(|| "none".to_string())
 }
 
-fn metadata_key(db: &AnalysisDb, family: FactFamily, run_id: u64, fallback: &str) -> String {
+fn metadata_key(db: &impl AnalysisHost, family: FactFamily, run_id: u64, fallback: &str) -> String {
     db.metadata_for(FactRef::new(family, run_id))
         .map(|metadata| db.resolve_stable_key(metadata.stable_key).to_string())
         .unwrap_or_else(|| fallback.to_string())
@@ -241,19 +240,17 @@ fn metadata_key(db: &AnalysisDb, family: FactFamily, run_id: u64, fallback: &str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::calls::facts::{
-        CallCallee, CallSiteFact, CallSyntaxKind, CallTargetStatus,
-    };
-    use crate::analysis::calls::store::CallOutput;
-    use crate::analysis::entrypoints::facts::{
+    use crate::LocalAnalysisDb;
+    use crate::calls::facts::{CallCallee, CallSiteFact, CallSyntaxKind, CallTargetStatus};
+    use crate::calls::store::CallOutput;
+    use crate::entrypoints::facts::{
         DispatchEdgeKind, EntrypointConfidence, EntrypointKind, EntrypointProvenance,
         EntrypointStatus, TriggerMetadata, UnresolvedFrameworkFact,
     };
-    use crate::analysis::entrypoints::store::EntrypointOutput;
-    use crate::analysis::ids::{
-        DispatchEdgeId, EntrypointId, MirBodyId, MirOpId, UnresolvedFrameworkId,
-    };
-    use crate::core::{FileId, FunctionFact, Span};
+    use crate::entrypoints::store::EntrypointOutput;
+    use crate::ids::{DispatchEdgeId, EntrypointId, MirBodyId, MirOpId, UnresolvedFrameworkId};
+    use polint_analysis_api::FunctionFact;
+    use polint_core::{FileId, Language, Span};
 
     #[test]
     fn framework_dispatch_fact_produces_refined_edge() {
@@ -273,7 +270,7 @@ mod tests {
                 span: span(),
                 precision: EntrypointPrecision::Heuristic,
                 provider_id: "polint.entrypoints".to_string(),
-                stable_key: crate::core::stable_key_for_test("dispatch:handler"),
+                stable_key: polint_core::stable_key_for_test("dispatch:handler"),
             }],
             ..EntrypointOutput::empty()
         })
@@ -303,7 +300,7 @@ mod tests {
                 scope_description: "router".to_string(),
                 precision: EntrypointPrecision::Unknown,
                 provider_id: "polint.entrypoints".to_string(),
-                stable_key: crate::core::stable_key_for_test("unresolved:framework"),
+                stable_key: polint_core::stable_key_for_test("unresolved:framework"),
             }],
             ..EntrypointOutput::empty()
         })
@@ -319,8 +316,8 @@ mod tests {
         );
     }
 
-    fn db_with_function_and_call_site() -> AnalysisDb {
-        let mut db = AnalysisDb::new();
+    fn db_with_function_and_call_site() -> LocalAnalysisDb {
+        let mut db = LocalAnalysisDb::new();
         let file = db.add_file(
             "src/app.ts".into(),
             "src/app.ts".to_string(),
@@ -358,7 +355,7 @@ mod tests {
                 result: None,
                 status: CallTargetStatus::Resolved,
                 precision: CallPrecision::SetupAware,
-                stable_key: crate::core::StableKeyId(0),
+                stable_key: polint_core::StableKeyId(0),
             }],
             targets: Vec::new(),
             unresolved: Vec::new(),
@@ -384,7 +381,7 @@ mod tests {
             confidence: EntrypointConfidence::High,
             status: EntrypointStatus::Resolved,
             provider_id: "polint.entrypoints".to_string(),
-            stable_key: crate::core::stable_key_for_test(stable_key),
+            stable_key: polint_core::stable_key_for_test(stable_key),
         }
     }
 

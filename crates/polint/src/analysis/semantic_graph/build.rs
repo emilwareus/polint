@@ -65,6 +65,7 @@ use crate::ts::scope::store::TsScopeOutput;
 /// with the default dense id and a composed stable key; the caller runs
 /// `normalized()` (and `SemanticGraphStore::from_output`) to sort by stable key and
 /// assign dense IDs (D-05).
+#[cfg(test)]
 pub(crate) fn build_semantic_graph(db: &AnalysisDb) -> SemanticGraphOutput {
     let ts_direct_bindings = collect_ts_direct_binding_collection(db);
     build_semantic_graph_with_ts_direct_binding_collection(db, &ts_direct_bindings)
@@ -81,6 +82,7 @@ pub(crate) fn build_semantic_graph_with_ts_direct_binding_collection(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn build_semantic_graph_with_ts_direct_bindings(
     db: &AnalysisDb,
     ts_direct_bindings: &[TsDirectBindingFact],
@@ -92,6 +94,7 @@ pub(crate) fn build_semantic_graph_with_ts_direct_bindings(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn build_semantic_graph_with_ts_direct_bindings_and_adaptation_models(
     db: &AnalysisDb,
     ts_direct_bindings: &[TsDirectBindingFact],
@@ -147,6 +150,7 @@ struct TsFileAnalysis {
     token_source_flows: Vec<TsTokenSourceFlow>,
 }
 
+#[cfg(test)]
 struct TsBindingFileAnalysis {
     file: FileId,
     inventory: TsInventoryOutput,
@@ -173,6 +177,7 @@ impl TsDirectBindingAnalysis for TsFileAnalysis {
     }
 }
 
+#[cfg(test)]
 impl TsDirectBindingAnalysis for TsBindingFileAnalysis {
     fn file(&self) -> FileId {
         self.file
@@ -223,6 +228,7 @@ pub(crate) fn collect_ts_direct_binding_collection(db: &AnalysisDb) -> TsDirectB
     TsDirectBindingCollection { output, analyses }
 }
 
+#[cfg(test)]
 pub(crate) fn collect_ts_direct_bindings(db: &AnalysisDb) -> TsDirectBindingOutput {
     let analyses = collect_ts_binding_file_analyses(db);
     collect_ts_direct_bindings_from_analyses(db, &analyses)
@@ -293,6 +299,7 @@ fn analyze_ts_file(interner: &crate::core::StableKeyInterner, file: &SourceFile)
     }
 }
 
+#[cfg(test)]
 fn collect_ts_binding_file_analyses(db: &AnalysisDb) -> Vec<TsBindingFileAnalysis> {
     let interner = db.stable_key_interner();
     db.files()
@@ -302,6 +309,7 @@ fn collect_ts_binding_file_analyses(db: &AnalysisDb) -> Vec<TsBindingFileAnalysi
         .collect()
 }
 
+#[cfg(test)]
 fn analyze_ts_binding_file(
     interner: &crate::core::StableKeyInterner,
     file: &SourceFile,

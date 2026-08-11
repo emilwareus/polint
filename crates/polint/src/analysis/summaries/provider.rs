@@ -113,6 +113,7 @@ struct SccClosureDigestCacheEntry {
 ///    is future work), and a DemandQueryEngine.
 /// 4. Call close_summaries_by_scc.
 /// 5. Return closure result, demand query trace, and any diagnostics.
+#[cfg(test)]
 pub(crate) fn run_scc_closure(db: &mut AnalysisDb) -> SccClosureProviderOutput {
     run_scc_closure_with_previous_digests(db, BTreeMap::new())
 }

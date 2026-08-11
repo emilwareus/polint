@@ -2,10 +2,6 @@ use super::facts::{EvidenceEdgeFact, EvidenceEdgeKind, EvidenceNodeFact, Evidenc
 use super::store::EvidenceStore;
 use crate::ids::EvidenceNodeId;
 
-#[allow(
-    dead_code,
-    reason = "Private evidence query helpers are consumed by subsequent path/rendering plans."
-)]
 pub fn incoming_edges(
     store: &EvidenceStore,
     node: EvidenceNodeId,
@@ -18,10 +14,6 @@ pub fn incoming_edges(
         .collect()
 }
 
-#[allow(
-    dead_code,
-    reason = "Private evidence query helpers are consumed by subsequent path/rendering plans."
-)]
 pub fn outgoing_edges(
     store: &EvidenceStore,
     node: EvidenceNodeId,
@@ -34,10 +26,6 @@ pub fn outgoing_edges(
         .collect()
 }
 
-#[allow(
-    dead_code,
-    reason = "Private evidence query helpers are consumed by subsequent path/rendering plans."
-)]
 pub fn nodes_by_edge_kind(store: &EvidenceStore, kind: EvidenceEdgeKind) -> Vec<&EvidenceNodeFact> {
     let mut nodes = store
         .by_edge_kind(kind)

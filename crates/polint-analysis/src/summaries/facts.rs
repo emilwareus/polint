@@ -106,7 +106,6 @@ pub enum AccessKind {
 }
 
 // Per-resource external effects replace the coarse boolean.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ExternalEffectKind {
     FileSystem,

@@ -554,15 +554,6 @@ mod tests {
         }
     }
 
-    #[allow(dead_code)]
-    fn event(status: SummaryStatus) -> SummaryEventFact {
-        event_with_domain(
-            SummaryDomainKind::DataFlowTito,
-            status,
-            "summary-event:tito",
-        )
-    }
-
     fn event_with_domain(
         domain: SummaryDomainKind,
         status: SummaryStatus,

@@ -7,7 +7,7 @@ use crate::analysis::calls::facts::{
     CallTargetStatus, UnresolvedCallReason,
 };
 use crate::analysis::cfg::facts::{CfgEdgeKind, CfgPrecision, CfgStatus, CfgView};
-use crate::analysis::domains::facts::{
+use polint_analysis::domains::facts::{
     DomainLocation, DomainPrecision, DomainSlot, DomainStatus, DomainValue,
 };
 use crate::analysis::mir::body::MirStatus;
@@ -3324,11 +3324,11 @@ mod semantic_mir_debug_json {
 mod abstract_domains_debug_json {
     use super::{metadata_debug_json_for_test, metadata_debug_json_with_demand_trace_for_test};
     use crate::analysis::cfg::ids::BasicBlockId;
-    use crate::analysis::domains::facts::{
+    use polint_analysis::domains::facts::{
         DomainEventFact, DomainLocation, DomainObservationFact, DomainPrecision, DomainSlot,
         DomainStatus, DomainValue,
     };
-    use crate::analysis::domains::store::DomainOutput;
+    use polint_analysis::domains::store::DomainOutput;
     use crate::analysis::ids::{DomainEventId, DomainObservationId, MirBodyId, MirOpId, PlaceId};
     use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
     use crate::analysis::mir::op::{AssignMode, MirOperation, MirOperationKind, MirValue};

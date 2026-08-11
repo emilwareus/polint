@@ -1,14 +1,12 @@
+use crate::AnalysisHost;
 use std::collections::BTreeSet;
 
-use crate::analysis::ids::SemanticNodeId;
-use crate::analysis::semantic_graph::constraints::ConstraintFact;
-use crate::analysis::semantic_graph::facts::{
-    SemanticEdgeFact, SemanticNodeFact, SemanticPrecision,
-};
-use crate::analysis::semantic_graph::store::SEMANTIC_GRAPH_PROVIDER_ID;
-use crate::analysis_kernel::FactPrecision;
-use crate::core::AnalysisDb;
-use crate::diagnostics::{Diagnostic, TextRange};
+use crate::ids::SemanticNodeId;
+use crate::semantic_graph::constraints::ConstraintFact;
+use crate::semantic_graph::facts::{SemanticEdgeFact, SemanticNodeFact, SemanticPrecision};
+use crate::semantic_graph::store::SEMANTIC_GRAPH_PROVIDER_ID;
+use polint_analysis_api::FactPrecision;
+use polint_core::{Diagnostic, DiagnosticRange as TextRange};
 
 /// Validates the stored semantic-graph facts, emitting an evidence-bearing
 /// diagnostic per problem rather than silently dropping a malformed row (D-15):
@@ -22,7 +20,7 @@ use crate::diagnostics::{Diagnostic, TextRange};
 ///
 /// Failures surface as structured [`Diagnostic`]s carrying `family`/`stable_key`/
 /// `field`/`reason` evidence, mirroring `reachability::validate`.
-pub(crate) fn validate_semantic_graph(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
+pub fn validate_semantic_graph(db: &impl AnalysisHost, diagnostics: &mut Vec<Diagnostic>) {
     validate_semantic_graph_rows(
         &db.stable_key_interner(),
         db.semantic_nodes(),
@@ -33,7 +31,7 @@ pub(crate) fn validate_semantic_graph(db: &AnalysisDb, diagnostics: &mut Vec<Dia
 }
 
 fn validate_semantic_graph_rows(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     nodes: &[SemanticNodeFact],
     edges: &[SemanticEdgeFact],
     constraints: &[ConstraintFact],
@@ -163,10 +161,7 @@ fn reject_exact_node_edge_precision(
 /// carry no `FactPrecision`-typed precision field of their own, but this helper
 /// preserves the established producer-level contract: a derived semantic-graph
 /// producer must never be reported as [`FactPrecision::Exact`].
-pub(crate) fn reject_exact_precision(
-    precision: FactPrecision,
-    stable_key: &str,
-) -> Option<Diagnostic> {
+pub fn reject_exact_precision(precision: FactPrecision, stable_key: &str) -> Option<Diagnostic> {
     if precision == FactPrecision::Exact {
         Some(precision_ceiling_diagnostic("SemanticNode", stable_key))
     } else {
@@ -267,14 +262,13 @@ fn precision_ceiling_diagnostic(family: &'static str, stable_key: &str) -> Diagn
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::ids::{CallSiteId, SemanticNodeId};
-    use crate::analysis::points_to::facts::{PointsToPrecision, PointsToStatus};
-    use crate::analysis::semantic_graph::constraints::{ConstraintFact, ConstraintKind};
-    use crate::analysis::semantic_graph::facts::{
-        EdgeKind, NodeKind, SemanticEdgeFact, SemanticNodeFact,
-    };
-    use crate::analysis::semantic_graph::store::SemanticGraphOutput;
-    use crate::core::{AnalysisDb, FunctionId, stable_key_for_test, test_stable_key_interner};
+    use crate::LocalAnalysisDb;
+    use crate::ids::{CallSiteId, SemanticNodeId};
+    use crate::points_to::facts::{PointsToPrecision, PointsToStatus};
+    use crate::semantic_graph::constraints::{ConstraintFact, ConstraintKind};
+    use crate::semantic_graph::facts::{EdgeKind, NodeKind, SemanticEdgeFact, SemanticNodeFact};
+    use crate::semantic_graph::store::SemanticGraphOutput;
+    use polint_core::{FunctionId, stable_key_for_test, test_stable_key_interner};
 
     fn node(kind: NodeKind, precision: SemanticPrecision, stable_key: &str) -> SemanticNodeFact {
         SemanticNodeFact {
@@ -285,8 +279,8 @@ mod tests {
         }
     }
 
-    fn store_db(mut output: SemanticGraphOutput) -> AnalysisDb {
-        let mut db = AnalysisDb::new();
+    fn store_db(mut output: SemanticGraphOutput) -> LocalAnalysisDb {
+        let mut db = LocalAnalysisDb::new();
         let source = test_stable_key_interner();
         let target = db.stable_key_interner();
         for row in &mut output.nodes {

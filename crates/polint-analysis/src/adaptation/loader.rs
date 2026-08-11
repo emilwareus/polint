@@ -3,11 +3,11 @@ use std::path::{Component, Path};
 use serde::Deserialize;
 use thiserror::Error;
 
-use crate::analysis::adaptation::facts::{LoadedModelFact, ModelConfidence, ModelLanguage};
-use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
+use crate::adaptation::facts::{LoadedModelFact, ModelConfidence, ModelLanguage};
+use polint_analysis_api::{FactFamily, stable_key_from_parts};
 
 #[derive(Debug, Error, PartialEq, Eq)]
-pub(crate) enum ModelLoadError {
+pub enum ModelLoadError {
     #[error("adaptation model path must be repo-relative: {0}")]
     InvalidPath(String),
     #[error("failed to parse adaptation model TOML: {0}")]
@@ -35,8 +35,8 @@ struct ModelFactToml {
     evidence: Option<Vec<String>>,
 }
 
-pub(crate) fn load_model_file(
-    interner: &crate::core::StableKeyInterner,
+pub fn load_model_file(
+    interner: &polint_core::StableKeyInterner,
     model_path: impl AsRef<Path>,
     contents: &str,
 ) -> Result<Vec<LoadedModelFact>, ModelLoadError> {
@@ -128,14 +128,14 @@ fn normalize_model_path(path: &Path) -> Result<String, ModelLoadError> {
 }
 
 fn model_stable_key(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     model_path: &str,
     source_pattern: &str,
     target_pattern: &str,
     confidence: ModelConfidence,
     language: ModelLanguage,
     pair: (&str, &[String]),
-) -> crate::core::StableKeyId {
+) -> polint_core::StableKeyId {
     let (scope, evidence) = pair;
     let language = language.as_str().to_string();
     let confidence = confidence.as_str().to_string();
@@ -154,6 +154,7 @@ fn model_stable_key(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::LocalAnalysisDb;
 
     const VALID: &str = r#"
 [[facts]]
@@ -167,7 +168,7 @@ evidence = ["src/app.ts:10", " src/app.ts:10 "]
 
     #[test]
     fn loader_parses_and_normalizes_model_facts() {
-        let interner = crate::core::AnalysisDb::new().stable_key_interner();
+        let interner = LocalAnalysisDb::new().stable_key_interner();
         let facts = load_model_file(&interner, ".polint/models/framework.toml", VALID).unwrap();
         assert_eq!(facts.len(), 1);
         assert_eq!(facts[0].model_path, ".polint/models/framework.toml");
@@ -183,7 +184,7 @@ evidence = ["src/app.ts:10", " src/app.ts:10 "]
 
     #[test]
     fn loader_stable_keys_keep_evidence_boundaries() {
-        let interner = crate::core::AnalysisDb::new().stable_key_interner();
+        let interner = LocalAnalysisDb::new().stable_key_interner();
         let first = interner.resolve(model_stable_key(
             &interner,
             ".polint/models/framework.toml",
@@ -210,7 +211,7 @@ evidence = ["src/app.ts:10", " src/app.ts:10 "]
     fn loader_rejects_absolute_and_parent_paths() {
         assert!(matches!(
             load_model_file(
-                &crate::core::AnalysisDb::new().stable_key_interner(),
+                &LocalAnalysisDb::new().stable_key_interner(),
                 "/tmp/model.toml",
                 VALID
             ),
@@ -218,7 +219,7 @@ evidence = ["src/app.ts:10", " src/app.ts:10 "]
         ));
         assert!(matches!(
             load_model_file(
-                &crate::core::AnalysisDb::new().stable_key_interner(),
+                &LocalAnalysisDb::new().stable_key_interner(),
                 "../model.toml",
                 VALID
             ),
@@ -229,7 +230,7 @@ evidence = ["src/app.ts:10", " src/app.ts:10 "]
     #[test]
     fn loader_requires_all_schema_fields() {
         let err = load_model_file(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &LocalAnalysisDb::new().stable_key_interner(),
             ".polint/models/framework.toml",
             r#"
 [[facts]]

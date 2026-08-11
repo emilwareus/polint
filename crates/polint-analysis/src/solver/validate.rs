@@ -25,19 +25,19 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::analysis::ids::SemanticNodeId;
-use crate::analysis::semantic_graph::constraints::{ConstraintFact, ConstraintKind};
-use crate::analysis::solver::facts::{DerivedEdgeFact, derived_edge_precision_ceiling};
-use crate::analysis::solver::store::SOLVER_PROVIDER_ID;
-use crate::analysis_kernel::FactPrecision;
-use crate::diagnostics::{Diagnostic, TextRange};
+use crate::ids::SemanticNodeId;
+use crate::semantic_graph::constraints::{ConstraintFact, ConstraintKind};
+use crate::solver::facts::{DerivedEdgeFact, derived_edge_precision_ceiling};
+use crate::solver::store::SOLVER_PROVIDER_ID;
+use polint_analysis_api::FactPrecision;
+use polint_core::{Diagnostic, DiagnosticRange as TextRange};
 
 /// Validates the solver's derived-edge rows, emitting an evidence-bearing
 /// [`Diagnostic`] per problem (D-06). Operates over the normalized rows the store
 /// holds; `node_ids` is the set of `SemanticNodeId`s the solver derived over (the
 /// edge endpoints must reference nodes that exist in the input graph).
-pub(crate) fn validate_derived_edges(
-    interner: &crate::core::StableKeyInterner,
+pub fn validate_derived_edges(
+    interner: &polint_core::StableKeyInterner,
     derived_edges: &[DerivedEdgeFact],
     node_ids: &BTreeSet<SemanticNodeId>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -96,10 +96,7 @@ pub(crate) fn validate_derived_edges(
 /// A derived edge is an over-approximation and must never claim the exact tier.
 /// Returns a diagnostic when the (already-mapped) kernel precision is
 /// [`FactPrecision::Exact`].
-pub(crate) fn reject_exact_precision(
-    precision: FactPrecision,
-    stable_key: &str,
-) -> Option<Diagnostic> {
+pub fn reject_exact_precision(precision: FactPrecision, stable_key: &str) -> Option<Diagnostic> {
     if precision == FactPrecision::Exact {
         Some(precision_ceiling_diagnostic(stable_key))
     } else {
@@ -121,7 +118,7 @@ pub(crate) fn reject_exact_precision(
 ///
 /// This is deterministic: the traversal is over `BTreeMap`/`BTreeSet`-ordered
 /// adjacency, so the diagnostics are emitted in stable node order.
-pub(crate) fn detect_solver_summary_cycle(
+pub fn detect_solver_summary_cycle(
     constraints: &[ConstraintFact],
     diagnostics: &mut Vec<Diagnostic>,
 ) -> usize {
@@ -350,14 +347,14 @@ fn precision_ceiling_diagnostic(stable_key: &str) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::ids::{DerivedEdgeId, SemanticConstraintId, SemanticNodeId};
-    use crate::analysis::points_to::facts::{PointsToPrecision, PointsToStatus};
-    use crate::analysis::semantic_graph::constraints::{ConstraintFact, ConstraintKind};
-    use crate::analysis::solver::provenance::{ContributingFact, DerivedEdgeProvenance};
-    use crate::analysis_kernel::FactFamily;
+    use crate::ids::{DerivedEdgeId, SemanticConstraintId, SemanticNodeId};
+    use crate::points_to::facts::{PointsToPrecision, PointsToStatus};
+    use crate::semantic_graph::constraints::{ConstraintFact, ConstraintKind};
+    use crate::solver::provenance::{ContributingFact, DerivedEdgeProvenance};
+    use polint_analysis_api::FactFamily;
 
     fn provenance() -> DerivedEdgeProvenance {
-        let interner = crate::core::test_stable_key_interner();
+        let interner = polint_core::test_stable_key_interner();
         DerivedEdgeProvenance::new(
             &interner,
             vec![ContributingFact::from_parts(
@@ -380,7 +377,7 @@ mod tests {
             target: SemanticNodeId(target),
             status: PointsToStatus::Present,
             precision: PointsToPrecision::FlowInsensitive,
-            stable_key: crate::core::stable_key_for_test(stable_key),
+            stable_key: polint_core::stable_key_for_test(stable_key),
             provenance: provenance(),
         }
     }
@@ -394,7 +391,7 @@ mod tests {
             },
             status: PointsToStatus::Present,
             precision: PointsToPrecision::FlowInsensitive,
-            stable_key: crate::core::stable_key_for_test(stable_key),
+            stable_key: polint_core::stable_key_for_test(stable_key),
         }
     }
 
@@ -406,7 +403,7 @@ mod tests {
             },
             status: PointsToStatus::Present,
             precision: PointsToPrecision::FlowInsensitive,
-            stable_key: crate::core::stable_key_for_test(stable_key),
+            stable_key: polint_core::stable_key_for_test(stable_key),
         }
     }
 
@@ -417,7 +414,7 @@ mod tests {
         let edges = vec![edge(0, 0, 1, "edge|copy_edge|a")];
         let mut diagnostics = Vec::new();
         validate_derived_edges(
-            &crate::core::test_stable_key_interner(),
+            &polint_core::test_stable_key_interner(),
             &edges,
             &node_ids,
             &mut diagnostics,
@@ -442,7 +439,7 @@ mod tests {
         ];
         let mut diagnostics = Vec::new();
         validate_derived_edges(
-            &crate::core::test_stable_key_interner(),
+            &polint_core::test_stable_key_interner(),
             &edges,
             &node_ids,
             &mut diagnostics,
@@ -462,7 +459,7 @@ mod tests {
         let edges = vec![edge(0, 0, 9, "edge|copy_edge|a")];
         let mut diagnostics = Vec::new();
         validate_derived_edges(
-            &crate::core::test_stable_key_interner(),
+            &polint_core::test_stable_key_interner(),
             &edges,
             &node_ids,
             &mut diagnostics,
@@ -483,7 +480,7 @@ mod tests {
         let edges = vec![edge(5, 0, 1, "edge|copy_edge|a")];
         let mut diagnostics = Vec::new();
         validate_derived_edges(
-            &crate::core::test_stable_key_interner(),
+            &polint_core::test_stable_key_interner(),
             &edges,
             &node_ids,
             &mut diagnostics,

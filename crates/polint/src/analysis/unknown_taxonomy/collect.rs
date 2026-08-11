@@ -72,6 +72,7 @@ pub(crate) fn public_capability_unknowns(db: &AnalysisDb, capability: &str) -> V
     normalize_rows(rows)
 }
 
+#[cfg(test)]
 pub(crate) fn graph_engine_unknowns(db: &AnalysisDb) -> Vec<UnknownRow> {
     graph_engine_unknowns_with_diagnostics(db, &[])
 }
@@ -90,14 +91,6 @@ pub(crate) fn graph_engine_unknowns_with_diagnostics(
     rows.extend(refined_call_unknowns(db));
     rows.extend(adaptation_unknowns(db));
     normalize_rows(rows)
-}
-
-#[allow(
-    dead_code,
-    reason = "Plan 52-04 wires the consolidated inspect unknowns command to this collector."
-)]
-pub(crate) fn all_unknowns(db: &AnalysisDb) -> Vec<UnknownRow> {
-    all_unknowns_with_diagnostics(db, &[])
 }
 
 pub(crate) fn all_unknowns_with_diagnostics(
@@ -1127,7 +1120,7 @@ mod tests {
         })
         .expect("refined calls");
 
-        let capabilities = all_unknowns(&db)
+        let capabilities = all_unknowns_with_diagnostics(&db, &[])
             .into_iter()
             .filter_map(|row| row.capability)
             .collect::<BTreeSet<_>>();

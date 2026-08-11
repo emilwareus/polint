@@ -2,6 +2,8 @@
 //!
 //! Extracted from the core monolith without behaviour changes.
 
+#[cfg(test)]
+use super::POLINT_ABSTRACT_DOMAINS_PROVIDER_ID;
 use crate::analysis::access_paths::facts::AccessPathFact;
 use crate::analysis::access_paths::store::AccessPathStore;
 use crate::analysis::adaptation::facts::{AcceptedModelFact, RejectedModelFact};
@@ -22,8 +24,6 @@ use crate::analysis::data_flow::facts::{
 };
 use crate::analysis::data_flow::provider::DATA_FLOW_PROVIDER_ID;
 use crate::analysis::data_flow::store::{DataFlowOutput, DataFlowStore};
-use crate::analysis::domains::facts::{DomainEventFact, DomainObservationFact};
-use crate::analysis::domains::store::{DomainOutput, DomainStore};
 use crate::analysis::entrypoints::facts::{
     EntrypointFact, EntrypointStatus, FrameworkDispatchEdgeFact, TrustBoundaryFact,
     UnresolvedFrameworkFact,
@@ -55,7 +55,7 @@ use crate::analysis::refined_calls::facts::RefinedCallEdgeFact;
 use crate::analysis::refined_calls::provider::REFINED_CALLS_PROVIDER_ID;
 use crate::analysis::refined_calls::store::{RefinedCallOutput, RefinedCallStore};
 use crate::analysis::semantic_graph::constraints::ConstraintFact;
-use crate::analysis::semantic_graph::facts::{SemanticEdgeFact, SemanticNodeFact};
+use crate::analysis::semantic_graph::facts::SemanticNodeFact;
 use crate::analysis::semantic_graph::store::{SemanticGraphOutput, SemanticGraphStore};
 use crate::analysis::solver::budget::BudgetStatus;
 use crate::analysis::solver::facts::DerivedEdgeFact;
@@ -98,6 +98,13 @@ use crate::ts::object_model::facts::{
     TsReceiverBindingFact,
 };
 use crate::ts::object_model::store::{TsObjectModelOutput, TsObjectModelStore};
+#[cfg(test)]
+use polint_analysis::domains::facts::{DomainEventFact, DomainObservationFact};
+#[cfg(test)]
+use polint_analysis::domains::store::DomainOutput;
+use polint_analysis::domains::store::DomainStore;
+#[cfg(test)]
+use polint_analysis::semantic_graph::facts::SemanticEdgeFact;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -133,9 +140,8 @@ use super::span::Span;
 use super::{
     CALLS_PROVIDER_ID, CFG_PROVIDER_ID, CYCLOMATIC_COMPLEXITY_METRIC_NAME, ENTRYPOINTS_PROVIDER_ID,
     FUNCTION_SIZE_METRIC_NAME, GO_SYNTAX_PROVIDER_ID, METRICS_PROVIDER_ID,
-    MODULE_GRAPH_PROVIDER_ID, MODULE_TOPOLOGY_PROVIDER_ID, POLINT_ABSTRACT_DOMAINS_PROVIDER_ID,
-    POLINT_DIRECT_SUMMARIES_PROVIDER_ID, SEMANTIC_MIR_PROVIDER_ID, SYMBOL_GRAPH_PROVIDER_ID,
-    TS_SYNTAX_PROVIDER_ID,
+    MODULE_GRAPH_PROVIDER_ID, MODULE_TOPOLOGY_PROVIDER_ID, POLINT_DIRECT_SUMMARIES_PROVIDER_ID,
+    SEMANTIC_MIR_PROVIDER_ID, SYMBOL_GRAPH_PROVIDER_ID, TS_SYNTAX_PROVIDER_ID,
 };
 
 #[derive(Debug)]
@@ -483,6 +489,7 @@ impl AnalysisDb {
             .expect("DomainStore is installed when AnalysisDb is constructed")
     }
 
+    #[cfg(test)]
     fn domain_store_mut(&mut self) -> &mut DomainStore {
         self.fact_store_mut(DOMAIN_STORE_FAMILY)
             .expect("DomainStore is installed when AnalysisDb is constructed")
@@ -1086,11 +1093,7 @@ impl AnalysisDb {
         self.replace_abstract_domain_store(store);
     }
 
-    pub(crate) fn replace_normalized_abstract_domain_facts(&mut self, output: DomainOutput) {
-        let store = DomainStore::from_normalized_output(output);
-        self.replace_abstract_domain_store(store);
-    }
-
+    #[cfg(test)]
     fn replace_abstract_domain_store(&mut self, store: DomainStore) {
         *self.domain_store_mut() = store;
         let interner = self.stable_key_interner();
@@ -1242,10 +1245,12 @@ impl AnalysisDb {
         Some(self.evidence_store_inner())
     }
 
+    #[cfg(test)]
     pub(crate) fn abstract_domain_observations(&self) -> &[DomainObservationFact] {
         self.domain_store_inner().observations()
     }
 
+    #[cfg(test)]
     pub(crate) fn abstract_domain_events(&self) -> &[DomainEventFact] {
         self.domain_store_inner().events()
     }
@@ -1446,6 +1451,7 @@ impl AnalysisDb {
         self.semantic_graph_store_inner().nodes()
     }
 
+    #[cfg(test)]
     pub(crate) fn semantic_edges(&self) -> &[SemanticEdgeFact] {
         self.semantic_graph_store_inner().edges()
     }
@@ -1888,6 +1894,7 @@ impl AnalysisDb {
             FactFamily::EvidenceReplayKey,
         ]);
     }
+    #[cfg(test)]
     fn refresh_abstract_domain_metadata(&mut self, interner: &crate::core::StableKeyInterner) {
         self.fact_meta.remove_family(FactFamily::DomainObservation);
         self.fact_meta.remove_family(FactFamily::DomainEvent);
@@ -5048,6 +5055,7 @@ impl AnalysisDb {
         )
     }
 
+    #[cfg(test)]
     fn domain_observation_metadata(
         &self,
         interner: &crate::core::StableKeyInterner,
@@ -5094,6 +5102,7 @@ impl AnalysisDb {
         )
     }
 
+    #[cfg(test)]
     fn domain_event_metadata(
         &self,
         interner: &crate::core::StableKeyInterner,

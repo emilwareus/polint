@@ -12,11 +12,11 @@
 //! the list) and an "algorithm-version bump invalidates" assertion. A third proves
 //! that a SolverBudget change changes the parameter digest (D-15).
 
-use crate::analysis::solver::budget::SolverBudget;
-use crate::analysis_kernel::incremental::{Digest, DigestKind};
+use crate::solver::budget::SolverBudget;
+use polint_analysis_api::{Digest, DigestKind};
 
 /// Schema label for the `polint.solver` provider manifest.
-pub(crate) const SOLVER_SCHEMA_LABEL: &str = "solver-run-output-2";
+pub const SOLVER_SCHEMA_LABEL: &str = "solver-run-output-2";
 
 /// Provider parameter digest for `polint.solver` (D-15).
 ///
@@ -30,7 +30,7 @@ pub(crate) const SOLVER_SCHEMA_LABEL: &str = "solver-run-output-2";
 /// override — changes the parameter digest and invalidates downstream. This is the
 /// "solver budgets participate in the cache key" contract (forward-compatible with
 /// CACHE-01/02).
-pub(crate) fn solver_provider_parameter_digest(budget: &SolverBudget) -> Digest {
+pub fn solver_provider_parameter_digest(budget: &SolverBudget) -> Digest {
     let budget_parts = solver_budget_digest_parts(budget);
     let mut parts: Vec<&str> = vec![
         SOLVER_SCHEMA_LABEL,
@@ -59,7 +59,7 @@ pub(crate) fn solver_provider_parameter_digest(budget: &SolverBudget) -> Digest 
 /// The active [`SolverBudget`] knobs, rendered as ordered digest parts (D-15).
 ///
 /// Only knobs observable by the production solver participate.
-pub(crate) fn solver_budget_digest_parts(budget: &SolverBudget) -> Vec<String> {
+pub fn solver_budget_digest_parts(budget: &SolverBudget) -> Vec<String> {
     vec![
         format!("budget.max_steps={}", budget.max_steps),
         format!(
@@ -106,8 +106,8 @@ pub(crate) fn solver_budget_digest_parts(budget: &SolverBudget) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::solver::budget::SolverBudget;
-    use crate::analysis_kernel::incremental::{Digest, DigestKind};
+    use crate::solver::budget::SolverBudget;
+    use polint_analysis_api::{Digest, DigestKind};
 
     #[test]
     fn solver_schema_label_is_solver_run_output_2() {

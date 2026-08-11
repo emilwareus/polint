@@ -14,7 +14,6 @@ use super::span::Span;
 use crate::analysis::adaptation::facts::AcceptedModelFact;
 use crate::analysis::calls::facts::{CallPrecision, CallTargetStatus};
 use crate::analysis::cfg::facts::{CfgPrecision, CfgStatus};
-use crate::analysis::domains::facts::{DomainPrecision, DomainStatus};
 use crate::analysis::entrypoints::facts::{EntrypointPrecision, EntrypointStatus};
 use crate::analysis::extensions::sinks::{ExtensionFactConfidence, ExtensionFactPrecision};
 use crate::analysis::extensions::store::AcceptedExtensionFact;
@@ -30,6 +29,8 @@ use crate::symbol_graph::semantic::{
     AliasFact, ExportFact, GeneratedSymbolFact, ResolutionFact, ScopeFact, SemanticImportFact,
     SemanticStatus, StableExportIdentity,
 };
+#[cfg(test)]
+use polint_analysis::domains::facts::{DomainPrecision, DomainStatus};
 use std::borrow::Cow;
 use std::cmp::Ordering;
 
@@ -660,6 +661,7 @@ pub(super) fn call_status_metadata(
     (fact_precision, confidence)
 }
 
+#[cfg(test)]
 pub(super) fn domain_status_metadata(
     status: DomainStatus,
     precision: DomainPrecision,

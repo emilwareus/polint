@@ -4,12 +4,12 @@ use super::core::{
 };
 use super::lattice::AbstractDomain;
 use super::solver::SolverPolicy;
-use crate::analysis_kernel::incremental::{Digest, DigestKind};
+use polint_analysis_api::{Digest, DigestKind};
 
-pub(crate) const ABSTRACT_DOMAIN_REDUCTION_GRAPH_VERSION: u32 = 1;
-pub(crate) const ABSTRACT_DOMAIN_SCHEMA_LABEL: &str = "abstract-domain-facts-1";
+pub const ABSTRACT_DOMAIN_REDUCTION_GRAPH_VERSION: u32 = 1;
+pub const ABSTRACT_DOMAIN_SCHEMA_LABEL: &str = "abstract-domain-facts-1";
 
-pub(crate) fn abstract_domains_provider_parameter_digest() -> Digest {
+pub fn abstract_domains_provider_parameter_digest() -> Digest {
     let policy = SolverPolicy::deterministic();
     abstract_domains_provider_parameter_digest_for_policy(
         policy.reduction_rounds,
@@ -66,7 +66,7 @@ fn abstract_domains_provider_parameter_digest_for_policy(
 }
 
 #[cfg(test)]
-pub(crate) fn abstract_domains_provider_parameter_digest_for_test(
+pub fn abstract_domains_provider_parameter_digest_for_test(
     max_reduction_rounds: u32,
     widening_fuel: u32,
     iteration_budget: u32,

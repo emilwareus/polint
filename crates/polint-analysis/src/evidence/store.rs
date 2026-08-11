@@ -387,18 +387,10 @@ impl EvidenceStore {
         self.interner.resolve(key)
     }
 
-    #[allow(
-        dead_code,
-        reason = "Private evidence query helpers are consumed by subsequent path/rendering plans."
-    )]
     pub fn node(&self, node: EvidenceNodeId) -> Option<&EvidenceNodeFact> {
         self.output.nodes.get(node.0 as usize)
     }
 
-    #[allow(
-        dead_code,
-        reason = "Private evidence query helpers are consumed by subsequent path/rendering plans."
-    )]
     pub fn edge(&self, edge: EvidenceEdgeId) -> Option<&EvidenceEdgeFact> {
         self.output.edges.get(edge.0 as usize)
     }
@@ -411,10 +403,6 @@ impl EvidenceStore {
         self.edge_refs(self.outgoing.get(&node))
     }
 
-    #[allow(
-        dead_code,
-        reason = "Private evidence query helpers are consumed by subsequent path/rendering plans."
-    )]
     pub fn by_edge_kind(&self, kind: EvidenceEdgeKind) -> Vec<&EvidenceEdgeFact> {
         self.edge_refs(self.by_edge_kind.get(&kind))
     }
@@ -808,50 +796,26 @@ where
     }
 }
 
-#[allow(
-    dead_code,
-    reason = "Evidence construction helpers are consumed by subsequent slice/path plans."
-)]
 pub fn next_evidence_node_id(nodes: &[EvidenceNodeFact]) -> EvidenceNodeId {
     EvidenceNodeId(nodes.len() as u64)
 }
 
-#[allow(
-    dead_code,
-    reason = "Evidence construction helpers are consumed by subsequent slice/path plans."
-)]
 pub fn next_evidence_edge_id(edges: &[EvidenceEdgeFact]) -> EvidenceEdgeId {
     EvidenceEdgeId(edges.len() as u64)
 }
 
-#[allow(
-    dead_code,
-    reason = "Evidence construction helpers are consumed by subsequent diagnostic bundle plans."
-)]
 pub fn next_evidence_bundle_id(bundles: &[EvidenceBundleFact]) -> EvidenceBundleId {
     EvidenceBundleId(bundles.len() as u64)
 }
 
-#[allow(
-    dead_code,
-    reason = "Evidence construction helpers are consumed by subsequent path plans."
-)]
 pub fn next_evidence_path_id(paths: &[EvidencePathFact]) -> EvidencePathId {
     EvidencePathId(paths.len() as u64)
 }
 
-#[allow(
-    dead_code,
-    reason = "Evidence construction helpers are consumed by subsequent slice plans."
-)]
 pub fn next_evidence_slice_id(slices: &[EvidenceSliceFact]) -> EvidenceSliceId {
     EvidenceSliceId(slices.len() as u64)
 }
 
-#[allow(
-    dead_code,
-    reason = "Evidence construction helpers are consumed by subsequent bounded rendering plans."
-)]
 pub fn next_evidence_omitted_region_id(
     omitted_regions: &[EvidenceOmittedRegionFact],
 ) -> EvidenceOmittedRegionId {

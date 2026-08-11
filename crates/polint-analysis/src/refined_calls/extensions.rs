@@ -2,19 +2,20 @@ use super::facts::{
     RefinedCallConfidence, RefinedCallEdgeFact, RefinedCallTier, RefinedCallValidation,
 };
 use super::store::RefinedCallOutput;
-use crate::analysis::calls::facts::{
+use crate::AnalysisHost;
+use crate::calls::facts::{
     CallAlgorithm, CallCallee, CallEdgeKind, CallPrecision, CallProvenance, CallTargetStatus,
     UnresolvedCallReason,
 };
-use crate::analysis::extensions::sinks::{
+use crate::extensions::sinks::{
     ExtensionFactConfidence, ExtensionFactPrecision, REFINED_CALL_EDGE_FAMILY,
 };
-use crate::analysis::extensions::store::AcceptedExtensionFact;
-use crate::analysis::ids::{CallSiteId, RefinedCallEdgeId};
-use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
-use crate::core::{AnalysisDb, FunctionId, SymbolId};
+use crate::extensions::store::AcceptedExtensionFact;
+use crate::ids::{CallSiteId, RefinedCallEdgeId};
+use polint_analysis_api::{FactFamily, stable_key_from_parts};
+use polint_core::{FunctionId, SymbolId};
 
-pub(crate) fn derive_extension_refinements(db: &AnalysisDb) -> RefinedCallOutput {
+pub fn derive_extension_refinements(db: &impl AnalysisHost) -> RefinedCallOutput {
     let interner_handle = db.stable_key_interner();
     let interner = &interner_handle;
     let mut edges = Vec::new();
@@ -31,7 +32,7 @@ pub(crate) fn derive_extension_refinements(db: &AnalysisDb) -> RefinedCallOutput
 }
 
 fn edge_from_extension_fact(
-    db: &AnalysisDb,
+    db: &impl AnalysisHost,
     fact: &AcceptedExtensionFact,
     index: usize,
 ) -> Option<RefinedCallEdgeFact> {
@@ -92,7 +93,7 @@ fn edge_from_extension_fact(
     })
 }
 
-fn resolve_site(db: &AnalysisDb, value: &str) -> Option<CallSiteId> {
+fn resolve_site(db: &impl AnalysisHost, value: &str) -> Option<CallSiteId> {
     if let Some(id) = value.strip_prefix("call_site:") {
         if let Ok(id) = id.parse::<u64>() {
             return Some(CallSiteId(id));
@@ -123,7 +124,7 @@ fn resolve_site(db: &AnalysisDb, value: &str) -> Option<CallSiteId> {
         })
 }
 
-fn resolve_file_span_site(db: &AnalysisDb, value: &str) -> Option<CallSiteId> {
+fn resolve_file_span_site(db: &impl AnalysisHost, value: &str) -> Option<CallSiteId> {
     let (relative_path, start_byte) = value.rsplit_once(':')?;
     let start_byte = start_byte.parse::<u32>().ok()?;
     db.call_sites()
@@ -137,7 +138,7 @@ fn resolve_file_span_site(db: &AnalysisDb, value: &str) -> Option<CallSiteId> {
         .map(|site| site.id)
 }
 
-fn resolve_file_callee_site(db: &AnalysisDb, value: &str) -> Option<CallSiteId> {
+fn resolve_file_callee_site(db: &impl AnalysisHost, value: &str) -> Option<CallSiteId> {
     let (relative_path, callee) = value.rsplit_once(':')?;
     let mut matches = db.call_sites().iter().filter(|site| {
         db.file(site.file)
@@ -254,11 +255,13 @@ fn payload<'a>(fact: &'a AcceptedExtensionFact, prefix: &str) -> Option<&'a str>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::calls::facts::{CallCallee, CallPrecision, CallSiteFact, CallSyntaxKind};
-    use crate::analysis::calls::store::CallOutput;
-    use crate::analysis::extensions::store::ExtensionOutput;
-    use crate::analysis::ids::{MirBodyId, MirOpId};
-    use crate::core::{FileId, FunctionFact, Language, Span};
+    use crate::LocalAnalysisDb;
+    use crate::calls::facts::{CallCallee, CallPrecision, CallSiteFact, CallSyntaxKind};
+    use crate::calls::store::CallOutput;
+    use crate::extensions::store::ExtensionOutput;
+    use crate::ids::{MirBodyId, MirOpId};
+    use polint_analysis_api::FunctionFact;
+    use polint_core::{FileId, Language, Span};
 
     #[test]
     fn accepted_extension_refined_edge_carries_extension_evidence() {
@@ -324,8 +327,8 @@ mod tests {
         assert!(output.edges.is_empty());
     }
 
-    fn db_with_call_site() -> AnalysisDb {
-        let mut db = AnalysisDb::new();
+    fn db_with_call_site() -> LocalAnalysisDb {
+        let mut db = LocalAnalysisDb::new();
         let file = db.add_file(
             "src/app.ts".into(),
             "src/app.ts".to_string(),
@@ -363,7 +366,7 @@ mod tests {
                 result: None,
                 status: CallTargetStatus::Ambiguous,
                 precision: CallPrecision::Heuristic,
-                stable_key: crate::core::StableKeyId(0),
+                stable_key: polint_core::StableKeyId(0),
             }],
             targets: Vec::new(),
             unresolved: Vec::new(),
@@ -377,11 +380,11 @@ mod tests {
             extension_id: "demo".to_string(),
             provider_id: "model".to_string(),
             fact_family: REFINED_CALL_EDGE_FAMILY.to_string(),
-            stable_key: crate::core::stable_key_for_test("extension:refined"),
+            stable_key: polint_core::stable_key_for_test("extension:refined"),
             binding_refs: vec!["file:src/app.ts".to_string()],
             precision: ExtensionFactPrecision::Heuristic,
             confidence: ExtensionFactConfidence::Medium,
-            status: crate::analysis::extensions::sinks::ExtensionFactStatus::Accepted,
+            status: crate::extensions::sinks::ExtensionFactStatus::Accepted,
             evidence: vec!["fixture".to_string()],
             payload_labels: labels.into_iter().map(str::to_string).collect(),
             payload_digest: "digest".to_string(),

@@ -50,6 +50,7 @@ pub(crate) const CFG_PROVIDER_ID: &str = "polint.cfg";
     reason = "Used by AnalysisDb call-fact metadata writers retained for tests until dual accessors are removed."
 )]
 pub(crate) const CALLS_PROVIDER_ID: &str = "polint.calls";
+#[cfg(test)]
 pub(crate) const POLINT_ABSTRACT_DOMAINS_PROVIDER_ID: &str = "polint.abstract_domains";
 pub(crate) const POLINT_DIRECT_SUMMARIES_PROVIDER_ID: &str = "polint.direct_summaries";
 #[allow(

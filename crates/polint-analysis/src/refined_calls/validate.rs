@@ -1,21 +1,19 @@
+use crate::AnalysisHost;
 use std::collections::BTreeSet;
 
-use crate::analysis::calls::facts::{
+use crate::calls::facts::{
     CallAlgorithm, CallEdgeKind, CallPrecision, CallProvenance, CallTargetStatus,
 };
-#[cfg(test)]
-use crate::analysis::refined_calls::facts::RefinedCallTier;
-use crate::analysis::refined_calls::facts::{RefinedCallEdgeFact, RefinedCallValidation};
-use crate::analysis_kernel::FactFamily;
-use crate::core::AnalysisDb;
-use crate::diagnostics::{Diagnostic, TextRange, fingerprint};
+use crate::refined_calls::facts::{RefinedCallEdgeFact, RefinedCallValidation};
+use polint_analysis_api::FactFamily;
+use polint_core::{Diagnostic, DiagnosticRange as TextRange, fingerprint};
 
-pub(crate) fn validate_refined_calls(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
+pub fn validate_refined_calls(db: &impl AnalysisHost, diagnostics: &mut Vec<Diagnostic>) {
     validate_refined_call_edges(db, db.refined_call_edges(), diagnostics);
 }
 
 fn validate_refined_call_edges(
-    db: &AnalysisDb,
+    db: &impl AnalysisHost,
     edges: &[RefinedCallEdgeFact],
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -150,9 +148,7 @@ fn validate_refined_call_edges(
     }
 }
 
-fn uses_synthetic_framework_site(
-    edge: &crate::analysis::refined_calls::facts::RefinedCallEdgeFact,
-) -> bool {
+fn uses_synthetic_framework_site(edge: &crate::refined_calls::facts::RefinedCallEdgeFact) -> bool {
     edge.base_target.is_none()
         && edge.edge_kind == CallEdgeKind::Synthetic
         && edge
@@ -185,15 +181,18 @@ fn invalid_refined_call_diagnostic(stable_key: &str, reason: String) -> Diagnost
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::calls::facts::{
+    use crate::LocalAnalysisDb;
+    use crate::calls::facts::{
         CallAlgorithm, CallCallee, CallPrecision, CallProvenance, CallSiteFact, CallSyntaxKind,
         CallTargetStatus,
     };
-    use crate::analysis::calls::store::CallOutput;
-    use crate::analysis::ids::{CallSiteId, MirBodyId, MirOpId, RefinedCallEdgeId};
-    use crate::analysis::refined_calls::facts::RefinedCallConfidence;
-    use crate::analysis::refined_calls::store::RefinedCallOutput;
-    use crate::core::{FileId, FunctionFact, FunctionId, Language, Span};
+    use crate::calls::store::CallOutput;
+    use crate::ids::{CallSiteId, MirBodyId, MirOpId, RefinedCallEdgeId};
+    use crate::refined_calls::facts::RefinedCallConfidence;
+    use crate::refined_calls::facts::RefinedCallTier;
+    use crate::refined_calls::store::RefinedCallOutput;
+    use polint_analysis_api::FunctionFact;
+    use polint_core::{FileId, FunctionId, Language, Span};
 
     #[test]
     fn validation_catches_dangling_call_site() {
@@ -272,8 +271,8 @@ mod tests {
         }));
     }
 
-    fn db_with_call_site() -> AnalysisDb {
-        let mut db = AnalysisDb::new();
+    fn db_with_call_site() -> LocalAnalysisDb {
+        let mut db = LocalAnalysisDb::new();
         let file = db.add_file(
             "app.ts".into(),
             "app.ts".to_string(),
@@ -322,7 +321,7 @@ mod tests {
                 result: None,
                 status: CallTargetStatus::Resolved,
                 precision: CallPrecision::SetupAware,
-                stable_key: crate::core::StableKeyId(0),
+                stable_key: polint_core::StableKeyId(0),
             }],
             targets: Vec::new(),
             unresolved: Vec::new(),
@@ -352,7 +351,7 @@ mod tests {
             confidence: RefinedCallConfidence::Medium,
             evidence: vec!["test".to_string()],
             input_stable_keys: vec!["input".to_string()],
-            stable_key: crate::core::stable_key_for_test(stable_key),
+            stable_key: polint_core::stable_key_for_test(stable_key),
         }
     }
 

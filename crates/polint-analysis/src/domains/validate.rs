@@ -1,14 +1,14 @@
+use crate::AnalysisHost;
 use std::collections::BTreeSet;
 
 use super::facts::{
     DomainEventFact, DomainObservationFact, DomainPrecision, DomainStatus, DomainValue,
 };
-use crate::analysis::ids::MirOpId;
-use crate::analysis_kernel::{FactFamily, FactPrecision, FactRef};
-use crate::core::AnalysisDb;
-use crate::diagnostics::{Diagnostic, TextRange};
+use crate::ids::MirOpId;
+use polint_analysis_api::{FactFamily, FactPrecision, FactRef};
+use polint_core::{Diagnostic, DiagnosticRange as TextRange};
 
-pub(crate) fn validate_abstract_domains(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
+pub fn validate_abstract_domains(db: &impl AnalysisHost, diagnostics: &mut Vec<Diagnostic>) {
     let bodies = db.mir_bodies().iter().map(|row| row.id).collect();
     let blocks = db.cfg_blocks().iter().map(|row| row.id).collect();
     let operations = db.mir_operations().iter().map(|row| row.id).collect();
@@ -69,12 +69,12 @@ pub(crate) fn validate_abstract_domains(db: &AnalysisDb, diagnostics: &mut Vec<D
 }
 
 fn validate_observation(
-    db: &AnalysisDb,
+    db: &impl AnalysisHost,
     diagnostics: &mut Vec<Diagnostic>,
-    bodies: &BTreeSet<crate::analysis::ids::MirBodyId>,
-    blocks: &BTreeSet<crate::analysis::cfg::ids::BasicBlockId>,
+    bodies: &BTreeSet<crate::ids::MirBodyId>,
+    blocks: &BTreeSet<crate::cfg::ids::BasicBlockId>,
     operations: &BTreeSet<MirOpId>,
-    places: &BTreeSet<crate::analysis::ids::PlaceId>,
+    places: &BTreeSet<crate::ids::PlaceId>,
     row: &DomainObservationFact,
 ) {
     let stable_key = db.resolve_stable_key(row.stable_key);
@@ -184,10 +184,10 @@ fn validate_observation(
 }
 
 fn validate_event(
-    db: &AnalysisDb,
+    db: &impl AnalysisHost,
     diagnostics: &mut Vec<Diagnostic>,
-    bodies: &BTreeSet<crate::analysis::ids::MirBodyId>,
-    blocks: &BTreeSet<crate::analysis::cfg::ids::BasicBlockId>,
+    bodies: &BTreeSet<crate::ids::MirBodyId>,
+    blocks: &BTreeSet<crate::cfg::ids::BasicBlockId>,
     operations: &BTreeSet<MirOpId>,
     call_operations: &BTreeSet<MirOpId>,
     row: &DomainEventFact,
@@ -265,7 +265,7 @@ fn validate_event(
 }
 
 fn check_metadata(
-    db: &AnalysisDb,
+    db: &impl AnalysisHost,
     diagnostics: &mut Vec<Diagnostic>,
     family: FactFamily,
     run_id: u64,
@@ -478,80 +478,4 @@ fn push_domain_diagnostic(
         .with_evidence("field", field)
         .with_evidence("reason", reason),
     );
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::analysis::cfg::ids::BasicBlockId;
-    use crate::analysis::domains::facts::{DomainLocation, DomainObservationFact, DomainSlot};
-    use crate::analysis::ids::{DomainObservationId, MirBodyId, PlaceId};
-    use crate::analysis_kernel::{FactConfidence, FactMeta, FactPrecision, ValidationStatus};
-
-    #[test]
-    fn unresolved_call_observation_allows_propagated_non_call_operation() {
-        let stable_key = "domain:propagated-unresolved-call";
-        let mut db = AnalysisDb::new();
-        let meta_stable_key = db.stable_key_interner().intern(stable_key);
-        db.fact_meta_mut_for_test().insert(
-            FactRef::new(FactFamily::DomainObservation, 0),
-            FactMeta {
-                stable_key: meta_stable_key,
-                producer_id: "polint.abstract_domains",
-                layer_id: "polint.abstract_domains",
-                precision: FactPrecision::Unresolved,
-                confidence: FactConfidence::Low,
-                validation: ValidationStatus::NativeTrusted,
-                payload_digest: "digest".to_string(),
-            },
-        );
-        let row = DomainObservationFact {
-            id: DomainObservationId(0),
-            body: MirBodyId(1),
-            block: Some(BasicBlockId(2)),
-            operation: Some(MirOpId(3)),
-            place: Some(PlaceId(4)),
-            slot: DomainSlot::Truthiness,
-            location: DomainLocation::AfterOperation,
-            value: DomainValue::TopReason("unresolved_call".to_string()),
-            status: DomainStatus::Unknown,
-            precision: DomainPrecision::Unknown,
-            stable_key: crate::core::stable_key_for_test(stable_key),
-        };
-        let mut diagnostics = Vec::new();
-
-        validate_observation(
-            &db,
-            &mut diagnostics,
-            &BTreeSet::from([MirBodyId(1)]),
-            &BTreeSet::from([BasicBlockId(2)]),
-            &BTreeSet::from([MirOpId(3)]),
-            &BTreeSet::from([PlaceId(4)]),
-            &row,
-        );
-
-        assert!(diagnostics.is_empty(), "{diagnostics:#?}");
-    }
-
-    #[test]
-    fn unresolved_call_event_still_requires_matching_call_site_operation() {
-        let mut diagnostics = Vec::new();
-
-        validate_unresolved_call_reference(
-            &mut diagnostics,
-            "DomainEvent",
-            "domain:event",
-            Some(MirOpId(3)),
-            &BTreeSet::new(),
-            Some("unresolved_call"),
-        );
-
-        assert!(diagnostics.iter().any(|diagnostic| {
-            diagnostic.evidence.iter().any(|evidence| {
-                evidence.label == "reason"
-                    && evidence.value
-                        == "unresolved-call rows require a matching call-site operation"
-            })
-        }));
-    }
 }

@@ -1,15 +1,15 @@
-use crate::analysis::adaptation::ADAPTATION_MODEL_ALGORITHM;
-use crate::analysis::adaptation::budget::AdaptationModelBudget;
-use crate::analysis::adaptation::store::AdaptationModelStore;
-use crate::analysis_kernel::incremental::{Digest, DigestKind};
+use crate::adaptation::ADAPTATION_MODEL_ALGORITHM;
+use crate::adaptation::budget::AdaptationModelBudget;
+use crate::adaptation::store::AdaptationModelStore;
+use polint_analysis_api::{Digest, DigestKind};
 
-pub(crate) const ADAPTATION_MODEL_SCHEMA_LABEL: &str = "adaptation-model-facts-1";
-pub(crate) const ADAPTATION_MODEL_VALIDATOR_VERSION: &str = "adaptation_model_validator_v1";
+pub const ADAPTATION_MODEL_SCHEMA_LABEL: &str = "adaptation-model-facts-1";
+pub const ADAPTATION_MODEL_VALIDATOR_VERSION: &str = "adaptation_model_validator_v1";
 
-pub(crate) fn adaptation_model_digest(
+pub fn adaptation_model_digest(
     store: &AdaptationModelStore,
     budget: AdaptationModelBudget,
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
 ) -> Digest {
     let budget_parts = budget.digest_parts();
     let store_parts = store.digest_parts(interner);
@@ -26,12 +26,13 @@ pub(crate) fn adaptation_model_digest(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::adaptation::facts::{LoadedModelFact, ModelConfidence, ModelLanguage};
-    use crate::analysis::adaptation::validate::ValidationUniverse;
+    use crate::LocalAnalysisDb;
+    use crate::adaptation::facts::{LoadedModelFact, ModelConfidence, ModelLanguage};
+    use crate::adaptation::validate::ValidationUniverse;
 
     #[test]
     fn digest_changes_when_model_behavior_changes() {
-        let interner = crate::core::AnalysisDb::new().stable_key_interner();
+        let interner = LocalAnalysisDb::new().stable_key_interner();
         let universe = ValidationUniverse::new(["call:a"], ["function:a", "function:b"]);
         let budget = AdaptationModelBudget::default();
         let first = AdaptationModelStore::build(
@@ -54,7 +55,7 @@ mod tests {
 
     #[test]
     fn digest_is_stable_for_file_reorder() {
-        let interner = crate::core::AnalysisDb::new().stable_key_interner();
+        let interner = LocalAnalysisDb::new().stable_key_interner();
         let universe = ValidationUniverse::new(["call:a", "call:b"], ["function:a", "function:b"]);
         let budget = AdaptationModelBudget::default();
         let first = AdaptationModelStore::build(
@@ -77,7 +78,7 @@ mod tests {
 
     #[test]
     fn digest_changes_when_budget_changes() {
-        let interner = crate::core::AnalysisDb::new().stable_key_interner();
+        let interner = LocalAnalysisDb::new().stable_key_interner();
         let universe = ValidationUniverse::new(["call:a"], ["function:a"]);
         let store = AdaptationModelStore::build(
             &interner,
@@ -102,7 +103,7 @@ mod tests {
             language: ModelLanguage::TypeScript,
             scope: "src/app.ts".to_string(),
             evidence: vec!["src/app.ts:10".to_string()],
-            stable_key: crate::core::stable_key_for_test(&format!("{source}->{target}")),
+            stable_key: polint_core::stable_key_for_test(&format!("{source}->{target}")),
         }
     }
 }

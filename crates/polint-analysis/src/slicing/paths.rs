@@ -15,10 +15,6 @@ pub struct PathQuery {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PathMode {
-    #[allow(
-        dead_code,
-        reason = "Local path mode is part of the private query contract and is exercised by later bundle rendering plans."
-    )]
     Local,
     SourceToSink,
 }
@@ -275,10 +271,6 @@ pub mod summary {
         pub expansion: EvidenceExpansion,
     }
 
-    #[allow(
-        dead_code,
-        reason = "Private compressed summary rendering is consumed by current bundle renderers."
-    )]
     pub fn compressed_steps(store: &EvidenceStore) -> Vec<EvidenceSummaryStep> {
         let mut steps = store
             .edges()

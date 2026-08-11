@@ -415,6 +415,7 @@ pub(crate) fn observe_kernel_fixture_repo_with_plan_for_test(
     })?;
     let elapsed = started.elapsed();
 
+    eprintln!("RAW_DIAGNOSTICS: {:#?}", output.diagnostics);
     let mut observed = Vec::new();
     observed.extend(observed_diagnostics(&output.diagnostics, repo_root));
     observed.extend(provider_order_invariants());

@@ -15,20 +15,12 @@ pub struct SliceQuery {
     pub budget: SliceBudget,
 }
 
-#[allow(
-    dead_code,
-    reason = "Forward slicing is part of the private query contract before public callers exist."
-)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SliceDirection {
     Backward,
     Forward,
 }
 
-#[allow(
-    dead_code,
-    reason = "All slice modes are part of the private query contract before public callers exist."
-)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SliceMode {
     ThinBackward,
@@ -194,10 +186,6 @@ pub fn local_slice(store: &EvidenceStore, query: SliceQuery) -> SliceResult {
 }
 
 impl SliceMode {
-    #[allow(
-        dead_code,
-        reason = "Mode-to-evidence-key mapping is consumed by subsequent cache/debug plans."
-    )]
     pub fn query_mode(self) -> EvidenceQueryMode {
         match self {
             Self::ThinBackward => EvidenceQueryMode::ThinBackward,

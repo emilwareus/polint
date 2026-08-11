@@ -2,17 +2,15 @@ use super::facts::{
     RefinedCallConfidence, RefinedCallEdgeFact, RefinedCallTier, RefinedCallValidation,
 };
 use super::store::RefinedCallOutput;
-use crate::analysis::calls::facts::{
+use crate::AnalysisHost;
+use crate::calls::facts::{
     CallAlgorithm, CallPrecision, CallProvenance, CallTargetFact, CallTargetStatus,
 };
-use crate::analysis::ids::RefinedCallEdgeId;
-use crate::analysis::summaries::facts::{
-    SummaryDomainKind, SummaryFact, SummaryPrecision, SummaryStatus,
-};
-use crate::analysis_kernel::{FactFamily, FactRef, stable_key_from_parts};
-use crate::core::AnalysisDb;
+use crate::ids::RefinedCallEdgeId;
+use crate::summaries::facts::{SummaryDomainKind, SummaryFact, SummaryPrecision, SummaryStatus};
+use polint_analysis_api::{FactFamily, FactRef, stable_key_from_parts};
 
-pub(crate) fn derive_summary_assisted_refinements(db: &AnalysisDb) -> RefinedCallOutput {
+pub fn derive_summary_assisted_refinements(db: &impl AnalysisHost) -> RefinedCallOutput {
     let interner_handle = db.stable_key_interner();
     let interner = &interner_handle;
     let mut edges = Vec::new();
@@ -34,7 +32,7 @@ pub(crate) fn derive_summary_assisted_refinements(db: &AnalysisDb) -> RefinedCal
 }
 
 fn edge_from_summary(
-    db: &AnalysisDb,
+    db: &impl AnalysisHost,
     summary: &SummaryFact,
     target: &CallTargetFact,
     index: usize,
@@ -66,7 +64,7 @@ fn edge_from_summary(
             .iter()
             .find(|site| site.id == target.site)
             .map(|site| site.language)
-            .unwrap_or(crate::core::Language::Unknown),
+            .unwrap_or(polint_core::Language::Unknown),
         edge_kind: target.edge_kind,
         algorithm: CallAlgorithm::SummaryAssisted,
         tier: RefinedCallTier::SummaryAssisted,
@@ -120,7 +118,7 @@ fn summary_confidence(
     }
 }
 
-fn metadata_key(db: &AnalysisDb, family: FactFamily, run_id: u64, fallback: &str) -> String {
+fn metadata_key(db: &impl AnalysisHost, family: FactFamily, run_id: u64, fallback: &str) -> String {
     db.metadata_for(FactRef::new(family, run_id))
         .map(|metadata| db.resolve_stable_key(metadata.stable_key).to_string())
         .unwrap_or_else(|| fallback.to_string())
@@ -129,14 +127,16 @@ fn metadata_key(db: &AnalysisDb, family: FactFamily, run_id: u64, fallback: &str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::calls::facts::{
+    use crate::LocalAnalysisDb;
+    use crate::calls::facts::{
         CallCallee, CallEdgeKind, CallSiteFact, CallSyntaxKind, CallTargetFact,
     };
-    use crate::analysis::calls::store::CallOutput;
-    use crate::analysis::ids::{CallSiteId, CallTargetId, MirBodyId, MirOpId, SummaryId};
-    use crate::analysis::summaries::facts::SummaryProvenance;
-    use crate::analysis::summaries::store::SummaryOutput;
-    use crate::core::{FileId, FunctionFact, FunctionId, Language, Span, SymbolId};
+    use crate::calls::store::CallOutput;
+    use crate::ids::{CallSiteId, CallTargetId, MirBodyId, MirOpId, SummaryId};
+    use crate::summaries::facts::SummaryProvenance;
+    use crate::summaries::store::SummaryOutput;
+    use polint_analysis_api::FunctionFact;
+    use polint_core::{FileId, FunctionId, Language, Span, SymbolId};
 
     #[test]
     fn bindable_call_summary_creates_summary_assisted_edge() {
@@ -172,8 +172,8 @@ mod tests {
         assert!(output.edges.is_empty());
     }
 
-    fn db_with_call_target() -> AnalysisDb {
-        let mut db = AnalysisDb::new();
+    fn db_with_call_target() -> LocalAnalysisDb {
+        let mut db = LocalAnalysisDb::new();
         let file = db.add_file(
             "src/app.ts".into(),
             "src/app.ts".to_string(),
@@ -222,7 +222,7 @@ mod tests {
                 result: None,
                 status: CallTargetStatus::Resolved,
                 precision: CallPrecision::SetupAware,
-                stable_key: crate::core::StableKeyId(0),
+                stable_key: polint_core::StableKeyId(0),
             }],
             targets: vec![CallTargetFact {
                 id: CallTargetId(0),
@@ -236,7 +236,7 @@ mod tests {
                 reason: None,
                 provenance: CallProvenance::NativeDirect,
                 precision: CallPrecision::SetupAware,
-                stable_key: crate::core::StableKeyId(1),
+                stable_key: polint_core::StableKeyId(1),
             }],
             unresolved: Vec::new(),
         })
@@ -247,7 +247,7 @@ mod tests {
     fn summary(status: SummaryStatus, domain: SummaryDomainKind) -> SummaryFact {
         SummaryFact {
             id: SummaryId(0),
-            callable_stable_key: crate::core::stable_key_for_test("function:caller"),
+            callable_stable_key: polint_core::stable_key_for_test("function:caller"),
             function: FunctionId(0),
             domain,
             status,
@@ -255,7 +255,7 @@ mod tests {
             provenance: SummaryProvenance::NativeLocal,
             payload_digest: "digest".to_string(),
             tito_flows: Vec::new(),
-            stable_key: crate::core::stable_key_for_test("summary:caller:call"),
+            stable_key: polint_core::stable_key_for_test("summary:caller:call"),
         }
     }
 

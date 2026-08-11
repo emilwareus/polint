@@ -194,8 +194,3 @@ fn resolve_stable_key_ids(interner: &polint_core::StableKeyInterner, payload: &s
     resolved.push_str(remaining);
     resolved
 }
-
-#[cfg(test)]
-fn entrypoints_output_digest_for_test(parts: &[&str]) -> Digest {
-    Digest::from_parts(DigestKind::ProviderOutput, "entrypoints_output", parts)
-}

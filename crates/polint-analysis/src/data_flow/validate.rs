@@ -3,20 +3,12 @@ use std::collections::BTreeSet;
 use super::facts::{DataFlowEdgeKind, DataFlowStatus, DataFlowValidation};
 use super::store::DataFlowOutput;
 
-#[allow(
-    dead_code,
-    reason = "Validation rows are used by the debug/eval surface in later data-flow slices."
-)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataFlowValidationIssue {
     pub stable_key_text: String,
     pub reason: String,
 }
 
-#[allow(
-    dead_code,
-    reason = "Validation is kept as a reusable private hook before it is surfaced in debug output."
-)]
 pub fn validate_output(
     output: &DataFlowOutput,
     interner: &polint_core::StableKeyInterner,

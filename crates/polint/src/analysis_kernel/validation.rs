@@ -1147,11 +1147,6 @@ mod abstract_domains {
     };
     use crate::analysis::cfg::ids::{BasicBlockId, CfgFunctionId, CfgNodeId};
     use crate::analysis::cfg::store::CfgOutput;
-    use crate::analysis::domains::facts::{
-        DomainEventFact, DomainLocation, DomainObservationFact, DomainPrecision, DomainSlot,
-        DomainStatus, DomainValue,
-    };
-    use crate::analysis::domains::store::DomainOutput;
     use crate::analysis::ids::{DomainEventId, DomainObservationId, MirBodyId, MirOpId, PlaceId};
     use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
     use crate::analysis::mir::op::{AssignMode, MirOperation, MirOperationKind, MirValue};
@@ -1161,6 +1156,11 @@ mod abstract_domains {
         ValidationStatus,
     };
     use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, Span};
+    use polint_analysis::domains::facts::{
+        DomainEventFact, DomainLocation, DomainObservationFact, DomainPrecision, DomainSlot,
+        DomainStatus, DomainValue,
+    };
+    use polint_analysis::domains::store::DomainOutput;
     use std::path::PathBuf;
 
     #[test]

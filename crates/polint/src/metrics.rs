@@ -6,16 +6,9 @@ use crate::analysis_kernel::incremental::{
 };
 use crate::analysis_plan::AnalysisPlan;
 use crate::cache::Cache;
-use crate::core::{
-    AnalysisDb, ComplexityMetricFact, FileId, FileMetricFact, FunctionFact, FunctionMetricFact,
-    SourceFile, Span, is_synthetic_ts_js_module_function,
-};
+use crate::core::{AnalysisDb, FunctionFact, SourceFile};
 use crate::diagnostics::{Diagnostic, TextRange};
-use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-
-const METRIC_CAPABILITIES: &[&str] = &["file_metrics", "function_metrics", "complexity_metrics"];
-const METRICS_LAYER_SCHEMA: &str = "metrics-facts-v1";
+use polint_analysis::metrics::{METRIC_CAPABILITIES, METRICS_LAYER_SCHEMA, MetricsLayerPayload};
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct MetricsDerivation {
@@ -24,21 +17,7 @@ pub(crate) struct MetricsDerivation {
     pub(crate) output_digest: Option<Digest>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct MetricsLayerPayload {
-    schema: String,
-    file_metrics: Vec<FileMetricFact>,
-    function_metrics: Vec<FunctionMetricFact>,
-    complexity_metrics: Vec<ComplexityMetricFact>,
-}
-
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Compatibility wrapper remains for direct in-crate metrics derivation callers while the kernel uses the stats-returning cache path."
-    )
-)]
+#[cfg(test)]
 pub(crate) fn derive_requested_metrics(db: &mut AnalysisDb, plan: &AnalysisPlan) {
     let _ = derive_requested_metrics_uncached(db, plan);
 }
@@ -140,66 +119,18 @@ fn derive_requested_metrics_uncached(
     db: &mut AnalysisDb,
     plan: &AnalysisPlan,
 ) -> MetricsDerivation {
-    if !plan.requests_any_capability(METRIC_CAPABILITIES) {
+    let requested = plan.requests_any_capability(METRIC_CAPABILITIES);
+    if !requested {
         return MetricsDerivation::default();
     }
 
-    let mut function_counts = BTreeMap::<FileId, u32>::new();
-    for function in db
-        .functions()
-        .iter()
-        .filter(|function| !is_synthetic_ts_js_module_function(function))
-    {
-        let count = function_counts.entry(function.file).or_default();
-        *count = count.saturating_add(1);
+    if let Some(output) = polint_analysis::metrics::derive_requested_metrics(db, requested) {
+        db.replace_metric_facts(
+            output.file_metrics,
+            output.function_metrics,
+            output.complexity_metrics,
+        );
     }
-
-    let file_metrics = db
-        .files()
-        .iter()
-        .map(|file| FileMetricFact {
-            file: file.id,
-            language: file.language,
-            line_count: line_count(&file.source),
-            non_empty_line_count: non_empty_line_count(&file.source),
-            byte_count: saturating_u32(file.source.len()),
-            function_count: function_counts.get(&file.id).copied().unwrap_or_default(),
-        })
-        .collect::<Vec<_>>();
-
-    let function_metrics = db
-        .functions()
-        .iter()
-        .filter(|function| !is_synthetic_ts_js_module_function(function))
-        .map(|function| FunctionMetricFact {
-            function: function.id,
-            file: function.file,
-            name: function.name.clone(),
-            span: function.span.clone(),
-            language: function.language,
-            line_count: span_line_count(&function.span),
-            byte_count: function
-                .span
-                .end_byte
-                .saturating_sub(function.span.start_byte),
-        })
-        .collect::<Vec<_>>();
-
-    let complexity_metrics = db
-        .functions()
-        .iter()
-        .filter(|function| !is_synthetic_ts_js_module_function(function))
-        .map(|function| ComplexityMetricFact {
-            function: function.id,
-            file: function.file,
-            name: function.name.clone(),
-            span: function.span.clone(),
-            language: function.language,
-            cyclomatic_complexity: function.cyclomatic_complexity,
-        })
-        .collect::<Vec<_>>();
-
-    db.replace_metric_facts(file_metrics, function_metrics, complexity_metrics);
     MetricsDerivation {
         cache_stats: CacheStats::default(),
         diagnostics: Vec::new(),
@@ -337,41 +268,20 @@ fn metrics_function_fact_digests(db: &AnalysisDb) -> Vec<Digest> {
 }
 
 fn metrics_parameter_digest() -> Digest {
-    Digest::from_parts(
-        DigestKind::ProviderParameters,
-        "metrics_parameters",
-        &[
-            "output=file_metrics",
-            "output=function_metrics",
-            "output=complexity_metrics",
-        ],
-    )
+    polint_analysis::metrics::metrics_parameter_digest()
 }
 
 fn metrics_layer_payload(db: &AnalysisDb) -> MetricsLayerPayload {
-    let mut file_metrics = db.file_metrics().to_vec();
-    let mut function_metrics = db.function_metrics().to_vec();
-    let mut complexity_metrics = db.complexity_metrics().to_vec();
-    sort_file_metrics(&mut file_metrics);
-    sort_function_metrics(&mut function_metrics);
-    sort_complexity_metrics(&mut complexity_metrics);
-
-    MetricsLayerPayload {
-        schema: METRICS_LAYER_SCHEMA.to_string(),
-        file_metrics,
-        function_metrics,
-        complexity_metrics,
-    }
+    polint_analysis::metrics::metrics_layer_payload(db)
 }
 
 fn restore_metrics_layer_payload(db: &mut AnalysisDb, payload: &MetricsLayerPayload) {
-    let mut file_metrics = payload.file_metrics.clone();
-    let mut function_metrics = payload.function_metrics.clone();
-    let mut complexity_metrics = payload.complexity_metrics.clone();
-    sort_file_metrics(&mut file_metrics);
-    sort_function_metrics(&mut function_metrics);
-    sort_complexity_metrics(&mut complexity_metrics);
-    db.replace_metric_facts(file_metrics, function_metrics, complexity_metrics);
+    let output = polint_analysis::metrics::restore_metrics_layer_payload(payload);
+    db.replace_metric_facts(
+        output.file_metrics,
+        output.function_metrics,
+        output.complexity_metrics,
+    );
 }
 
 fn validate_metrics_layer_payload(
@@ -453,34 +363,11 @@ fn metrics_output_digest(layer_key: &LayerKey, payload_digest: &Digest) -> Diges
 }
 
 fn sorted_files(db: &AnalysisDb) -> Vec<&SourceFile> {
-    let mut files = db.files().iter().collect::<Vec<_>>();
-    files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-    files
+    polint_analysis::metrics::sorted_files(db)
 }
 
 fn sorted_functions(db: &AnalysisDb) -> Vec<&FunctionFact> {
-    let mut functions = db
-        .functions()
-        .iter()
-        .filter(|function| !is_synthetic_ts_js_module_function(function))
-        .collect::<Vec<_>>();
-    functions.sort_by(|left, right| {
-        (
-            db.path_for(left.file),
-            left.span.start_byte,
-            left.span.end_byte,
-            left.name.as_str(),
-            left.id,
-        )
-            .cmp(&(
-                db.path_for(right.file),
-                right.span.start_byte,
-                right.span.end_byte,
-                right.name.as_str(),
-                right.id,
-            ))
-    });
-    functions
+    polint_analysis::metrics::sorted_functions(db)
 }
 
 fn normalized_file_path(file: &SourceFile) -> String {
@@ -521,76 +408,7 @@ fn upstream_layer_key(layer_kind: LayerKind, provider_id: &str, output_digest: D
 }
 
 fn language_cache_label(language: crate::core::Language) -> &'static str {
-    match language {
-        crate::core::Language::Go => "go",
-        crate::core::Language::TypeScript => "typescript",
-        crate::core::Language::Tsx => "tsx",
-        crate::core::Language::JavaScript => "javascript",
-        crate::core::Language::Jsx => "jsx",
-        crate::core::Language::Unknown => "unknown",
-        _ => unreachable!(),
-    }
-}
-
-fn sort_file_metrics(metrics: &mut [FileMetricFact]) {
-    metrics.sort_by_key(|metric| (metric.file, metric.language));
-}
-
-fn sort_function_metrics(metrics: &mut [FunctionMetricFact]) {
-    metrics.sort_by(|left, right| {
-        metric_order_key(left.file, left.function, &left.name, &left.span).cmp(&metric_order_key(
-            right.file,
-            right.function,
-            &right.name,
-            &right.span,
-        ))
-    });
-}
-
-fn sort_complexity_metrics(metrics: &mut [ComplexityMetricFact]) {
-    metrics.sort_by(|left, right| {
-        metric_order_key(left.file, left.function, &left.name, &left.span).cmp(&metric_order_key(
-            right.file,
-            right.function,
-            &right.name,
-            &right.span,
-        ))
-    });
-}
-
-fn metric_order_key<'a>(
-    file: FileId,
-    function: crate::core::FunctionId,
-    name: &'a str,
-    span: &Span,
-) -> (FileId, u64, u32, u32, &'a str) {
-    (file, function.0, span.start_byte, span.end_byte, name)
-}
-
-fn line_count(source: &str) -> u32 {
-    saturating_u32(source.lines().count())
-}
-
-fn non_empty_line_count(source: &str) -> u32 {
-    saturating_u32(
-        source
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .count(),
-    )
-}
-
-fn span_line_count(span: &crate::core::Span) -> u32 {
-    if span.end_line < span.start_line {
-        return 0;
-    }
-    span.end_line
-        .saturating_sub(span.start_line)
-        .saturating_add(1)
-}
-
-fn saturating_u32(value: usize) -> u32 {
-    u32::try_from(value).unwrap_or(u32::MAX)
+    polint_analysis::metrics::language_cache_label(language)
 }
 
 #[cfg(test)]

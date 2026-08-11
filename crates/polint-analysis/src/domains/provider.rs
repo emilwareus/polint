@@ -1,25 +1,23 @@
 use super::cache_key::abstract_domains_provider_parameter_digest;
 use super::solver::{IdeDomainSolver, SolverInput, SolverPolicy};
 use super::store::{DomainMaterialization, DomainOutput};
-use crate::analysis::cfg::ids::BasicBlockId;
-use crate::analysis::ids::{MirBodyId, MirOpId, PlaceId};
-use crate::analysis_kernel::ProviderManifest;
-use crate::analysis_kernel::incremental::{
-    CacheStats, Digest, DigestKind, InputComponent, InputSnapshot,
-};
-use crate::core::AnalysisDb;
-use crate::diagnostics::Diagnostic;
+use crate::AnalysisHost;
+use crate::cfg::ids::BasicBlockId;
+use crate::ids::{MirBodyId, MirOpId, PlaceId};
+use polint_analysis_api::ProviderManifest;
+use polint_analysis_api::{CacheStats, Digest, DigestKind, InputComponent, InputSnapshot};
+use polint_core::Diagnostic;
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct AbstractDomainsProviderOutput {
-    pub(crate) diagnostics: Vec<Diagnostic>,
-    pub(crate) cache_stats: CacheStats,
-    pub(crate) output_digest: Option<Digest>,
+pub struct AbstractDomainsProviderOutput {
+    pub diagnostics: Vec<Diagnostic>,
+    pub cache_stats: CacheStats,
+    pub output_digest: Option<Digest>,
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn derive_abstract_domains_with_cache_stats(
-    db: &mut AnalysisDb,
+pub fn derive_abstract_domains_with_cache_stats(
+    db: &mut impl AnalysisHost,
     input_snapshot: &InputSnapshot,
     manifest: &ProviderManifest,
     semantic_mir_output_digest: Digest,
@@ -44,8 +42,8 @@ pub(crate) fn derive_abstract_domains_with_cache_stats(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn derive_summary_input_abstract_domains_with_cache_stats(
-    db: &mut AnalysisDb,
+pub fn derive_summary_input_abstract_domains_with_cache_stats(
+    db: &mut impl AnalysisHost,
     input_snapshot: &InputSnapshot,
     manifest: &ProviderManifest,
     semantic_mir_output_digest: Digest,
@@ -71,7 +69,7 @@ pub(crate) fn derive_summary_input_abstract_domains_with_cache_stats(
 
 #[allow(clippy::too_many_arguments)]
 fn derive_abstract_domains_with_materialization(
-    db: &mut AnalysisDb,
+    db: &mut impl AnalysisHost,
     input_snapshot: &InputSnapshot,
     manifest: &ProviderManifest,
     semantic_mir_output_digest: Digest,
@@ -120,7 +118,7 @@ fn derive_abstract_domains_with_materialization(
     );
     let mut cache_stats = CacheStats::default();
     cache_stats.record_recompute();
-    db.replace_normalized_abstract_domain_facts(output);
+    db.replace_abstract_domain_facts(output);
 
     AbstractDomainsProviderOutput {
         diagnostics: Vec::new(),
@@ -143,7 +141,7 @@ fn abstract_domains_output_digest(
     block_keys: &std::collections::BTreeMap<BasicBlockId, String>,
     operation_keys: &std::collections::BTreeMap<MirOpId, String>,
     place_keys: &std::collections::BTreeMap<PlaceId, String>,
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     output: &DomainOutput,
     materialization: DomainMaterialization,
 ) -> Digest {
@@ -244,14 +242,16 @@ fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[I
     }));
 }
 
-fn body_stable_key_map(db: &AnalysisDb) -> std::collections::BTreeMap<MirBodyId, String> {
+fn body_stable_key_map(db: &impl AnalysisHost) -> std::collections::BTreeMap<MirBodyId, String> {
     db.mir_bodies()
         .iter()
         .map(|body| (body.id, db.resolve_stable_key(body.stable_key).to_string()))
         .collect()
 }
 
-fn block_stable_key_map(db: &AnalysisDb) -> std::collections::BTreeMap<BasicBlockId, String> {
+fn block_stable_key_map(
+    db: &impl AnalysisHost,
+) -> std::collections::BTreeMap<BasicBlockId, String> {
     db.cfg_blocks()
         .iter()
         .map(|block| {
@@ -263,7 +263,7 @@ fn block_stable_key_map(db: &AnalysisDb) -> std::collections::BTreeMap<BasicBloc
         .collect()
 }
 
-fn operation_stable_key_map(db: &AnalysisDb) -> std::collections::BTreeMap<MirOpId, String> {
+fn operation_stable_key_map(db: &impl AnalysisHost) -> std::collections::BTreeMap<MirOpId, String> {
     db.mir_operations()
         .iter()
         .map(|operation| {
@@ -275,7 +275,7 @@ fn operation_stable_key_map(db: &AnalysisDb) -> std::collections::BTreeMap<MirOp
         .collect()
 }
 
-fn place_stable_key_map(db: &AnalysisDb) -> std::collections::BTreeMap<PlaceId, String> {
+fn place_stable_key_map(db: &impl AnalysisHost) -> std::collections::BTreeMap<PlaceId, String> {
     db.mir_places()
         .iter()
         .map(|place| {
@@ -295,122 +295,4 @@ fn stable_body_key(
         .get(&body)
         .cloned()
         .unwrap_or_else(|| "missing-body".to_string())
-}
-
-#[cfg(test)]
-mod abstract_domains_provider {
-    use super::*;
-    use crate::analysis_kernel::AnalysisKernel;
-    use crate::analysis_kernel::incremental::{Digest, DigestKind};
-    use crate::analysis_plan::AnalysisPlan;
-    use crate::config::load_config;
-    use crate::core::AnalysisDb;
-    use std::fs;
-    use tempfile::tempdir;
-
-    #[test]
-    fn abstract_domains_provider_accepts_empty_output_with_deterministic_digest() {
-        let mut db = AnalysisDb::new();
-        let temp = tempdir().expect("tempdir");
-        fs::write(temp.path().join(".polint.toml"), "").expect("config");
-        let loaded = load_config(temp.path()).expect("config loads");
-        let input_snapshot = crate::analysis_kernel::incremental::input_snapshot_from_run_inputs(
-            &loaded,
-            &db,
-            "config",
-            "rules",
-            AnalysisPlan::empty().digest(),
-            AnalysisKernel::provider_manifests(),
-        );
-        let output = derive_abstract_domains_with_cache_stats(
-            &mut db,
-            &input_snapshot,
-            AnalysisKernel::provider_manifests()
-                .iter()
-                .find(|manifest| manifest.id == "polint.abstract_domains")
-                .expect("abstract domains manifest should exist"),
-            Digest::absent(DigestKind::ProviderOutput, "semantic_mir"),
-            Digest::absent(DigestKind::ProviderOutput, "cfg"),
-            Digest::absent(DigestKind::ProviderOutput, "calls"),
-            Digest::absent(DigestKind::ProviderOutput, "symbol_graph"),
-            Digest::absent(DigestKind::ProviderOutput, "module_topology"),
-            Vec::new(),
-        );
-
-        assert!(output.diagnostics.is_empty());
-        assert!(output.output_digest.is_some());
-        assert_eq!(output.cache_stats.recomputes, 1);
-    }
-
-    #[test]
-    fn abstract_domains_provider_manifest_declares_private_outputs() {
-        let manifest = AnalysisKernel::provider_manifests()
-            .iter()
-            .find(|manifest| manifest.id == "polint.abstract_domains")
-            .expect("abstract domains manifest should exist");
-
-        assert_eq!(manifest.primary_schema_label(), "abstract-domain-facts-1:1");
-        assert!(manifest.outputs.contains(&"domain_observations"));
-        assert!(manifest.outputs.contains(&"domain_events"));
-    }
-}
-
-#[cfg(test)]
-mod kernel_run_report_abstract_domains_row_carries_output_digest {
-    use crate::analysis_kernel::AnalysisKernel;
-
-    #[test]
-    fn abstract_domains_runs_after_calls_and_before_metrics() {
-        let order = AnalysisKernel::provider_manifests()
-            .iter()
-            .map(|manifest| manifest.id)
-            .collect::<Vec<_>>();
-        let calls = order
-            .iter()
-            .position(|provider| *provider == "polint.calls")
-            .expect("calls provider");
-        let domains = order
-            .iter()
-            .position(|provider| *provider == "polint.abstract_domains")
-            .expect("abstract domains provider");
-        let metrics = order
-            .iter()
-            .position(|provider| *provider == "polint.metrics")
-            .expect("metrics provider");
-
-        assert!(calls < domains);
-        assert!(domains < metrics);
-    }
-}
-
-#[cfg(test)]
-mod abstract_domains_layer_key {
-    use crate::analysis::domains::cache_key::abstract_domains_provider_parameter_digest;
-    use crate::analysis_kernel::AnalysisKernel;
-    use crate::analysis_kernel::incremental::{Digest, DigestKind, LayerKey, LayerKind};
-
-    #[test]
-    fn abstract_domains_layer_key_records_upstream_and_absent_future_inputs() {
-        let manifest = AnalysisKernel::provider_manifests()
-            .iter()
-            .find(|manifest| manifest.id == "polint.abstract_domains")
-            .expect("abstract domains manifest should exist");
-        let key = LayerKey::abstract_domains_layer_key(
-            manifest,
-            Vec::new(),
-            Digest::from_parts(DigestKind::Config, "config", &["a"]),
-            Digest::absent(DigestKind::ProviderParameters, "go_lifecycle"),
-            Digest::absent(DigestKind::ProviderParameters, "ts_lifecycle"),
-            Vec::new(),
-            Digest::absent(DigestKind::ProviderOutput, "semantic_mir"),
-            Digest::absent(DigestKind::ProviderOutput, "cfg"),
-            Digest::absent(DigestKind::ProviderOutput, "calls"),
-            Digest::absent(DigestKind::ProviderOutput, "symbol_graph"),
-            Digest::absent(DigestKind::ProviderOutput, "module_topology"),
-            abstract_domains_provider_parameter_digest(),
-        );
-
-        assert_eq!(key.layer_kind, LayerKind::AbstractDomains);
-        assert!(key.extension_digests.len() >= 2);
-    }
 }

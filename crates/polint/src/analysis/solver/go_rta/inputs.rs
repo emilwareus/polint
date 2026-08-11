@@ -584,6 +584,7 @@ fn bare_method_name(name: &str) -> String {
 /// same-named declaration to a point that actually belongs to a tighter inner one. A
 /// previous `find()` (first-match) fallback did exactly that — both the outer and inner
 /// declarations matched the same contained point, breaking symmetry.
+#[cfg(test)]
 fn qualified_for_function_id(
     db: &AnalysisDb,
     function_id: crate::core::FunctionId,
@@ -675,6 +676,7 @@ fn matching_core_function_indexed<'a>(
 ///    case), the innermost core declaration CONTAINING that point. "Innermost" (the
 ///    narrowest containing span) is chosen deterministically so nested same-named
 ///    ranges resolve to the tightest enclosing declaration rather than a first-match.
+#[cfg(test)]
 fn matching_core_function_for<'a>(
     db: &'a AnalysisDb,
     file: FileId,

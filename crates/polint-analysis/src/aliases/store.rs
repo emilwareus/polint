@@ -32,10 +32,6 @@ pub struct AliasStore {
 }
 
 impl AliasStore {
-    #[allow(
-        dead_code,
-        reason = "Compatibility callers can still pass unnormalized output; providers use from_normalized_output."
-    )]
     pub fn from_output(output: AliasOutput, interner: &StableKeyInterner) -> Self {
         Self::from_normalized_output(output.normalized(interner))
     }

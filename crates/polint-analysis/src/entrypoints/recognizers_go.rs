@@ -564,6 +564,7 @@ fn recognize_cobra_entrypoints(
 // ---------------------------------------------------------------------------
 
 /// Go test function naming prefixes that indicate test entrypoints.
+#[cfg(test)]
 const GO_TEST_PREFIXES: &[&str] = &["Test", "Benchmark", "Example", "Fuzz"];
 
 fn recognize_test_entrypoints(

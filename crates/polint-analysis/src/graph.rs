@@ -1,4 +1,4 @@
-use crate::core::{AnalysisDb, FileId, FunctionId};
+use crate::AnalysisHost;
 use petgraph::dot::{Config, Dot};
 use petgraph::graph::{DiGraph, NodeIndex};
 use std::collections::BTreeMap;
@@ -21,12 +21,12 @@ fn ensure_node<'k>(
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct ImportGraph {
+pub struct ImportGraph {
     graph: DiGraph<String, ()>,
 }
 
 impl ImportGraph {
-    pub(crate) fn from_db(db: &AnalysisDb) -> Self {
+    pub fn from_db(db: &(impl AnalysisHost + ?Sized)) -> Self {
         let mut graph = DiGraph::<String, ()>::new();
         let mut nodes: BTreeMap<&str, NodeIndex> = BTreeMap::new();
 
@@ -46,7 +46,7 @@ impl ImportGraph {
         Self { graph }
     }
 
-    pub(crate) fn to_dot(&self) -> String {
+    pub fn to_dot(&self) -> String {
         format!(
             "{:?}",
             Dot::with_config(&self.graph, &[Config::EdgeNoLabel])
@@ -55,12 +55,12 @@ impl ImportGraph {
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct FunctionGraph {
+pub struct FunctionGraph {
     graph: DiGraph<String, ()>,
 }
 
 impl FunctionGraph {
-    pub(crate) fn from_db(db: &AnalysisDb, function_name: &str) -> Self {
+    pub fn from_db(db: &(impl AnalysisHost + ?Sized), function_name: &str) -> Self {
         let mut graph = DiGraph::<String, ()>::new();
         let mut nodes = BTreeMap::<&str, NodeIndex>::new();
 
@@ -79,7 +79,7 @@ impl FunctionGraph {
         Self { graph }
     }
 
-    pub(crate) fn to_dot(&self) -> String {
+    pub fn to_dot(&self) -> String {
         format!(
             "{:?}",
             Dot::with_config(&self.graph, &[Config::EdgeNoLabel])
@@ -87,31 +87,15 @@ impl FunctionGraph {
     }
 }
 
-// Placeholders for internal graph experiments; do not expose before the SDK view
-// and user value are finished.
-#[expect(
-    dead_code,
-    reason = "Reserved for internal CFG experiments; not a public surface."
-)]
-pub(crate) fn cfg_to_dot(_db: &AnalysisDb, _function: FunctionId) -> String {
-    "digraph cfg {\n  \"entry\" -> \"exit\";\n}\n".to_string()
-}
-
-#[expect(
-    dead_code,
-    reason = "Reserved for future graph export; ImportGraph uses paths directly today."
-)]
-pub(crate) fn file_node_label(db: &AnalysisDb, file: FileId) -> String {
-    db.path_for(file)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{FunctionFact, FunctionId, ImportFact, ImportId, Language, Span};
+    use crate::LocalAnalysisDb;
+    use polint_analysis_api::{FactDatabase, FunctionFact, ImportFact};
+    use polint_core::{FileId, FunctionId, ImportId, Language, Span};
     use std::path::PathBuf;
 
-    fn add_file(db: &mut AnalysisDb, relative_path: &str) -> FileId {
+    fn add_file(db: &mut LocalAnalysisDb, relative_path: &str) -> FileId {
         db.add_file(
             PathBuf::from(relative_path),
             relative_path.to_string(),
@@ -125,7 +109,7 @@ mod tests {
 
     #[test]
     fn import_graph_dot_is_deterministic() {
-        let mut db = AnalysisDb::new();
+        let mut db = LocalAnalysisDb::new();
         let main = add_file(&mut db, "cmd/main.go");
         let worker = add_file(&mut db, "internal/worker.go");
         db.push_import(ImportFact {
@@ -158,7 +142,7 @@ mod tests {
 
     #[test]
     fn function_graph_dot_includes_available_calls() {
-        let mut db = AnalysisDb::new();
+        let mut db = LocalAnalysisDb::new();
         let file = add_file(&mut db, "cmd/main.go");
         db.push_function(FunctionFact {
             id: FunctionId(99),
@@ -182,7 +166,7 @@ mod tests {
 
     #[test]
     fn function_graph_dot_empty_match_is_valid_dot() {
-        let db = AnalysisDb::new();
+        let db = LocalAnalysisDb::new();
         let dot = FunctionGraph::from_db(&db, "Missing").to_dot();
 
         assert!(dot.contains("digraph"));

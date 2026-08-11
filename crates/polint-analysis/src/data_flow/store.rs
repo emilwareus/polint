@@ -233,26 +233,14 @@ impl DataFlowStore {
         self.edge_refs(self.outgoing.get(&node))
     }
 
-    #[allow(
-        dead_code,
-        reason = "Place index is part of the private data-flow query contract for later path slices."
-    )]
     pub fn by_place(&self, place: PlaceId) -> Vec<&DataFlowNodeFact> {
         self.node_refs(self.by_place.get(&place))
     }
 
-    #[allow(
-        dead_code,
-        reason = "Operation index is consumed by validation/debug and later data-flow slices."
-    )]
     pub fn by_operation(&self, operation: MirOpId) -> Vec<&DataFlowNodeFact> {
         self.node_refs(self.by_operation.get(&operation))
     }
 
-    #[allow(
-        dead_code,
-        reason = "Private query indexes are exposed to later data-flow plan slices."
-    )]
     pub fn by_edge_kind(&self, kind: DataFlowEdgeKind) -> Vec<&DataFlowEdgeFact> {
         self.edge_refs(self.by_edge_kind.get(&kind))
     }

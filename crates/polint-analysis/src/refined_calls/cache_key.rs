@@ -1,9 +1,9 @@
-use crate::analysis_kernel::incremental::{Digest, DigestKind, InputComponent, InputSnapshot};
+use polint_analysis_api::{Digest, DigestKind, InputComponent, InputSnapshot};
 
-pub(crate) const REFINED_CALLS_SCHEMA_LABEL: &str = "refined-call-facts-1";
+pub const REFINED_CALLS_SCHEMA_LABEL: &str = "refined-call-facts-1";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RefinedCallsProviderParameters {
+pub struct RefinedCallsProviderParameters {
     pub(crate) precision_tier: &'static str,
     pub(crate) direct_mirror: bool,
     pub(crate) solver_projection: &'static str,
@@ -11,7 +11,7 @@ pub(crate) struct RefinedCallsProviderParameters {
 }
 
 impl RefinedCallsProviderParameters {
-    pub(crate) fn deterministic_default() -> Self {
+    pub fn deterministic_default() -> Self {
         Self {
             precision_tier: "setup-aware",
             direct_mirror: true,
@@ -21,13 +21,13 @@ impl RefinedCallsProviderParameters {
     }
 }
 
-pub(crate) fn refined_calls_provider_parameter_digest() -> Digest {
+pub fn refined_calls_provider_parameter_digest() -> Digest {
     refined_calls_provider_parameter_digest_for_settings(
         &RefinedCallsProviderParameters::deterministic_default(),
     )
 }
 
-pub(crate) fn refined_calls_provider_parameter_digest_for_snapshot(
+pub fn refined_calls_provider_parameter_digest_for_snapshot(
     input_snapshot: &InputSnapshot,
     upstream_output_digests: &[Digest],
 ) -> Digest {
