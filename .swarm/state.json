@@ -927,20 +927,27 @@
       }
     },
     "T-ARCH-DOC": {
-      "state": "READY",
+      "state": "MERGED",
       "depends_on": [
         "T-SPLIT"
       ],
       "created_at": "2026-08-10T10:04:15+02:00",
-      "note": "Unblocked by T-SPLIT MERGED; write root ARCHITECTURE.md and update AGENTS.md architecture pointer",
-      "updated_at": "2026-08-11T21:02:18+0200"
+      "note": "Root ARCHITECTURE.md and managed AGENTS.md architecture pointer landed; documentation/state only; no Rust or code-head change",
+      "updated_at": "2026-08-11T21:24:11+0200",
+      "branch": "static-analysis-architecture-review",
+      "source_commit": "ce99bde502f6ec375127a7d213ac73d13238e10f",
+      "worker": "T-ARCH-DOC-exclusive-writer",
+      "merged_at": "2026-08-11T21:24:11+0200",
+      "done_at": "2026-08-11T21:24:11+0200"
     },
     "T-SHIP-PREP": {
-      "state": "BLOCKED",
+      "state": "READY",
       "depends_on": [
         "T-ARCH-DOC"
       ],
-      "created_at": "2026-08-10T10:04:15+02:00"
+      "created_at": "2026-08-10T10:04:15+02:00",
+      "note": "Unblocked by T-ARCH-DOC MERGED; final tip gate and .swarm/READY-TO-SHIP.md remain",
+      "updated_at": "2026-08-11T21:24:11+0200"
     }
   },
   "locks": {
@@ -950,7 +957,7 @@
   },
   "milestone": "PRE-SHIP",
   "READY": [
-    "T-ARCH-DOC"
+    "T-SHIP-PREP"
   ],
   "IN_FLIGHT": [],
   "IN_REVIEW": [],
@@ -987,7 +994,8 @@
     "W4.5",
     "W4.4",
     "T-INTERN-C",
-    "T-SPLIT"
+    "T-SPLIT",
+    "T-ARCH-DOC"
   ],
   "HELD": [
     "W2.3"
@@ -1057,7 +1065,8 @@
     "2026-08-11T02:17:07+0200: T-SPLIT polint-analysis CP1 foundations committed; still IN_FLIGHT/exclusive",
     "2026-08-11T02:25:02+0200: T-SPLIT polint-analysis CP2 cycle-break API committed; still IN_FLIGHT/exclusive; lang/algorithm moves remain",
     "2026-08-11T02:29:09+0200: T-SPLIT AnalysisHost expanded for algorithm move; still IN_FLIGHT/exclusive",
-    "2026-08-11T21:02:18+0200: T-SPLIT MERGED/complete at code 92b4b021; eight-crate graph landed; exclusive lock released; T-ARCH-DOC READY"
+    "2026-08-11T21:02:18+0200: T-SPLIT MERGED/complete at code 92b4b021; eight-crate graph landed; exclusive lock released; T-ARCH-DOC READY",
+    "2026-08-11T21:24:11+0200: T-ARCH-DOC MERGED/complete; docs parent ce99bde5; T-SHIP-PREP READY; integration_head remains code parent 92b4b021"
   ],
   "m1_gate": {
     "status": "PASS",
@@ -1120,7 +1129,8 @@
     "2026-08-11T01:45:00+0200: T-SPLIT polint-go extraction compiler-green (follow-up to ce702a96); still IN_FLIGHT/exclusive; next polint-ts then polint-analysis",
     "2026-08-11T01:58:51+0200: T-SPLIT polint-ts extraction compiler-green; still IN_FLIGHT/exclusive; next polint-analysis",
     "2026-08-11T02:11:25+0200: T-SPLIT polint-analysis CP1 foundations compiler-green; still IN_FLIGHT/exclusive",
-    "2026-08-11T21:02:18+0200: T-SPLIT MERGED @92b4b021; released t_split_exclusive; T-ARCH-DOC READY"
+    "2026-08-11T21:02:18+0200: T-SPLIT MERGED @92b4b021; released t_split_exclusive; T-ARCH-DOC READY",
+    "2026-08-11T21:24:11+0200: T-ARCH-DOC MERGED @ docs parent ce99bde5 (self SHA intentionally omitted); T-SHIP-PREP READY; final tip gate remains"
   ],
   "events": [
     "2026-08-08T15:10:20+02:00: W2.2d+e landed FF @271ccd15; core/mod.rs 8739 LOC; capability+rule extracted; main untouched",
@@ -1230,6 +1240,17 @@
       "at": "2026-08-11T21:02:18+0200",
       "event": "T-ARCH-DOC READY",
       "depends_on": "T-SPLIT"
+    },
+    {
+      "at": "2026-08-11T21:24:11+0200",
+      "event": "T-ARCH-DOC MERGED",
+      "source_commit": "ce99bde502f6ec375127a7d213ac73d13238e10f",
+      "integration_head": "92b4b021"
+    },
+    {
+      "at": "2026-08-11T21:24:11+0200",
+      "event": "T-SHIP-PREP READY",
+      "depends_on": "T-ARCH-DOC"
     }
   ],
   "ready": [],
@@ -1251,6 +1272,7 @@
   "binding": ".swarm/DECISION-2026-08-10-PRE-SHIP.md",
   "progress": [
     "2026-08-11T02:45:01+0200: T-SPLIT physical algorithm moves (ifds/slicing/domains-solver/demand) + InputSnapshot vocab; still IN_FLIGHT/exclusive",
-    "2026-08-11T21:02:18+0200: T-SPLIT complete at code 92b4b021; T-ARCH-DOC READY; T-SHIP-PREP remains BLOCKED"
+    "2026-08-11T21:02:18+0200: T-SPLIT complete at code 92b4b021; T-ARCH-DOC READY; T-SHIP-PREP remains BLOCKED",
+    "2026-08-11T21:24:11+0200: T-ARCH-DOC complete at documentation parent ce99bde5; T-SHIP-PREP READY; final tip gate and READY-TO-SHIP remain"
   ]
 }
