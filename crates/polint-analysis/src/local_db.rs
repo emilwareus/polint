@@ -146,6 +146,21 @@ impl LocalAnalysisDb {
         FactDatabase::add_file(self, path, relative_path, source)
     }
 
+    pub fn add_source_file(
+        &mut self,
+        path: PathBuf,
+        relative_path: String,
+        language: Language,
+        source: Arc<str>,
+        content_hash: String,
+    ) -> FileId {
+        FactDatabase::add_source_file(self, path, relative_path, language, source, content_hash)
+    }
+
+    pub fn semantic_imports(&self) -> &[SemanticImportFact] {
+        FactDatabase::semantic_imports(self)
+    }
+
     pub fn file(&self, id: FileId) -> Option<&SourceFile> {
         FactDatabase::file(self, id)
     }
@@ -299,6 +314,10 @@ impl LocalAnalysisDb {
         references: Vec<ReferenceFact>,
     ) {
         FactDatabase::replace_symbol_facts(self, symbols, definitions, references);
+    }
+
+    pub fn replace_semantic_imports(&mut self, imports: Vec<SemanticImportFact>) {
+        FactDatabase::replace_semantic_imports(self, imports);
     }
 
     pub fn symbols(&self) -> &[SymbolFact] {
@@ -508,6 +527,10 @@ impl FactDatabase for LocalAnalysisDb {
 
     fn semantic_imports(&self) -> &[SemanticImportFact] {
         &self.semantic_imports
+    }
+
+    fn replace_semantic_imports(&mut self, imports: Vec<SemanticImportFact>) {
+        self.semantic_imports = imports;
     }
 
     fn file_metrics(&self) -> &[FileMetricFact] {

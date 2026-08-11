@@ -343,6 +343,10 @@ impl AnalysisDb {
             .expect("CallStore is installed when AnalysisDb is constructed")
     }
 
+    #[allow(
+        dead_code,
+        reason = "Call writes go through AnalysisHost in polint-analysis; kept for AnalysisDb test helpers."
+    )]
     fn calls_store_mut(&mut self) -> &mut CallStore {
         self.fact_store_mut(CALL_STORE_FAMILY)
             .expect("CallStore is installed when AnalysisDb is constructed")
@@ -947,6 +951,10 @@ impl AnalysisDb {
         Ok(())
     }
 
+    #[allow(
+        dead_code,
+        reason = "Call writes go through AnalysisHost in polint-analysis; kept for AnalysisDb test helpers."
+    )]
     pub(crate) fn replace_call_facts(
         &mut self,
         mut output: CallOutput,
@@ -1057,6 +1065,10 @@ impl AnalysisDb {
         self.refresh_abstract_domain_metadata(&interner);
     }
 
+    #[allow(
+        dead_code,
+        reason = "Call metadata helpers retained for AnalysisDb tests until dual accessors are removed."
+    )]
     fn populate_call_owner_symbols(&self, output: &mut CallOutput) {
         if output.sites.iter().all(|site| site.owner_symbol.is_some()) {
             return;
@@ -1101,6 +1113,10 @@ impl AnalysisDb {
         }
     }
 
+    #[allow(
+        dead_code,
+        reason = "Call metadata helpers retained for AnalysisDb tests until dual accessors are removed."
+    )]
     fn span_is_within(inner: &Span, outer: &Span) -> bool {
         inner.file == outer.file
             && inner.start_byte >= outer.start_byte
@@ -1663,6 +1679,10 @@ impl AnalysisDb {
         self.calls_store().unresolved_by_status(status)
     }
 
+    #[allow(
+        dead_code,
+        reason = "Call metadata helpers retained for AnalysisDb tests until dual accessors are removed."
+    )]
     fn refresh_call_metadata(&mut self, interner: &crate::core::StableKeyInterner) {
         self.fact_meta.remove_family(FactFamily::CallSite);
         self.fact_meta.remove_family(FactFamily::CallTarget);
@@ -4187,6 +4207,10 @@ impl AnalysisDb {
         )
     }
 
+    #[allow(
+        dead_code,
+        reason = "Call metadata helpers retained for AnalysisDb tests until dual accessors are removed."
+    )]
     fn call_site_metadata(
         &self,
         interner: &crate::core::StableKeyInterner,
@@ -4231,6 +4255,10 @@ impl AnalysisDb {
         )
     }
 
+    #[allow(
+        dead_code,
+        reason = "Call metadata helpers retained for AnalysisDb tests until dual accessors are removed."
+    )]
     fn call_target_metadata(
         &self,
         interner: &crate::core::StableKeyInterner,
@@ -4830,6 +4858,10 @@ impl AnalysisDb {
 }
 
 impl AnalysisDb {
+    #[allow(
+        dead_code,
+        reason = "Call metadata helpers retained for AnalysisDb tests until dual accessors are removed."
+    )]
     fn unresolved_call_metadata(
         &self,
         interner: &crate::core::StableKeyInterner,

@@ -112,6 +112,10 @@ pub trait AnalysisHost: FactDatabase {
         FactDatabase::replace_symbol_facts(self, symbols, definitions, references);
     }
 
+    fn replace_semantic_imports(&mut self, imports: Vec<polint_analysis_api::SemanticImportFact>) {
+        FactDatabase::replace_semantic_imports(self, imports);
+    }
+
     fn references_for_file(
         &self,
         file: polint_core::FileId,

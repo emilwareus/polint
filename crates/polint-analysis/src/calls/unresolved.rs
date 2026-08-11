@@ -1,17 +1,17 @@
 use std::collections::BTreeMap;
 
-use crate::analysis::calls::facts::{
+use crate::AnalysisHost;
+use crate::calls::facts::{
     CallAlgorithm, CallCallee, CallPrecision, CallProvenance, CallSiteFact, CallSyntaxKind,
     CallTargetStatus, UnresolvedCallFact, UnresolvedCallReason,
 };
-use crate::analysis::ids::MirOpId;
-use crate::analysis::mir::op::{UnsupportedDomain, UnsupportedSemanticFact};
-use crate::analysis::stable_key::semantic_stable_key;
-use crate::analysis_kernel::FactFamily;
-use crate::core::AnalysisDb;
+use crate::ids::MirOpId;
+use crate::mir_op::{UnsupportedDomain, UnsupportedSemanticFact};
+use crate::stable_key::semantic_stable_key;
+use polint_analysis_api::FactFamily;
 
-pub(crate) fn derive_unresolved_calls(
-    db: &AnalysisDb,
+pub fn derive_unresolved_calls(
+    db: &impl AnalysisHost,
     sites: &[CallSiteFact],
 ) -> Vec<UnresolvedCallFact> {
     let interner_handle = db.stable_key_interner();
@@ -45,7 +45,7 @@ pub(crate) fn derive_unresolved_calls(
 }
 
 fn insert_unresolved(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     rows: &mut BTreeMap<String, UnresolvedCallFact>,
     site: &CallSiteFact,
     reason: UnresolvedCallReason,
@@ -153,19 +153,19 @@ fn any_contains(values: &[&str], needles: &[&str]) -> bool {
         .any(|value| needles.iter().any(|needle| value.contains(needle)))
 }
 
-fn spans_overlap_or_touch(left: &crate::core::Span, right: &crate::core::Span) -> bool {
+fn spans_overlap_or_touch(left: &polint_core::Span, right: &polint_core::Span) -> bool {
     left.file == right.file
         && left.start_byte <= right.end_byte
         && right.start_byte <= left.end_byte
 }
 
 fn unresolved_stable_key(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     site: &CallSiteFact,
     reason: UnresolvedCallReason,
     status: CallTargetStatus,
     evidence: &str,
-) -> crate::core::StableKeyId {
+) -> polint_core::StableKeyId {
     interner.intern(
         semantic_stable_key(
             interner,
@@ -219,21 +219,24 @@ fn algorithm_for_reason(reason: UnresolvedCallReason) -> CallAlgorithm {
 
 #[cfg(test)]
 mod tests {
+    use crate::AnalysisHost;
     use std::collections::BTreeSet;
     use std::path::PathBuf;
 
-    use crate::analysis::calls::facts::{
+    use crate::LocalAnalysisDb;
+    use crate::calls::facts::{
         CallCallee, CallPrecision, CallSiteFact, CallSyntaxKind, CallTargetStatus,
         UnresolvedCallReason,
     };
-    use crate::analysis::ids::{CallSiteId, MirBodyId, MirOpId, PlaceId, UnsupportedId};
-    use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
-    use crate::analysis::mir::op::{
+    use crate::ids::{CallSiteId, MirBodyId, MirOpId, PlaceId, UnsupportedId};
+    use crate::mir_body::{MirBody, MirOutput, MirStatus};
+    use crate::mir_op::{
         ConservativeAction, MirOperation, MirOperationKind, MirValue, UnsupportedDomain,
         UnsupportedPrecision, UnsupportedSemanticFact,
     };
-    use crate::analysis::places::{PlaceFact, PlaceRoot, PlaceStatus};
-    use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, Span};
+    use crate::places::{PlaceFact, PlaceRoot, PlaceStatus};
+    use polint_analysis_api::FunctionFact;
+    use polint_core::{FileId, FunctionId, Language, Span};
 
     fn span(file: FileId, line: u32) -> Span {
         Span {
@@ -247,8 +250,8 @@ mod tests {
         }
     }
 
-    fn db_with_function(language: Language, path: &str) -> (AnalysisDb, FileId, FunctionId) {
-        let mut db = AnalysisDb::new();
+    fn db_with_function(language: Language, path: &str) -> (LocalAnalysisDb, FileId, FunctionId) {
+        let mut db = LocalAnalysisDb::new();
         let file = db.add_file(PathBuf::from(path), path.to_string(), String::new());
         let function = db.push_function(FunctionFact {
             id: FunctionId(999),
@@ -265,7 +268,7 @@ mod tests {
     }
 
     fn site(
-        db: &AnalysisDb,
+        db: &impl AnalysisHost,
         language: Language,
         file: FileId,
         caller: FunctionId,
@@ -295,7 +298,7 @@ mod tests {
     }
 
     fn replace_unsupported(
-        db: &mut AnalysisDb,
+        db: &mut impl AnalysisHost,
         language: Language,
         file: FileId,
         function: FunctionId,
@@ -349,7 +352,7 @@ mod tests {
     }
 
     fn unsupported(
-        db: &AnalysisDb,
+        db: &impl AnalysisHost,
         id: u64,
         language: Language,
         file: FileId,
@@ -390,7 +393,7 @@ mod tests {
             function,
             10,
             CallCallee::Identifier {
-                reference: Some(crate::core::ReferenceId(1)),
+                reference: Some(polint_core::ReferenceId(1)),
                 name: "run".to_string(),
             },
             CallSyntaxKind::Function,

@@ -41,6 +41,10 @@ pub(super) const MODULE_TOPOLOGY_PROVIDER_ID: &str = "polint.module_topology";
 pub(super) const SYMBOL_GRAPH_PROVIDER_ID: &str = "polint.symbol_graph";
 pub(crate) const SEMANTIC_MIR_PROVIDER_ID: &str = "polint.semantic_mir";
 pub(crate) const CFG_PROVIDER_ID: &str = "polint.cfg";
+#[allow(
+    dead_code,
+    reason = "Used by AnalysisDb call-fact metadata writers retained for tests until dual accessors are removed."
+)]
 pub(crate) const CALLS_PROVIDER_ID: &str = "polint.calls";
 pub(crate) const POLINT_ABSTRACT_DOMAINS_PROVIDER_ID: &str = "polint.abstract_domains";
 pub(crate) const POLINT_DIRECT_SUMMARIES_PROVIDER_ID: &str = "polint.direct_summaries";

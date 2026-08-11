@@ -1,17 +1,19 @@
 use std::collections::BTreeMap;
 
-use crate::analysis::calls::facts::{
+use crate::AnalysisHost;
+use crate::calls::facts::{
     CallCallee, CallPrecision, CallSiteFact, CallSyntaxKind, CallTargetStatus, UnresolvedCallReason,
 };
-use crate::analysis::ids::{MirValueId, PlaceId};
-use crate::analysis::mir::body::MirBody;
-use crate::analysis::mir::op::{MirOperation, MirOperationKind, MirValue};
-use crate::analysis::places::{PlaceFact, PlaceProjection, PlaceRoot};
-use crate::analysis::stable_key::semantic_stable_key;
-use crate::analysis_kernel::{FactFamily, FactRef};
-use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, Span, SymbolId};
+use crate::ids::{MirValueId, PlaceId};
+use crate::mir_body::MirBody;
+use crate::mir_op::{MirOperation, MirOperationKind, MirValue};
+use crate::places::{PlaceFact, PlaceProjection, PlaceRoot};
+use crate::stable_key::semantic_stable_key;
+use polint_analysis_api::FunctionFact;
+use polint_analysis_api::{FactFamily, FactRef};
+use polint_core::{FileId, FunctionId, Language, Span, SymbolId};
 
-pub(crate) fn extract_call_sites(db: &AnalysisDb) -> Vec<CallSiteFact> {
+pub fn extract_call_sites(db: &impl AnalysisHost) -> Vec<CallSiteFact> {
     let bodies = db
         .mir_bodies()
         .iter()
@@ -436,13 +438,13 @@ fn projection_callee(
 }
 
 fn call_site_stable_key(
-    db: &AnalysisDb,
+    db: &impl AnalysisHost,
     body: &MirBody,
     operation: &MirOperation,
     kind: CallSyntaxKind,
     callee_shape: &str,
     operation_stable_key: &str,
-) -> crate::core::StableKeyId {
+) -> polint_core::StableKeyId {
     let interner_handle = db.stable_key_interner();
     let interner = &interner_handle;
     interner.intern(
@@ -464,7 +466,7 @@ fn call_site_stable_key(
 }
 
 fn owner_symbol(
-    db: &AnalysisDb,
+    db: &impl AnalysisHost,
     functions: &BTreeMap<FunctionId, &FunctionFact>,
     function: FunctionId,
 ) -> Option<SymbolId> {
@@ -479,7 +481,7 @@ fn owner_symbol(
         .map(|symbol| symbol.id)
 }
 
-fn file_key(db: &AnalysisDb, file: FileId) -> String {
+fn file_key(db: &impl AnalysisHost, file: FileId) -> String {
     db.metadata_for(FactRef::new(FactFamily::SourceFile, u64::from(file.0)))
         .map(|metadata| db.resolve_stable_key(metadata.stable_key).to_string())
         .or_else(|| {
@@ -491,7 +493,7 @@ fn file_key(db: &AnalysisDb, file: FileId) -> String {
         .unwrap_or_else(|| format!("<missing-file:{}>", file.0))
 }
 
-fn caller_key(db: &AnalysisDb, function: FunctionId) -> String {
+fn caller_key(db: &impl AnalysisHost, function: FunctionId) -> String {
     db.metadata_for(FactRef::new(FactFamily::Function, function.0))
         .map(|metadata| db.resolve_stable_key(metadata.stable_key).to_string())
         .unwrap_or_else(|| format!("<missing-function:{}>", function.0))
@@ -516,17 +518,18 @@ fn is_constructor_name(language: Language, name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use crate::AnalysisHost;
     use std::path::PathBuf;
 
-    use crate::analysis::calls::facts::{
-        CallCallee, CallPrecision, CallSyntaxKind, CallTargetStatus,
-    };
-    use crate::analysis::ids::{CallSiteId, MirBodyId, MirOpId, PlaceId};
-    use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
-    use crate::analysis::mir::op::{MirOperation, MirOperationKind, MirValue};
-    use crate::analysis::places::{PlaceFact, PlaceProjection, PlaceRoot, PlaceStatus};
-    use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, Span};
+    use crate::LocalAnalysisDb;
+    use crate::calls::facts::{CallCallee, CallPrecision, CallSyntaxKind, CallTargetStatus};
+    use crate::ids::{CallSiteId, MirBodyId, MirOpId, PlaceId};
+    use crate::mir_body::{MirBody, MirOutput, MirStatus};
+    use crate::mir_op::{MirOperation, MirOperationKind, MirValue};
+    use crate::places::{PlaceFact, PlaceProjection, PlaceRoot, PlaceStatus};
+    use polint_analysis_api::FunctionFact;
     use polint_analysis_api::anonymous_callable_name;
+    use polint_core::{FileId, FunctionId, Language, Span};
 
     fn span(file: FileId, line: u32, start_byte: u32) -> Span {
         Span {
@@ -540,7 +543,10 @@ mod tests {
         }
     }
 
-    fn add_file_and_function(db: &mut AnalysisDb, relative_path: &str) -> (FileId, FunctionId) {
+    fn add_file_and_function(
+        db: &mut impl AnalysisHost,
+        relative_path: &str,
+    ) -> (FileId, FunctionId) {
         let file = db.add_file(
             PathBuf::from(relative_path),
             relative_path.to_string(),
@@ -560,11 +566,16 @@ mod tests {
         (file, function)
     }
 
-    fn key(db: &AnalysisDb, text: impl Into<String>) -> crate::core::StableKeyId {
+    fn key(db: &impl AnalysisHost, text: impl Into<String>) -> polint_core::StableKeyId {
         db.stable_key_interner().intern(text.into())
     }
 
-    fn body(db: &AnalysisDb, file: FileId, function: FunctionId, language: Language) -> MirBody {
+    fn body(
+        db: &impl AnalysisHost,
+        file: FileId,
+        function: FunctionId,
+        language: Language,
+    ) -> MirBody {
         MirBody {
             id: MirBodyId(1),
             language,
@@ -580,7 +591,7 @@ mod tests {
     }
 
     fn place(
-        db: &AnalysisDb,
+        db: &impl AnalysisHost,
         id: u64,
         file: FileId,
         function: FunctionId,
@@ -600,7 +611,7 @@ mod tests {
     }
 
     fn call_op(
-        db: &AnalysisDb,
+        db: &impl AnalysisHost,
         id: u64,
         ordinal: u32,
         file: FileId,
@@ -626,7 +637,7 @@ mod tests {
 
     #[test]
     fn extract_call_sites_maps_mir_calls_to_complete_call_site_facts() {
-        let mut db = AnalysisDb::new();
+        let mut db = LocalAnalysisDb::new();
         let (file, function) = add_file_and_function(&mut db, "src/app.ts");
         db.replace_semantic_mir(MirOutput {
             bodies: vec![body(&db, file, function, Language::TypeScript)],
@@ -704,7 +715,7 @@ mod tests {
 
     #[test]
     fn extract_call_sites_treats_anonymous_callable_evidence_as_lexical_callee() {
-        let mut db = AnalysisDb::new();
+        let mut db = LocalAnalysisDb::new();
         let (file, function) = add_file_and_function(&mut db, "src/iife.ts");
         let anonymous = anonymous_callable_name(1, 14);
         db.replace_semantic_mir(MirOutput {
@@ -749,7 +760,7 @@ mod tests {
 
     #[test]
     fn extract_call_sites_stable_key_uses_required_stable_inputs() {
-        let mut db = AnalysisDb::new();
+        let mut db = LocalAnalysisDb::new();
         let (file, function) = add_file_and_function(&mut db, "src/app.ts");
         db.replace_semantic_mir(MirOutput {
             bodies: vec![body(&db, file, function, Language::TypeScript)],
@@ -805,7 +816,7 @@ mod tests {
 
     #[test]
     fn extract_call_sites_is_deterministic_for_different_operation_orders() {
-        let mut first = AnalysisDb::new();
+        let mut first = LocalAnalysisDb::new();
         let (file, function) = add_file_and_function(&mut first, "src/app.ts");
         let output = MirOutput {
             bodies: vec![body(&first, file, function, Language::TypeScript)],
@@ -870,7 +881,7 @@ mod tests {
             .replace_semantic_mir(output.clone())
             .expect("semantic MIR should store");
 
-        let mut second = AnalysisDb::new();
+        let mut second = LocalAnalysisDb::new();
         let (second_file, second_function) = add_file_and_function(&mut second, "src/app.ts");
         let mut reordered = output;
         reordered.bodies = vec![body(

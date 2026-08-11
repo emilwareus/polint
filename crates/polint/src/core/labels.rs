@@ -184,6 +184,10 @@ pub(super) fn call_precision_label(precision: CallPrecision) -> &'static str {
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "Retained for AnalysisDb call metadata until dual accessors are removed."
+)]
 pub(super) fn call_syntax_kind_label(kind: CallSyntaxKind) -> &'static str {
     match kind {
         CallSyntaxKind::Function => "function",

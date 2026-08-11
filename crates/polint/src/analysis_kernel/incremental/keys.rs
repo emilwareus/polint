@@ -2965,7 +2965,7 @@ mod cfg_layer_key {
 #[cfg(test)]
 mod calls_layer_key {
     use super::*;
-    use crate::analysis::calls::cache_key::calls_provider_parameter_digest;
+    use polint_analysis::calls::cache_key::calls_provider_parameter_digest;
 
     fn manifest() -> &'static crate::analysis_kernel::ProviderManifest {
         crate::analysis_kernel::AnalysisKernel::provider_manifests()

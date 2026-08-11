@@ -1,6 +1,6 @@
-use crate::analysis_kernel::incremental::{Digest, DigestKind};
+use polint_analysis_api::{Digest, DigestKind};
 
-pub(crate) fn calls_provider_parameter_digest() -> Digest {
+pub fn calls_provider_parameter_digest() -> Digest {
     Digest::from_parts(
         DigestKind::ProviderParameters,
         "calls_provider_parameters",
@@ -26,7 +26,7 @@ pub(crate) fn calls_provider_parameter_digest() -> Digest {
 
 #[cfg(test)]
 mod calls_provider_parameters {
-    use crate::analysis_kernel::incremental::{Digest, DigestKind};
+    use polint_analysis_api::{Digest, DigestKind};
 
     #[test]
     fn calls_provider_parameters_include_direct_call_outputs_schema_and_algorithms() {

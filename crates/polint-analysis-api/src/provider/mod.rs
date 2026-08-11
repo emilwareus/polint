@@ -114,6 +114,8 @@ pub trait FactDatabase: Any + Send {
     fn semantic_imports(&self) -> &[crate::symbol_facts::SemanticImportFact] {
         &[]
     }
+    fn replace_semantic_imports(&mut self, _imports: Vec<crate::symbol_facts::SemanticImportFact>) {
+    }
     fn file_metrics(&self) -> &[crate::symbol_facts::FileMetricFact] {
         &[]
     }

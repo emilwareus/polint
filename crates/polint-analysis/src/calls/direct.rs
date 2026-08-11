@@ -1,21 +1,22 @@
 use std::collections::BTreeMap;
 
-use crate::analysis::calls::facts::{
+use crate::AnalysisHost;
+use crate::calls::facts::{
     CallAlgorithm, CallCallee, CallEdgeKind, CallPrecision, CallProvenance, CallSiteFact,
     CallSyntaxKind, CallTargetFact, CallTargetStatus,
 };
-use crate::analysis::ids::CallTargetId;
-use crate::analysis::mir::op::UnsupportedDomain;
-use crate::analysis::stable_key::semantic_stable_key;
-use crate::analysis_kernel::FactFamily;
-use crate::core::{
-    AnalysisDb, FileId, FunctionFact, FunctionId, ReferenceFact, ReferenceId, Span, SymbolFact,
-    SymbolId, SymbolKind, SymbolPrecision, SymbolResolutionStatus,
+use crate::ids::CallTargetId;
+use crate::mir_op::UnsupportedDomain;
+use crate::stable_key::semantic_stable_key;
+use polint_analysis_api::FactFamily;
+use polint_analysis_api::SemanticStatus;
+use polint_analysis_api::{
+    FunctionFact, ReferenceFact, SymbolFact, SymbolKind, SymbolPrecision, SymbolResolutionStatus,
 };
-use crate::symbol_graph::semantic::SemanticStatus;
+use polint_core::{FileId, FunctionId, ReferenceId, Span, SymbolId};
 
-pub(crate) fn resolve_direct_call_targets(
-    db: &AnalysisDb,
+pub fn resolve_direct_call_targets(
+    db: &impl AnalysisHost,
     sites: &[CallSiteFact],
 ) -> Vec<CallTargetFact> {
     let interner_handle = db.stable_key_interner();
@@ -122,16 +123,16 @@ pub(crate) fn resolve_direct_call_targets(
     rows
 }
 
-struct DirectIndex<'db> {
-    db: &'db AnalysisDb,
+struct DirectIndex<'db, H: AnalysisHost + ?Sized> {
+    db: &'db H,
     references_by_id: BTreeMap<ReferenceId, &'db ReferenceFact>,
     symbols_by_id: BTreeMap<SymbolId, &'db SymbolFact>,
     functions_by_file_name: BTreeMap<(Option<FileId>, String), &'db FunctionFact>,
     functions_by_name: BTreeMap<String, Vec<&'db FunctionFact>>,
 }
 
-impl<'db> DirectIndex<'db> {
-    fn new(db: &'db AnalysisDb) -> Self {
+impl<'db, H: AnalysisHost + ?Sized> DirectIndex<'db, H> {
+    fn new(db: &'db H) -> Self {
         Self {
             db,
             references_by_id: db
@@ -182,6 +183,7 @@ impl<'db> DirectIndex<'db> {
         let mut matches = self
             .db
             .references_for_file(site.file)
+            .into_iter()
             .filter(|reference| reference.name == name)
             .filter(|reference| {
                 reference
@@ -294,7 +296,7 @@ const BUILTIN_GLOBAL_RECEIVERS: &[&str] = &[
 /// Is the receiver of this member call a built-in global namespace? Reads the
 /// leading identifier of the call-site source slice (the part before the first
 /// `.`), which for a member call is the receiver expression.
-fn receiver_is_builtin_global(db: &AnalysisDb, site: &CallSiteFact) -> bool {
+fn receiver_is_builtin_global(db: &impl AnalysisHost, site: &CallSiteFact) -> bool {
     let Some(file) = db.files().iter().find(|file| file.id == site.file) else {
         return false;
     };
@@ -352,7 +354,7 @@ fn short_function_name(function_name: &str) -> Option<&str> {
         .filter(|short| !short.is_empty())
 }
 
-fn has_unsupported_call_evidence(db: &AnalysisDb, site: &CallSiteFact) -> bool {
+fn has_unsupported_call_evidence(db: &impl AnalysisHost, site: &CallSiteFact) -> bool {
     db.unsupported_semantics().iter().any(|row| {
         row.file == site.file
             && row.affected_domains.contains(&UnsupportedDomain::Calls)
@@ -419,11 +421,11 @@ fn spans_overlap_or_touch(left: &Span, right: &Span) -> bool {
 }
 
 fn target_stable_key(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     site: &CallSiteFact,
     algorithm: CallAlgorithm,
     symbol: &SymbolFact,
-) -> crate::core::StableKeyId {
+) -> polint_core::StableKeyId {
     interner.intern(
         semantic_stable_key(
             interner,
@@ -432,7 +434,7 @@ fn target_stable_key(
                 ("site", interner.resolve(site.stable_key).to_string()),
                 ("algorithm", format!("{algorithm:?}")),
                 ("target", interner.resolve(symbol.stable_key).to_string()),
-                ("provider", crate::core::CALLS_PROVIDER_ID.to_string()),
+                ("provider", "polint.calls".to_string()),
                 ("schema", "calls-facts-1:1".to_string()),
                 ("model", "absent".to_string()),
             ],
@@ -442,10 +444,10 @@ fn target_stable_key(
 }
 
 fn lexical_target_stable_key(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     site: &CallSiteFact,
     function: &FunctionFact,
-) -> crate::core::StableKeyId {
+) -> polint_core::StableKeyId {
     interner.intern(
         semantic_stable_key(
             interner,
@@ -464,7 +466,7 @@ fn lexical_target_stable_key(
                         function.span.start_byte
                     ),
                 ),
-                ("provider", crate::core::CALLS_PROVIDER_ID.to_string()),
+                ("provider", "polint.calls".to_string()),
                 ("schema", "calls-facts-1:1".to_string()),
                 ("model", "absent".to_string()),
             ],
@@ -478,19 +480,20 @@ mod tests {
     use std::path::PathBuf;
 
     use super::resolve_direct_call_targets;
-    use crate::analysis::calls::facts::{
+    use crate::LocalAnalysisDb;
+    use crate::calls::facts::{
         CallAlgorithm, CallCallee, CallEdgeKind, CallPrecision, CallSiteFact, CallSyntaxKind,
         CallTargetStatus,
     };
-    use crate::analysis::ids::{CallSiteId, MirBodyId, MirOpId};
-    use crate::core::{
-        AnalysisDb, DefinitionFact, DefinitionId, DefinitionKind, FileId, FunctionFact, FunctionId,
-        Language, ReferenceFact, ReferenceId, ReferenceKind, Span, SymbolFact, SymbolId,
+    use crate::ids::{CallSiteId, MirBodyId, MirOpId};
+    use polint_analysis_api::{
+        DefinitionFact, DefinitionKind, FunctionFact, ReferenceFact, ReferenceKind, SymbolFact,
         SymbolKind, SymbolNamespace, SymbolPrecision, SymbolResolutionStatus,
     };
-    use crate::symbol_graph::semantic::{
+    use polint_analysis_api::{
         SemanticImportFact, SemanticImportId, SemanticImportKind, SemanticStatus,
     };
+    use polint_core::{DefinitionId, FileId, FunctionId, Language, ReferenceId, Span, SymbolId};
 
     #[test]
     fn lexical_function_call_with_resolved_reference_emits_direct_target() {
@@ -553,7 +556,7 @@ mod tests {
             1,
             CallSyntaxKind::Member,
             CallCallee::Member {
-                base: crate::analysis::ids::PlaceId(1),
+                base: crate::ids::PlaceId(1),
                 property: "run".to_string(),
             },
             3,
@@ -572,7 +575,7 @@ mod tests {
             1,
             CallSyntaxKind::StaticMember,
             CallCallee::Member {
-                base: crate::analysis::ids::PlaceId(1),
+                base: crate::ids::PlaceId(1),
                 property: "run".to_string(),
             },
             3,
@@ -652,7 +655,7 @@ mod tests {
             4,
             CallSyntaxKind::Member,
             CallCallee::Member {
-                base: crate::analysis::ids::PlaceId(7),
+                base: crate::ids::PlaceId(7),
                 property: "run".to_string(),
             },
             6,
@@ -714,7 +717,7 @@ mod tests {
             6,
             CallSyntaxKind::Member,
             CallCallee::Member {
-                base: crate::analysis::ids::PlaceId(8),
+                base: crate::ids::PlaceId(8),
                 property: "render".to_string(),
             },
             8,
@@ -729,7 +732,7 @@ mod tests {
     }
 
     struct Fixture {
-        db: AnalysisDb,
+        db: LocalAnalysisDb,
         file: FileId,
         caller: FunctionId,
         symbols: Vec<SymbolFact>,
@@ -740,7 +743,7 @@ mod tests {
 
     impl Fixture {
         fn new(language: Language, path: &str) -> Self {
-            let mut db = AnalysisDb::new();
+            let mut db = LocalAnalysisDb::new();
             let file = db.add_source_file(
                 PathBuf::from(path),
                 path.to_string(),
@@ -894,15 +897,8 @@ mod tests {
 
         fn store_symbols_and_semantic_imports(&mut self) {
             self.store_symbols();
-            self.db.replace_semantic_index_facts(
-                Vec::new(),
-                self.semantic_imports.clone(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-            );
+            self.db
+                .replace_semantic_imports(self.semantic_imports.clone());
         }
     }
 
@@ -935,15 +931,18 @@ mod tests {
 
 #[cfg(test)]
 mod non_direct_cases {
+    use crate::AnalysisHost;
     use std::path::PathBuf;
 
     use super::resolve_direct_call_targets;
-    use crate::analysis::calls::facts::{
+    use crate::LocalAnalysisDb;
+    use crate::calls::facts::{
         CallCallee, CallPrecision, CallSiteFact, CallSyntaxKind, CallTargetStatus,
         UnresolvedCallReason,
     };
-    use crate::analysis::ids::{CallSiteId, MirBodyId, MirOpId, PlaceId};
-    use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, Span};
+    use crate::ids::{CallSiteId, MirBodyId, MirOpId, PlaceId};
+    use polint_analysis_api::FunctionFact;
+    use polint_core::{FileId, FunctionId, Language, Span};
 
     #[test]
     fn go_function_value_and_interface_shapes_do_not_emit_direct_targets() {
@@ -1017,8 +1016,8 @@ mod non_direct_cases {
         assert!(resolve_direct_call_targets(&db, &sites).is_empty());
     }
 
-    fn db_with_function(language: Language, path: &str) -> (AnalysisDb, FileId, FunctionId) {
-        let mut db = AnalysisDb::new();
+    fn db_with_function(language: Language, path: &str) -> (LocalAnalysisDb, FileId, FunctionId) {
+        let mut db = LocalAnalysisDb::new();
         let file = db.add_source_file(
             PathBuf::from(path),
             path.to_string(),
@@ -1041,7 +1040,7 @@ mod non_direct_cases {
     }
 
     fn site(
-        db: &AnalysisDb,
+        db: &impl AnalysisHost,
         language: Language,
         file: FileId,
         caller: FunctionId,
