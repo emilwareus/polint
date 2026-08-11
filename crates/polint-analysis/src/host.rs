@@ -54,7 +54,7 @@ use crate::fact_store::{
     SOLVER_STORE_FAMILY, SUMMARY_STORE_FAMILY, TYPE_STORE_FAMILY, VALUE_STORE_FAMILY,
 };
 use crate::identity::facts::IdentityRecord;
-use crate::identity::store::IdentityStore;
+use crate::identity::store::{IdentityProviderOutput, IdentityStore};
 use crate::ids::CallSiteId;
 use crate::mir_body::MirOutput;
 use crate::mir_body::{MirBlock, MirBody};
@@ -546,6 +546,68 @@ pub trait AnalysisHost: FactDatabase {
             SemanticGraphStore::from_output(output, &interner)?;
         Ok(())
     }
+    fn identity_store_mut(&mut self) -> &mut IdentityStore {
+        store_mut(self, IDENTITY_STORE_FAMILY)
+    }
+
+    fn replace_identity_facts(
+        &mut self,
+        output: IdentityProviderOutput,
+    ) -> Result<(), AnalysisError> {
+        let valid_sites = self
+            .calls_store()
+            .sites()
+            .iter()
+            .map(|site| site.id)
+            .collect::<std::collections::BTreeSet<_>>();
+        let valid_targets = self
+            .call_targets()
+            .iter()
+            .map(|target| target.id)
+            .collect::<std::collections::BTreeSet<_>>();
+        let interner = self.stable_key_interner();
+        let store = IdentityStore::from_output(output, &interner, &valid_sites, &valid_targets)?;
+        *self.identity_store_mut() = store;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn set_identity_records_for_test(
+        &mut self,
+        records: Vec<crate::identity::facts::IdentityRecord>,
+    ) {
+        let mut store = IdentityStore::default();
+        store.records = records;
+        *self.identity_store_mut() = store;
+    }
+
+    fn merge_summary_facts_without_metadata(
+        &mut self,
+        summaries: &[SummaryFact],
+        events: &[SummaryEventFact],
+    ) {
+        let interner = self.stable_key_interner();
+        self.summary_store_mut()
+            .merge_updates(summaries, events, &interner);
+    }
+
+    fn refresh_summary_metadata_after_bulk_update(&mut self) {
+        refresh_summary_metadata(self);
+    }
+
+    fn replace_normalized_type_value_alias_facts(&mut self, output: TypeValueAliasOutput) {
+        *store_mut::<TypeStore>(self, TYPE_STORE_FAMILY) =
+            TypeStore::from_normalized_output(output.types);
+        *store_mut::<ValueStore>(self, VALUE_STORE_FAMILY) =
+            ValueStore::from_normalized_output(output.values);
+        *store_mut::<AccessPathStore>(self, ACCESS_PATH_STORE_FAMILY) =
+            AccessPathStore::from_normalized_output(output.access_paths);
+        *store_mut::<PointsToStore>(self, POINTS_TO_STORE_FAMILY) =
+            PointsToStore::from_normalized_output(output.points_to);
+        *store_mut::<AliasStore>(self, ALIAS_STORE_FAMILY) =
+            AliasStore::from_normalized_output(output.aliases);
+    }
+
 }
 
 impl<T: FactDatabase + ?Sized> AnalysisHost for T {}

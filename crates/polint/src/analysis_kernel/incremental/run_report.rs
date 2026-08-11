@@ -1,4 +1,4 @@
-use super::demand::DemandQueryTrace;
+use polint_analysis::demand::DemandQueryTrace;
 use super::{CacheStats, Digest, DigestKind, InputSnapshot, PrecisionTier, ProviderOutputMeta};
 #[cfg(test)]
 use crate::analysis::summaries::provider::SccClosureDebugSnapshot;

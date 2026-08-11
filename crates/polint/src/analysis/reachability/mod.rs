@@ -1,8 +1,8 @@
+#![allow(unused_imports)]
+pub(crate) use polint_analysis::reachability::cache_key;
+pub(crate) use polint_analysis::reachability::debug;
+pub(crate) use polint_analysis::reachability::discover;
 pub(crate) use polint_analysis::reachability::facts;
+pub(crate) use polint_analysis::reachability::provider;
 pub(crate) use polint_analysis::reachability::store;
-pub(crate) mod cache_key;
-#[cfg(test)]
-pub(crate) mod debug;
-pub(crate) mod discover;
-pub(crate) mod provider;
-pub(crate) mod validate;
+pub(crate) use polint_analysis::reachability::validate;

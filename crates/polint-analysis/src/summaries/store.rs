@@ -474,7 +474,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // AnalysisDb integration tests (summary_fact_storage)
+    // LocalAnalysisDb integration tests (summary_fact_storage)
     // -----------------------------------------------------------------------
 
     #[test]

@@ -1,13 +1,13 @@
+#![allow(unused_imports)]
+pub(crate) use polint_analysis::entrypoints::cache_key;
+pub(crate) use polint_analysis::entrypoints::debug;
+pub(crate) use polint_analysis::entrypoints::dispatch;
+pub(crate) use polint_analysis::entrypoints::extract;
 pub(crate) use polint_analysis::entrypoints::facts;
+pub(crate) use polint_analysis::entrypoints::provider;
+pub(crate) use polint_analysis::entrypoints::recognizers_go;
+pub(crate) use polint_analysis::entrypoints::recognizers_ts;
 pub(crate) use polint_analysis::entrypoints::store;
-pub(crate) mod cache_key;
-#[cfg(test)]
-pub(crate) mod debug;
-pub(crate) mod dispatch;
-pub(crate) mod extract;
-pub(crate) mod provider;
-pub(crate) mod recognizers_go;
-pub(crate) mod recognizers_ts;
-pub(crate) mod trust_boundaries;
-pub(crate) mod unresolved;
-pub(crate) mod validate;
+pub(crate) use polint_analysis::entrypoints::trust_boundaries;
+pub(crate) use polint_analysis::entrypoints::unresolved;
+pub(crate) use polint_analysis::entrypoints::validate;

@@ -1,5 +1,4 @@
 mod change_set;
-mod demand;
 mod dependency_index;
 mod digest;
 mod input_snapshot;
@@ -39,9 +38,7 @@ pub(crate) use change_set::{ChangeKind, ChangeSet, ChangeSetRow};
         reason = "Demand query engine infrastructure is established before Plan 04 wires real demand-driven consumers."
     )
 )]
-pub(crate) use demand::{
-    DemandQueryEngine, DemandQueryResult, DemandQueryTrace, DemandQueryTraceEntry,
-};
+pub(crate) use polint_analysis::demand::{DemandQueryEngine, DemandQueryResult, DemandQueryTrace, DemandQueryTraceEntry};
 #[cfg_attr(
     test,
     allow(
