@@ -4,6 +4,7 @@
 //! implement [`FactDatabase`]; analysis algorithms call these default methods so
 //! they never name the facade database type.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use polint_analysis_api::{
@@ -71,7 +72,9 @@ use crate::points_to::facts::{PointsToConstraintFact, PointsToSetFact};
 use crate::points_to::store::PointsToStore;
 use crate::reachability::facts::ReachabilityRootFact;
 use crate::reachability::store::{ReachabilityProviderOutput, ReachabilityStore};
-use crate::refined_calls::facts::RefinedCallEdgeFact;
+use crate::refined_calls::facts::{
+    RefinedCallConfidence, RefinedCallEdgeFact, RefinedCallTier, RefinedCallValidation,
+};
 use crate::refined_calls::store::{RefinedCallOutput, RefinedCallStore};
 use crate::semantic_graph::constraints::ConstraintFact;
 use crate::semantic_graph::facts::{SemanticEdgeFact, SemanticNodeFact};
@@ -259,7 +262,8 @@ pub trait AnalysisHost: FactDatabase {
         refresh_summary_metadata(self);
     }
 
-    fn replace_call_facts(&mut self, output: CallOutput) -> Result<(), AnalysisError> {
+    fn replace_call_facts(&mut self, mut output: CallOutput) -> Result<(), AnalysisError> {
+        populate_call_owner_symbols(self, &mut output);
         let interner = self.stable_key_interner();
         let store = CallStore::from_output(output, &interner)?;
         *self.calls_store_mut() = store;
@@ -268,7 +272,9 @@ pub trait AnalysisHost: FactDatabase {
     }
 
     fn replace_cfg_facts(&mut self, output: CfgOutput) -> Result<(), AnalysisError> {
-        self.cfg_store_mut().replace(output);
+        let interner = self.stable_key_interner();
+        self.cfg_store_mut().replace(output.normalized(&interner));
+        refresh_cfg_metadata(self);
         Ok(())
     }
 
@@ -285,6 +291,7 @@ pub trait AnalysisHost: FactDatabase {
         let interner = self.stable_key_interner();
         *store_mut::<RefinedCallStore>(self, REFINED_CALL_STORE_FAMILY) =
             RefinedCallStore::from_output(output, &interner)?;
+        refresh_refined_call_metadata(self);
         Ok(())
     }
 
@@ -642,6 +649,55 @@ fn summary_domain_family(domain: SummaryDomainKind) -> FactFamily {
     }
 }
 
+fn populate_call_owner_symbols(db: &(impl AnalysisHost + ?Sized), output: &mut CallOutput) {
+    if output.sites.iter().all(|site| site.owner_symbol.is_some()) {
+        return;
+    }
+
+    let function_symbols = db
+        .functions()
+        .iter()
+        .filter_map(|function| {
+            let symbol = db
+                .symbols()
+                .iter()
+                .find(|symbol| {
+                    symbol.file == Some(function.file)
+                        && symbol.name == function.name
+                        && symbol.primary_span.as_ref().is_some_and(|span| {
+                            span == &function.span || span_is_within(span, &function.span)
+                        })
+                })
+                .map(|symbol| symbol.id)
+                .or_else(|| {
+                    db.definitions()
+                        .iter()
+                        .find(|definition| {
+                            definition.file == Some(function.file)
+                                && definition.name == function.name
+                                && definition.primary_span.as_ref().is_some_and(|span| {
+                                    span == &function.span || span_is_within(span, &function.span)
+                                })
+                        })
+                        .map(|definition| definition.symbol)
+                });
+            symbol.map(|symbol| (function.id, symbol))
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    for site in &mut output.sites {
+        if site.owner_symbol.is_none() {
+            site.owner_symbol = function_symbols.get(&site.caller).copied();
+        }
+    }
+}
+
+fn span_is_within(inner: &polint_core::Span, outer: &polint_core::Span) -> bool {
+    inner.file == outer.file
+        && inner.start_byte >= outer.start_byte
+        && inner.end_byte <= outer.end_byte
+}
+
 fn refresh_summary_metadata(db: &mut (impl AnalysisHost + ?Sized)) {
     let summaries = db.summary_facts().to_vec();
     let events = db.summary_events().to_vec();
@@ -716,6 +772,606 @@ fn refresh_abstract_domain_metadata(db: &mut (impl AnalysisHost + ?Sized)) {
         }
         meta.finish_family_insertions(FactFamily::DomainObservation);
         meta.finish_family_insertions(FactFamily::DomainEvent);
+    }
+}
+
+fn refresh_cfg_metadata(db: &mut (impl AnalysisHost + ?Sized)) {
+    let interner = db.stable_key_interner();
+    let families = [
+        FactFamily::CfgFunction,
+        FactFamily::CfgNode,
+        FactFamily::BasicBlock,
+        FactFamily::CfgEdge,
+        FactFamily::CfgReachability,
+        FactFamily::CfgDominator,
+        FactFamily::CfgPostDominator,
+        FactFamily::CfgControlDependence,
+        FactFamily::UnsupportedControlFlow,
+    ];
+    {
+        let metadata = db.fact_meta_mut();
+        for family in families {
+            metadata.remove_family(family);
+        }
+    }
+
+    let functions = db.cfg_functions().to_vec();
+    let nodes = db.cfg_nodes().to_vec();
+    let blocks = db.cfg_blocks().to_vec();
+    let edges = db.cfg_edges().to_vec();
+    let reachability = db.cfg_reachability().to_vec();
+    let dominators = db.cfg_dominators().to_vec();
+    let postdominators = db.cfg_postdominators().to_vec();
+    let control_dependence = db.cfg_control_dependence().to_vec();
+    let unsupported = db.unsupported_control_flow().to_vec();
+
+    for fact in &functions {
+        let metadata = cfg_function_metadata(db, &interner, fact);
+        db.fact_meta_mut()
+            .insert(FactRef::new(FactFamily::CfgFunction, fact.id.0), metadata);
+    }
+    for fact in &nodes {
+        let metadata = cfg_node_metadata(db, &interner, fact);
+        db.fact_meta_mut()
+            .insert(FactRef::new(FactFamily::CfgNode, fact.id.0), metadata);
+    }
+    for fact in &blocks {
+        let metadata = cfg_block_metadata(db, &interner, fact);
+        db.fact_meta_mut()
+            .insert(FactRef::new(FactFamily::BasicBlock, fact.id.0), metadata);
+    }
+    for fact in &edges {
+        let metadata = cfg_edge_metadata(db, &interner, fact);
+        db.fact_meta_mut()
+            .insert(FactRef::new(FactFamily::CfgEdge, fact.id.0), metadata);
+    }
+    for fact in &reachability {
+        let metadata = cfg_reachability_metadata(db, &interner, fact);
+        db.fact_meta_mut().insert(
+            FactRef::new(FactFamily::CfgReachability, fact.id.0),
+            metadata,
+        );
+    }
+    for fact in &dominators {
+        let metadata = cfg_dominator_metadata(db, &interner, fact);
+        db.fact_meta_mut()
+            .insert(FactRef::new(FactFamily::CfgDominator, fact.id.0), metadata);
+    }
+    for fact in &postdominators {
+        let metadata = cfg_postdominator_metadata(db, &interner, fact);
+        db.fact_meta_mut().insert(
+            FactRef::new(FactFamily::CfgPostDominator, fact.id.0),
+            metadata,
+        );
+    }
+    for fact in &control_dependence {
+        let metadata = cfg_control_dependence_metadata(db, &interner, fact);
+        db.fact_meta_mut().insert(
+            FactRef::new(FactFamily::CfgControlDependence, fact.id.0),
+            metadata,
+        );
+    }
+    for fact in &unsupported {
+        let metadata = unsupported_control_flow_metadata(db, &interner, fact);
+        db.fact_meta_mut().insert(
+            FactRef::new(FactFamily::UnsupportedControlFlow, fact.id.0),
+            metadata,
+        );
+    }
+
+    let metadata = db.fact_meta_mut();
+    for family in families {
+        metadata.finish_family_insertions(family);
+    }
+}
+
+fn cfg_fact_metadata<const N: usize>(
+    interner: &StableKeyInterner,
+    stable_key: StableKeyId,
+    precision: FactPrecision,
+    confidence: FactConfidence,
+    payload_parts: [(&str, String); N],
+) -> FactMeta {
+    FactMeta {
+        stable_key,
+        producer_id: crate::CFG_PROVIDER_ID,
+        layer_id: crate::CFG_PROVIDER_ID,
+        precision,
+        confidence,
+        validation: ValidationStatus::NativeTrusted,
+        payload_digest: metadata_payload_digest(interner, stable_key, &payload_parts),
+    }
+}
+
+fn cfg_status_metadata(
+    status: crate::cfg::facts::CfgStatus,
+    precision: crate::cfg::facts::CfgPrecision,
+) -> (FactPrecision, FactConfidence) {
+    use crate::cfg::facts::{CfgPrecision, CfgStatus};
+
+    let fact_precision = match (status, precision) {
+        (CfgStatus::Resolved, CfgPrecision::ExactSyntax) => FactPrecision::Syntax,
+        (CfgStatus::Resolved, CfgPrecision::ExactLowered | CfgPrecision::SetupAware) => {
+            FactPrecision::SetupAware
+        }
+        (_, CfgPrecision::Conservative | CfgPrecision::Heuristic) => FactPrecision::Heuristic,
+        (CfgStatus::Partial, _) => FactPrecision::Heuristic,
+        (CfgStatus::Unknown, _) | (_, CfgPrecision::Unknown) => FactPrecision::Unresolved,
+        (CfgStatus::Unsupported, _) | (_, CfgPrecision::Unsupported) => FactPrecision::Unsupported,
+    };
+    let confidence = match status {
+        CfgStatus::Resolved => FactConfidence::High,
+        CfgStatus::Partial => FactConfidence::Medium,
+        CfgStatus::Unknown | CfgStatus::Unsupported => FactConfidence::Low,
+    };
+    (fact_precision, confidence)
+}
+
+fn cfg_function_metadata(
+    db: &(impl AnalysisHost + ?Sized),
+    interner: &StableKeyInterner,
+    fact: &CfgFunctionFact,
+) -> FactMeta {
+    let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
+    cfg_fact_metadata(
+        interner,
+        fact.stable_key,
+        precision,
+        confidence,
+        [
+            ("status", cfg_status_label(fact.status).to_string()),
+            ("precision", cfg_precision_label(fact.precision).to_string()),
+            (
+                "body_key",
+                fact_stable_key(db, FactFamily::MirBody, fact.body.0),
+            ),
+            ("language", language_label(fact.language).to_string()),
+            ("path", db.path_for(fact.file)),
+            ("span", span_metadata_value(&fact.span)),
+        ],
+    )
+}
+
+fn cfg_node_metadata(
+    db: &(impl AnalysisHost + ?Sized),
+    interner: &StableKeyInterner,
+    fact: &CfgNodeFact,
+) -> FactMeta {
+    let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
+    cfg_fact_metadata(
+        interner,
+        fact.stable_key,
+        precision,
+        confidence,
+        [
+            ("status", cfg_status_label(fact.status).to_string()),
+            ("precision", cfg_precision_label(fact.precision).to_string()),
+            ("kind", cfg_node_kind_label(fact.kind).to_string()),
+            (
+                "function_key",
+                fact_stable_key(db, FactFamily::CfgFunction, fact.cfg_function.0),
+            ),
+            ("operation_ordinal", fact.operation_ordinal.to_string()),
+            ("span", option_span_metadata_value(fact.span.as_ref())),
+        ],
+    )
+}
+
+fn cfg_block_metadata(
+    db: &(impl AnalysisHost + ?Sized),
+    interner: &StableKeyInterner,
+    fact: &BasicBlockFact,
+) -> FactMeta {
+    let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
+    cfg_fact_metadata(
+        interner,
+        fact.stable_key,
+        precision,
+        confidence,
+        [
+            ("status", cfg_status_label(fact.status).to_string()),
+            ("precision", cfg_precision_label(fact.precision).to_string()),
+            ("kind", basic_block_kind_label(fact.kind).to_string()),
+            (
+                "function_key",
+                fact_stable_key(db, FactFamily::CfgFunction, fact.cfg_function.0),
+            ),
+            ("reachable", fact.reachable.to_string()),
+            ("reverse_postorder", fact.reverse_postorder.to_string()),
+        ],
+    )
+}
+
+fn cfg_edge_metadata(
+    db: &(impl AnalysisHost + ?Sized),
+    interner: &StableKeyInterner,
+    fact: &CfgEdgeFact,
+) -> FactMeta {
+    let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
+    cfg_fact_metadata(
+        interner,
+        fact.stable_key,
+        precision,
+        confidence,
+        [
+            ("status", cfg_status_label(fact.status).to_string()),
+            ("precision", cfg_precision_label(fact.precision).to_string()),
+            ("view", cfg_view_label(fact.view).to_string()),
+            ("kind", cfg_edge_kind_label(fact.kind).to_string()),
+            (
+                "function_key",
+                fact_stable_key(db, FactFamily::CfgFunction, fact.cfg_function.0),
+            ),
+            ("from_block", fact.from_block.0.to_string()),
+            ("to_block", fact.to_block.0.to_string()),
+        ],
+    )
+}
+
+fn cfg_reachability_metadata(
+    _db: &(impl AnalysisHost + ?Sized),
+    interner: &StableKeyInterner,
+    fact: &ReachabilityFact,
+) -> FactMeta {
+    let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
+    cfg_fact_metadata(
+        interner,
+        fact.stable_key,
+        precision,
+        confidence,
+        [
+            ("status", cfg_status_label(fact.status).to_string()),
+            ("precision", cfg_precision_label(fact.precision).to_string()),
+            ("view", cfg_view_label(fact.view).to_string()),
+            ("block", fact.block.0.to_string()),
+            ("reachable", fact.reachable.to_string()),
+        ],
+    )
+}
+
+fn cfg_dominator_metadata(
+    _db: &(impl AnalysisHost + ?Sized),
+    interner: &StableKeyInterner,
+    fact: &DominatorFact,
+) -> FactMeta {
+    let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
+    cfg_fact_metadata(
+        interner,
+        fact.stable_key,
+        precision,
+        confidence,
+        [
+            ("status", cfg_status_label(fact.status).to_string()),
+            ("precision", cfg_precision_label(fact.precision).to_string()),
+            ("view", cfg_view_label(fact.view).to_string()),
+            ("dominator", fact.dominator.0.to_string()),
+            ("dominated", fact.dominated.0.to_string()),
+            ("immediate", fact.immediate.to_string()),
+        ],
+    )
+}
+
+fn cfg_postdominator_metadata(
+    _db: &(impl AnalysisHost + ?Sized),
+    interner: &StableKeyInterner,
+    fact: &PostDominatorFact,
+) -> FactMeta {
+    let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
+    cfg_fact_metadata(
+        interner,
+        fact.stable_key,
+        precision,
+        confidence,
+        [
+            ("status", cfg_status_label(fact.status).to_string()),
+            ("precision", cfg_precision_label(fact.precision).to_string()),
+            ("view", cfg_view_label(fact.view).to_string()),
+            ("postdominator", fact.postdominator.0.to_string()),
+            ("postdominated", fact.postdominated.0.to_string()),
+            ("immediate", fact.immediate.to_string()),
+        ],
+    )
+}
+
+fn cfg_control_dependence_metadata(
+    _db: &(impl AnalysisHost + ?Sized),
+    interner: &StableKeyInterner,
+    fact: &ControlDependenceFact,
+) -> FactMeta {
+    let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
+    cfg_fact_metadata(
+        interner,
+        fact.stable_key,
+        precision,
+        confidence,
+        [
+            ("status", cfg_status_label(fact.status).to_string()),
+            ("precision", cfg_precision_label(fact.precision).to_string()),
+            ("view", cfg_view_label(fact.view).to_string()),
+            ("edge", fact.controlling_edge.0.to_string()),
+            (
+                "edge_kind",
+                cfg_edge_kind_label(fact.controlling_edge_kind).to_string(),
+            ),
+            ("controlled_block", fact.controlled_block.0.to_string()),
+        ],
+    )
+}
+
+fn unsupported_control_flow_metadata(
+    db: &(impl AnalysisHost + ?Sized),
+    interner: &StableKeyInterner,
+    fact: &UnsupportedControlFlowFact,
+) -> FactMeta {
+    let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
+    cfg_fact_metadata(
+        interner,
+        fact.stable_key,
+        precision,
+        confidence,
+        [
+            ("status", cfg_status_label(fact.status).to_string()),
+            ("precision", cfg_precision_label(fact.precision).to_string()),
+            ("language", language_label(fact.language).to_string()),
+            ("path", db.path_for(fact.file)),
+            ("span", span_metadata_value(&fact.span)),
+            ("construct", fact.construct.clone()),
+            ("source_evidence", fact.source_evidence.clone()),
+        ],
+    )
+}
+
+fn option_span_metadata_value(span: Option<&polint_core::Span>) -> String {
+    span.map(span_metadata_value).unwrap_or_else(none_value)
+}
+
+fn cfg_status_label(status: crate::cfg::facts::CfgStatus) -> &'static str {
+    match status {
+        crate::cfg::facts::CfgStatus::Resolved => "resolved",
+        crate::cfg::facts::CfgStatus::Partial => "partial",
+        crate::cfg::facts::CfgStatus::Unknown => "unknown",
+        crate::cfg::facts::CfgStatus::Unsupported => "unsupported",
+    }
+}
+
+fn cfg_precision_label(precision: crate::cfg::facts::CfgPrecision) -> &'static str {
+    match precision {
+        crate::cfg::facts::CfgPrecision::ExactSyntax => "exact_syntax",
+        crate::cfg::facts::CfgPrecision::ExactLowered => "exact_lowered",
+        crate::cfg::facts::CfgPrecision::SetupAware => "setup_aware",
+        crate::cfg::facts::CfgPrecision::Conservative => "conservative",
+        crate::cfg::facts::CfgPrecision::Heuristic => "heuristic",
+        crate::cfg::facts::CfgPrecision::Unknown => "unknown",
+        crate::cfg::facts::CfgPrecision::Unsupported => "unsupported",
+    }
+}
+
+fn cfg_view_label(view: crate::cfg::facts::CfgView) -> &'static str {
+    match view {
+        crate::cfg::facts::CfgView::NormalControl => "normal_control",
+        crate::cfg::facts::CfgView::AbruptAware => "abrupt_aware",
+        crate::cfg::facts::CfgView::ExceptionConservative => "exception_conservative",
+    }
+}
+
+fn cfg_node_kind_label(kind: crate::cfg::facts::CfgNodeKind) -> &'static str {
+    use crate::cfg::facts::CfgNodeKind;
+
+    match kind {
+        CfgNodeKind::Entry => "entry",
+        CfgNodeKind::ExitNormal => "exit_normal",
+        CfgNodeKind::ExitExceptional => "exit_exceptional",
+        CfgNodeKind::Operation => "operation",
+        CfgNodeKind::Condition => "condition",
+        CfgNodeKind::CallSite => "call_site",
+        CfgNodeKind::Return => "return",
+        CfgNodeKind::Throw => "throw",
+        CfgNodeKind::Panic => "panic",
+        CfgNodeKind::Break => "break",
+        CfgNodeKind::Continue => "continue",
+        CfgNodeKind::Goto => "goto",
+        CfgNodeKind::Yield => "yield",
+        CfgNodeKind::Await => "await",
+        CfgNodeKind::Defer => "defer",
+        CfgNodeKind::RunDefers => "run_defers",
+        CfgNodeKind::FinallyEnter => "finally_enter",
+        CfgNodeKind::FinallyExit => "finally_exit",
+        CfgNodeKind::Synthetic => "synthetic",
+        CfgNodeKind::Unsupported => "unsupported",
+    }
+}
+
+fn basic_block_kind_label(kind: crate::cfg::facts::BasicBlockKind) -> &'static str {
+    use crate::cfg::facts::BasicBlockKind;
+
+    match kind {
+        BasicBlockKind::Entry => "entry",
+        BasicBlockKind::ExitNormal => "exit_normal",
+        BasicBlockKind::ExitExceptional => "exit_exceptional",
+        BasicBlockKind::StraightLine => "straight_line",
+        BasicBlockKind::Branch => "branch",
+        BasicBlockKind::LoopHeader => "loop_header",
+        BasicBlockKind::LoopBody => "loop_body",
+        BasicBlockKind::Join => "join",
+        BasicBlockKind::Cleanup => "cleanup",
+        BasicBlockKind::Unreachable => "unreachable",
+        BasicBlockKind::Synthetic => "synthetic",
+    }
+}
+
+fn cfg_edge_kind_label(kind: crate::cfg::facts::CfgEdgeKind) -> &'static str {
+    use crate::cfg::facts::CfgEdgeKind;
+
+    match kind {
+        CfgEdgeKind::Normal => "normal",
+        CfgEdgeKind::True => "true",
+        CfgEdgeKind::False => "false",
+        CfgEdgeKind::SwitchCase => "switch_case",
+        CfgEdgeKind::DefaultCase => "default_case",
+        CfgEdgeKind::LoopEnter => "loop_enter",
+        CfgEdgeKind::LoopBack => "loop_back",
+        CfgEdgeKind::LoopExit => "loop_exit",
+        CfgEdgeKind::Break => "break",
+        CfgEdgeKind::Continue => "continue",
+        CfgEdgeKind::Goto => "goto",
+        CfgEdgeKind::Return => "return",
+        CfgEdgeKind::Throw => "throw",
+        CfgEdgeKind::ImplicitThrow => "implicit_throw",
+        CfgEdgeKind::Panic => "panic",
+        CfgEdgeKind::Recover => "recover",
+        CfgEdgeKind::Finally => "finally",
+        CfgEdgeKind::Cleanup => "cleanup",
+        CfgEdgeKind::Defer => "defer",
+        CfgEdgeKind::ShortCircuit => "short_circuit",
+        CfgEdgeKind::OptionalChain => "optional_chain",
+        CfgEdgeKind::Nullish => "nullish",
+        CfgEdgeKind::YieldSuspend => "yield_suspend",
+        CfgEdgeKind::YieldResume => "yield_resume",
+        CfgEdgeKind::AwaitSuspend => "await_suspend",
+        CfgEdgeKind::AwaitResume => "await_resume",
+        CfgEdgeKind::Spawn => "spawn",
+        CfgEdgeKind::Unreachable => "unreachable",
+        CfgEdgeKind::Unknown => "unknown",
+        CfgEdgeKind::Synthetic => "synthetic",
+        CfgEdgeKind::Extension => "extension",
+    }
+}
+
+fn refresh_refined_call_metadata(db: &mut (impl AnalysisHost + ?Sized)) {
+    let interner = db.stable_key_interner();
+    let edges = db.refined_call_edges().to_vec();
+    {
+        let metadata = db.fact_meta_mut();
+        metadata.remove_family(FactFamily::RefinedCallEdge);
+    }
+
+    for fact in &edges {
+        let (precision, status_confidence) = call_status_metadata(fact.status, fact.precision);
+        let confidence = refined_call_confidence_metadata(fact.confidence, status_confidence);
+        let validation = refined_call_validation_metadata(fact.validation);
+        let metadata = FactMeta {
+            stable_key: fact.stable_key,
+            producer_id: "polint.refined_calls",
+            layer_id: "polint.refined_calls",
+            precision,
+            confidence,
+            validation,
+            payload_digest: metadata_payload_digest(
+                &interner,
+                fact.stable_key,
+                &[
+                    ("status", call_status_label(fact.status).to_string()),
+                    (
+                        "precision",
+                        call_precision_label(fact.precision).to_string(),
+                    ),
+                    (
+                        "algorithm",
+                        call_algorithm_label(fact.algorithm).to_string(),
+                    ),
+                    (
+                        "edge_kind",
+                        call_edge_kind_label(fact.edge_kind).to_string(),
+                    ),
+                    ("tier", refined_call_tier_label(fact.tier).to_string()),
+                    (
+                        "validation",
+                        refined_call_validation_label(fact.validation).to_string(),
+                    ),
+                    (
+                        "reason",
+                        fact.reason
+                            .map(call_unresolved_reason_label)
+                            .map(str::to_string)
+                            .unwrap_or_else(none_value),
+                    ),
+                    (
+                        "site_key",
+                        fact_stable_key(db, FactFamily::CallSite, fact.site.0),
+                    ),
+                    (
+                        "base_target_key",
+                        fact.base_target
+                            .map(|target| fact_stable_key(db, FactFamily::CallTarget, target.0))
+                            .unwrap_or_else(none_value),
+                    ),
+                    (
+                        "caller_key",
+                        fact_stable_key(db, FactFamily::Function, fact.caller.0),
+                    ),
+                    (
+                        "target_function_key",
+                        fact.target_function
+                            .map(|function| fact_stable_key(db, FactFamily::Function, function.0))
+                            .unwrap_or_else(none_value),
+                    ),
+                    (
+                        "target_symbol_key",
+                        fact.target_symbol
+                            .map(|symbol| fact_stable_key(db, FactFamily::Symbol, symbol.0))
+                            .unwrap_or_else(none_value),
+                    ),
+                    (
+                        "synthetic_target",
+                        fact.synthetic_target.clone().unwrap_or_else(none_value),
+                    ),
+                    ("evidence", fact.evidence.join("\n")),
+                    ("inputs", fact.input_stable_keys.join("\n")),
+                ],
+            ),
+        };
+        db.fact_meta_mut().insert(
+            FactRef::new(FactFamily::RefinedCallEdge, fact.id.0),
+            metadata,
+        );
+    }
+    db.fact_meta_mut()
+        .finish_family_insertions(FactFamily::RefinedCallEdge);
+}
+
+fn refined_call_confidence_metadata(
+    confidence: RefinedCallConfidence,
+    fallback: FactConfidence,
+) -> FactConfidence {
+    let requested = match confidence {
+        RefinedCallConfidence::High => FactConfidence::High,
+        RefinedCallConfidence::Medium => FactConfidence::Medium,
+        RefinedCallConfidence::Low => FactConfidence::Low,
+    };
+    match (requested, fallback) {
+        (FactConfidence::Low, _) | (_, FactConfidence::Low) => FactConfidence::Low,
+        (FactConfidence::Medium, _) | (_, FactConfidence::Medium) => FactConfidence::Medium,
+        (FactConfidence::High, FactConfidence::High) => FactConfidence::High,
+    }
+}
+
+fn refined_call_validation_metadata(validation: RefinedCallValidation) -> ValidationStatus {
+    match validation {
+        RefinedCallValidation::Native => ValidationStatus::NativeTrusted,
+        RefinedCallValidation::ReferentiallyValidated => ValidationStatus::ReferentiallyValidated,
+        RefinedCallValidation::ExtensionValidated => ValidationStatus::SchemaValidated,
+        RefinedCallValidation::Rejected => ValidationStatus::ConflictRejected,
+    }
+}
+
+fn refined_call_tier_label(tier: RefinedCallTier) -> &'static str {
+    match tier {
+        RefinedCallTier::DirectOnly => "direct_only",
+        RefinedCallTier::DirectPlusFramework => "direct_plus_framework",
+        RefinedCallTier::TypeValueFunctionToken => "type_value_function_token",
+        RefinedCallTier::SummaryAssisted => "summary_assisted",
+        RefinedCallTier::PointsToAssisted => "points_to_assisted",
+        RefinedCallTier::ExtensionModel => "extension_model",
+        RefinedCallTier::AllAccepted => "all_accepted",
+    }
+}
+
+fn refined_call_validation_label(validation: RefinedCallValidation) -> &'static str {
+    match validation {
+        RefinedCallValidation::Native => "native",
+        RefinedCallValidation::ReferentiallyValidated => "referentially_validated",
+        RefinedCallValidation::ExtensionValidated => "extension_validated",
+        RefinedCallValidation::Rejected => "rejected",
     }
 }
 

@@ -66,6 +66,7 @@ pub(crate) fn refined_calls_debug_json_for_test(db: &AnalysisDb) -> serde_json::
 #[derive(Serialize)]
 struct RefinedCallDebugRow {
     family: &'static str,
+    #[serde(rename = "stable_key")]
     stable_key_text: String,
     producer_id: &'static str,
     layer_id: &'static str,
