@@ -1273,15 +1273,7 @@ mod tests {
     use crate::ts::scope::extract::extract_ts_scope;
 
     fn span(file: FileId) -> Span {
-        Span {
-            file,
-            start_byte: 0,
-            end_byte: 10,
-            start_line: 1,
-            start_col: 0,
-            end_line: 1,
-            end_col: 10,
-        }
+        Span::new(file, 0, 10, 1, 0, 1, 10)
     }
 
     /// Builds a tiny in-memory db with one package, one function, and one call site
@@ -1294,24 +1286,24 @@ mod tests {
             "main.go".to_string(),
             "package main\nfunc main() { run() }\n".to_string(),
         );
-        db.push_package(PackageFact {
-            id: PackageId(0),
+        db.push_package(PackageFact::new(
+            PackageId::from_raw(0),
             file,
-            name: "main".to_string(),
-            span: span(file),
-            language: Language::Go,
-        });
-        let caller = db.push_function(FunctionFact {
-            id: FunctionId(0),
+            "main".to_string(),
+            span(file),
+            Language::Go,
+        ));
+        let caller = db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "main".to_string(),
-            span: span(file),
-            language: Language::Go,
-            is_test: false,
-            is_exported: false,
-            cyclomatic_complexity: 1,
-            calls: vec!["run".to_string()],
-        });
+            "main".to_string(),
+            span(file),
+            Language::Go,
+            false,
+            false,
+            1,
+            vec!["run".to_string()],
+        ));
 
         let site = CallSiteFact {
             in_throw: false,
@@ -1354,20 +1346,20 @@ mod tests {
     }
 
     fn push_ts_function(db: &mut AnalysisDb, function: &TsInventoryFunctionFact) -> FunctionId {
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
-            file: function.file,
-            name: function
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
+            function.file,
+            function
                 .display_name
                 .clone()
                 .unwrap_or_else(|| "<anonymous>".to_string()),
-            span: function.span.clone(),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: false,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        })
+            function.span.clone(),
+            Language::TypeScript,
+            false,
+            false,
+            1,
+            Vec::new(),
+        ))
     }
 
     fn ts_function<'a>(
@@ -1723,46 +1715,46 @@ function run() {
             push_ts_function(&mut db, &target);
             let caller = push_ts_function(&mut db, &caller);
             replace_single_ts_callsite(&mut db, caller, &callsite);
-            let import = db.push_import(ImportFact {
-                id: ImportId(0),
-                file: app_file,
-                package: None,
-                path: "./m".to_string(),
-                span: Span::point(app_file, 1, 0),
-                language: Language::TypeScript,
-            });
+            let import = db.push_import(ImportFact::new(
+                ImportId::from_raw(0),
+                app_file,
+                None,
+                "./m".to_string(),
+                Span::point(app_file, 1, 0),
+                Language::TypeScript,
+            ));
             db.replace_module_graph_facts(
-                vec![ResolvedImportFact {
-                    id: crate::core::ResolvedImportId(0),
+                vec![ResolvedImportFact::new(
+                    crate::core::ResolvedImportId::from_raw(0),
                     import,
-                    from_file: app_file,
-                    target_node: Some(ModuleNodeId(1)),
-                    status: ResolutionStatus::Resolved,
-                    precision: ResolutionPrecision::ExactFile,
-                    reason: None,
-                }],
+                    app_file,
+                    Some(ModuleNodeId::from_raw(1)),
+                    ResolutionStatus::Resolved,
+                    ResolutionPrecision::ExactFile,
+                    None,
+                )],
                 vec![
-                    ModuleNode {
-                        id: ModuleNodeId(0),
-                        kind: ModuleNodeKind::File,
-                        label: "src/app.ts".to_string(),
-                        file: Some(app_file),
-                        package: None,
-                        language: Some(Language::TypeScript),
-                    },
-                    ModuleNode {
-                        id: ModuleNodeId(1),
-                        kind: ModuleNodeKind::File,
-                        label: "src/m.ts".to_string(),
-                        file: Some(module_file),
-                        package: None,
-                        language: Some(Language::TypeScript),
-                    },
+                    ModuleNode::new(
+                        ModuleNodeId::from_raw(0),
+                        ModuleNodeKind::File,
+                        "src/app.ts".to_string(),
+                        Some(app_file),
+                        None,
+                        Some(Language::TypeScript),
+                    ),
+                    ModuleNode::new(
+                        ModuleNodeId::from_raw(1),
+                        ModuleNodeKind::File,
+                        "src/m.ts".to_string(),
+                        Some(module_file),
+                        None,
+                        Some(Language::TypeScript),
+                    ),
                 ],
                 Vec::new(),
             );
             let module_files = vec![TsDirectBindingModuleFile {
-                module_node: ModuleNodeId(1),
+                module_node: ModuleNodeId::from_raw(1),
                 inventory: &module_inventory,
                 scope: &module_scope,
             }];
@@ -2229,35 +2221,35 @@ function run() {
                 "main.go".to_string(),
                 "package main\nfunc main(){ run() }\nfunc run(){}\n".to_string(),
             );
-            db.push_package(PackageFact {
-                id: PackageId(0),
+            db.push_package(PackageFact::new(
+                PackageId::from_raw(0),
                 file,
-                name: "main".to_string(),
-                span: span(file),
-                language: Language::Go,
-            });
-            let caller = db.push_function(FunctionFact {
-                id: FunctionId(0),
+                "main".to_string(),
+                span(file),
+                Language::Go,
+            ));
+            let caller = db.push_function(FunctionFact::new(
+                FunctionId::from_raw(0),
                 file,
-                name: "main".to_string(),
-                span: span_at(file, 20, 24),
-                language: Language::Go,
-                is_test: false,
-                is_exported: false,
-                cyclomatic_complexity: 1,
-                calls: vec!["run".to_string()],
-            });
-            db.push_function(FunctionFact {
-                id: FunctionId(0),
+                "main".to_string(),
+                span_at(file, 20, 24),
+                Language::Go,
+                false,
+                false,
+                1,
+                vec!["run".to_string()],
+            ));
+            db.push_function(FunctionFact::new(
+                FunctionId::from_raw(0),
                 file,
-                name: "run".to_string(),
-                span: span_at(file, 34, 37),
-                language: Language::Go,
-                is_test: false,
-                is_exported: false,
-                cyclomatic_complexity: 1,
-                calls: Vec::new(),
-            });
+                "run".to_string(),
+                span_at(file, 34, 37),
+                Language::Go,
+                false,
+                false,
+                1,
+                Vec::new(),
+            ));
             db.replace_call_facts(CallOutput {
                 sites: vec![CallSiteFact {
                     in_throw: false,
@@ -2307,8 +2299,8 @@ function run() {
                     kind: GoSemanticFunctionKind::Function,
                     receiver: None,
                     relative_file: Some("main.go".to_string()),
-                    file: Some(FileId(0)),
-                    span: Some(span_at(FileId(0), 34, 37)),
+                    file: Some(FileId::from_raw(0)),
+                    span: Some(span_at(FileId::from_raw(0), 34, 37)),
                 }],
                 callsites: vec![GoSemanticCallsiteFact {
                     id: GoSemanticCallsiteId(0),
@@ -2320,23 +2312,15 @@ function run() {
                     status,
                     reason: None,
                     relative_file: Some("main.go".to_string()),
-                    file: Some(FileId(0)),
-                    span: Some(span_at(FileId(0), 28, 31)),
+                    file: Some(FileId::from_raw(0)),
+                    span: Some(span_at(FileId::from_raw(0), 28, 31)),
                 }],
                 ..GoSemanticFactsOutput::default()
             }
         }
 
         fn span_at(file: FileId, start: u32, end: u32) -> Span {
-            Span {
-                file,
-                start_byte: start,
-                end_byte: end,
-                start_line: 1,
-                start_col: start,
-                end_line: 1,
-                end_col: end,
-            }
+            Span::new(file, start, end, 1, start, 1, end)
         }
     }
 }

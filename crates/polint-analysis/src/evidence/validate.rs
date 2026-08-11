@@ -386,7 +386,7 @@ mod tests {
             claimed_precision: EvidencePrecision::Heuristic,
             confidence: EvidenceConfidence::Medium,
             source_path: Some("src/lib.rs".to_string()),
-            source_span: Some(Span::new(FileId(1), 0, 1, 1, 1, 1, 2)),
+            source_span: Some(Span::new(FileId::from_raw(1), 0, 1, 1, 1, 1, 2)),
             summary_stable_key: None,
             expansion: EvidenceExpansion::None,
             replay_key: Some("replay:extension".to_string()),

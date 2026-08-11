@@ -175,8 +175,8 @@ mod solver_projection_tests {
         let edge = &output.edges[0];
         assert_eq!(edge.site, CallSiteId(0));
         assert_eq!(edge.base_target, None);
-        assert_eq!(edge.caller, FunctionId(0));
-        assert_eq!(edge.target_function, Some(FunctionId(1)));
+        assert_eq!(edge.caller, FunctionId::from_raw(0));
+        assert_eq!(edge.target_function, Some(FunctionId::from_raw(1)));
         assert_eq!(edge.tier, RefinedCallTier::PointsToAssisted);
         assert_eq!(edge.status, CallTargetStatus::Resolved);
         assert_eq!(edge.precision, CallPrecision::SetupAware);
@@ -201,8 +201,8 @@ mod solver_projection_tests {
         assert_eq!(output.edges.len(), 1);
         let edge = &output.edges[0];
         assert_eq!(edge.site, CallSiteId(0));
-        assert_eq!(edge.caller, FunctionId(0));
-        assert_eq!(edge.target_function, Some(FunctionId(1)));
+        assert_eq!(edge.caller, FunctionId::from_raw(0));
+        assert_eq!(edge.target_function, Some(FunctionId::from_raw(1)));
         assert_eq!(edge.tier, RefinedCallTier::PointsToAssisted);
         assert!(
             edge.input_stable_keys
@@ -220,8 +220,8 @@ mod solver_projection_tests {
         assert_eq!(output.edges.len(), 1);
         let edge = &output.edges[0];
         assert_eq!(edge.site, CallSiteId(0));
-        assert_eq!(edge.caller, FunctionId(0));
-        assert_eq!(edge.target_function, Some(FunctionId(1)));
+        assert_eq!(edge.caller, FunctionId::from_raw(0));
+        assert_eq!(edge.target_function, Some(FunctionId::from_raw(1)));
         assert_eq!(edge.tier, RefinedCallTier::PointsToAssisted);
         assert!(
             edge.input_stable_keys
@@ -239,8 +239,8 @@ mod solver_projection_tests {
         assert_eq!(output.edges.len(), 1);
         let edge = &output.edges[0];
         assert_eq!(edge.site, CallSiteId(0));
-        assert_eq!(edge.caller, FunctionId(0));
-        assert_eq!(edge.target_function, Some(FunctionId(1)));
+        assert_eq!(edge.caller, FunctionId::from_raw(0));
+        assert_eq!(edge.target_function, Some(FunctionId::from_raw(1)));
         assert_eq!(edge.tier, RefinedCallTier::PointsToAssisted);
         assert!(
             edge.input_stable_keys
@@ -293,19 +293,24 @@ mod solver_projection_tests {
             "callee();\n".to_string(),
         );
         db.push_function(ts_function(
-            FunctionId(0),
+            FunctionId::from_raw(0),
             file,
             "caller",
             vec!["callee".to_string()],
         ));
-        db.push_function(ts_function(FunctionId(1), file, "callee", Vec::new()));
+        db.push_function(ts_function(
+            FunctionId::from_raw(1),
+            file,
+            "callee",
+            Vec::new(),
+        ));
         db.replace_call_facts(CallOutput {
             sites: vec![CallSiteFact {
                 in_throw: false,
                 id: CallSiteId(0),
                 language: Language::TypeScript,
                 file,
-                caller: FunctionId(0),
+                caller: FunctionId::from_raw(0),
                 owner_symbol: None,
                 body: MirBodyId(0),
                 operation: MirOpId(0),
@@ -331,13 +336,13 @@ mod solver_projection_tests {
                 semantic_node(
                     &db,
                     SemanticNodeId(0),
-                    NodeKind::Function(FunctionId(0)),
+                    NodeKind::Function(FunctionId::from_raw(0)),
                     "node:function:caller",
                 ),
                 semantic_node(
                     &db,
                     SemanticNodeId(1),
-                    NodeKind::Function(FunctionId(1)),
+                    NodeKind::Function(FunctionId::from_raw(1)),
                     "node:function:callee",
                 ),
             ],
@@ -346,8 +351,8 @@ mod solver_projection_tests {
         })
         .expect("valid semantic graph");
 
-        let caller_node = function_node(&db, FunctionId(0));
-        let callee_node = function_node(&db, FunctionId(1));
+        let caller_node = function_node(&db, FunctionId::from_raw(0));
+        let callee_node = function_node(&db, FunctionId::from_raw(1));
         let provenance = DerivedEdgeProvenance::new(
             &interner,
             vec![
@@ -388,19 +393,24 @@ mod solver_projection_tests {
             "package main\nfunc caller(){ callee() }\nfunc callee() {}\n".to_string(),
         );
         db.push_function(go_function(
-            FunctionId(0),
+            FunctionId::from_raw(0),
             file,
             "caller",
             vec!["callee".to_string()],
         ));
-        db.push_function(go_function(FunctionId(1), file, "callee", Vec::new()));
+        db.push_function(go_function(
+            FunctionId::from_raw(1),
+            file,
+            "callee",
+            Vec::new(),
+        ));
         db.replace_call_facts(CallOutput {
             sites: vec![CallSiteFact {
                 in_throw: false,
                 id: CallSiteId(0),
                 language: Language::Go,
                 file,
-                caller: FunctionId(0),
+                caller: FunctionId::from_raw(0),
                 owner_symbol: None,
                 body: MirBodyId(0),
                 operation: MirOpId(0),
@@ -426,13 +436,13 @@ mod solver_projection_tests {
                 semantic_node(
                     &db,
                     SemanticNodeId(0),
-                    NodeKind::Function(FunctionId(0)),
+                    NodeKind::Function(FunctionId::from_raw(0)),
                     "node:function:caller",
                 ),
                 semantic_node(
                     &db,
                     SemanticNodeId(1),
-                    NodeKind::Function(FunctionId(1)),
+                    NodeKind::Function(FunctionId::from_raw(1)),
                     "node:function:callee",
                 ),
                 semantic_node(
@@ -457,8 +467,8 @@ mod solver_projection_tests {
         })
         .expect("valid semantic graph");
 
-        let caller_node = function_node(&db, FunctionId(0));
-        let callee_node = function_node(&db, FunctionId(1));
+        let caller_node = function_node(&db, FunctionId::from_raw(0));
+        let callee_node = function_node(&db, FunctionId::from_raw(1));
         let callsite_node = callsite_node(&db, CallSiteId(0));
         let interner = db.stable_key_interner();
         let provenance = DerivedEdgeProvenance::new(
@@ -504,14 +514,14 @@ mod solver_projection_tests {
                     "go-function:caller",
                     "pkg.caller",
                     file,
-                    FunctionId(0),
+                    FunctionId::from_raw(0),
                 ),
                 go_semantic_function(
                     &interner,
                     "go-function:callee",
                     "pkg.callee",
                     file,
-                    FunctionId(1),
+                    FunctionId::from_raw(1),
                 ),
             ],
             callsites: vec![GoSemanticCallsiteFact {
@@ -531,8 +541,8 @@ mod solver_projection_tests {
         })
         .expect("valid go semantic facts");
 
-        let caller_node = function_node(&db, FunctionId(0));
-        let callee_node = function_node(&db, FunctionId(1));
+        let caller_node = function_node(&db, FunctionId::from_raw(0));
+        let callee_node = function_node(&db, FunctionId::from_raw(1));
         let callsite_node = callsite_node(&db, CallSiteId(0));
         let provenance = DerivedEdgeProvenance::new(
             &interner,
@@ -574,21 +584,21 @@ mod solver_projection_tests {
         let call_span = span_for_file(file, 60, 75);
         let interner = db.stable_key_interner();
         db.push_function(go_function_with_span(
-            FunctionId(0),
+            FunctionId::from_raw(0),
             file,
             "Handler.Handle",
             caller_span,
             vec!["Speak".to_string()],
         ));
         db.push_function(go_function_with_span(
-            FunctionId(1),
+            FunctionId::from_raw(1),
             file,
             "Speak",
             callee_span.clone(),
             Vec::new(),
         ));
         db.push_function(go_function_with_span(
-            FunctionId(2),
+            FunctionId::from_raw(2),
             file,
             "other",
             decoy_span,
@@ -601,7 +611,7 @@ mod solver_projection_tests {
                     id: CallSiteId(0),
                     language: Language::Go,
                     file,
-                    caller: FunctionId(0),
+                    caller: FunctionId::from_raw(0),
                     owner_symbol: None,
                     body: MirBodyId(0),
                     operation: MirOpId(0),
@@ -623,7 +633,7 @@ mod solver_projection_tests {
                     id: CallSiteId(1),
                     language: Language::Go,
                     file,
-                    caller: FunctionId(2),
+                    caller: FunctionId::from_raw(2),
                     owner_symbol: None,
                     body: MirBodyId(1),
                     operation: MirOpId(0),
@@ -650,13 +660,13 @@ mod solver_projection_tests {
                 semantic_node(
                     &db,
                     SemanticNodeId(0),
-                    NodeKind::Function(FunctionId(0)),
+                    NodeKind::Function(FunctionId::from_raw(0)),
                     "node:function:handler-handle",
                 ),
                 semantic_node(
                     &db,
                     SemanticNodeId(1),
-                    NodeKind::Function(FunctionId(1)),
+                    NodeKind::Function(FunctionId::from_raw(1)),
                     "node:function:speak",
                 ),
             ],
@@ -672,7 +682,7 @@ mod solver_projection_tests {
                     "Handler.Handle",
                     "pkg.Handler.Handle",
                     file,
-                    FunctionId(0),
+                    FunctionId::from_raw(0),
                     span_for_file(file, 25, 25),
                 ),
                 go_semantic_function_with_span(
@@ -681,7 +691,7 @@ mod solver_projection_tests {
                     "Speak",
                     "pkg.Speak",
                     file,
-                    FunctionId(1),
+                    FunctionId::from_raw(1),
                     callee_span,
                 ),
             ],
@@ -702,8 +712,8 @@ mod solver_projection_tests {
         })
         .expect("valid go semantic facts");
 
-        let caller_node = function_node(&db, FunctionId(0));
-        let callee_node = function_node(&db, FunctionId(1));
+        let caller_node = function_node(&db, FunctionId::from_raw(0));
+        let callee_node = function_node(&db, FunctionId::from_raw(1));
         let provenance = DerivedEdgeProvenance::new(
             &interner,
             vec![ContributingFact {
@@ -767,17 +777,17 @@ mod solver_projection_tests {
         span: Span,
         calls: Vec<String>,
     ) -> FunctionFact {
-        FunctionFact {
+        FunctionFact::new(
             id,
             file,
-            name: name.to_string(),
+            name.to_string(),
             span,
             language,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
+            false,
+            true,
+            1,
             calls,
-        }
+        )
     }
 
     fn go_semantic_function(
@@ -905,19 +915,11 @@ mod solver_projection_tests {
     }
 
     fn span() -> Span {
-        Span::point(FileId(0), 1, 1)
+        Span::point(FileId::from_raw(0), 1, 1)
     }
 
     fn span_for_file(file: FileId, start_byte: u32, end_byte: u32) -> Span {
-        Span {
-            file,
-            start_byte,
-            end_byte,
-            start_line: 1,
-            start_col: 1,
-            end_line: 1,
-            end_col: 1,
-        }
+        Span::new(file, start_byte, end_byte, 1, 1, 1, 1)
     }
 }
 
@@ -938,9 +940,9 @@ mod tests {
         let target = CallTargetFact {
             id: CallTargetId(7),
             site: CallSiteId(3),
-            caller: FunctionId(1),
-            target_function: Some(FunctionId(2)),
-            target_symbol: Some(SymbolId(4)),
+            caller: FunctionId::from_raw(1),
+            target_function: Some(FunctionId::from_raw(2)),
+            target_symbol: Some(SymbolId::from_raw(4)),
             edge_kind: CallEdgeKind::Direct,
             algorithm: CallAlgorithm::DirectReference,
             status: CallTargetStatus::Resolved,
@@ -991,7 +993,7 @@ mod tests {
             id: crate::analysis::ids::RefinedCallEdgeId(id),
             site: CallSiteId(0),
             base_target: None,
-            caller: FunctionId(0),
+            caller: FunctionId::from_raw(0),
             target_function: None,
             target_symbol: None,
             synthetic_target: None,

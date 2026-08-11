@@ -12,102 +12,35 @@
             "export function Button() {}\n".to_string(),
         );
         let span = test_span(from_file, 1);
-        let local_import = db.push_import(ImportFact {
-            id: ImportId(99),
-            file: from_file,
-            package: None,
-            path: "./button".to_string(),
-            span: span.clone(),
-            language: Language::TypeScript,
-        });
-        let external_import = db.push_import(ImportFact {
-            id: ImportId(99),
-            file: from_file,
-            package: None,
-            path: "react".to_string(),
-            span,
-            language: Language::TypeScript,
-        });
+        let local_import = db.push_import(ImportFact::new(ImportId::from_raw(99), from_file, None, "./button".to_string(), span.clone(), Language::TypeScript));
+        let external_import = db.push_import(ImportFact::new(ImportId::from_raw(99), from_file, None, "react".to_string(), span, Language::TypeScript));
 
         db.replace_module_graph_facts(
             vec![
-                ResolvedImportFact {
-                    id: ResolvedImportId(99),
-                    import: local_import,
-                    from_file,
-                    target_node: Some(ModuleNodeId(1)),
-                    status: ResolutionStatus::Resolved,
-                    precision: ResolutionPrecision::ExactFile,
-                    reason: None,
-                },
-                ResolvedImportFact {
-                    id: ResolvedImportId(99),
-                    import: external_import,
-                    from_file,
-                    target_node: Some(ModuleNodeId(2)),
-                    status: ResolutionStatus::External,
-                    precision: ResolutionPrecision::ExternalPackage,
-                    reason: None,
-                },
+                ResolvedImportFact::new(ResolvedImportId::from_raw(99), local_import, from_file, Some(ModuleNodeId::from_raw(1)), ResolutionStatus::Resolved, ResolutionPrecision::ExactFile, None),
+                ResolvedImportFact::new(ResolvedImportId::from_raw(99), external_import, from_file, Some(ModuleNodeId::from_raw(2)), ResolutionStatus::External, ResolutionPrecision::ExternalPackage, None),
             ],
             vec![
-                ModuleNode {
-                    id: ModuleNodeId(99),
-                    kind: ModuleNodeKind::File,
-                    label: "src/app.ts".to_string(),
-                    file: Some(from_file),
-                    package: None,
-                    language: Some(Language::TypeScript),
-                },
-                ModuleNode {
-                    id: ModuleNodeId(99),
-                    kind: ModuleNodeKind::File,
-                    label: "src/button.ts".to_string(),
-                    file: Some(target_file),
-                    package: None,
-                    language: Some(Language::TypeScript),
-                },
-                ModuleNode {
-                    id: ModuleNodeId(99),
-                    kind: ModuleNodeKind::External,
-                    label: "react".to_string(),
-                    file: None,
-                    package: None,
-                    language: Some(Language::TypeScript),
-                },
+                ModuleNode::new(ModuleNodeId::from_raw(99), ModuleNodeKind::File, "src/app.ts".to_string(), Some(from_file), None, Some(Language::TypeScript)),
+                ModuleNode::new(ModuleNodeId::from_raw(99), ModuleNodeKind::File, "src/button.ts".to_string(), Some(target_file), None, Some(Language::TypeScript)),
+                ModuleNode::new(ModuleNodeId::from_raw(99), ModuleNodeKind::External, "react".to_string(), None, None, Some(Language::TypeScript)),
             ],
             vec![
-                ModuleEdge {
-                    id: ModuleEdgeId(99),
-                    from: ModuleNodeId(0),
-                    to: ModuleNodeId(1),
-                    import: Some(local_import),
-                    resolved_import: Some(ResolvedImportId(0)),
-                    kind: ModuleEdgeKind::Imports,
-                    status: ResolutionStatus::Resolved,
-                },
-                ModuleEdge {
-                    id: ModuleEdgeId(99),
-                    from: ModuleNodeId(0),
-                    to: ModuleNodeId(2),
-                    import: Some(external_import),
-                    resolved_import: Some(ResolvedImportId(1)),
-                    kind: ModuleEdgeKind::DependsOn,
-                    status: ResolutionStatus::External,
-                },
+                ModuleEdge::new(ModuleEdgeId::from_raw(99), ModuleNodeId::from_raw(0), ModuleNodeId::from_raw(1), Some(local_import), Some(ResolvedImportId::from_raw(0)), ModuleEdgeKind::Imports, ResolutionStatus::Resolved),
+                ModuleEdge::new(ModuleEdgeId::from_raw(99), ModuleNodeId::from_raw(0), ModuleNodeId::from_raw(2), Some(external_import), Some(ResolvedImportId::from_raw(1)), ModuleEdgeKind::DependsOn, ResolutionStatus::External),
             ],
         );
 
-        assert_eq!(db.resolved_imports()[0].id, ResolvedImportId(0));
-        assert_eq!(db.resolved_imports()[1].id, ResolvedImportId(1));
-        assert_eq!(db.module_nodes()[0].id, ModuleNodeId(0));
-        assert_eq!(db.module_nodes()[1].id, ModuleNodeId(1));
-        assert_eq!(db.module_nodes()[2].id, ModuleNodeId(2));
-        assert_eq!(db.module_edges()[0].id, ModuleEdgeId(0));
-        assert_eq!(db.module_edges()[1].id, ModuleEdgeId(1));
+        assert_eq!(db.resolved_imports()[0].id, ResolvedImportId::from_raw(0));
+        assert_eq!(db.resolved_imports()[1].id, ResolvedImportId::from_raw(1));
+        assert_eq!(db.module_nodes()[0].id, ModuleNodeId::from_raw(0));
+        assert_eq!(db.module_nodes()[1].id, ModuleNodeId::from_raw(1));
+        assert_eq!(db.module_nodes()[2].id, ModuleNodeId::from_raw(2));
+        assert_eq!(db.module_edges()[0].id, ModuleEdgeId::from_raw(0));
+        assert_eq!(db.module_edges()[1].id, ModuleEdgeId::from_raw(1));
         assert_eq!(
             db.module_edges()[1].resolved_import,
-            Some(ResolvedImportId(1))
+            Some(ResolvedImportId::from_raw(1))
         );
     }
 
@@ -124,60 +57,23 @@
             "src/button.ts".to_string(),
             "export function Button() {}\n".to_string(),
         );
-        let import = db.push_import(ImportFact {
-            id: ImportId(99),
-            file: from_file,
-            package: None,
-            path: "./button".to_string(),
-            span: test_span(from_file, 1),
-            language: Language::TypeScript,
-        });
+        let import = db.push_import(ImportFact::new(ImportId::from_raw(99), from_file, None, "./button".to_string(), test_span(from_file, 1), Language::TypeScript));
 
         db.replace_module_graph_facts(
-            vec![ResolvedImportFact {
-                id: ResolvedImportId(40),
-                import,
-                from_file,
-                target_node: Some(ModuleNodeId(42)),
-                status: ResolutionStatus::Resolved,
-                precision: ResolutionPrecision::ExactFile,
-                reason: None,
-            }],
+            vec![ResolvedImportFact::new(ResolvedImportId::from_raw(40), import, from_file, Some(ModuleNodeId::from_raw(42)), ResolutionStatus::Resolved, ResolutionPrecision::ExactFile, None)],
             vec![
-                ModuleNode {
-                    id: ModuleNodeId(41),
-                    kind: ModuleNodeKind::File,
-                    label: "src/app.ts".to_string(),
-                    file: Some(from_file),
-                    package: None,
-                    language: Some(Language::TypeScript),
-                },
-                ModuleNode {
-                    id: ModuleNodeId(42),
-                    kind: ModuleNodeKind::File,
-                    label: "src/button.ts".to_string(),
-                    file: Some(target_file),
-                    package: None,
-                    language: Some(Language::TypeScript),
-                },
+                ModuleNode::new(ModuleNodeId::from_raw(41), ModuleNodeKind::File, "src/app.ts".to_string(), Some(from_file), None, Some(Language::TypeScript)),
+                ModuleNode::new(ModuleNodeId::from_raw(42), ModuleNodeKind::File, "src/button.ts".to_string(), Some(target_file), None, Some(Language::TypeScript)),
             ],
-            vec![ModuleEdge {
-                id: ModuleEdgeId(43),
-                from: ModuleNodeId(41),
-                to: ModuleNodeId(42),
-                import: Some(import),
-                resolved_import: Some(ResolvedImportId(40)),
-                kind: ModuleEdgeKind::Imports,
-                status: ResolutionStatus::Resolved,
-            }],
+            vec![ModuleEdge::new(ModuleEdgeId::from_raw(43), ModuleNodeId::from_raw(41), ModuleNodeId::from_raw(42), Some(import), Some(ResolvedImportId::from_raw(40)), ModuleEdgeKind::Imports, ResolutionStatus::Resolved)],
         );
 
-        assert_eq!(db.resolved_imports()[0].target_node, Some(ModuleNodeId(1)));
-        assert_eq!(db.module_edges()[0].from, ModuleNodeId(0));
-        assert_eq!(db.module_edges()[0].to, ModuleNodeId(1));
+        assert_eq!(db.resolved_imports()[0].target_node, Some(ModuleNodeId::from_raw(1)));
+        assert_eq!(db.module_edges()[0].from, ModuleNodeId::from_raw(0));
+        assert_eq!(db.module_edges()[0].to, ModuleNodeId::from_raw(1));
         assert_eq!(
             db.module_edges()[0].resolved_import,
-            Some(ResolvedImportId(0))
+            Some(ResolvedImportId::from_raw(0))
         );
     }
 
@@ -198,106 +94,25 @@
         let interner = db.stable_key_interner();
         db.replace_symbol_graph_facts(
             vec![
-                SymbolFact {
-                    id: SymbolId(0xfeed_beef),
-                    language: Language::TypeScript,
-                    name: "Button".to_string(),
-                    qualified_name: "src/app.ts::Button".to_string(),
-                    kind: SymbolKind::Function,
-                    namespace: SymbolNamespace::Value,
-                    file: Some(app_file),
-                    package: None,
-                    module: Some(ModuleNodeId(10)),
-                    owner: None,
-                    primary_span: Some(test_span(app_file, 1)),
-                    is_exported: true,
-                    stable_key: interner
-                        .intern("ts|src/app.ts|value|function|Button|1:1".to_string()),
-                    precision: SymbolPrecision::ExactLocal,
-                },
-                SymbolFact {
-                    id: SymbolId(0xabc0_1234),
-                    language: Language::TypeScript,
-                    name: "theme".to_string(),
-                    qualified_name: "src/theme.ts::theme".to_string(),
-                    kind: SymbolKind::Constant,
-                    namespace: SymbolNamespace::Value,
-                    file: Some(theme_file),
-                    package: None,
-                    module: Some(ModuleNodeId(11)),
-                    owner: None,
-                    primary_span: Some(test_span(theme_file, 1)),
-                    is_exported: true,
-                    stable_key: interner
-                        .intern("ts|src/theme.ts|value|constant|theme|1:1".to_string()),
-                    precision: SymbolPrecision::ModuleLinked,
-                },
+                SymbolFact::new(SymbolId::from_raw(0xfeed_beef), Language::TypeScript, "Button".to_string(), "src/app.ts::Button".to_string(), SymbolKind::Function, SymbolNamespace::Value, Some(app_file), None, Some(ModuleNodeId::from_raw(10)), None, Some(test_span(app_file, 1)), true, interner
+                        .intern("ts|src/app.ts|value|function|Button|1:1".to_string()), SymbolPrecision::ExactLocal),
+                SymbolFact::new(SymbolId::from_raw(0xabc0_1234), Language::TypeScript, "theme".to_string(), "src/theme.ts::theme".to_string(), SymbolKind::Constant, SymbolNamespace::Value, Some(theme_file), None, Some(ModuleNodeId::from_raw(11)), None, Some(test_span(theme_file, 1)), true, interner
+                        .intern("ts|src/theme.ts|value|constant|theme|1:1".to_string()), SymbolPrecision::ModuleLinked),
             ],
-            vec![DefinitionFact {
-                id: DefinitionId(0x1010_2020),
-                symbol: SymbolId(0xfeed_beef),
-                language: Language::TypeScript,
-                name: "Button".to_string(),
-                qualified_name: "src/app.ts::Button".to_string(),
-                kind: DefinitionKind::Declaration,
-                namespace: SymbolNamespace::Value,
-                file: Some(app_file),
-                package: None,
-                module: Some(ModuleNodeId(10)),
-                owner: None,
-                primary_span: Some(test_span(app_file, 1)),
-                is_primary: true,
-                is_exported: true,
-                stable_key: interner.intern("ts|src/app.ts|definition|Button|1:1".to_string()),
-                precision: SymbolPrecision::ExactLocal,
-            }],
+            vec![DefinitionFact::new(DefinitionId::from_raw(0x1010_2020), SymbolId::from_raw(0xfeed_beef), Language::TypeScript, "Button".to_string(), "src/app.ts::Button".to_string(), DefinitionKind::Declaration, SymbolNamespace::Value, Some(app_file), None, Some(ModuleNodeId::from_raw(10)), None, Some(test_span(app_file, 1)), true, true, interner.intern("ts|src/app.ts|definition|Button|1:1".to_string()), SymbolPrecision::ExactLocal)],
             vec![
-                ReferenceFact {
-                    id: ReferenceId(0x3030_4040),
-                    language: Language::TypeScript,
-                    name: "theme".to_string(),
-                    qualified_name: "src/theme.ts::theme".to_string(),
-                    kind: ReferenceKind::Read,
-                    namespace: SymbolNamespace::Value,
-                    file: Some(app_file),
-                    package: None,
-                    module: Some(ModuleNodeId(10)),
-                    owner: Some(SymbolId(0xfeed_beef)),
-                    primary_span: Some(test_span(app_file, 1)),
-                    target: Some(SymbolId(0xabc0_1234)),
-                    candidates: Vec::new(),
-                    stable_key: interner
-                        .intern("ts|src/app.ts|reference|theme|1:28".to_string()),
-                    status: SymbolResolutionStatus::Resolved,
-                    precision: SymbolPrecision::ModuleLinked,
-                },
-                ReferenceFact {
-                    id: ReferenceId(0x5050_6060),
-                    language: Language::TypeScript,
-                    name: "missing".to_string(),
-                    qualified_name: "missing".to_string(),
-                    kind: ReferenceKind::Read,
-                    namespace: SymbolNamespace::Value,
-                    file: Some(app_file),
-                    package: None,
-                    module: Some(ModuleNodeId(10)),
-                    owner: Some(SymbolId(0xfeed_beef)),
-                    primary_span: Some(test_span(app_file, 2)),
-                    target: None,
-                    candidates: vec![SymbolId(0xfeed_beef), SymbolId(0xabc0_1234)],
-                    stable_key: interner
-                        .intern("ts|src/app.ts|reference|missing|2:1".to_string()),
-                    status: SymbolResolutionStatus::Ambiguous,
-                    precision: SymbolPrecision::Ambiguous,
-                },
+                ReferenceFact::new(ReferenceId::from_raw(0x3030_4040), Language::TypeScript, "theme".to_string(), "src/theme.ts::theme".to_string(), ReferenceKind::Read, SymbolNamespace::Value, Some(app_file), None, Some(ModuleNodeId::from_raw(10)), Some(SymbolId::from_raw(0xfeed_beef)), Some(test_span(app_file, 1)), Some(SymbolId::from_raw(0xabc0_1234)), Vec::new(), interner
+                        .intern("ts|src/app.ts|reference|theme|1:28".to_string()), SymbolResolutionStatus::Resolved, SymbolPrecision::ModuleLinked),
+                ReferenceFact::new(ReferenceId::from_raw(0x5050_6060), Language::TypeScript, "missing".to_string(), "missing".to_string(), ReferenceKind::Read, SymbolNamespace::Value, Some(app_file), None, Some(ModuleNodeId::from_raw(10)), Some(SymbolId::from_raw(0xfeed_beef)), Some(test_span(app_file, 2)), None, vec![SymbolId::from_raw(0xfeed_beef), SymbolId::from_raw(0xabc0_1234)], interner
+                        .intern("ts|src/app.ts|reference|missing|2:1".to_string()), SymbolResolutionStatus::Ambiguous, SymbolPrecision::Ambiguous),
             ],
         );
 
-        assert_eq!(db.symbols()[0].id, SymbolId(0xfeed_beef));
-        assert_eq!(db.definitions()[0].id, DefinitionId(0x1010_2020));
-        assert_eq!(db.references()[0].id, ReferenceId(0x3030_4040));
+        assert_eq!(db.symbols()[0].id, SymbolId::from_raw(0xfeed_beef));
+        assert_eq!(db.definitions()[0].id, DefinitionId::from_raw(0x1010_2020));
+        assert_eq!(db.references()[0].id, ReferenceId::from_raw(0x3030_4040));
         assert_eq!(
-            db.symbol_by_id(SymbolId(0xabc0_1234))
+            db.symbol_by_id(SymbolId::from_raw(0xabc0_1234))
                 .map(|symbol| symbol.name.as_str()),
             Some("theme")
         );
@@ -305,36 +120,36 @@
             crate::symbol_graph::query::symbols_for_file(&db, app_file)
                 .map(|symbol| symbol.id)
                 .collect::<Vec<_>>(),
-            vec![SymbolId(0xfeed_beef)]
+            vec![SymbolId::from_raw(0xfeed_beef)]
         );
         assert_eq!(
             crate::symbol_graph::query::symbols_by_name(&db, "Button")
                 .map(|symbol| symbol.id)
                 .collect::<Vec<_>>(),
-            vec![SymbolId(0xfeed_beef)]
+            vec![SymbolId::from_raw(0xfeed_beef)]
         );
         assert_eq!(
-            db.definitions_for_symbol(SymbolId(0xfeed_beef))
+            db.definitions_for_symbol(SymbolId::from_raw(0xfeed_beef))
                 .map(|definition| definition.id)
                 .collect::<Vec<_>>(),
-            vec![DefinitionId(0x1010_2020)]
+            vec![DefinitionId::from_raw(0x1010_2020)]
         );
         assert_eq!(
-            db.definition_for_symbol(SymbolId(0xfeed_beef))
+            db.definition_for_symbol(SymbolId::from_raw(0xfeed_beef))
                 .map(|definition| definition.id),
-            Some(DefinitionId(0x1010_2020))
+            Some(DefinitionId::from_raw(0x1010_2020))
         );
         assert_eq!(
-            crate::symbol_graph::query::references_to_symbol(&db, SymbolId(0xabc0_1234))
+            crate::symbol_graph::query::references_to_symbol(&db, SymbolId::from_raw(0xabc0_1234))
                 .map(|reference| reference.id)
                 .collect::<Vec<_>>(),
-            vec![ReferenceId(0x3030_4040)]
+            vec![ReferenceId::from_raw(0x3030_4040)]
         );
         assert_eq!(
             db.references_for_file(app_file)
                 .map(|reference| reference.id)
                 .collect::<Vec<_>>(),
-            vec![ReferenceId(0x3030_4040), ReferenceId(0x5050_6060)]
+            vec![ReferenceId::from_raw(0x3030_4040), ReferenceId::from_raw(0x5050_6060)]
         );
 
         let precision_statuses = [
@@ -448,69 +263,14 @@
             "export function Button() { return <button aria-label=\"Save\" /> }\n".to_string(),
         );
         let span = test_span(file, 1);
-        let function = db.push_function(FunctionFact {
-            id: FunctionId(99),
-            file,
-            name: "Button".to_string(),
-            span: span.clone(),
-            language: Language::Tsx,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: vec!["render".to_string()],
-        });
-        let import = db.push_import(ImportFact {
-            id: ImportId(99),
-            file,
-            package: Some("react".to_string()),
-            path: "react".to_string(),
-            span: span.clone(),
-            language: Language::Tsx,
-        });
-        let branch = db.push_branch(BranchObligation {
-            id: BranchId(99),
-            function: Some(function),
-            file,
-            decision_span: span.clone(),
-            condition_text: "enabled".to_string(),
-            edge_label: "true".to_string(),
-            is_error_path: false,
-            stable_fingerprint: "branch".to_string(),
-        });
-        db.push_test(TestFact {
-            file,
-            function: Some(function),
-            name: "Button test".to_string(),
-            span: span.clone(),
-            evidence_terms: vec!["render".to_string()],
-            assertion_count: 1,
-            subtest_count: 0,
-            subtest_names: Vec::new(),
-            table_rows: 0,
-        });
-        db.push_coverage(CoverageFact {
-            branch,
-            covered: Some(true),
-            source: "synthetic-coverage".to_string(),
-        });
-        db.push_ts_component(TsComponentFact {
-            file,
-            function: Some(function),
-            name: "Button".to_string(),
-            span: span.clone(),
-        });
-        db.push_string_literal(StringLiteralFact {
-            file,
-            value: "Save".to_string(),
-            span: span.clone(),
-            language: Language::Tsx,
-        });
-        db.push_jsx_attribute(JsxAttributeFact {
-            file,
-            name: "aria-label".to_string(),
-            value: Some("Save".to_string()),
-            span,
-        });
+        let function = db.push_function(FunctionFact::new(FunctionId::from_raw(99), file, "Button".to_string(), span.clone(), Language::Tsx, false, true, 1, vec!["render".to_string()]));
+        let import = db.push_import(ImportFact::new(ImportId::from_raw(99), file, Some("react".to_string()), "react".to_string(), span.clone(), Language::Tsx));
+        let branch = db.push_branch(BranchObligation::new(BranchId::from_raw(99), Some(function), file, span.clone(), "enabled".to_string(), "true".to_string(), false, "branch".to_string()));
+        db.push_test(TestFact::new(file, Some(function), "Button test".to_string(), span.clone(), vec!["render".to_string()], 1, 0, Vec::new(), 0));
+        db.push_coverage(CoverageFact::new(branch, Some(true), "synthetic-coverage".to_string()));
+        db.push_ts_component(TsComponentFact::new(file, Some(function), "Button".to_string(), span.clone()));
+        db.push_string_literal(StringLiteralFact::new(file, "Save".to_string(), span.clone(), Language::Tsx));
+        db.push_jsx_attribute(JsxAttributeFact::new(file, "aria-label".to_string(), Some("Save".to_string()), span));
 
         assert_eq!(db.files()[0].id, file);
         assert_eq!(db.functions()[0].id, function);
@@ -526,7 +286,7 @@
     #[test]
     fn span_from_byte_range_handles_utf8_newlines_and_empty_ranges() {
         let source = "aé\nβ\n";
-        let file = FileId(7);
+        let file = FileId::from_raw(7);
 
         let utf8 = span_from_byte_range(file, source, 1, 3);
         assert_eq!(utf8.diagnostic_range(), diagnostic_range(1, 2, 1, 3));
@@ -643,7 +403,7 @@
 
             for start in &offsets {
                 for end in offsets.iter().filter(|end| *end >= start) {
-                    let span = span_from_byte_range(FileId(0), &source, *start, *end);
+                    let span = span_from_byte_range(FileId::from_raw(0), &source, *start, *end);
                     let range = span.diagnostic_range();
                     prop_assert!(
                         (range.end_line, range.end_col) >= (range.start_line, range.start_col),

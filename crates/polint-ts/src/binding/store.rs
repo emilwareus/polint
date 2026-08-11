@@ -266,7 +266,7 @@ mod tests {
         );
         resolved.target_function = Some(TsInventoryFunctionId(7));
         resolved.target_function_stable_key = Some(interner.intern("function:7"));
-        resolved.module_node = Some(ModuleNodeId(9));
+        resolved.module_node = Some(ModuleNodeId::from_raw(9));
 
         let mut unresolved = binding(
             &interner,
@@ -295,7 +295,7 @@ mod tests {
             interner.intern("binding:resolved")
         );
         assert_eq!(
-            store.bindings_by_module_node(ModuleNodeId(9))[0].stable_key,
+            store.bindings_by_module_node(ModuleNodeId::from_raw(9))[0].stable_key,
             interner.intern("binding:resolved")
         );
         assert_eq!(
@@ -443,8 +443,8 @@ mod tests {
         );
 
         let mut changed_module = base.clone();
-        changed_module.bindings[0].resolved_import = Some(ResolvedImportId(44));
-        changed_module.bindings[0].module_node = Some(ModuleNodeId(45));
+        changed_module.bindings[0].resolved_import = Some(ResolvedImportId::from_raw(44));
+        changed_module.bindings[0].module_node = Some(ModuleNodeId::from_raw(45));
         assert_ne!(
             base_digest,
             ts_direct_binding_output_digest(&changed_module, &interner)
@@ -515,7 +515,7 @@ mod tests {
             target_function_stable_key: None,
             scope_binding: Some(TsBindingId(1)),
             scope_binding_stable_key: Some(interner.intern("scope:binding")),
-            resolved_import: Some(ResolvedImportId(2)),
+            resolved_import: Some(ResolvedImportId::from_raw(2)),
             module_node: None,
             kind: TsDirectBindingKind::ImportedNamed,
             status: TsDirectBindingStatus::Resolved,

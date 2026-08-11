@@ -119,15 +119,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn span(file: FileId, start: u32, end: u32) -> Span {
-        Span {
-            file,
-            start_byte: start,
-            end_byte: end,
-            start_line: 1,
-            start_col: 1,
-            end_line: 1,
-            end_col: 1,
-        }
+        Span::new(file, start, end, 1, 1, 1, 1)
     }
 
     fn db_with_root() -> LocalAnalysisDb {
@@ -137,17 +129,17 @@ mod tests {
             "cmd/app/main.go".to_string(),
             "package main\nfunc main() {}\n".to_string(),
         );
-        let function = db.push_function(FunctionFact {
-            id: FunctionId(1),
+        let function = db.push_function(FunctionFact::new(
+            FunctionId::from_raw(1),
             file,
-            name: "main".to_string(),
-            span: span(file, 1, 2),
-            language: Language::Go,
-            is_test: false,
-            is_exported: false,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "main".to_string(),
+            span(file, 1, 2),
+            Language::Go,
+            false,
+            false,
+            1,
+            Vec::new(),
+        ));
         let root = ReachabilityRootFact {
             id: ReachabilityRootId(0),
             kind: RootKind::Main,

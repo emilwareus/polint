@@ -160,16 +160,16 @@ mod tests {
             target_function_stable_key: Some(interner.intern("function:f")),
             scope_binding: Some(TsBindingId(4)),
             scope_binding_stable_key: Some(interner.intern("binding:f")),
-            resolved_import: Some(ResolvedImportId(5)),
-            module_node: Some(ModuleNodeId(6)),
+            resolved_import: Some(ResolvedImportId::from_raw(5)),
+            module_node: Some(ModuleNodeId::from_raw(6)),
             kind: TsDirectBindingKind::ImportedNamed,
             status: TsDirectBindingStatus::Resolved,
             reason: None,
             stable_key: interner.intern("direct:f"),
         };
 
-        assert_eq!(fact.resolved_import, Some(ResolvedImportId(5)));
-        assert_eq!(fact.module_node, Some(ModuleNodeId(6)));
+        assert_eq!(fact.resolved_import, Some(ResolvedImportId::from_raw(5)));
+        assert_eq!(fact.module_node, Some(ModuleNodeId::from_raw(6)));
         assert_eq!(fact.status.as_str(), "resolved");
     }
 }

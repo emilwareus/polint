@@ -16,15 +16,15 @@ use polint_core::Language;
 /// function set, so unresolved configured roots are honest `RootStatus::Unresolved`
 /// rows the provider keeps out of the referentially-validated graph while still
 /// reporting them (never a silent drop, D-13).
-const UNRESOLVED_TARGET: polint_core::FunctionId = polint_core::FunctionId(u64::MAX);
+const UNRESOLVED_TARGET: polint_core::FunctionId = polint_core::FunctionId::from_raw(u64::MAX);
 
-/// Sentinel file id for a configured root that resolves to no function. `FileId(0)`
+/// Sentinel file id for a configured root that resolves to no function. `FileId::from_raw(0)`
 /// is a legitimate (first-added) file id, so using it for an unresolved root would
 /// alias a real file — and the validator's file-reference check would pass for it
 /// spuriously if the root were ever stored (IN-04). A max-valued sentinel keeps the
 /// unresolved root's file reference recognizably non-real; the validator skips the
 /// file-reference check for `RootStatus::Unresolved` roots.
-const UNRESOLVED_FILE: polint_core::FileId = polint_core::FileId(u32::MAX);
+const UNRESOLVED_FILE: polint_core::FileId = polint_core::FileId::from_raw(u32::MAX);
 
 /// Discovers every whole-program reachability root by projecting EXISTING facts
 /// only — no parsing, no AST, no tree-sitter/Oxc invocation (D-07).
@@ -511,15 +511,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn span(file: FileId, start: u32, end: u32) -> Span {
-        Span {
-            file,
-            start_byte: start,
-            end_byte: end,
-            start_line: 1,
-            start_col: 1,
-            end_line: 1,
-            end_col: 1,
-        }
+        Span::new(file, start, end, 1, 1, 1, 1)
     }
 
     fn add_go_file(db: &mut impl AnalysisHost, path: &str, package: &str) -> FileId {
@@ -528,13 +520,13 @@ mod tests {
             path.to_string(),
             format!("package {package}\n"),
         );
-        db.push_package(PackageFact {
-            id: PackageId(0),
+        db.push_package(PackageFact::new(
+            PackageId::from_raw(0),
             file,
-            name: package.to_string(),
-            span: span(file, 0, 1),
-            language: Language::Go,
-        });
+            package.to_string(),
+            span(file, 0, 1),
+            Language::Go,
+        ));
         file
     }
 
@@ -546,17 +538,17 @@ mod tests {
         language: Language,
         is_exported: bool,
     ) -> FunctionId {
-        db.push_function(FunctionFact {
-            id: FunctionId(id),
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(id),
             file,
-            name: name.to_string(),
-            span: span(file, id as u32, id as u32 + 1),
+            name.to_string(),
+            span(file, id as u32, id as u32 + 1),
             language,
-            is_test: false,
+            false,
             is_exported,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        })
+            1,
+            Vec::new(),
+        ))
     }
 
     #[test]
@@ -631,7 +623,7 @@ mod tests {
             framework_id: "jest".to_string(),
             kind: EntrypointKind::Test,
             target_function: function,
-            target_symbol: Some(SymbolId(0)),
+            target_symbol: Some(SymbolId::from_raw(0)),
             registration_span: span(file, 1, 2),
             registration_file: file,
             trigger_metadata: TriggerMetadata::empty(),

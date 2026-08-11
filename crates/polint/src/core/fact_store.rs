@@ -515,14 +515,14 @@ mod tests {
             "pkg/x.go".to_string(),
             "package x\n".to_string(),
         );
-        let id = db.push_package(PackageFact {
-            id: PackageId(0),
+        let id = db.push_package(PackageFact::new(
+            PackageId::from_raw(0),
             file,
-            name: "x".to_string(),
-            span: Span::point(file, 1, 1),
-            language: Language::Go,
-        });
-        assert_eq!(id, PackageId(0));
+            "x".to_string(),
+            Span::point(file, 1, 1),
+            Language::Go,
+        ));
+        assert_eq!(id, PackageId::from_raw(0));
         assert_eq!(db.packages().len(), 1);
         assert_eq!(
             db.fact_store::<GoSyntaxStore>(GO_SYNTAX_STORE_FAMILY)
@@ -535,13 +535,13 @@ mod tests {
     #[test]
     fn go_syntax_store_clear_empties_owned_vectors() {
         let mut store = GoSyntaxStore::default();
-        store.packages.push(PackageFact {
-            id: PackageId(0),
-            file: FileId(0),
-            name: "x".to_string(),
-            span: Span::point(FileId(0), 1, 1),
-            language: Language::Go,
-        });
+        store.packages.push(PackageFact::new(
+            PackageId::from_raw(0),
+            FileId::from_raw(0),
+            "x".to_string(),
+            Span::point(FileId::from_raw(0), 1, 1),
+            Language::Go,
+        ));
         let erased: &mut dyn FactStore = &mut store;
         erased.clear();
         assert_eq!(erased.family(), FactFamily::Package);

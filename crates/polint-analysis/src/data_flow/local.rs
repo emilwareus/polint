@@ -682,7 +682,7 @@ mod tests {
                     &interner,
                     0,
                     PlaceRoot::Parameter {
-                        function: FunctionId(1),
+                        function: FunctionId::from_raw(1),
                         index: 0,
                         name: Some("input".to_string()),
                     },
@@ -692,7 +692,7 @@ mod tests {
                     &interner,
                     1,
                     PlaceRoot::Local {
-                        function: FunctionId(1),
+                        function: FunctionId::from_raw(1),
                         name: "local".to_string(),
                     },
                     Vec::new(),
@@ -749,7 +749,7 @@ mod tests {
                     &interner,
                     0,
                     PlaceRoot::Parameter {
-                        function: FunctionId(1),
+                        function: FunctionId::from_raw(1),
                         index: 0,
                         name: Some("input".to_string()),
                     },
@@ -759,7 +759,7 @@ mod tests {
                     &interner,
                     1,
                     PlaceRoot::Local {
-                        function: FunctionId(1),
+                        function: FunctionId::from_raw(1),
                         name: "result".to_string(),
                     },
                     Vec::new(),
@@ -805,7 +805,7 @@ mod tests {
                     &interner,
                     0,
                     PlaceRoot::Local {
-                        function: FunctionId(1),
+                        function: FunctionId::from_raw(1),
                         name: "source".to_string(),
                     },
                     Vec::new(),
@@ -814,7 +814,7 @@ mod tests {
                     &interner,
                     1,
                     PlaceRoot::Local {
-                        function: FunctionId(1),
+                        function: FunctionId::from_raw(1),
                         name: "target".to_string(),
                     },
                     vec![PlaceProjection::Property("field".to_string())],
@@ -860,7 +860,7 @@ mod tests {
                 &interner,
                 0,
                 PlaceRoot::Local {
-                    function: FunctionId(1),
+                    function: FunctionId::from_raw(1),
                     name: "target".to_string(),
                 },
                 Vec::new(),
@@ -904,7 +904,7 @@ mod tests {
                 &interner,
                 0,
                 PlaceRoot::Local {
-                    function: FunctionId(1),
+                    function: FunctionId::from_raw(1),
                     name: "target".to_string(),
                 },
                 Vec::new(),
@@ -946,7 +946,7 @@ mod tests {
                     &interner,
                     0,
                     PlaceRoot::Parameter {
-                        function: FunctionId(1),
+                        function: FunctionId::from_raw(1),
                         index: 0,
                         name: Some("input".to_string()),
                     },
@@ -956,7 +956,7 @@ mod tests {
                     &interner,
                     1,
                     PlaceRoot::Local {
-                        function: FunctionId(1),
+                        function: FunctionId::from_raw(1),
                         name: "local".to_string(),
                     },
                     Vec::new(),
@@ -1027,7 +1027,7 @@ mod tests {
                     &interner,
                     0,
                     PlaceRoot::Parameter {
-                        function: FunctionId(1),
+                        function: FunctionId::from_raw(1),
                         index: 0,
                         name: Some("input".to_string()),
                     },
@@ -1037,7 +1037,7 @@ mod tests {
                     &interner,
                     1,
                     PlaceRoot::Local {
-                        function: FunctionId(1),
+                        function: FunctionId::from_raw(1),
                         name: "local".to_string(),
                     },
                     Vec::new(),
@@ -1102,8 +1102,8 @@ mod tests {
         MirBody {
             id: MirBodyId(1),
             language: Language::TypeScript,
-            file: FileId(1),
-            function: FunctionId(1),
+            file: FileId::from_raw(1),
+            function: FunctionId::from_raw(1),
             package: None,
             module: None,
             owner_stable_key: interner.intern("function:one".to_string()),
@@ -1145,8 +1145,8 @@ mod tests {
         PlaceFact {
             id: PlaceId(id),
             language: Language::TypeScript,
-            file: Some(FileId(1)),
-            function: Some(FunctionId(1)),
+            file: Some(FileId::from_raw(1)),
+            function: Some(FunctionId::from_raw(1)),
             root,
             projections,
             stable_key: interner.intern(format!("place:{id}:target")),
@@ -1155,6 +1155,6 @@ mod tests {
     }
 
     fn span() -> Span {
-        Span::point(FileId(1), 1, 1)
+        Span::point(FileId::from_raw(1), 1, 1)
     }
 }

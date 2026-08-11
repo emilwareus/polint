@@ -503,6 +503,7 @@ pub(super) fn module_node_kind_label(kind: ModuleNodeKind) -> &'static str {
         ModuleNodeKind::Package => "package",
         ModuleNodeKind::Module => "module",
         ModuleNodeKind::External => "external",
+        _ => "unknown",
     }
 }
 
@@ -511,6 +512,7 @@ pub(super) fn module_edge_kind_label(kind: ModuleEdgeKind) -> &'static str {
         ModuleEdgeKind::Contains => "contains",
         ModuleEdgeKind::Imports => "imports",
         ModuleEdgeKind::DependsOn => "depends_on",
+        _ => "unknown",
     }
 }
 
@@ -522,6 +524,7 @@ pub(super) fn resolution_status_label(status: ResolutionStatus) -> &'static str 
         ResolutionStatus::SetupMissing => "setup_missing",
         ResolutionStatus::Dynamic => "dynamic",
         ResolutionStatus::Unsupported => "unsupported",
+        _ => "unknown",
     }
 }
 
@@ -532,6 +535,7 @@ pub(super) fn resolution_precision_label(precision: ResolutionPrecision) -> &'st
         ResolutionPrecision::ExternalPackage => "external_package",
         ResolutionPrecision::Heuristic => "heuristic",
         ResolutionPrecision::None => "none",
+        _ => "unknown",
     }
 }
 
@@ -544,6 +548,7 @@ pub(super) fn unresolved_reason_label(reason: UnresolvedReason) -> &'static str 
         UnresolvedReason::UnsupportedImport => "unsupported_import",
         UnresolvedReason::ResolverError => "resolver_error",
         UnresolvedReason::OutsideWorkspace => "outside_workspace",
+        _ => "unknown",
     }
 }
 
@@ -557,6 +562,7 @@ pub(super) fn symbol_precision_label(precision: SymbolPrecision) -> &'static str
         SymbolPrecision::Ambiguous => "ambiguous",
         SymbolPrecision::SetupMissing => "setup_missing",
         SymbolPrecision::Unsupported => "unsupported",
+        _ => "unknown",
     }
 }
 
@@ -567,6 +573,7 @@ pub(super) fn symbol_resolution_status_label(status: SymbolResolutionStatus) -> 
         SymbolResolutionStatus::Ambiguous => "ambiguous",
         SymbolResolutionStatus::SetupMissing => "setup_missing",
         SymbolResolutionStatus::Unsupported => "unsupported",
+        _ => "unknown",
     }
 }
 

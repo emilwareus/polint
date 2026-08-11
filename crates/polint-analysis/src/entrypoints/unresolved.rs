@@ -36,8 +36,8 @@ mod tests {
         UnresolvedFrameworkFact {
             id: UnresolvedFrameworkId(0),
             language,
-            file: FileId(1),
-            span: Span::point(FileId(1), 1, 1),
+            file: FileId::from_raw(1),
+            span: Span::point(FileId::from_raw(1), 1, 1),
             framework_id: framework_id.to_string(),
             reason: UnresolvedFrameworkReason::UnsupportedFrameworkVersion,
             evidence: "import detected".to_string(),

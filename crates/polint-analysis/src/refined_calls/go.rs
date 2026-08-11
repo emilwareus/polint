@@ -500,7 +500,7 @@ mod tests {
             targets: Vec::new(),
             unresolved: vec![UnresolvedCallFact {
                 site: CallSiteId(0),
-                caller: FunctionId(0),
+                caller: FunctionId::from_raw(0),
                 status: CallTargetStatus::Unresolved,
                 reason,
                 algorithm: CallAlgorithm::Unsupported,
@@ -521,28 +521,28 @@ mod tests {
             "handler.go".to_string(),
             "package p\nfunc caller(r Receiver) { r.Handle() }\nfunc Handle() {}\n".to_string(),
         );
-        let caller = db.push_function(FunctionFact {
-            id: FunctionId(99),
+        let caller = db.push_function(FunctionFact::new(
+            FunctionId::from_raw(99),
             file,
-            name: "caller".to_string(),
-            span: span(),
-            language: Language::Go,
-            is_test: false,
-            is_exported: false,
-            cyclomatic_complexity: 1,
-            calls: vec!["Handle".to_string()],
-        });
-        db.push_function(FunctionFact {
-            id: FunctionId(99),
+            "caller".to_string(),
+            span(),
+            Language::Go,
+            false,
+            false,
+            1,
+            vec!["Handle".to_string()],
+        ));
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(99),
             file,
-            name: "Handle".to_string(),
-            span: span(),
-            language: Language::Go,
-            is_test: false,
-            is_exported: false,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "Handle".to_string(),
+            span(),
+            Language::Go,
+            false,
+            false,
+            1,
+            Vec::new(),
+        ));
         db.replace_semantic_mir(crate::mir_body::MirOutput {
             bodies: Vec::new(),
             operations: Vec::new(),
@@ -572,8 +572,8 @@ mod tests {
             in_throw: false,
             id: CallSiteId(0),
             language: Language::Go,
-            file: FileId(0),
-            caller: FunctionId(0),
+            file: FileId::from_raw(0),
+            caller: FunctionId::from_raw(0),
             owner_symbol: None,
             body: MirBodyId(0),
             operation: MirOpId(0),
@@ -595,9 +595,9 @@ mod tests {
         CallTargetFact {
             id: CallTargetId(0),
             site: CallSiteId(0),
-            caller: FunctionId(0),
-            target_function: Some(FunctionId(1)),
-            target_symbol: Some(SymbolId(0)),
+            caller: FunctionId::from_raw(0),
+            target_function: Some(FunctionId::from_raw(1)),
+            target_symbol: Some(SymbolId::from_raw(0)),
             edge_kind: CallEdgeKind::Method,
             algorithm: CallAlgorithm::GoStatic,
             status: CallTargetStatus::Resolved,
@@ -618,8 +618,8 @@ mod tests {
             },
             phase: TypePhase::Resolved,
             language: Language::Go,
-            file: Some(FileId(0)),
-            function: Some(FunctionId(0)),
+            file: Some(FileId::from_raw(0)),
+            function: Some(FunctionId::from_raw(0)),
             body: None,
             place: Some(PlaceId(0)),
             cfg_block: None,
@@ -645,6 +645,6 @@ mod tests {
     }
 
     fn span() -> Span {
-        Span::point(FileId(0), 1, 1)
+        Span::point(FileId::from_raw(0), 1, 1)
     }
 }

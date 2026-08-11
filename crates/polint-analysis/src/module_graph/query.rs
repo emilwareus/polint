@@ -84,20 +84,20 @@ mod tests {
     #[test]
     fn module_graph_ts_determinism_reachable_from_uses_deterministic_id_order() {
         let unsorted_edges = vec![
-            (ModuleNodeId(0), ModuleNodeId(3)),
-            (ModuleNodeId(0), ModuleNodeId(1)),
-            (ModuleNodeId(2), ModuleNodeId(4)),
-            (ModuleNodeId(0), ModuleNodeId(2)),
-            (ModuleNodeId(1), ModuleNodeId(4)),
+            (ModuleNodeId::from_raw(0), ModuleNodeId::from_raw(3)),
+            (ModuleNodeId::from_raw(0), ModuleNodeId::from_raw(1)),
+            (ModuleNodeId::from_raw(2), ModuleNodeId::from_raw(4)),
+            (ModuleNodeId::from_raw(0), ModuleNodeId::from_raw(2)),
+            (ModuleNodeId::from_raw(1), ModuleNodeId::from_raw(4)),
         ];
 
         assert_eq!(
-            reachable_from(ModuleNodeId(0), unsorted_edges),
+            reachable_from(ModuleNodeId::from_raw(0), unsorted_edges),
             vec![
-                ModuleNodeId(1),
-                ModuleNodeId(2),
-                ModuleNodeId(3),
-                ModuleNodeId(4)
+                ModuleNodeId::from_raw(1),
+                ModuleNodeId::from_raw(2),
+                ModuleNodeId::from_raw(3),
+                ModuleNodeId::from_raw(4)
             ]
         );
     }

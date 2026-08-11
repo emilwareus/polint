@@ -994,8 +994,8 @@ mod tests {
         }
 
         pub(super) fn interprocedural_solver_input() -> SolverInput<'static, LocalAnalysisDb> {
-            let caller = FunctionId(1);
-            let callee = FunctionId(2);
+            let caller = FunctionId::from_raw(1);
+            let callee = FunctionId::from_raw(2);
             let argument = PlaceId(0);
             let call_result = PlaceId(1);
             let parameter = PlaceId(2);
@@ -1013,7 +1013,7 @@ mod tests {
                     PlaceFact {
                         id: parameter,
                         language: Language::Go,
-                        file: Some(FileId(1)),
+                        file: Some(FileId::from_raw(1)),
                         function: Some(callee),
                         root: PlaceRoot::Parameter {
                             function: callee,
@@ -1092,7 +1092,7 @@ mod tests {
             MirBody {
                 id,
                 language: Language::Go,
-                file: FileId(1),
+                file: FileId::from_raw(1),
                 function,
                 package: None,
                 module: None,
@@ -1113,7 +1113,7 @@ mod tests {
             PlaceFact {
                 id,
                 language: Language::Go,
-                file: Some(FileId(1)),
+                file: Some(FileId::from_raw(1)),
                 function: Some(function),
                 root: PlaceRoot::Local {
                     function,
@@ -1200,7 +1200,7 @@ mod tests {
                 body: MirBodyId(body),
                 function,
                 language: Language::Go,
-                file: FileId(1),
+                file: FileId::from_raw(1),
                 span: span(),
                 entry_node: CfgNodeId(entry),
                 normal_exit_node: CfgNodeId(exit),
@@ -1287,7 +1287,7 @@ mod tests {
             CallSiteFact {
                 id: site,
                 language: Language::Go,
-                file: FileId(1),
+                file: FileId::from_raw(1),
                 caller,
                 owner_symbol: None,
                 body: MirBodyId(0),
@@ -1338,15 +1338,15 @@ mod tests {
         }
 
         fn span() -> Span {
-            Span::new(FileId(1), 1, 2, 1, 1, 1, 2)
+            Span::new(FileId::from_raw(1), 1, 2, 1, 1, 1, 2)
         }
 
         fn mir_output(interner: &polint_core::StableKeyInterner, shuffled: bool) -> MirOutput {
             let body = MirBody {
                 id: MirBodyId(0),
                 language: Language::Go,
-                file: FileId(1),
-                function: FunctionId(1),
+                file: FileId::from_raw(1),
+                function: FunctionId::from_raw(1),
                 package: None,
                 module: None,
                 owner_stable_key: interner.intern("owner:test".to_string()),
@@ -1357,10 +1357,10 @@ mod tests {
             let place = PlaceFact {
                 id: PlaceId(0),
                 language: Language::Go,
-                file: Some(FileId(1)),
-                function: Some(FunctionId(1)),
+                file: Some(FileId::from_raw(1)),
+                function: Some(FunctionId::from_raw(1)),
                 root: PlaceRoot::Local {
-                    function: FunctionId(1),
+                    function: FunctionId::from_raw(1),
                     name: "value".to_string(),
                 },
                 projections: Vec::new(),
@@ -1403,9 +1403,9 @@ mod tests {
             let function = CfgFunctionFact {
                 id: CfgFunctionId(1),
                 body: MirBodyId(0),
-                function: FunctionId(1),
+                function: FunctionId::from_raw(1),
                 language: Language::Go,
-                file: FileId(1),
+                file: FileId::from_raw(1),
                 span: span(),
                 entry_node: CfgNodeId(1),
                 normal_exit_node: CfgNodeId(3),

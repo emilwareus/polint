@@ -180,17 +180,17 @@ mod tests {
     use polint_core::{FileId, FunctionId, Language, ModuleNodeId, PackageId, Span};
 
     fn span() -> Span {
-        Span::new(FileId(1), 1, 2, 1, 1, 1, 2)
+        Span::new(FileId::from_raw(1), 1, 2, 1, 1, 1, 2)
     }
 
     fn body(interner: &StableKeyInterner, id: u64, stable_key: &str) -> MirBody {
         MirBody {
             id: MirBodyId(id),
             language: Language::Go,
-            file: FileId(1),
-            function: FunctionId(id),
-            package: Some(PackageId(1)),
-            module: Some(ModuleNodeId(1)),
+            file: FileId::from_raw(1),
+            function: FunctionId::from_raw(id),
+            package: Some(PackageId::from_raw(1)),
+            module: Some(ModuleNodeId::from_raw(1)),
             owner_stable_key: interner.intern(format!("owner:{id}")),
             span: span(),
             stable_key: interner.intern(stable_key.to_string()),
@@ -202,10 +202,10 @@ mod tests {
         PlaceFact {
             id: PlaceId(id),
             language: Language::Go,
-            file: Some(FileId(1)),
-            function: Some(FunctionId(1)),
+            file: Some(FileId::from_raw(1)),
+            function: Some(FunctionId::from_raw(1)),
             root: PlaceRoot::Local {
-                function: FunctionId(1),
+                function: FunctionId::from_raw(1),
                 name: stable_key.to_string(),
             },
             projections: Vec::new(),
@@ -241,7 +241,7 @@ mod tests {
             body: Some(MirBodyId(1)),
             operation: Some(MirOpId(1)),
             language: Language::Go,
-            file: FileId(1),
+            file: FileId::from_raw(1),
             span: span(),
             construct: "go-reflect".to_string(),
             source_evidence: "reflect.ValueOf(x)".to_string(),

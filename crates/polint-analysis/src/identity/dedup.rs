@@ -181,11 +181,19 @@ mod tests {
         container: &str,
     ) -> IdentityRecord {
         let language = LanguageTag::Go;
-        let span = Span::new(FileId(file), start, start + 4, 1, start + 1, 1, start + 5);
+        let span = Span::new(
+            FileId::from_raw(file),
+            start,
+            start + 4,
+            1,
+            start + 1,
+            1,
+            start + 5,
+        );
         IdentityRecord {
             id: IdentityRecordId(0),
             kind,
-            file_id: FileId(file),
+            file_id: FileId::from_raw(file),
             span: span.clone(),
             language,
             package_or_module: Arc::from(package),
@@ -200,7 +208,7 @@ mod tests {
                 language,
                 package,
                 container,
-                FileId(file),
+                FileId::from_raw(file),
                 &span,
             )),
             originating_call_site_id: site.map(CallSiteId),

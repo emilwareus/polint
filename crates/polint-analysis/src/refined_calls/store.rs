@@ -221,7 +221,7 @@ mod tests {
             id: RefinedCallEdgeId(id),
             site: CallSiteId(0),
             base_target: None,
-            caller: FunctionId(0),
+            caller: FunctionId::from_raw(0),
             target_function: None,
             target_symbol: None,
             synthetic_target: None,

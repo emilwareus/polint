@@ -1290,70 +1290,70 @@ mod symbol_graph_derivation {
     }
 
     fn stale_symbol_fact(interner: &crate::core::StableKeyInterner, file: FileId) -> SymbolFact {
-        SymbolFact {
-            id: SymbolId(999),
-            language: Language::TypeScript,
-            name: "stale".to_string(),
-            qualified_name: "stale".to_string(),
-            kind: SymbolKind::Unknown,
-            namespace: SymbolNamespace::Unknown,
-            file: Some(file),
-            package: None,
-            module: None,
-            owner: None,
-            primary_span: Some(Span::point(file, 1, 1)),
-            is_exported: false,
-            stable_key: interner.intern("stale:symbol".to_string()),
-            precision: SymbolPrecision::Unsupported,
-        }
+        SymbolFact::new(
+            SymbolId::from_raw(999),
+            Language::TypeScript,
+            "stale".to_string(),
+            "stale".to_string(),
+            SymbolKind::Unknown,
+            SymbolNamespace::Unknown,
+            Some(file),
+            None,
+            None,
+            None,
+            Some(Span::point(file, 1, 1)),
+            false,
+            interner.intern("stale:symbol".to_string()),
+            SymbolPrecision::Unsupported,
+        )
     }
 
     fn stale_definition_fact(
         interner: &crate::core::StableKeyInterner,
         file: FileId,
     ) -> DefinitionFact {
-        DefinitionFact {
-            id: DefinitionId(999),
-            symbol: SymbolId(999),
-            language: Language::TypeScript,
-            name: "stale".to_string(),
-            qualified_name: "stale".to_string(),
-            kind: DefinitionKind::Unknown,
-            namespace: SymbolNamespace::Unknown,
-            file: Some(file),
-            package: None,
-            module: None,
-            owner: None,
-            primary_span: Some(Span::point(file, 1, 1)),
-            is_primary: false,
-            is_exported: false,
-            stable_key: interner.intern("stale:definition".to_string()),
-            precision: SymbolPrecision::Unsupported,
-        }
+        DefinitionFact::new(
+            DefinitionId::from_raw(999),
+            SymbolId::from_raw(999),
+            Language::TypeScript,
+            "stale".to_string(),
+            "stale".to_string(),
+            DefinitionKind::Unknown,
+            SymbolNamespace::Unknown,
+            Some(file),
+            None,
+            None,
+            None,
+            Some(Span::point(file, 1, 1)),
+            false,
+            false,
+            interner.intern("stale:definition".to_string()),
+            SymbolPrecision::Unsupported,
+        )
     }
 
     fn stale_reference_fact(
         interner: &crate::core::StableKeyInterner,
         file: FileId,
     ) -> ReferenceFact {
-        ReferenceFact {
-            id: ReferenceId(999),
-            language: Language::TypeScript,
-            name: "stale".to_string(),
-            qualified_name: "stale".to_string(),
-            kind: ReferenceKind::Unknown,
-            namespace: SymbolNamespace::Unknown,
-            file: Some(file),
-            package: None,
-            module: None,
-            owner: None,
-            primary_span: Some(Span::point(file, 1, 1)),
-            target: None,
-            candidates: Vec::new(),
-            stable_key: interner.intern("stale:reference".to_string()),
-            status: SymbolResolutionStatus::Unsupported,
-            precision: SymbolPrecision::Unsupported,
-        }
+        ReferenceFact::new(
+            ReferenceId::from_raw(999),
+            Language::TypeScript,
+            "stale".to_string(),
+            "stale".to_string(),
+            ReferenceKind::Unknown,
+            SymbolNamespace::Unknown,
+            Some(file),
+            None,
+            None,
+            None,
+            Some(Span::point(file, 1, 1)),
+            None,
+            Vec::new(),
+            interner.intern("stale:reference".to_string()),
+            SymbolResolutionStatus::Unsupported,
+            SymbolPrecision::Unsupported,
+        )
     }
 
     fn symbol_graph_manifest() -> &'static crate::analysis_kernel::ProviderManifest {
@@ -1455,14 +1455,14 @@ mod symbol_graph_derivation {
     }
 
     fn push_import(db: &mut AnalysisDb, file: FileId, source: &str, path: &str) -> ImportId {
-        db.push_import(ImportFact {
-            id: ImportId(0),
+        db.push_import(ImportFact::new(
+            ImportId::from_raw(0),
             file,
-            package: None,
-            path: path.to_string(),
-            span: span_for(file, source, &format!("{path:?}")),
-            language: Language::TypeScript,
-        })
+            None,
+            path.to_string(),
+            span_for(file, source, &format!("{path:?}")),
+            Language::TypeScript,
+        ))
     }
 
     fn fixture_db(root: &Path, import_path: &str) -> AnalysisDb {
@@ -1481,32 +1481,32 @@ export function answer() {{
         let target = add_ts_file(&mut db, root, "src/target.ts", target_source);
         let import = push_import(&mut db, app, &app_source, import_path);
         db.replace_module_graph_facts(
-            vec![ResolvedImportFact {
-                id: ResolvedImportId(0),
+            vec![ResolvedImportFact::new(
+                ResolvedImportId::from_raw(0),
                 import,
-                from_file: app,
-                target_node: Some(ModuleNodeId(1)),
-                status: ResolutionStatus::Resolved,
-                precision: ResolutionPrecision::ExactFile,
-                reason: None,
-            }],
+                app,
+                Some(ModuleNodeId::from_raw(1)),
+                ResolutionStatus::Resolved,
+                ResolutionPrecision::ExactFile,
+                None,
+            )],
             vec![
-                ModuleNode {
-                    id: ModuleNodeId(0),
-                    kind: ModuleNodeKind::File,
-                    label: "src/app.ts".to_string(),
-                    file: Some(app),
-                    package: None,
-                    language: Some(Language::TypeScript),
-                },
-                ModuleNode {
-                    id: ModuleNodeId(1),
-                    kind: ModuleNodeKind::File,
-                    label: "src/target.ts".to_string(),
-                    file: Some(target),
-                    package: None,
-                    language: Some(Language::TypeScript),
-                },
+                ModuleNode::new(
+                    ModuleNodeId::from_raw(0),
+                    ModuleNodeKind::File,
+                    "src/app.ts".to_string(),
+                    Some(app),
+                    None,
+                    Some(Language::TypeScript),
+                ),
+                ModuleNode::new(
+                    ModuleNodeId::from_raw(1),
+                    ModuleNodeKind::File,
+                    "src/target.ts".to_string(),
+                    Some(target),
+                    None,
+                    Some(Language::TypeScript),
+                ),
             ],
             Vec::new(),
         );
@@ -1522,58 +1522,58 @@ export function answer() {{
             "export const value = 1;\n".to_string(),
         );
         let interner = db.stable_key_interner();
-        let symbol = SymbolFact {
-            id: SymbolId(7),
-            language: Language::TypeScript,
-            name: "value".to_string(),
-            qualified_name: "value".to_string(),
-            kind: SymbolKind::Variable,
-            namespace: SymbolNamespace::Value,
-            file: Some(file),
-            package: None,
-            module: None,
-            owner: None,
-            primary_span: Some(Span::point(file, 1, 14)),
-            is_exported: true,
-            stable_key: interner.intern("symbol:key:value".to_string()),
-            precision: SymbolPrecision::ExactSemantic,
-        };
-        let definition = DefinitionFact {
-            id: DefinitionId(11),
-            symbol: symbol.id,
-            language: Language::TypeScript,
-            name: "value".to_string(),
-            qualified_name: "value".to_string(),
-            kind: DefinitionKind::Declaration,
-            namespace: SymbolNamespace::Value,
-            file: Some(file),
-            package: None,
-            module: None,
-            owner: None,
-            primary_span: Some(Span::point(file, 1, 14)),
-            is_primary: true,
-            is_exported: true,
-            stable_key: interner.intern("definition:key:value".to_string()),
-            precision: SymbolPrecision::ExactSemantic,
-        };
-        let reference = ReferenceFact {
-            id: ReferenceId(13),
-            language: Language::TypeScript,
-            name: "value".to_string(),
-            qualified_name: "value".to_string(),
-            kind: ReferenceKind::Read,
-            namespace: SymbolNamespace::Value,
-            file: Some(file),
-            package: None,
-            module: None,
-            owner: None,
-            primary_span: Some(Span::point(file, 1, 14)),
-            target: Some(symbol.id),
-            candidates: Vec::new(),
-            stable_key: interner.intern("reference:key:value".to_string()),
-            status: SymbolResolutionStatus::Resolved,
-            precision: SymbolPrecision::ExactSemantic,
-        };
+        let symbol = SymbolFact::new(
+            SymbolId::from_raw(7),
+            Language::TypeScript,
+            "value".to_string(),
+            "value".to_string(),
+            SymbolKind::Variable,
+            SymbolNamespace::Value,
+            Some(file),
+            None,
+            None,
+            None,
+            Some(Span::point(file, 1, 14)),
+            true,
+            interner.intern("symbol:key:value".to_string()),
+            SymbolPrecision::ExactSemantic,
+        );
+        let definition = DefinitionFact::new(
+            DefinitionId::from_raw(11),
+            symbol.id,
+            Language::TypeScript,
+            "value".to_string(),
+            "value".to_string(),
+            DefinitionKind::Declaration,
+            SymbolNamespace::Value,
+            Some(file),
+            None,
+            None,
+            None,
+            Some(Span::point(file, 1, 14)),
+            true,
+            true,
+            interner.intern("definition:key:value".to_string()),
+            SymbolPrecision::ExactSemantic,
+        );
+        let reference = ReferenceFact::new(
+            ReferenceId::from_raw(13),
+            Language::TypeScript,
+            "value".to_string(),
+            "value".to_string(),
+            ReferenceKind::Read,
+            SymbolNamespace::Value,
+            Some(file),
+            None,
+            None,
+            None,
+            Some(Span::point(file, 1, 14)),
+            Some(symbol.id),
+            Vec::new(),
+            interner.intern("reference:key:value".to_string()),
+            SymbolResolutionStatus::Resolved,
+            SymbolPrecision::ExactSemantic,
+        );
 
         db.replace_symbol_graph_facts(vec![symbol], vec![definition], vec![reference]);
 
@@ -1615,24 +1615,24 @@ export function answer() {{
             "missing;\n".to_string(),
         );
         let interner = db.stable_key_interner();
-        let reference = ReferenceFact {
-            id: ReferenceId(23),
-            language: Language::TypeScript,
-            name: "missing".to_string(),
-            qualified_name: "missing".to_string(),
-            kind: ReferenceKind::Read,
-            namespace: SymbolNamespace::Value,
-            file: Some(file),
-            package: None,
-            module: None,
-            owner: None,
-            primary_span: Some(Span::point(file, 1, 1)),
-            target: None,
-            candidates: Vec::new(),
-            stable_key: interner.intern("reference:key:missing".to_string()),
-            status: SymbolResolutionStatus::SetupMissing,
-            precision: SymbolPrecision::SetupMissing,
-        };
+        let reference = ReferenceFact::new(
+            ReferenceId::from_raw(23),
+            Language::TypeScript,
+            "missing".to_string(),
+            "missing".to_string(),
+            ReferenceKind::Read,
+            SymbolNamespace::Value,
+            Some(file),
+            None,
+            None,
+            None,
+            Some(Span::point(file, 1, 1)),
+            None,
+            Vec::new(),
+            interner.intern("reference:key:missing".to_string()),
+            SymbolResolutionStatus::SetupMissing,
+            SymbolPrecision::SetupMissing,
+        );
 
         db.replace_symbol_graph_facts(Vec::new(), Vec::new(), vec![reference]);
 
@@ -1995,14 +1995,14 @@ mod semantic_layer_payload {
     }
 
     fn push_import(db: &mut AnalysisDb, file: FileId, source: &str, path: &str) -> ImportId {
-        db.push_import(ImportFact {
-            id: ImportId(0),
+        db.push_import(ImportFact::new(
+            ImportId::from_raw(0),
             file,
-            package: None,
-            path: path.to_string(),
-            span: span_for(file, source, &format!("{path:?}")),
-            language: Language::TypeScript,
-        })
+            None,
+            path.to_string(),
+            span_for(file, source, &format!("{path:?}")),
+            Language::TypeScript,
+        ))
     }
 
     fn fixture_db(root: &Path) -> AnalysisDb {
@@ -2019,32 +2019,32 @@ export function answer() {
         let target = add_file(&mut db, root, "src/target.ts", target_source);
         let import = push_import(&mut db, app, app_source, "./target");
         db.replace_module_graph_facts(
-            vec![ResolvedImportFact {
-                id: ResolvedImportId(0),
+            vec![ResolvedImportFact::new(
+                ResolvedImportId::from_raw(0),
                 import,
-                from_file: app,
-                target_node: Some(ModuleNodeId(1)),
-                status: ResolutionStatus::Resolved,
-                precision: ResolutionPrecision::ExactFile,
-                reason: None,
-            }],
+                app,
+                Some(ModuleNodeId::from_raw(1)),
+                ResolutionStatus::Resolved,
+                ResolutionPrecision::ExactFile,
+                None,
+            )],
             vec![
-                ModuleNode {
-                    id: ModuleNodeId(0),
-                    kind: ModuleNodeKind::File,
-                    label: "src/app.ts".to_string(),
-                    file: Some(app),
-                    package: None,
-                    language: Some(Language::TypeScript),
-                },
-                ModuleNode {
-                    id: ModuleNodeId(1),
-                    kind: ModuleNodeKind::File,
-                    label: "src/target.ts".to_string(),
-                    file: Some(target),
-                    package: None,
-                    language: Some(Language::TypeScript),
-                },
+                ModuleNode::new(
+                    ModuleNodeId::from_raw(0),
+                    ModuleNodeKind::File,
+                    "src/app.ts".to_string(),
+                    Some(app),
+                    None,
+                    Some(Language::TypeScript),
+                ),
+                ModuleNode::new(
+                    ModuleNodeId::from_raw(1),
+                    ModuleNodeKind::File,
+                    "src/target.ts".to_string(),
+                    Some(target),
+                    None,
+                    Some(Language::TypeScript),
+                ),
             ],
             Vec::new(),
         );
@@ -2576,25 +2576,25 @@ mod symbol_graph_ts_import_links {
         path: &str,
         occurrence: usize,
     ) -> ImportId {
-        db.push_import(ImportFact {
-            id: ImportId(0),
+        db.push_import(ImportFact::new(
+            ImportId::from_raw(0),
             file,
-            package: None,
-            path: path.to_string(),
-            span: span_for(file, source, &format!("{path:?}"), occurrence),
-            language: Language::TypeScript,
-        })
+            None,
+            path.to_string(),
+            span_for(file, source, &format!("{path:?}"), occurrence),
+            Language::TypeScript,
+        ))
     }
 
     fn file_node(id: ModuleNodeId, label: &str, file: FileId) -> ModuleNode {
-        ModuleNode {
+        ModuleNode::new(
             id,
-            kind: ModuleNodeKind::File,
-            label: label.to_string(),
-            file: Some(file),
-            package: None,
-            language: Some(Language::TypeScript),
-        }
+            ModuleNodeKind::File,
+            label.to_string(),
+            Some(file),
+            None,
+            Some(Language::TypeScript),
+        )
     }
 
     fn derive_symbol_reference_facts(
@@ -2645,28 +2645,28 @@ export default defaultThing;
         let target_file = add_file(&mut db, temp.path(), "src/target.ts", target);
         let first_import = push_import(&mut db, source_file, source, "./target", 0);
         let second_import = push_import(&mut db, source_file, source, "./target", 1);
-        let source_node = ModuleNodeId(0);
-        let target_node = ModuleNodeId(1);
+        let source_node = ModuleNodeId::from_raw(0);
+        let target_node = ModuleNodeId::from_raw(1);
         db.replace_module_graph_facts(
             vec![
-                ResolvedImportFact {
-                    id: crate::core::ResolvedImportId(0),
-                    import: first_import,
-                    from_file: source_file,
-                    target_node: Some(target_node),
-                    status: ResolutionStatus::Resolved,
-                    precision: ResolutionPrecision::ExactFile,
-                    reason: None,
-                },
-                ResolvedImportFact {
-                    id: crate::core::ResolvedImportId(0),
-                    import: second_import,
-                    from_file: source_file,
-                    target_node: Some(target_node),
-                    status: ResolutionStatus::Resolved,
-                    precision: ResolutionPrecision::ExactFile,
-                    reason: None,
-                },
+                ResolvedImportFact::new(
+                    crate::core::ResolvedImportId::from_raw(0),
+                    first_import,
+                    source_file,
+                    Some(target_node),
+                    ResolutionStatus::Resolved,
+                    ResolutionPrecision::ExactFile,
+                    None,
+                ),
+                ResolvedImportFact::new(
+                    crate::core::ResolvedImportId::from_raw(0),
+                    second_import,
+                    source_file,
+                    Some(target_node),
+                    ResolutionStatus::Resolved,
+                    ResolutionPrecision::ExactFile,
+                    None,
+                ),
             ],
             vec![
                 file_node(source_node, "src/source.ts", source_file),
@@ -2713,17 +2713,17 @@ export const used = missing;
 "#;
         let source_file = add_file(&mut db, temp.path(), "src/source.ts", source);
         let import = push_import(&mut db, source_file, source, "./missing", 0);
-        let source_node = ModuleNodeId(0);
+        let source_node = ModuleNodeId::from_raw(0);
         db.replace_module_graph_facts(
-            vec![ResolvedImportFact {
-                id: crate::core::ResolvedImportId(0),
+            vec![ResolvedImportFact::new(
+                crate::core::ResolvedImportId::from_raw(0),
                 import,
-                from_file: source_file,
-                target_node: None,
-                status: ResolutionStatus::Unresolved,
-                precision: ResolutionPrecision::None,
-                reason: Some(UnresolvedReason::NotFound),
-            }],
+                source_file,
+                None,
+                ResolutionStatus::Unresolved,
+                ResolutionPrecision::None,
+                Some(UnresolvedReason::NotFound),
+            )],
             vec![file_node(source_node, "src/source.ts", source_file)],
             vec![],
         );

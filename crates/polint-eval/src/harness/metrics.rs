@@ -930,23 +930,23 @@ mod tests {
             "src/main.go".to_string(),
             "package main\nfunc main() {}\n".to_string(),
         );
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "main".to_string(),
-            span: Span::point(file, 2, 1),
-            language: Language::Go,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "main".to_string(),
+            Span::point(file, 2, 1),
+            Language::Go,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
         let site = CallSiteFact {
             in_throw: false,
             id: CallSiteId(0),
             language: Language::Go,
             file,
-            caller: FunctionId(0),
+            caller: FunctionId::from_raw(0),
             owner_symbol: None,
             body: MirBodyId(0),
             operation: MirOpId(0),
@@ -970,7 +970,7 @@ mod tests {
         CallTargetFact {
             id: CallTargetId(0),
             site,
-            caller: FunctionId(0),
+            caller: FunctionId::from_raw(0),
             target_function: None,
             target_symbol: None,
             edge_kind: CallEdgeKind::Unknown,
@@ -1016,7 +1016,7 @@ mod tests {
         let unresolved = vec![
             UnresolvedCallFact {
                 site: site.id,
-                caller: FunctionId(0),
+                caller: FunctionId::from_raw(0),
                 status: CallTargetStatus::Unresolved,
                 reason: UnresolvedCallReason::DynamicProperty,
                 algorithm: CallAlgorithm::Unsupported,
@@ -1026,7 +1026,7 @@ mod tests {
             },
             UnresolvedCallFact {
                 site: site.id,
-                caller: FunctionId(0),
+                caller: FunctionId::from_raw(0),
                 status: CallTargetStatus::Unsupported,
                 reason: UnresolvedCallReason::Reflection,
                 algorithm: CallAlgorithm::Unsupported,
@@ -1116,15 +1116,7 @@ mod tests {
     #[test]
     fn categorized_failures_wrong_identity_fires_on_oracle_span_overlap() {
         let (mut db, file, _site) = db_with_one_site();
-        let span = Span {
-            file,
-            start_byte: 20,
-            end_byte: 30,
-            start_line: 2,
-            start_col: 5,
-            end_line: 2,
-            end_col: 15,
-        };
+        let span = Span::new(file, 20, 30, 2, 5, 2, 15);
         db.set_identity_records_for_test(vec![callsite_identity_at(file, span.clone())]);
 
         // An oracle entry overlapping the observed callsite's (file, span) makes it

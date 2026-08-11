@@ -132,23 +132,23 @@ mod tests {
             "src/app.ts".to_string(),
             "function caller(fn) { fn(); }\n".to_string(),
         );
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "caller".to_string(),
-            span: Span::point(file, 1, 1),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: vec!["fn".to_string()],
-        });
+            "caller".to_string(),
+            Span::point(file, 1, 1),
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            vec!["fn".to_string()],
+        ));
         let site = CallSiteFact {
             in_throw: false,
             id: CallSiteId(0),
             language: Language::TypeScript,
-            file: FileId(0),
-            caller: FunctionId(0),
+            file: FileId::from_raw(0),
+            caller: FunctionId::from_raw(0),
             owner_symbol: None,
             body: MirBodyId(0),
             operation: MirOpId(0),
@@ -167,7 +167,7 @@ mod tests {
             targets: Vec::new(),
             unresolved: vec![UnresolvedCallFact {
                 site: CallSiteId(0),
-                caller: FunctionId(0),
+                caller: FunctionId::from_raw(0),
                 status: CallTargetStatus::Unresolved,
                 reason: UnresolvedCallReason::FunctionValue,
                 algorithm: CallAlgorithm::Unsupported,

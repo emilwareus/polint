@@ -302,7 +302,7 @@ mod tests {
         let output = SemanticGraphOutput {
             nodes: vec![
                 node(
-                    NodeKind::Function(FunctionId(1)),
+                    NodeKind::Function(FunctionId::from_raw(1)),
                     SemanticPrecision::Conservative,
                     "node|function|a",
                 ),
@@ -342,7 +342,7 @@ mod tests {
         // (ResolvedStatic) must produce a precision-ceiling diagnostic.
         let output = SemanticGraphOutput {
             nodes: vec![node(
-                NodeKind::Function(FunctionId(1)),
+                NodeKind::Function(FunctionId::from_raw(1)),
                 SemanticPrecision::ResolvedStatic,
                 "node|function|exact",
             )],
@@ -370,7 +370,7 @@ mod tests {
     #[test]
     fn validation_rejects_dangling_ts_direct_binding_constraint_endpoint() {
         let nodes = vec![node(
-            NodeKind::Function(FunctionId(1)),
+            NodeKind::Function(FunctionId::from_raw(1)),
             SemanticPrecision::Conservative,
             "node|function|target",
         )];

@@ -44,9 +44,13 @@ pub fn references_for_file(
     db: &dyn FactDatabase,
     file: FileId,
 ) -> impl Iterator<Item = &ReferenceFact> {
-    db.references()
+    let mut references = db
+        .references()
         .iter()
         .filter(move |reference| reference.file == Some(file))
+        .collect::<Vec<_>>();
+    references.sort_by(|left, right| reference_order(db, left, right));
+    references.into_iter()
 }
 
 pub fn unresolved_references(db: &dyn FactDatabase) -> impl Iterator<Item = &ReferenceFact> {
@@ -120,8 +124,8 @@ mod tests {
             "export const theme = {};\n".to_string(),
         );
         let interner = db.stable_key_interner();
-        let button = SymbolId(20);
-        let theme = SymbolId(10);
+        let button = SymbolId::from_raw(20);
+        let theme = SymbolId::from_raw(10);
         db.replace_symbol_graph_facts(
             vec![
                 symbol_fact(
@@ -142,7 +146,7 @@ mod tests {
                 ),
                 symbol_fact(
                     &interner,
-                    SymbolId(30),
+                    SymbolId::from_raw(30),
                     "Button",
                     app_file,
                     10,
@@ -151,7 +155,7 @@ mod tests {
             ],
             vec![definition_fact(
                 &interner,
-                polint_core::DefinitionId(30),
+                polint_core::DefinitionId::from_raw(30),
                 button,
                 "Button",
                 app_file,
@@ -160,7 +164,7 @@ mod tests {
             vec![
                 reference_fact(
                     &interner,
-                    polint_core::ReferenceId(60),
+                    polint_core::ReferenceId::from_raw(60),
                     "ambiguous",
                     (app_file, 44),
                     None,
@@ -169,7 +173,7 @@ mod tests {
                 ),
                 reference_fact(
                     &interner,
-                    polint_core::ReferenceId(50),
+                    polint_core::ReferenceId::from_raw(50),
                     "missing",
                     (app_file, 35),
                     None,
@@ -178,7 +182,7 @@ mod tests {
                 ),
                 reference_fact(
                     &interner,
-                    polint_core::ReferenceId(40),
+                    polint_core::ReferenceId::from_raw(40),
                     "theme",
                     (app_file, 28),
                     Some(theme),
@@ -198,22 +202,22 @@ mod tests {
         col: u32,
         kind: SymbolKind,
     ) -> SymbolFact {
-        SymbolFact {
+        SymbolFact::new(
             id,
-            language: Language::TypeScript,
-            name: name.to_string(),
-            qualified_name: format!("src/app.ts::{name}"),
+            Language::TypeScript,
+            name.to_string(),
+            format!("src/app.ts::{name}"),
             kind,
-            namespace: SymbolNamespace::Value,
-            file: Some(file),
-            package: None,
-            module: Some(ModuleNodeId(0)),
-            owner: None,
-            primary_span: Some(Span::point(file, 1, col)),
-            is_exported: true,
-            stable_key: interner.intern(format!("symbol:{name}:{}", id.0)),
-            precision: SymbolPrecision::ExactLocal,
-        }
+            SymbolNamespace::Value,
+            Some(file),
+            None,
+            Some(ModuleNodeId::from_raw(0)),
+            None,
+            Some(Span::point(file, 1, col)),
+            true,
+            interner.intern(format!("symbol:{name}:{}", id.0)),
+            SymbolPrecision::ExactLocal,
+        )
     }
     fn definition_fact(
         interner: &StableKeyInterner,
@@ -223,24 +227,24 @@ mod tests {
         file: FileId,
         col: u32,
     ) -> DefinitionFact {
-        DefinitionFact {
+        DefinitionFact::new(
             id,
             symbol,
-            language: Language::TypeScript,
-            name: name.to_string(),
-            qualified_name: format!("src/app.ts::{name}"),
-            kind: DefinitionKind::Declaration,
-            namespace: SymbolNamespace::Value,
-            file: Some(file),
-            package: None,
-            module: Some(ModuleNodeId(0)),
-            owner: None,
-            primary_span: Some(Span::point(file, 1, col)),
-            is_primary: true,
-            is_exported: true,
-            stable_key: interner.intern(format!("definition:{name}:{}", id.0)),
-            precision: SymbolPrecision::ExactLocal,
-        }
+            Language::TypeScript,
+            name.to_string(),
+            format!("src/app.ts::{name}"),
+            DefinitionKind::Declaration,
+            SymbolNamespace::Value,
+            Some(file),
+            None,
+            Some(ModuleNodeId::from_raw(0)),
+            None,
+            Some(Span::point(file, 1, col)),
+            true,
+            true,
+            interner.intern(format!("definition:{name}:{}", id.0)),
+            SymbolPrecision::ExactLocal,
+        )
     }
     fn reference_fact(
         interner: &StableKeyInterner,
@@ -252,30 +256,31 @@ mod tests {
         status: SymbolResolutionStatus,
     ) -> ReferenceFact {
         let (file, col) = location;
-        ReferenceFact {
+        ReferenceFact::new(
             id,
-            language: Language::TypeScript,
-            name: name.to_string(),
-            qualified_name: name.to_string(),
-            kind: ReferenceKind::Read,
-            namespace: SymbolNamespace::Value,
-            file: Some(file),
-            package: None,
-            module: Some(ModuleNodeId(0)),
-            owner: None,
-            primary_span: Some(Span::point(file, 1, col)),
+            Language::TypeScript,
+            name.to_string(),
+            name.to_string(),
+            ReferenceKind::Read,
+            SymbolNamespace::Value,
+            Some(file),
+            None,
+            Some(ModuleNodeId::from_raw(0)),
+            None,
+            Some(Span::point(file, 1, col)),
             target,
             candidates,
-            stable_key: interner.intern(format!("reference:{name}:{}", id.0)),
+            interner.intern(format!("reference:{name}:{}", id.0)),
             status,
-            precision: match status {
+            match status {
                 SymbolResolutionStatus::Resolved => SymbolPrecision::ExactLocal,
                 SymbolResolutionStatus::Unresolved => SymbolPrecision::Unresolved,
                 SymbolResolutionStatus::Ambiguous => SymbolPrecision::Ambiguous,
                 SymbolResolutionStatus::SetupMissing => SymbolPrecision::SetupMissing,
                 SymbolResolutionStatus::Unsupported => SymbolPrecision::Unsupported,
+                _ => SymbolPrecision::Unresolved,
             },
-        }
+        )
     }
 
     #[test]
@@ -290,14 +295,14 @@ mod tests {
             symbols_by_name(&db, "Button")
                 .map(|row| row.id)
                 .collect::<Vec<_>>(),
-            vec![SymbolId(20), SymbolId(30)]
+            vec![SymbolId::from_raw(20), SymbolId::from_raw(30)]
         );
         assert_eq!(definitions_for_symbol(&db, button).count(), 1);
         assert_eq!(
             references_to_symbol(&db, theme)
                 .map(|row| row.id)
                 .collect::<Vec<_>>(),
-            vec![polint_core::ReferenceId(40)]
+            vec![polint_core::ReferenceId::from_raw(40)]
         );
     }
 
@@ -309,22 +314,22 @@ mod tests {
                 .map(|row| row.id)
                 .collect::<Vec<_>>(),
             vec![
-                polint_core::ReferenceId(40),
-                polint_core::ReferenceId(50),
-                polint_core::ReferenceId(60)
+                polint_core::ReferenceId::from_raw(40),
+                polint_core::ReferenceId::from_raw(50),
+                polint_core::ReferenceId::from_raw(60)
             ]
         );
         assert_eq!(
             unresolved_references(&db)
                 .map(|row| row.id)
                 .collect::<Vec<_>>(),
-            vec![polint_core::ReferenceId(50)]
+            vec![polint_core::ReferenceId::from_raw(50)]
         );
         assert_eq!(
             ambiguous_references(&db)
                 .map(|row| row.id)
                 .collect::<Vec<_>>(),
-            vec![polint_core::ReferenceId(60)]
+            vec![polint_core::ReferenceId::from_raw(60)]
         );
     }
 }

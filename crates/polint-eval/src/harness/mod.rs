@@ -1201,7 +1201,7 @@ fact = { family = "ResolvedDependencyEdge", stable_key = "edge:missing-lockfile"
                 kind: SourceSetKind::Source,
                 path: "web/src/app.ts".to_string(),
                 language: None,
-                files: vec![FileId(0)],
+                files: vec![FileId::from_raw(0)],
                 stable_key: crate::core::stable_key_for_test("set:source"),
                 producer_id: "polint.module_graph",
                 precision: TopologyPrecision::ExactStatic,
@@ -1240,7 +1240,7 @@ fact = { family = "ResolvedDependencyEdge", stable_key = "edge:missing-lockfile"
                 semantic_import_stable_key: Some(crate::core::stable_key_for_test(
                     "semantic:import:@scope/lib",
                 )),
-                from_file: Some(FileId(0)),
+                from_file: Some(FileId::from_raw(0)),
                 from_package: Some(TopologyPackageId(0)),
                 to_package: None,
                 target_node: None,

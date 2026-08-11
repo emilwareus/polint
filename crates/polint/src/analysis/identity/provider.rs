@@ -128,25 +128,25 @@ mod tests {
             "package foo\nfunc Bar() {}\n".to_string(),
         );
         if let Some(name) = package_name {
-            db.push_package(PackageFact {
-                id: PackageId(0),
+            db.push_package(PackageFact::new(
+                PackageId::from_raw(0),
                 file,
-                name: name.to_string(),
-                span: Span::point(file, 1, 1),
-                language: Language::Go,
-            });
+                name.to_string(),
+                Span::point(file, 1, 1),
+                Language::Go,
+            ));
         }
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "Bar".to_string(),
-            span: Span::point(file, 2, 1),
-            language: Language::Go,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "Bar".to_string(),
+            Span::point(file, 2, 1),
+            Language::Go,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
         let function = db.functions().first().expect("pushed function").clone();
         super::function_identity_record(&db, &db.stable_key_interner(), &function)
             .expect("Go function builds a record")
@@ -166,13 +166,13 @@ mod tests {
             "src/main.go".to_string(),
             "package foo\nfunc Bar() {}\n".to_string(),
         );
-        db.push_package(PackageFact {
-            id: PackageId(0),
+        db.push_package(PackageFact::new(
+            PackageId::from_raw(0),
             file,
-            name: "foo".to_string(),
-            span: Span::point(file, 1, 1),
-            language: Language::Go,
-        });
+            "foo".to_string(),
+            Span::point(file, 1, 1),
+            Language::Go,
+        ));
         let package_stable_key = db.stable_key_interner().intern("pkg");
         db.replace_go_semantic_facts(GoSemanticFactsOutput {
             packages: vec![GoSemanticPackageFact {
@@ -187,17 +187,17 @@ mod tests {
             ..GoSemanticFactsOutput::default()
         })
         .expect("semantic facts replace");
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "Bar".to_string(),
-            span: Span::point(file, 2, 1),
-            language: Language::Go,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "Bar".to_string(),
+            Span::point(file, 2, 1),
+            Language::Go,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
 
         let function = db.functions().first().expect("pushed function").clone();
         let record = super::function_identity_record(&db, &db.stable_key_interner(), &function)
@@ -223,24 +223,24 @@ mod tests {
             "export function bar() {}\n".to_string(),
         );
         // A stray PackageFact must not redirect a non-Go record to a package name.
-        db.push_package(PackageFact {
-            id: PackageId(0),
+        db.push_package(PackageFact::new(
+            PackageId::from_raw(0),
             file,
-            name: "should-be-ignored".to_string(),
-            span: Span::point(file, 1, 1),
-            language: Language::Go,
-        });
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
+            "should-be-ignored".to_string(),
+            Span::point(file, 1, 1),
+            Language::Go,
+        ));
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "bar".to_string(),
-            span: Span::point(file, 1, 1),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "bar".to_string(),
+            Span::point(file, 1, 1),
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
         let function = db.functions().first().expect("pushed function").clone();
         let record = super::function_identity_record(&db, &db.stable_key_interner(), &function)
             .expect("TS function builds a record");
@@ -249,11 +249,11 @@ mod tests {
 
     fn identity_record(id: u64, container: &str, multiplicity: u32) -> IdentityRecord {
         let language = LanguageTag::Go;
-        let span = Span::point(FileId(0), 1, 1);
+        let span = Span::point(FileId::from_raw(0), 1, 1);
         IdentityRecord {
             id: IdentityRecordId(id),
             kind: IdentityKind::Function,
-            file_id: FileId(0),
+            file_id: FileId::from_raw(0),
             span: span.clone(),
             language,
             package_or_module: Arc::from("pkg"),
@@ -268,7 +268,7 @@ mod tests {
                 language,
                 "pkg",
                 container,
-                FileId(0),
+                FileId::from_raw(0),
                 &span,
             )),
             originating_call_site_id: None,
@@ -343,17 +343,17 @@ mod tests {
             "src/main.go".to_string(),
             "package main\nfunc main() {}\n".to_string(),
         );
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "main".to_string(),
-            span: Span::point(file, 2, 1),
-            language: Language::Go,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "main".to_string(),
+            Span::point(file, 2, 1),
+            Language::Go,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
 
         let temp = tempdir().expect("tempdir");
         fs::write(temp.path().join(".polint.toml"), "").expect("config");
@@ -395,17 +395,17 @@ mod tests {
             "src/main.go".to_string(),
             "package main\nfunc main() {}\n".to_string(),
         );
-        db2.push_function(FunctionFact {
-            id: FunctionId(0),
-            file: file2,
-            name: "main".to_string(),
-            span: Span::point(file2, 2, 1),
-            language: Language::Go,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+        db2.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
+            file2,
+            "main".to_string(),
+            Span::point(file2, 2, 1),
+            Language::Go,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
         let second = super::derive_identity_with_cache_stats(
             &mut db2,
             &snapshot,
@@ -433,24 +433,24 @@ mod tests {
             "src/foo.go".to_string(),
             "package foo\nfunc Bar() {}\n".to_string(),
         );
-        db.push_package(PackageFact {
-            id: PackageId(0),
+        db.push_package(PackageFact::new(
+            PackageId::from_raw(0),
             file,
-            name: "foo".to_string(),
-            span: Span::point(file, 1, 1),
-            language: Language::Go,
-        });
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
+            "foo".to_string(),
+            Span::point(file, 1, 1),
+            Language::Go,
+        ));
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "Bar".to_string(),
-            span: Span::point(file, 2, 1),
-            language: Language::Go,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "Bar".to_string(),
+            Span::point(file, 2, 1),
+            Language::Go,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
 
         let temp = tempdir().expect("tempdir");
         fs::write(temp.path().join(".polint.toml"), "").expect("config");

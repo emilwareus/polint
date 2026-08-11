@@ -402,22 +402,22 @@ impl SymbolDraft {
     }
 
     fn into_fact(self, id: SymbolId, stable_key: StableKeyId) -> SymbolFact {
-        SymbolFact {
+        SymbolFact::new(
             id,
-            language: self.language,
-            name: self.name,
-            qualified_name: self.qualified_name,
-            kind: self.kind,
-            namespace: self.namespace,
-            file: self.file,
-            package: self.package,
-            module: self.module,
-            owner: self.owner,
-            primary_span: self.primary_span,
-            is_exported: self.is_exported,
+            self.language,
+            self.name,
+            self.qualified_name,
+            self.kind,
+            self.namespace,
+            self.file,
+            self.package,
+            self.module,
+            self.owner,
+            self.primary_span,
+            self.is_exported,
             stable_key,
-            precision: self.precision,
-        }
+            self.precision,
+        )
     }
 }
 
@@ -442,24 +442,24 @@ impl DefinitionDraft {
         symbol: SymbolId,
         stable_key: StableKeyId,
     ) -> DefinitionFact {
-        DefinitionFact {
+        DefinitionFact::new(
             id,
             symbol,
-            language: self.language,
-            name: self.name,
-            qualified_name: self.qualified_name,
-            kind: self.kind,
-            namespace: self.namespace,
-            file: self.file,
-            package: self.package,
-            module: self.module,
-            owner: self.owner,
-            primary_span: self.primary_span,
-            is_primary: self.is_primary,
-            is_exported: self.is_exported,
+            self.language,
+            self.name,
+            self.qualified_name,
+            self.kind,
+            self.namespace,
+            self.file,
+            self.package,
+            self.module,
+            self.owner,
+            self.primary_span,
+            self.is_primary,
+            self.is_exported,
             stable_key,
-            precision: self.precision,
-        }
+            self.precision,
+        )
     }
 }
 
@@ -495,29 +495,29 @@ impl ReferenceDraft {
         stable_key: StableKeyId,
         status: SymbolResolutionStatus,
     ) -> ReferenceFact {
-        ReferenceFact {
+        ReferenceFact::new(
             id,
-            language: self.language,
-            name: self.name,
-            qualified_name: self.qualified_name,
-            kind: self.kind,
-            namespace: self.namespace,
-            file: self.file,
-            package: self.package,
-            module: self.module,
-            owner: self.owner,
-            primary_span: self.primary_span,
+            self.language,
+            self.name,
+            self.qualified_name,
+            self.kind,
+            self.namespace,
+            self.file,
+            self.package,
+            self.module,
+            self.owner,
+            self.primary_span,
             target,
             candidates,
             stable_key,
             status,
-            precision: self.precision,
-        }
+            self.precision,
+        )
     }
 }
 
 fn fallback_span(file: Option<FileId>) -> Span {
-    Span::point(file.unwrap_or(FileId(u32::MAX)), 1, 1)
+    Span::point(file.unwrap_or(FileId::from_raw(u32::MAX)), 1, 1)
 }
 
 fn same_symbol_fact(left: &SymbolFact, right: &SymbolFact) -> bool {
@@ -675,6 +675,7 @@ fn symbol_kind_rank(kind: SymbolKind) -> u8 {
         SymbolKind::Import => 16,
         SymbolKind::Export => 17,
         SymbolKind::Unknown => 18,
+        _ => 19,
     }
 }
 
@@ -686,6 +687,7 @@ fn definition_kind_rank(kind: DefinitionKind) -> u8 {
         DefinitionKind::Export => 3,
         DefinitionKind::Implicit => 4,
         DefinitionKind::Unknown => 5,
+        _ => 6,
     }
 }
 
@@ -702,6 +704,7 @@ fn reference_kind_rank(kind: ReferenceKind) -> u8 {
         ReferenceKind::Assignment => 8,
         ReferenceKind::DeclarationUse => 9,
         ReferenceKind::Unknown => 10,
+        _ => 11,
     }
 }
 

@@ -124,10 +124,10 @@ mod tests {
             language: Language::Go,
             framework_id: framework_id.to_string(),
             kind,
-            target_function: FunctionId(42),
+            target_function: FunctionId::from_raw(42),
             target_symbol: None,
-            registration_span: Span::point(FileId(1), 1, 1),
-            registration_file: FileId(1),
+            registration_span: Span::point(FileId::from_raw(1), 1, 1),
+            registration_file: FileId::from_raw(1),
             trigger_metadata: TriggerMetadata::empty(),
             trust_boundary_link: None,
             precision: EntrypointPrecision::Heuristic,
@@ -148,7 +148,7 @@ mod tests {
 
         assert_eq!(edges.len(), 1);
         assert_eq!(edges[0].edge_kind, DispatchEdgeKind::RouteDispatch);
-        assert_eq!(edges[0].to_target, FunctionId(42));
+        assert_eq!(edges[0].to_target, FunctionId::from_raw(42));
         assert_eq!(edges[0].from_source, "ep-HttpRoute");
     }
 
@@ -249,9 +249,9 @@ mod tests {
     fn output_is_sorted_by_stable_key() {
         let db = LocalAnalysisDb::new();
         let mut ep1 = make_entrypoint(EntrypointKind::HttpRoute, "z.framework");
-        ep1.target_function = FunctionId(1);
+        ep1.target_function = FunctionId::from_raw(1);
         let mut ep2 = make_entrypoint(EntrypointKind::HttpRoute, "a.framework");
-        ep2.target_function = FunctionId(2);
+        ep2.target_function = FunctionId::from_raw(2);
 
         let edges = derive_dispatch_edges(&db, &[ep1, ep2]);
 

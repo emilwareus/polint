@@ -292,7 +292,7 @@ fn resolve_function_ref(db: &(impl AnalysisHost + ?Sized), value: &str) -> bool 
         .is_some_and(|id| {
             db.functions()
                 .iter()
-                .any(|function| function.id == polint_core::FunctionId(id))
+                .any(|function| function.id == polint_core::FunctionId::from_raw(id))
         })
 }
 
@@ -303,7 +303,7 @@ fn resolve_symbol_ref(db: &(impl AnalysisHost + ?Sized), value: &str) -> bool {
         .is_some_and(|id| {
             db.symbols()
                 .iter()
-                .any(|symbol| symbol.id == polint_core::SymbolId(id))
+                .any(|symbol| symbol.id == polint_core::SymbolId::from_raw(id))
         })
 }
 
@@ -499,17 +499,17 @@ mod tests {
             Arc::from("export const app = 1;\n"),
             "hash".to_string(),
         );
-        db.push_function(FunctionFact {
-            id: FunctionId(99),
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(99),
             file,
-            name: "app".to_string(),
-            span: span(),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: vec!["model".to_string()],
-        });
+            "app".to_string(),
+            span(),
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            vec!["model".to_string()],
+        ));
         let interner = db.stable_key_interner();
         db.replace_semantic_mir(MirOutput {
             bodies: Vec::new(),
@@ -525,7 +525,7 @@ mod tests {
                 id: CallSiteId(0),
                 language: Language::TypeScript,
                 file,
-                caller: FunctionId(0),
+                caller: FunctionId::from_raw(0),
                 owner_symbol: None,
                 body: MirBodyId(0),
                 operation: MirOpId(0),
@@ -550,17 +550,17 @@ mod tests {
     }
 
     fn span() -> Span {
-        Span::point(FileId(0), 1, 1)
+        Span::point(FileId::from_raw(0), 1, 1)
     }
 
     fn test_place(interner: &polint_core::StableKeyInterner, id: u64) -> PlaceFact {
         PlaceFact {
             id: PlaceId(id),
             language: Language::TypeScript,
-            file: Some(FileId(0)),
-            function: Some(FunctionId(0)),
+            file: Some(FileId::from_raw(0)),
+            function: Some(FunctionId::from_raw(0)),
             root: PlaceRoot::Local {
-                function: FunctionId(0),
+                function: FunctionId::from_raw(0),
                 name: format!("p{id}"),
             },
             projections: Vec::new(),

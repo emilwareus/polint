@@ -139,11 +139,11 @@ mod tests {
 
     fn record(kind: IdentityKind, package: &str, container: &str, display: &str) -> IdentityRecord {
         let language = LanguageTag::Go;
-        let span = Span::point(FileId(1), 1, 1);
+        let span = Span::point(FileId::from_raw(1), 1, 1);
         IdentityRecord {
             id: IdentityRecordId(0),
             kind,
-            file_id: FileId(1),
+            file_id: FileId::from_raw(1),
             span: span.clone(),
             language,
             package_or_module: Arc::from(package),
@@ -158,7 +158,7 @@ mod tests {
                 language,
                 package,
                 container,
-                FileId(1),
+                FileId::from_raw(1),
                 &span,
             )),
             originating_call_site_id: None,

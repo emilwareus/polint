@@ -697,16 +697,16 @@ impl AnalysisDb {
         source: Arc<str>,
         content_hash: String,
     ) -> FileId {
-        let id = FileId(self.files.len() as u32);
+        let id = FileId::from_raw(self.files.len() as u32);
         let metadata = source_file_metadata(interner, &relative_path, language, &content_hash);
-        self.files.push(SourceFile {
+        self.files.push(SourceFile::new(
             id,
             path,
             relative_path,
             language,
             source,
             content_hash,
-        });
+        ));
         self.record_fact_meta(FactFamily::SourceFile, u64::from(id.0), metadata);
         id
     }
@@ -714,7 +714,7 @@ impl AnalysisDb {
     pub fn push_package(&mut self, mut fact: PackageFact) -> PackageId {
         let interner_handle = self.stable_key_interner();
         let interner = &interner_handle;
-        fact.id = PackageId(self.go_syntax_store().packages().len() as u64);
+        fact.id = PackageId::from_raw(self.go_syntax_store().packages().len() as u64);
         let metadata = self.package_metadata(interner, &fact);
         let id = self.go_syntax_store_mut().push_package(fact);
         self.record_fact_meta(FactFamily::Package, id.0, metadata);
@@ -724,7 +724,7 @@ impl AnalysisDb {
     pub fn push_function(&mut self, mut fact: FunctionFact) -> FunctionId {
         let interner_handle = self.stable_key_interner();
         let interner = &interner_handle;
-        fact.id = FunctionId(self.go_syntax_store().functions().len() as u64);
+        fact.id = FunctionId::from_raw(self.go_syntax_store().functions().len() as u64);
         let metadata = self.function_metadata(interner, &fact);
         let id = self.go_syntax_store_mut().push_function(fact);
         self.record_fact_meta(FactFamily::Function, id.0, metadata);
@@ -734,7 +734,7 @@ impl AnalysisDb {
     pub fn push_import(&mut self, mut fact: ImportFact) -> ImportId {
         let interner_handle = self.stable_key_interner();
         let interner = &interner_handle;
-        fact.id = ImportId(self.go_syntax_store().imports().len() as u64);
+        fact.id = ImportId::from_raw(self.go_syntax_store().imports().len() as u64);
         let metadata = self.import_metadata(interner, &fact);
         let id = self.go_syntax_store_mut().push_import(fact);
         self.record_fact_meta(FactFamily::Import, id.0, metadata);
@@ -744,7 +744,7 @@ impl AnalysisDb {
     pub fn push_branch(&mut self, mut fact: BranchObligation) -> BranchId {
         let interner_handle = self.stable_key_interner();
         let interner = &interner_handle;
-        fact.id = BranchId(self.go_syntax_store().branches().len() as u64);
+        fact.id = BranchId::from_raw(self.go_syntax_store().branches().len() as u64);
         let metadata = self.branch_metadata(interner, &fact);
         let id = self.go_syntax_store_mut().push_branch(fact);
         self.record_fact_meta(FactFamily::BranchObligation, id.0, metadata);
@@ -794,16 +794,16 @@ impl AnalysisDb {
         let resolved_import_ids = resolved_imports
             .iter()
             .enumerate()
-            .map(|(index, fact)| (fact.id, ResolvedImportId(index as u64)))
+            .map(|(index, fact)| (fact.id, ResolvedImportId::from_raw(index as u64)))
             .collect::<BTreeMap<_, _>>();
         let module_node_ids = module_nodes
             .iter()
             .enumerate()
-            .map(|(index, node)| (node.id, ModuleNodeId(index as u64)))
+            .map(|(index, node)| (node.id, ModuleNodeId::from_raw(index as u64)))
             .collect::<BTreeMap<_, _>>();
 
         for (index, fact) in resolved_imports.iter_mut().enumerate() {
-            fact.id = ResolvedImportId(index as u64);
+            fact.id = ResolvedImportId::from_raw(index as u64);
             if let Some(target_node) = fact.target_node
                 && let Some(remapped) = module_node_ids.get(&target_node)
             {
@@ -811,10 +811,10 @@ impl AnalysisDb {
             }
         }
         for (index, node) in module_nodes.iter_mut().enumerate() {
-            node.id = ModuleNodeId(index as u64);
+            node.id = ModuleNodeId::from_raw(index as u64);
         }
         for (index, edge) in module_edges.iter_mut().enumerate() {
-            edge.id = ModuleEdgeId(index as u64);
+            edge.id = ModuleEdgeId::from_raw(index as u64);
             if let Some(remapped) = module_node_ids.get(&edge.from) {
                 edge.from = *remapped;
             }

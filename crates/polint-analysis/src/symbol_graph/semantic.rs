@@ -1329,6 +1329,7 @@ fn namespace_label(namespace: SymbolNamespace) -> &'static str {
         SymbolNamespace::Package => "package",
         SymbolNamespace::Module => "module",
         SymbolNamespace::Unknown => "unknown",
+        _ => "unknown",
     }
 }
 
@@ -1684,9 +1685,9 @@ mod tests {
             .map(|(index, status)| AliasFact {
                 id: AliasId(index as u64),
                 language: Language::JavaScript,
-                file: Some(FileId(0)),
-                package: Some(PackageId(1)),
-                module: Some(ModuleNodeId(2)),
+                file: Some(FileId::from_raw(0)),
+                package: Some(PackageId::from_raw(1)),
+                module: Some(ModuleNodeId::from_raw(2)),
                 source_symbol_stable_key: stable_key_for_test(&format!("alias:{index}")),
                 target_symbol_stable_keys: Vec::new(),
                 kind: AliasKind::ReExport,
@@ -1707,7 +1708,7 @@ mod tests {
             ScopeFact {
                 id: ScopeId(0),
                 language: Language::TypeScript,
-                file: Some(FileId(0)),
+                file: Some(FileId::from_raw(0)),
                 package: None,
                 module: None,
                 parent: None,
@@ -1722,7 +1723,7 @@ mod tests {
             ScopeFact {
                 id: ScopeId(0),
                 language: Language::TypeScript,
-                file: Some(FileId(0)),
+                file: Some(FileId::from_raw(0)),
                 package: None,
                 module: None,
                 parent: None,
@@ -1754,7 +1755,7 @@ mod tests {
             SemanticImportFact {
                 id: SemanticImportId(0),
                 language: Language::TypeScript,
-                file: Some(FileId(0)),
+                file: Some(FileId::from_raw(0)),
                 package: None,
                 module: None,
                 scope: None,
@@ -1772,7 +1773,7 @@ mod tests {
             ExportFact {
                 id: ExportId(0),
                 language: Language::TypeScript,
-                file: Some(FileId(0)),
+                file: Some(FileId::from_raw(0)),
                 package: None,
                 module: None,
                 scope: None,
@@ -1789,7 +1790,7 @@ mod tests {
             AliasFact {
                 id: AliasId(0),
                 language: Language::TypeScript,
-                file: Some(FileId(0)),
+                file: Some(FileId::from_raw(0)),
                 package: None,
                 module: None,
                 source_symbol_stable_key: interner.intern("alias:source"),
@@ -1804,7 +1805,7 @@ mod tests {
             ResolutionFact {
                 id: ResolutionId(0),
                 language: Language::TypeScript,
-                file: Some(FileId(0)),
+                file: Some(FileId::from_raw(0)),
                 package: None,
                 module: None,
                 source_stable_key: interner.intern("ref:source"),
@@ -1819,7 +1820,7 @@ mod tests {
             GeneratedSymbolFact {
                 id: GeneratedSymbolId(0),
                 language: Language::TypeScript,
-                file: Some(FileId(0)),
+                file: Some(FileId::from_raw(0)),
                 package: None,
                 module: None,
                 symbol_stable_key: interner.intern("symbol:generated"),
@@ -1872,7 +1873,7 @@ mod alias_reexport_closure_tests {
         let mut fact = AliasFact {
             id: AliasId(0),
             language: Language::TypeScript,
-            file: Some(FileId(0)),
+            file: Some(FileId::from_raw(0)),
             package: None,
             module: None,
             source_symbol_stable_key: interner.intern(source),
@@ -1893,7 +1894,7 @@ mod alias_reexport_closure_tests {
         ExportFact {
             id: ExportId(0),
             language: Language::TypeScript,
-            file: Some(FileId(0)),
+            file: Some(FileId::from_raw(0)),
             package: None,
             module: None,
             scope: None,

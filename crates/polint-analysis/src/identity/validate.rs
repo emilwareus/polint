@@ -129,26 +129,26 @@ mod tests {
             "src/main.go".to_string(),
             "package main\nfunc main() {}\n".to_string(),
         );
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "main".to_string(),
-            span: Span::point(file, 2, 1),
-            language: Language::Go,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "main".to_string(),
+            Span::point(file, 2, 1),
+            Language::Go,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
         db
     }
 
     fn record(file: u32, stable_key: &str, digest_zero: bool, bad_span: bool) -> IdentityRecord {
         let language = LanguageTag::Go;
         let span = if bad_span {
-            Span::new(FileId(file), 10, 1, 1, 11, 1, 2)
+            Span::new(FileId::from_raw(file), 10, 1, 1, 11, 1, 2)
         } else {
-            Span::point(FileId(file), 1, 1)
+            Span::point(FileId::from_raw(file), 1, 1)
         };
         let signature_digest = if digest_zero {
             SignatureDigest([0u8; 16])
@@ -158,7 +158,7 @@ mod tests {
         IdentityRecord {
             id: IdentityRecordId(0),
             kind: IdentityKind::Function,
-            file_id: FileId(file),
+            file_id: FileId::from_raw(file),
             span,
             language,
             package_or_module: Arc::from("pkg"),

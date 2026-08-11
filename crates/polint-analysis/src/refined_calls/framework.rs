@@ -260,13 +260,13 @@ mod tests {
             dispatch_edges: vec![FrameworkDispatchEdgeFact {
                 id: DispatchEdgeId(0),
                 from_source: "entrypoint:handler".to_string(),
-                to_target: FunctionId(0),
+                to_target: FunctionId::from_raw(0),
                 to_symbol: None,
                 edge_kind: DispatchEdgeKind::RouteDispatch,
                 guard_metadata: None,
                 ordering: None,
                 language: Language::TypeScript,
-                file: FileId(0),
+                file: FileId::from_raw(0),
                 span: span(),
                 precision: EntrypointPrecision::Heuristic,
                 provider_id: "polint.entrypoints".to_string(),
@@ -292,7 +292,7 @@ mod tests {
             unresolved: vec![UnresolvedFrameworkFact {
                 id: UnresolvedFrameworkId(0),
                 language: Language::TypeScript,
-                file: FileId(0),
+                file: FileId::from_raw(0),
                 span: span(),
                 framework_id: "express".to_string(),
                 reason: UnresolvedFrameworkReason::DynamicRegistration,
@@ -323,17 +323,17 @@ mod tests {
             "src/app.ts".to_string(),
             "export function handler() { framework(); }\n".to_string(),
         );
-        let function = db.push_function(FunctionFact {
-            id: FunctionId(99),
+        let function = db.push_function(FunctionFact::new(
+            FunctionId::from_raw(99),
             file,
-            name: "handler".to_string(),
-            span: span(),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: vec!["framework".to_string()],
-        });
+            "handler".to_string(),
+            span(),
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            vec!["framework".to_string()],
+        ));
         db.replace_call_facts(CallOutput {
             sites: vec![CallSiteFact {
                 in_throw: false,
@@ -370,10 +370,10 @@ mod tests {
             language: Language::TypeScript,
             framework_id: "express".to_string(),
             kind: EntrypointKind::HttpRoute,
-            target_function: FunctionId(0),
+            target_function: FunctionId::from_raw(0),
             target_symbol: None,
             registration_span: span(),
-            registration_file: FileId(0),
+            registration_file: FileId::from_raw(0),
             trigger_metadata: TriggerMetadata::empty(),
             trust_boundary_link: None,
             precision: EntrypointPrecision::SetupAware,
@@ -386,6 +386,6 @@ mod tests {
     }
 
     fn span() -> Span {
-        Span::point(FileId(0), 1, 1)
+        Span::point(FileId::from_raw(0), 1, 1)
     }
 }

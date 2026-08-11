@@ -216,7 +216,7 @@ mod tests {
     use polint_core::{FileId, FunctionId, Language, Span, SymbolId};
 
     fn span() -> Span {
-        Span::point(FileId(1), 1, 1)
+        Span::point(FileId::from_raw(1), 1, 1)
     }
 
     fn entrypoint(id: u64, stable_key: &str) -> EntrypointFact {
@@ -225,10 +225,10 @@ mod tests {
             language: Language::TypeScript,
             framework_id: "express".to_string(),
             kind: EntrypointKind::HttpRoute,
-            target_function: FunctionId(10),
-            target_symbol: Some(SymbolId(20)),
+            target_function: FunctionId::from_raw(10),
+            target_symbol: Some(SymbolId::from_raw(20)),
             registration_span: span(),
-            registration_file: FileId(1),
+            registration_file: FileId::from_raw(1),
             trigger_metadata: TriggerMetadata::empty(),
             trust_boundary_link: None,
             precision: EntrypointPrecision::ResolvedStatic,
@@ -245,12 +245,12 @@ mod tests {
             id: TrustBoundaryId(id),
             entrypoint_stable_key: polint_core::stable_key_for_test(entrypoint_key),
             source_kind: TrustBoundarySourceKind::PathParam,
-            target_parameter: Some(FunctionId(10)),
+            target_parameter: Some(FunctionId::from_raw(10)),
             target_parameter_index: Some(0),
             access_path: None,
             protocol: None,
             language: Language::TypeScript,
-            file: FileId(1),
+            file: FileId::from_raw(1),
             span: span(),
             precision: EntrypointPrecision::ResolvedStatic,
             provider_id: "polint.entrypoints".to_string(),
@@ -262,13 +262,13 @@ mod tests {
         FrameworkDispatchEdgeFact {
             id: DispatchEdgeId(id),
             from_source: from_source.to_string(),
-            to_target: FunctionId(10),
-            to_symbol: Some(SymbolId(20)),
+            to_target: FunctionId::from_raw(10),
+            to_symbol: Some(SymbolId::from_raw(20)),
             edge_kind: DispatchEdgeKind::RouteDispatch,
             guard_metadata: None,
             ordering: None,
             language: Language::TypeScript,
-            file: FileId(1),
+            file: FileId::from_raw(1),
             span: span(),
             precision: EntrypointPrecision::ResolvedStatic,
             provider_id: "polint.entrypoints".to_string(),
@@ -284,7 +284,7 @@ mod tests {
         UnresolvedFrameworkFact {
             id: UnresolvedFrameworkId(id),
             language: Language::TypeScript,
-            file: FileId(2),
+            file: FileId::from_raw(2),
             span: span(),
             framework_id: "fastify".to_string(),
             reason,
@@ -382,7 +382,7 @@ mod tests {
                 entrypoints: vec![entrypoint(2, "ep-b"), {
                     let mut ep = entrypoint(1, "ep-a");
                     ep.kind = EntrypointKind::McpTool;
-                    ep.registration_file = FileId(2);
+                    ep.registration_file = FileId::from_raw(2);
                     ep.framework_id = "mcp-sdk".to_string();
                     ep
                 }],
@@ -411,9 +411,9 @@ mod tests {
         assert_eq!(mcp.map(|v| v.len()), Some(1));
 
         // Indexes by file
-        let file1 = store.entrypoints_by_file.get(&FileId(1));
+        let file1 = store.entrypoints_by_file.get(&FileId::from_raw(1));
         assert_eq!(file1.map(|v| v.len()), Some(1));
-        let file2 = store.entrypoints_by_file.get(&FileId(2));
+        let file2 = store.entrypoints_by_file.get(&FileId::from_raw(2));
         assert_eq!(file2.map(|v| v.len()), Some(1));
 
         // Indexes by framework

@@ -397,13 +397,13 @@ function run() {
         let cjs_inventory = extract_ts_inventory(&interner, db.file(cjs_file).expect("cjs file"));
         let cjs_scope = extract_ts_scope(&interner, db.file(cjs_file).expect("cjs file"));
 
-        let app_node = ModuleNodeId(0);
-        let m_node = ModuleNodeId(1);
-        let default_node = ModuleNodeId(2);
-        let ns_node = ModuleNodeId(3);
-        let barrel_node = ModuleNodeId(4);
-        let cjs_node = ModuleNodeId(5);
-        let external_node = ModuleNodeId(6);
+        let app_node = ModuleNodeId::from_raw(0);
+        let m_node = ModuleNodeId::from_raw(1);
+        let default_node = ModuleNodeId::from_raw(2);
+        let ns_node = ModuleNodeId::from_raw(3);
+        let barrel_node = ModuleNodeId::from_raw(4);
+        let cjs_node = ModuleNodeId::from_raw(5);
+        let external_node = ModuleNodeId::from_raw(6);
         let imports = vec![
             import(0, app_file, "./m"),
             import(1, app_file, "./default"),
@@ -449,14 +449,14 @@ function run() {
             file_node(ns_node, "src/ns.ts", ns_file),
             file_node(barrel_node, "packages/pkg/barrel.ts", barrel_file),
             file_node(cjs_node, "src/cjs.ts", cjs_file),
-            ModuleNode {
-                id: external_node,
-                kind: ModuleNodeKind::External,
-                label: "external-pkg".to_string(),
-                file: None,
-                package: None,
-                language: Some(Language::TypeScript),
-            },
+            ModuleNode::new(
+                external_node,
+                ModuleNodeKind::External,
+                "external-pkg".to_string(),
+                None,
+                None,
+                Some(Language::TypeScript),
+            ),
         ];
         let module_files = vec![
             module_file(m_node, &m_inventory, &m_scope),
@@ -564,7 +564,7 @@ function run(f) {
         let m_inventory = extract_ts_inventory(&interner, db.file(m_file).expect("m file"));
         let m_scope = extract_ts_scope(&interner, db.file(m_file).expect("m file"));
 
-        let m_node = ModuleNodeId(1);
+        let m_node = ModuleNodeId::from_raw(1);
         let imports = vec![import(0, app_file, "./m")];
         let resolved = vec![resolved(
             0,
@@ -574,7 +574,7 @@ function run(f) {
             ResolutionStatus::Resolved,
         )];
         let nodes = vec![
-            file_node(ModuleNodeId(0), "src/app.ts", app_file),
+            file_node(ModuleNodeId::from_raw(0), "src/app.ts", app_file),
             file_node(m_node, "src/m.ts", m_file),
         ];
         let module_files = vec![module_file(m_node, &m_inventory, &m_scope)];
@@ -635,7 +635,7 @@ export { real as g };
         let m_inventory = extract_ts_inventory(&interner, db.file(m_file).expect("m file"));
         let m_scope = extract_ts_scope(&interner, db.file(m_file).expect("m file"));
 
-        let m_node = ModuleNodeId(1);
+        let m_node = ModuleNodeId::from_raw(1);
         let imports = vec![import(0, app_file, "./m")];
         let resolved = vec![resolved(
             0,
@@ -645,7 +645,7 @@ export { real as g };
             ResolutionStatus::Resolved,
         )];
         let nodes = vec![
-            file_node(ModuleNodeId(0), "src/app.ts", app_file),
+            file_node(ModuleNodeId::from_raw(0), "src/app.ts", app_file),
             file_node(m_node, "src/m.ts", m_file),
         ];
         let module_files = vec![module_file(m_node, &m_inventory, &m_scope)];
@@ -714,7 +714,7 @@ export { hidden as g };
         let m_inventory = extract_ts_inventory(&interner, db.file(m_file).expect("m file"));
         let m_scope = extract_ts_scope(&interner, db.file(m_file).expect("m file"));
 
-        let m_node = ModuleNodeId(1);
+        let m_node = ModuleNodeId::from_raw(1);
         let imports = vec![import(0, app_file, "./m")];
         let resolved = vec![resolved(
             0,
@@ -724,7 +724,7 @@ export { hidden as g };
             ResolutionStatus::Resolved,
         )];
         let nodes = vec![
-            file_node(ModuleNodeId(0), "src/app.ts", app_file),
+            file_node(ModuleNodeId::from_raw(0), "src/app.ts", app_file),
             file_node(m_node, "src/m.ts", m_file),
         ];
         let module_files = vec![module_file(m_node, &m_inventory, &m_scope)];
@@ -782,14 +782,14 @@ export { hidden as g };
     }
 
     fn import(id: u64, file: FileId, path: &str) -> ImportFact {
-        ImportFact {
-            id: ImportId(id),
+        ImportFact::new(
+            ImportId::from_raw(id),
             file,
-            package: None,
-            path: path.to_string(),
-            span: Span::point(file, 0, 0),
-            language: Language::TypeScript,
-        }
+            None,
+            path.to_string(),
+            Span::point(file, 0, 0),
+            Language::TypeScript,
+        )
     }
 
     fn resolved(
@@ -799,30 +799,30 @@ export { hidden as g };
         target_node: Option<ModuleNodeId>,
         status: ResolutionStatus,
     ) -> ResolvedImportFact {
-        ResolvedImportFact {
-            id: polint_core::ResolvedImportId(id),
-            import: ImportId(import),
+        ResolvedImportFact::new(
+            polint_core::ResolvedImportId::from_raw(id),
+            ImportId::from_raw(import),
             from_file,
             target_node,
             status,
-            precision: if status == ResolutionStatus::External {
+            if status == ResolutionStatus::External {
                 ResolutionPrecision::ExternalPackage
             } else {
                 ResolutionPrecision::ExactFile
             },
-            reason: None,
-        }
+            None,
+        )
     }
 
     fn file_node(id: ModuleNodeId, label: &str, file: FileId) -> ModuleNode {
-        ModuleNode {
+        ModuleNode::new(
             id,
-            kind: ModuleNodeKind::File,
-            label: label.to_string(),
-            file: Some(file),
-            package: None,
-            language: Some(Language::TypeScript),
-        }
+            ModuleNodeKind::File,
+            label.to_string(),
+            Some(file),
+            None,
+            Some(Language::TypeScript),
+        )
     }
 
     fn module_file<'a>(

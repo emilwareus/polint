@@ -1170,67 +1170,53 @@ mod tests {
             "src/panel.ts".to_string(),
             "export function Panel() {}\n".to_string(),
         );
-        let route_function = FunctionId(0);
-        let panel_function = FunctionId(1);
+        let route_function = FunctionId::from_raw(0);
+        let panel_function = FunctionId::from_raw(1);
         let route_span = Span::new(go_file, 12, 27, 2, 1, 2, 16);
         let panel_span = Span::new(ts_file, 0, 26, 1, 1, 1, 27);
 
         db.replace_metric_facts(
             vec![
-                FileMetricFact {
-                    file: go_file,
-                    language: Language::Go,
-                    line_count: 2,
-                    non_empty_line_count: 2,
-                    byte_count: 28,
-                    function_count: 1,
-                },
-                FileMetricFact {
-                    file: ts_file,
-                    language: Language::TypeScript,
-                    line_count: 1,
-                    non_empty_line_count: 1,
-                    byte_count: 27,
-                    function_count: 1,
-                },
+                FileMetricFact::new(go_file, Language::Go, 2, 2, 28, 1),
+                FileMetricFact::new(ts_file, Language::TypeScript, 1, 1, 27, 1),
             ],
             vec![
-                FunctionMetricFact {
-                    function: route_function,
-                    file: go_file,
-                    name: "route".to_string(),
-                    span: route_span.clone(),
-                    language: Language::Go,
-                    line_count: 1,
-                    byte_count: 15,
-                },
-                FunctionMetricFact {
-                    function: panel_function,
-                    file: ts_file,
-                    name: "Panel".to_string(),
-                    span: panel_span.clone(),
-                    language: Language::TypeScript,
-                    line_count: 1,
-                    byte_count: 26,
-                },
+                FunctionMetricFact::new(
+                    route_function,
+                    go_file,
+                    "route".to_string(),
+                    route_span.clone(),
+                    Language::Go,
+                    1,
+                    15,
+                ),
+                FunctionMetricFact::new(
+                    panel_function,
+                    ts_file,
+                    "Panel".to_string(),
+                    panel_span.clone(),
+                    Language::TypeScript,
+                    1,
+                    26,
+                ),
             ],
             vec![
-                ComplexityMetricFact {
-                    function: route_function,
-                    file: go_file,
-                    name: "route".to_string(),
-                    span: route_span,
-                    language: Language::Go,
-                    cyclomatic_complexity: 1,
-                },
-                ComplexityMetricFact {
-                    function: panel_function,
-                    file: ts_file,
-                    name: "Panel".to_string(),
-                    span: panel_span,
-                    language: Language::TypeScript,
-                    cyclomatic_complexity: 3,
-                },
+                ComplexityMetricFact::new(
+                    route_function,
+                    go_file,
+                    "route".to_string(),
+                    route_span,
+                    Language::Go,
+                    1,
+                ),
+                ComplexityMetricFact::new(
+                    panel_function,
+                    ts_file,
+                    "Panel".to_string(),
+                    panel_span,
+                    Language::TypeScript,
+                    3,
+                ),
             ],
         );
 
@@ -1328,61 +1314,61 @@ mod tests {
             "export function Button() {}\n".to_string(),
         );
         let span = Span::point(source_file, 1, 1);
-        let local_import = db.push_import(ImportFact {
-            id: crate::core::ImportId(99),
-            file: source_file,
-            package: None,
-            path: "./button".to_string(),
-            span: span.clone(),
-            language: crate::core::Language::TypeScript,
-        });
-        let missing_import = db.push_import(ImportFact {
-            id: crate::core::ImportId(99),
-            file: source_file,
-            package: None,
-            path: "./missing".to_string(),
+        let local_import = db.push_import(ImportFact::new(
+            crate::core::ImportId::from_raw(99),
+            source_file,
+            None,
+            "./button".to_string(),
+            span.clone(),
+            crate::core::Language::TypeScript,
+        ));
+        let missing_import = db.push_import(ImportFact::new(
+            crate::core::ImportId::from_raw(99),
+            source_file,
+            None,
+            "./missing".to_string(),
             span,
-            language: crate::core::Language::TypeScript,
-        });
+            crate::core::Language::TypeScript,
+        ));
 
         db.replace_module_graph_facts(
             vec![
-                ResolvedImportFact {
-                    id: ResolvedImportId(99),
-                    import: local_import,
-                    from_file: source_file,
-                    target_node: Some(ModuleNodeId(1)),
-                    status: ResolutionStatus::Resolved,
-                    precision: ResolutionPrecision::ExactFile,
-                    reason: None,
-                },
-                ResolvedImportFact {
-                    id: ResolvedImportId(99),
-                    import: missing_import,
-                    from_file: source_file,
-                    target_node: None,
-                    status: ResolutionStatus::Unresolved,
-                    precision: ResolutionPrecision::None,
-                    reason: Some(UnresolvedReason::NotFound),
-                },
+                ResolvedImportFact::new(
+                    ResolvedImportId::from_raw(99),
+                    local_import,
+                    source_file,
+                    Some(ModuleNodeId::from_raw(1)),
+                    ResolutionStatus::Resolved,
+                    ResolutionPrecision::ExactFile,
+                    None,
+                ),
+                ResolvedImportFact::new(
+                    ResolvedImportId::from_raw(99),
+                    missing_import,
+                    source_file,
+                    None,
+                    ResolutionStatus::Unresolved,
+                    ResolutionPrecision::None,
+                    Some(UnresolvedReason::NotFound),
+                ),
             ],
             vec![
-                ModuleNode {
-                    id: ModuleNodeId(99),
-                    kind: ModuleNodeKind::File,
-                    label: "src/app.ts".to_string(),
-                    file: Some(source_file),
-                    package: None,
-                    language: Some(crate::core::Language::TypeScript),
-                },
-                ModuleNode {
-                    id: ModuleNodeId(99),
-                    kind: ModuleNodeKind::File,
-                    label: "src/button.ts".to_string(),
-                    file: Some(target_file),
-                    package: None,
-                    language: Some(crate::core::Language::TypeScript),
-                },
+                ModuleNode::new(
+                    ModuleNodeId::from_raw(99),
+                    ModuleNodeKind::File,
+                    "src/app.ts".to_string(),
+                    Some(source_file),
+                    None,
+                    Some(crate::core::Language::TypeScript),
+                ),
+                ModuleNode::new(
+                    ModuleNodeId::from_raw(99),
+                    ModuleNodeKind::File,
+                    "src/button.ts".to_string(),
+                    Some(target_file),
+                    None,
+                    Some(crate::core::Language::TypeScript),
+                ),
             ],
             Vec::new(),
         );
@@ -1391,7 +1377,7 @@ mod tests {
         assert_eq!(resolved.all().len(), 2);
         assert_eq!(
             resolved.iter().map(|fact| fact.id).collect::<Vec<_>>(),
-            vec![ResolvedImportId(0), ResolvedImportId(1)]
+            vec![ResolvedImportId::from_raw(0), ResolvedImportId::from_raw(1)]
         );
         assert_eq!(
             resolved
@@ -1434,7 +1420,7 @@ mod tests {
             resolved
                 .for_import(local_import)
                 .map(|fact| fact.target_node),
-            Some(Some(ModuleNodeId(1)))
+            Some(Some(ModuleNodeId::from_raw(1)))
         );
     }
 
@@ -1456,172 +1442,179 @@ mod tests {
             "src/tokens.ts".to_string(),
             "export const token = 'primary';\n".to_string(),
         );
-        let app_import = db.push_import(ImportFact {
-            id: crate::core::ImportId(99),
-            file: app_file,
-            package: None,
-            path: "./button".to_string(),
-            span: Span::point(app_file, 1, 1),
-            language: crate::core::Language::TypeScript,
-        });
-        let react_import = db.push_import(ImportFact {
-            id: crate::core::ImportId(99),
-            file: app_file,
-            package: None,
-            path: "react".to_string(),
-            span: Span::point(app_file, 2, 1),
-            language: crate::core::Language::TypeScript,
-        });
-        let token_import = db.push_import(ImportFact {
-            id: crate::core::ImportId(99),
-            file: button_file,
-            package: None,
-            path: "./tokens".to_string(),
-            span: Span::point(button_file, 1, 1),
-            language: crate::core::Language::TypeScript,
-        });
+        let app_import = db.push_import(ImportFact::new(
+            crate::core::ImportId::from_raw(99),
+            app_file,
+            None,
+            "./button".to_string(),
+            Span::point(app_file, 1, 1),
+            crate::core::Language::TypeScript,
+        ));
+        let react_import = db.push_import(ImportFact::new(
+            crate::core::ImportId::from_raw(99),
+            app_file,
+            None,
+            "react".to_string(),
+            Span::point(app_file, 2, 1),
+            crate::core::Language::TypeScript,
+        ));
+        let token_import = db.push_import(ImportFact::new(
+            crate::core::ImportId::from_raw(99),
+            button_file,
+            None,
+            "./tokens".to_string(),
+            Span::point(button_file, 1, 1),
+            crate::core::Language::TypeScript,
+        ));
 
         db.replace_module_graph_facts(
             vec![
-                ResolvedImportFact {
-                    id: ResolvedImportId(99),
-                    import: app_import,
-                    from_file: app_file,
-                    target_node: Some(ModuleNodeId(1)),
-                    status: ResolutionStatus::Resolved,
-                    precision: ResolutionPrecision::ExactFile,
-                    reason: None,
-                },
-                ResolvedImportFact {
-                    id: ResolvedImportId(99),
-                    import: react_import,
-                    from_file: app_file,
-                    target_node: Some(ModuleNodeId(3)),
-                    status: ResolutionStatus::External,
-                    precision: ResolutionPrecision::ExternalPackage,
-                    reason: None,
-                },
-                ResolvedImportFact {
-                    id: ResolvedImportId(99),
-                    import: token_import,
-                    from_file: button_file,
-                    target_node: Some(ModuleNodeId(2)),
-                    status: ResolutionStatus::Resolved,
-                    precision: ResolutionPrecision::ExactFile,
-                    reason: None,
-                },
+                ResolvedImportFact::new(
+                    ResolvedImportId::from_raw(99),
+                    app_import,
+                    app_file,
+                    Some(ModuleNodeId::from_raw(1)),
+                    ResolutionStatus::Resolved,
+                    ResolutionPrecision::ExactFile,
+                    None,
+                ),
+                ResolvedImportFact::new(
+                    ResolvedImportId::from_raw(99),
+                    react_import,
+                    app_file,
+                    Some(ModuleNodeId::from_raw(3)),
+                    ResolutionStatus::External,
+                    ResolutionPrecision::ExternalPackage,
+                    None,
+                ),
+                ResolvedImportFact::new(
+                    ResolvedImportId::from_raw(99),
+                    token_import,
+                    button_file,
+                    Some(ModuleNodeId::from_raw(2)),
+                    ResolutionStatus::Resolved,
+                    ResolutionPrecision::ExactFile,
+                    None,
+                ),
             ],
             vec![
-                ModuleNode {
-                    id: ModuleNodeId(99),
-                    kind: ModuleNodeKind::File,
-                    label: "src/app.ts".to_string(),
-                    file: Some(app_file),
-                    package: None,
-                    language: Some(crate::core::Language::TypeScript),
-                },
-                ModuleNode {
-                    id: ModuleNodeId(99),
-                    kind: ModuleNodeKind::File,
-                    label: "src/button.ts".to_string(),
-                    file: Some(button_file),
-                    package: None,
-                    language: Some(crate::core::Language::TypeScript),
-                },
-                ModuleNode {
-                    id: ModuleNodeId(99),
-                    kind: ModuleNodeKind::File,
-                    label: "src/tokens.ts".to_string(),
-                    file: Some(token_file),
-                    package: None,
-                    language: Some(crate::core::Language::TypeScript),
-                },
-                ModuleNode {
-                    id: ModuleNodeId(99),
-                    kind: ModuleNodeKind::External,
-                    label: "react".to_string(),
-                    file: None,
-                    package: None,
-                    language: Some(crate::core::Language::TypeScript),
-                },
+                ModuleNode::new(
+                    ModuleNodeId::from_raw(99),
+                    ModuleNodeKind::File,
+                    "src/app.ts".to_string(),
+                    Some(app_file),
+                    None,
+                    Some(crate::core::Language::TypeScript),
+                ),
+                ModuleNode::new(
+                    ModuleNodeId::from_raw(99),
+                    ModuleNodeKind::File,
+                    "src/button.ts".to_string(),
+                    Some(button_file),
+                    None,
+                    Some(crate::core::Language::TypeScript),
+                ),
+                ModuleNode::new(
+                    ModuleNodeId::from_raw(99),
+                    ModuleNodeKind::File,
+                    "src/tokens.ts".to_string(),
+                    Some(token_file),
+                    None,
+                    Some(crate::core::Language::TypeScript),
+                ),
+                ModuleNode::new(
+                    ModuleNodeId::from_raw(99),
+                    ModuleNodeKind::External,
+                    "react".to_string(),
+                    None,
+                    None,
+                    Some(crate::core::Language::TypeScript),
+                ),
             ],
             vec![
-                ModuleEdge {
-                    id: ModuleEdgeId(99),
-                    from: ModuleNodeId(0),
-                    to: ModuleNodeId(1),
-                    import: Some(app_import),
-                    resolved_import: Some(ResolvedImportId(0)),
-                    kind: ModuleEdgeKind::Imports,
-                    status: ResolutionStatus::Resolved,
-                },
-                ModuleEdge {
-                    id: ModuleEdgeId(99),
-                    from: ModuleNodeId(0),
-                    to: ModuleNodeId(3),
-                    import: Some(react_import),
-                    resolved_import: Some(ResolvedImportId(1)),
-                    kind: ModuleEdgeKind::DependsOn,
-                    status: ResolutionStatus::External,
-                },
-                ModuleEdge {
-                    id: ModuleEdgeId(99),
-                    from: ModuleNodeId(1),
-                    to: ModuleNodeId(2),
-                    import: Some(token_import),
-                    resolved_import: Some(ResolvedImportId(2)),
-                    kind: ModuleEdgeKind::Imports,
-                    status: ResolutionStatus::Resolved,
-                },
+                ModuleEdge::new(
+                    ModuleEdgeId::from_raw(99),
+                    ModuleNodeId::from_raw(0),
+                    ModuleNodeId::from_raw(1),
+                    Some(app_import),
+                    Some(ResolvedImportId::from_raw(0)),
+                    ModuleEdgeKind::Imports,
+                    ResolutionStatus::Resolved,
+                ),
+                ModuleEdge::new(
+                    ModuleEdgeId::from_raw(99),
+                    ModuleNodeId::from_raw(0),
+                    ModuleNodeId::from_raw(3),
+                    Some(react_import),
+                    Some(ResolvedImportId::from_raw(1)),
+                    ModuleEdgeKind::DependsOn,
+                    ResolutionStatus::External,
+                ),
+                ModuleEdge::new(
+                    ModuleEdgeId::from_raw(99),
+                    ModuleNodeId::from_raw(1),
+                    ModuleNodeId::from_raw(2),
+                    Some(token_import),
+                    Some(ResolvedImportId::from_raw(2)),
+                    ModuleEdgeKind::Imports,
+                    ResolutionStatus::Resolved,
+                ),
             ],
         );
 
         let graph = ModuleGraphFacts::build(&db);
         assert_eq!(graph.nodes().len(), 4);
         assert_eq!(graph.edges().len(), 3);
-        assert_eq!(graph.node_for_file(app_file), Some(ModuleNodeId(0)));
+        assert_eq!(
+            graph.node_for_file(app_file),
+            Some(ModuleNodeId::from_raw(0))
+        );
         assert_eq!(
             graph
                 .nodes_for_package("src/button.ts")
                 .map(|node| node.id)
                 .collect::<Vec<_>>(),
-            vec![ModuleNodeId(1)]
+            vec![ModuleNodeId::from_raw(1)]
         );
         assert_eq!(
             graph
                 .edges_from_file(app_file)
                 .map(|edge| edge.id)
                 .collect::<Vec<_>>(),
-            vec![ModuleEdgeId(0), ModuleEdgeId(1)]
+            vec![ModuleEdgeId::from_raw(0), ModuleEdgeId::from_raw(1)]
         );
         assert_eq!(
             graph
                 .imports_between(app_file, button_file)
                 .map(|edge| edge.id)
                 .collect::<Vec<_>>(),
-            vec![ModuleEdgeId(0)]
+            vec![ModuleEdgeId::from_raw(0)]
         );
         assert_eq!(
             graph
-                .outgoing(ModuleNodeId(0))
+                .outgoing(ModuleNodeId::from_raw(0))
                 .map(|edge| edge.to)
                 .collect::<Vec<_>>(),
-            vec![ModuleNodeId(1), ModuleNodeId(3)]
+            vec![ModuleNodeId::from_raw(1), ModuleNodeId::from_raw(3)]
         );
         assert_eq!(
             graph
-                .incoming(ModuleNodeId(2))
+                .incoming(ModuleNodeId::from_raw(2))
                 .map(|edge| edge.from)
                 .collect::<Vec<_>>(),
-            vec![ModuleNodeId(1)]
+            vec![ModuleNodeId::from_raw(1)]
         );
         assert_eq!(
             graph.dependency_status(&graph.edges()[1]),
             ResolutionStatus::External
         );
         assert_eq!(
-            graph.reachable_from(ModuleNodeId(0)),
-            vec![ModuleNodeId(1), ModuleNodeId(3), ModuleNodeId(2)]
+            graph.reachable_from(ModuleNodeId::from_raw(0)),
+            vec![
+                ModuleNodeId::from_raw(1),
+                ModuleNodeId::from_raw(3),
+                ModuleNodeId::from_raw(2)
+            ]
         );
     }
 
@@ -1638,118 +1631,118 @@ mod tests {
             "src/theme.ts".to_string(),
             "export const theme = {};\n".to_string(),
         );
-        let button = SymbolId(10);
-        let theme = SymbolId(20);
+        let button = SymbolId::from_raw(10);
+        let theme = SymbolId::from_raw(20);
         let interner = db.stable_key_interner();
 
         db.replace_symbol_graph_facts(
             vec![
-                SymbolFact {
-                    id: button,
-                    language: Language::TypeScript,
-                    name: "Button".to_string(),
-                    qualified_name: "src/app.ts::Button".to_string(),
-                    kind: SymbolKind::Function,
-                    namespace: SymbolNamespace::Value,
-                    file: Some(app_file),
-                    package: None,
-                    module: Some(ModuleNodeId(0)),
-                    owner: None,
-                    primary_span: Some(Span::point(app_file, 1, 1)),
-                    is_exported: true,
-                    stable_key: interner.intern("ts|src/app.ts|Button".to_string()),
-                    precision: SymbolPrecision::ExactLocal,
-                },
-                SymbolFact {
-                    id: theme,
-                    language: Language::TypeScript,
-                    name: "theme".to_string(),
-                    qualified_name: "src/theme.ts::theme".to_string(),
-                    kind: SymbolKind::Constant,
-                    namespace: SymbolNamespace::Value,
-                    file: Some(theme_file),
-                    package: None,
-                    module: Some(ModuleNodeId(1)),
-                    owner: None,
-                    primary_span: Some(Span::point(theme_file, 1, 1)),
-                    is_exported: true,
-                    stable_key: interner.intern("ts|src/theme.ts|theme".to_string()),
-                    precision: SymbolPrecision::ModuleLinked,
-                },
+                SymbolFact::new(
+                    button,
+                    Language::TypeScript,
+                    "Button".to_string(),
+                    "src/app.ts::Button".to_string(),
+                    SymbolKind::Function,
+                    SymbolNamespace::Value,
+                    Some(app_file),
+                    None,
+                    Some(ModuleNodeId::from_raw(0)),
+                    None,
+                    Some(Span::point(app_file, 1, 1)),
+                    true,
+                    interner.intern("ts|src/app.ts|Button".to_string()),
+                    SymbolPrecision::ExactLocal,
+                ),
+                SymbolFact::new(
+                    theme,
+                    Language::TypeScript,
+                    "theme".to_string(),
+                    "src/theme.ts::theme".to_string(),
+                    SymbolKind::Constant,
+                    SymbolNamespace::Value,
+                    Some(theme_file),
+                    None,
+                    Some(ModuleNodeId::from_raw(1)),
+                    None,
+                    Some(Span::point(theme_file, 1, 1)),
+                    true,
+                    interner.intern("ts|src/theme.ts|theme".to_string()),
+                    SymbolPrecision::ModuleLinked,
+                ),
             ],
-            vec![DefinitionFact {
-                id: DefinitionId(30),
-                symbol: button,
-                language: Language::TypeScript,
-                name: "Button".to_string(),
-                qualified_name: "src/app.ts::Button".to_string(),
-                kind: DefinitionKind::Declaration,
-                namespace: SymbolNamespace::Value,
-                file: Some(app_file),
-                package: None,
-                module: Some(ModuleNodeId(0)),
-                owner: None,
-                primary_span: Some(Span::point(app_file, 1, 1)),
-                is_primary: true,
-                is_exported: true,
-                stable_key: interner.intern("ts|src/app.ts|definition|Button".to_string()),
-                precision: SymbolPrecision::ExactLocal,
-            }],
+            vec![DefinitionFact::new(
+                DefinitionId::from_raw(30),
+                button,
+                Language::TypeScript,
+                "Button".to_string(),
+                "src/app.ts::Button".to_string(),
+                DefinitionKind::Declaration,
+                SymbolNamespace::Value,
+                Some(app_file),
+                None,
+                Some(ModuleNodeId::from_raw(0)),
+                None,
+                Some(Span::point(app_file, 1, 1)),
+                true,
+                true,
+                interner.intern("ts|src/app.ts|definition|Button".to_string()),
+                SymbolPrecision::ExactLocal,
+            )],
             vec![
-                ReferenceFact {
-                    id: ReferenceId(40),
-                    language: Language::TypeScript,
-                    name: "theme".to_string(),
-                    qualified_name: "src/theme.ts::theme".to_string(),
-                    kind: ReferenceKind::Read,
-                    namespace: SymbolNamespace::Value,
-                    file: Some(app_file),
-                    package: None,
-                    module: Some(ModuleNodeId(0)),
-                    owner: Some(button),
-                    primary_span: Some(Span::point(app_file, 1, 28)),
-                    target: Some(theme),
-                    candidates: Vec::new(),
-                    stable_key: interner.intern("ts|src/app.ts|reference|theme".to_string()),
-                    status: SymbolResolutionStatus::Resolved,
-                    precision: SymbolPrecision::ModuleLinked,
-                },
-                ReferenceFact {
-                    id: ReferenceId(50),
-                    language: Language::TypeScript,
-                    name: "missing".to_string(),
-                    qualified_name: "missing".to_string(),
-                    kind: ReferenceKind::Read,
-                    namespace: SymbolNamespace::Value,
-                    file: Some(app_file),
-                    package: None,
-                    module: Some(ModuleNodeId(0)),
-                    owner: Some(button),
-                    primary_span: Some(Span::point(app_file, 1, 35)),
-                    target: None,
-                    candidates: Vec::new(),
-                    stable_key: interner.intern("ts|src/app.ts|reference|missing".to_string()),
-                    status: SymbolResolutionStatus::Unresolved,
-                    precision: SymbolPrecision::Unresolved,
-                },
-                ReferenceFact {
-                    id: ReferenceId(60),
-                    language: Language::TypeScript,
-                    name: "ambiguous".to_string(),
-                    qualified_name: "ambiguous".to_string(),
-                    kind: ReferenceKind::Read,
-                    namespace: SymbolNamespace::Value,
-                    file: Some(app_file),
-                    package: None,
-                    module: Some(ModuleNodeId(0)),
-                    owner: Some(button),
-                    primary_span: Some(Span::point(app_file, 1, 44)),
-                    target: None,
-                    candidates: vec![button, theme],
-                    stable_key: interner.intern("ts|src/app.ts|reference|ambiguous".to_string()),
-                    status: SymbolResolutionStatus::Ambiguous,
-                    precision: SymbolPrecision::Ambiguous,
-                },
+                ReferenceFact::new(
+                    ReferenceId::from_raw(40),
+                    Language::TypeScript,
+                    "theme".to_string(),
+                    "src/theme.ts::theme".to_string(),
+                    ReferenceKind::Read,
+                    SymbolNamespace::Value,
+                    Some(app_file),
+                    None,
+                    Some(ModuleNodeId::from_raw(0)),
+                    Some(button),
+                    Some(Span::point(app_file, 1, 28)),
+                    Some(theme),
+                    Vec::new(),
+                    interner.intern("ts|src/app.ts|reference|theme".to_string()),
+                    SymbolResolutionStatus::Resolved,
+                    SymbolPrecision::ModuleLinked,
+                ),
+                ReferenceFact::new(
+                    ReferenceId::from_raw(50),
+                    Language::TypeScript,
+                    "missing".to_string(),
+                    "missing".to_string(),
+                    ReferenceKind::Read,
+                    SymbolNamespace::Value,
+                    Some(app_file),
+                    None,
+                    Some(ModuleNodeId::from_raw(0)),
+                    Some(button),
+                    Some(Span::point(app_file, 1, 35)),
+                    None,
+                    Vec::new(),
+                    interner.intern("ts|src/app.ts|reference|missing".to_string()),
+                    SymbolResolutionStatus::Unresolved,
+                    SymbolPrecision::Unresolved,
+                ),
+                ReferenceFact::new(
+                    ReferenceId::from_raw(60),
+                    Language::TypeScript,
+                    "ambiguous".to_string(),
+                    "ambiguous".to_string(),
+                    ReferenceKind::Read,
+                    SymbolNamespace::Value,
+                    Some(app_file),
+                    None,
+                    Some(ModuleNodeId::from_raw(0)),
+                    Some(button),
+                    Some(Span::point(app_file, 1, 44)),
+                    None,
+                    vec![button, theme],
+                    interner.intern("ts|src/app.ts|reference|ambiguous".to_string()),
+                    SymbolResolutionStatus::Ambiguous,
+                    SymbolPrecision::Ambiguous,
+                ),
             ],
         );
 
@@ -1798,18 +1791,18 @@ mod tests {
                 .definitions_in_file(app_file)
                 .map(|definition| definition.id)
                 .collect::<Vec<_>>(),
-            vec![DefinitionId(30)]
+            vec![DefinitionId::from_raw(30)]
         );
         assert_eq!(
             symbols.definition(button).map(|definition| definition.id),
-            Some(DefinitionId(30))
+            Some(DefinitionId::from_raw(30))
         );
         assert_eq!(
             symbols
                 .definitions(button)
                 .map(|definition| definition.id)
                 .collect::<Vec<_>>(),
-            vec![DefinitionId(30)]
+            vec![DefinitionId::from_raw(30)]
         );
         assert_eq!(
             symbols
@@ -1825,63 +1818,71 @@ mod tests {
                 .iter()
                 .map(|reference| reference.id)
                 .collect::<Vec<_>>(),
-            vec![ReferenceId(40), ReferenceId(50), ReferenceId(60)]
+            vec![
+                ReferenceId::from_raw(40),
+                ReferenceId::from_raw(50),
+                ReferenceId::from_raw(60)
+            ]
         );
         assert_eq!(
             references
                 .to(theme)
                 .map(|reference| reference.id)
                 .collect::<Vec<_>>(),
-            vec![ReferenceId(40)]
+            vec![ReferenceId::from_raw(40)]
         );
         assert_eq!(
             references
                 .resolved()
                 .map(|reference| reference.id)
                 .collect::<Vec<_>>(),
-            vec![ReferenceId(40)]
+            vec![ReferenceId::from_raw(40)]
         );
         assert_eq!(
             references
                 .by_name("theme")
                 .map(|reference| reference.id)
                 .collect::<Vec<_>>(),
-            vec![ReferenceId(40)]
+            vec![ReferenceId::from_raw(40)]
         );
         assert_eq!(
             references
                 .to_any(symbols.exported_by_name("theme"))
                 .map(|reference| reference.id)
                 .collect::<Vec<_>>(),
-            vec![ReferenceId(40)]
+            vec![ReferenceId::from_raw(40)]
         );
         assert_eq!(
             references
                 .for_file(app_file)
                 .map(|reference| reference.id)
                 .collect::<Vec<_>>(),
-            vec![ReferenceId(40), ReferenceId(50), ReferenceId(60)]
+            vec![
+                ReferenceId::from_raw(40),
+                ReferenceId::from_raw(50),
+                ReferenceId::from_raw(60)
+            ]
         );
         assert_eq!(
             references
                 .unresolved()
                 .map(|reference| reference.id)
                 .collect::<Vec<_>>(),
-            vec![ReferenceId(50)]
+            vec![ReferenceId::from_raw(50)]
         );
         assert_eq!(
             references
                 .unresolved_by_name("missing")
                 .map(|reference| reference.id)
                 .collect::<Vec<_>>(),
-            vec![ReferenceId(50)]
+            vec![ReferenceId::from_raw(50)]
         );
         assert_eq!(
             references
                 .ambiguous()
                 .map(|reference| reference.id)
                 .collect::<Vec<_>>(),
-            vec![ReferenceId(60)]
+            vec![ReferenceId::from_raw(60)]
         );
     }
 

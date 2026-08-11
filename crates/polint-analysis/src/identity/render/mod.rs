@@ -1,6 +1,6 @@
 //! Per-benchmark identity renderers (D-05, D-06).
 //!
-//! Both renderers are pure `pub(crate)` functions over an [`IdentityRecord`]
+//! Both renderers are pure `pub(crate)` functions over an [`crate::identity::facts::IdentityRecord`]
 //! (plus, for Jelly, the borrowed [`polint_analysis_api::SourceFile`]). They are the
 //! single source of truth for benchmark-matchable identity strings — eval
 //! adapters call into these renderers rather than formatting names/spans

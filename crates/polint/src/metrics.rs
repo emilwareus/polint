@@ -525,25 +525,25 @@ mod tests {
         source: &str,
     ) -> FunctionId {
         let start = source.find(function_name).unwrap_or(0);
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: function_name.to_string(),
-            span: Span {
+            function_name.to_string(),
+            Span::new(
                 file,
-                start_byte: start as u32,
-                end_byte: source.len() as u32,
-                start_line: 1,
-                start_col: (start + 1) as u32,
-                end_line: source.lines().count() as u32,
-                end_col: 1,
-            },
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 2,
-            calls: Vec::new(),
-        })
+                start as u32,
+                source.len() as u32,
+                1,
+                (start + 1) as u32,
+                source.lines().count() as u32,
+                1,
+            ),
+            Language::TypeScript,
+            false,
+            true,
+            2,
+            Vec::new(),
+        ))
     }
 
     #[test]
@@ -570,45 +570,29 @@ mod tests {
             "src/app.ts".to_string(),
             "export function handler() {\n  if (ok) return 1;\n  return 0;\n}\n".to_string(),
         );
-        let span = Span {
+        let span = Span::new(file, 0, 62, 1, 1, 4, 2);
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            start_byte: 0,
-            end_byte: 62,
-            start_line: 1,
-            start_col: 1,
-            end_line: 4,
-            end_col: 2,
-        };
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
+            TS_JS_MODULE_FUNCTION_NAME.to_string(),
+            Span::new(file, 0, 63, 1, 1, 5, 1),
+            Language::TypeScript,
+            false,
+            false,
+            1,
+            Vec::new(),
+        ));
+        let function = db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: TS_JS_MODULE_FUNCTION_NAME.to_string(),
-            span: Span {
-                file,
-                start_byte: 0,
-                end_byte: 63,
-                start_line: 1,
-                start_col: 1,
-                end_line: 5,
-                end_col: 1,
-            },
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: false,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
-        let function = db.push_function(FunctionFact {
-            id: FunctionId(0),
-            file,
-            name: "handler".to_string(),
+            "handler".to_string(),
             span,
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 2,
-            calls: Vec::new(),
-        });
+            Language::TypeScript,
+            false,
+            true,
+            2,
+            Vec::new(),
+        ));
         let plan = AnalysisPlan::from_capability_names_for_test(&["file_metrics"]);
 
         derive_requested_metrics(&mut db, &plan);
@@ -635,26 +619,18 @@ mod tests {
             "src/app.ts".to_string(),
             "export function handler() { return 1; }\n".to_string(),
         );
-        let span = Span {
+        let span = Span::new(file, 0, 37, 1, 1, 1, 38);
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            start_byte: 0,
-            end_byte: 37,
-            start_line: 1,
-            start_col: 1,
-            end_line: 1,
-            end_col: 38,
-        };
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
-            file,
-            name: "handler".to_string(),
+            "handler".to_string(),
             span,
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
 
         derive_requested_metrics(&mut db, &AnalysisPlan::empty());
 
@@ -698,26 +674,18 @@ mod tests {
             "src/app.ts".to_string(),
             "export function handler() {\n  return 1;\n}\n".to_string(),
         );
-        let span = Span {
+        let span = Span::new(file, 0, 40, 1, 1, 3, 2);
+        let function = db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            start_byte: 0,
-            end_byte: 40,
-            start_line: 1,
-            start_col: 1,
-            end_line: 3,
-            end_col: 2,
-        };
-        let function = db.push_function(FunctionFact {
-            id: FunctionId(0),
-            file,
-            name: "handler".to_string(),
+            "handler".to_string(),
             span,
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
         let file_key = db
             .resolve_stable_key(
                 db.metadata_for(FactRef::new(FactFamily::SourceFile, u64::from(file.0)))

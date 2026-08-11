@@ -179,28 +179,28 @@ mod tests {
             "src/app.ts".to_string(),
             "function caller() { callee(); } function callee() {}\n".to_string(),
         );
-        let caller = db.push_function(FunctionFact {
-            id: FunctionId(99),
+        let caller = db.push_function(FunctionFact::new(
+            FunctionId::from_raw(99),
             file,
-            name: "caller".to_string(),
-            span: span(),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: vec!["callee".to_string()],
-        });
-        let callee = db.push_function(FunctionFact {
-            id: FunctionId(99),
+            "caller".to_string(),
+            span(),
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            vec!["callee".to_string()],
+        ));
+        let callee = db.push_function(FunctionFact::new(
+            FunctionId::from_raw(99),
             file,
-            name: "callee".to_string(),
-            span: span(),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "callee".to_string(),
+            span(),
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
         db.replace_call_facts(CallOutput {
             sites: vec![CallSiteFact {
                 in_throw: false,
@@ -229,7 +229,7 @@ mod tests {
                 site: CallSiteId(0),
                 caller,
                 target_function: Some(callee),
-                target_symbol: Some(SymbolId(0)),
+                target_symbol: Some(SymbolId::from_raw(0)),
                 edge_kind: CallEdgeKind::Direct,
                 algorithm: CallAlgorithm::DirectReference,
                 status: CallTargetStatus::Resolved,
@@ -248,7 +248,7 @@ mod tests {
         SummaryFact {
             id: SummaryId(0),
             callable_stable_key: polint_core::stable_key_for_test("function:caller"),
-            function: FunctionId(0),
+            function: FunctionId::from_raw(0),
             domain,
             status,
             precision: SummaryPrecision::SetupAware,
@@ -260,6 +260,6 @@ mod tests {
     }
 
     fn span() -> Span {
-        Span::point(FileId(0), 1, 1)
+        Span::point(FileId::from_raw(0), 1, 1)
     }
 }

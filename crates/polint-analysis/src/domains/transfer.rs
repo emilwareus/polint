@@ -83,7 +83,7 @@ impl<'a> TransferCx<'a> {
 
         let row = Box::leak(Box::new(UnresolvedCallFact {
             site,
-            caller: FunctionId(1),
+            caller: FunctionId::from_raw(1),
             status: CallTargetStatus::Unresolved,
             reason,
             algorithm: CallAlgorithm::Unsupported,
@@ -113,8 +113,8 @@ impl<'a> TransferCx<'a> {
             body: None,
             operation: None,
             language: Language::Go,
-            file: FileId(1),
-            span: Span::point(FileId(1), 1, 1),
+            file: FileId::from_raw(1),
+            span: Span::point(FileId::from_raw(1), 1, 1),
             construct: "unsupported".to_string(),
             source_evidence: "unsupported".to_string(),
             affected_places,
@@ -743,7 +743,7 @@ mod tests {
             id: MirOpId(1),
             body: crate::ids::MirBodyId(1),
             ordinal: 1,
-            span: Span::point(FileId(1), 1, 1),
+            span: Span::point(FileId::from_raw(1), 1, 1),
             kind,
             stable_key: interner.intern("op:test".to_string()),
             status: MirStatus::Resolved,

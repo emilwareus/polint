@@ -779,47 +779,45 @@ mod tests {
             line: u32,
             kind: SymbolKind,
         ) -> SymbolId {
-            let id = SymbolId(self.symbols.len() as u64);
-            self.symbols.push(SymbolFact {
+            let id = SymbolId::from_raw(self.symbols.len() as u64);
+            self.symbols.push(SymbolFact::new(
                 id,
-                language: Language::TypeScript,
-                name: name.to_string(),
-                qualified_name: name.to_string(),
+                Language::TypeScript,
+                name.to_string(),
+                name.to_string(),
                 kind,
-                namespace: SymbolNamespace::Value,
-                file: Some(self.file),
-                package: None,
-                module: None,
-                owner: None,
-                primary_span: Some(span(self.file, line)),
-                is_exported: true,
-                stable_key: self
-                    .db
+                SymbolNamespace::Value,
+                Some(self.file),
+                None,
+                None,
+                None,
+                Some(span(self.file, line)),
+                true,
+                self.db
                     .stable_key_interner()
                     .intern(format!("symbol:{name}")),
-                precision: SymbolPrecision::ExactSemantic,
-            });
-            self.definitions.push(DefinitionFact {
-                id: DefinitionId(id.0),
-                symbol: id,
-                language: Language::TypeScript,
-                name: name.to_string(),
-                qualified_name: name.to_string(),
-                kind: DefinitionKind::Definition,
-                namespace: SymbolNamespace::Value,
-                file: Some(self.file),
-                package: None,
-                module: None,
-                owner: None,
-                primary_span: Some(span(self.file, line)),
-                is_primary: true,
-                is_exported: true,
-                stable_key: self
-                    .db
+                SymbolPrecision::ExactSemantic,
+            ));
+            self.definitions.push(DefinitionFact::new(
+                DefinitionId::from_raw(id.0),
+                id,
+                Language::TypeScript,
+                name.to_string(),
+                name.to_string(),
+                DefinitionKind::Definition,
+                SymbolNamespace::Value,
+                Some(self.file),
+                None,
+                None,
+                None,
+                Some(span(self.file, line)),
+                true,
+                true,
+                self.db
                     .stable_key_interner()
                     .intern(format!("definition:{name}")),
-                precision: SymbolPrecision::ExactSemantic,
-            });
+                SymbolPrecision::ExactSemantic,
+            ));
             assert_eq!(function.0, id.0 + 1);
             id
         }
@@ -831,28 +829,27 @@ mod tests {
             line: u32,
             precision: SymbolPrecision,
         ) -> ReferenceId {
-            let id = ReferenceId(self.references.len() as u64);
-            self.references.push(ReferenceFact {
+            let id = ReferenceId::from_raw(self.references.len() as u64);
+            self.references.push(ReferenceFact::new(
                 id,
-                language: Language::TypeScript,
-                name: name.to_string(),
-                qualified_name: name.to_string(),
-                kind: ReferenceKind::Call,
-                namespace: SymbolNamespace::Value,
-                file: Some(self.file),
-                package: None,
-                module: None,
-                owner: None,
-                primary_span: Some(span(self.file, line)),
-                target: Some(target),
-                candidates: vec![target],
-                stable_key: self
-                    .db
+                Language::TypeScript,
+                name.to_string(),
+                name.to_string(),
+                ReferenceKind::Call,
+                SymbolNamespace::Value,
+                Some(self.file),
+                None,
+                None,
+                None,
+                Some(span(self.file, line)),
+                Some(target),
+                vec![target],
+                self.db
                     .stable_key_interner()
                     .intern(format!("reference:{name}:{}", id.0)),
-                status: SymbolResolutionStatus::Resolved,
+                SymbolResolutionStatus::Resolved,
                 precision,
-            });
+            ));
             id
         }
 
@@ -903,29 +900,21 @@ mod tests {
     }
 
     fn function(file: FileId, language: Language, name: &str, line: u32) -> FunctionFact {
-        FunctionFact {
-            id: FunctionId(999),
+        FunctionFact::new(
+            FunctionId::from_raw(999),
             file,
-            name: name.to_string(),
-            span: span(file, line),
+            name.to_string(),
+            span(file, line),
             language,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        }
+            false,
+            true,
+            1,
+            Vec::new(),
+        )
     }
 
     fn span(file: FileId, line: u32) -> Span {
-        Span {
-            file,
-            start_byte: line * 10,
-            end_byte: line * 10 + 5,
-            start_line: line,
-            start_col: 1,
-            end_line: line,
-            end_col: 6,
-        }
+        Span::new(file, line * 10, line * 10 + 5, line, 1, line, 6)
     }
 }
 
@@ -1025,17 +1014,17 @@ mod non_direct_cases {
             "".into(),
             "content".to_string(),
         );
-        let function = db.push_function(FunctionFact {
-            id: FunctionId(999),
+        let function = db.push_function(FunctionFact::new(
+            FunctionId::from_raw(999),
             file,
-            name: "caller".to_string(),
-            span: span(file, 1),
+            "caller".to_string(),
+            span(file, 1),
             language,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
         (db, file, function)
     }
 
@@ -1070,14 +1059,6 @@ mod non_direct_cases {
     }
 
     fn span(file: FileId, line: u32) -> Span {
-        Span {
-            file,
-            start_byte: line * 10,
-            end_byte: line * 10 + 5,
-            start_line: line,
-            start_col: 1,
-            end_line: line,
-            end_col: 6,
-        }
+        Span::new(file, line * 10, line * 10 + 5, line, 1, line, 6)
     }
 }

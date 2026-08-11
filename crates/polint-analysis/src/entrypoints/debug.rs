@@ -403,17 +403,17 @@ mod tests {
             "src/server.ts".to_string(),
             "export function handler() {}\n".to_string(),
         );
-        let function = db.push_function(FunctionFact {
-            id: FunctionId(999),
+        let function = db.push_function(FunctionFact::new(
+            FunctionId::from_raw(999),
             file,
-            name: "handler".to_string(),
-            span: Span::point(file, 1, 1),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "handler".to_string(),
+            Span::point(file, 1, 1),
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
 
         let entrypoint = EntrypointFact {
             id: EntrypointId(0),
@@ -421,7 +421,7 @@ mod tests {
             framework_id: "express".to_string(),
             kind: EntrypointKind::HttpRoute,
             target_function: function,
-            target_symbol: Some(SymbolId(0)),
+            target_symbol: Some(SymbolId::from_raw(0)),
             registration_span: Span::point(file, 1, 1),
             registration_file: file,
             trigger_metadata: TriggerMetadata {
@@ -462,7 +462,7 @@ mod tests {
             id: DispatchEdgeId(0),
             from_source: db.resolve_stable_key(entrypoint.stable_key).to_string(),
             to_target: function,
-            to_symbol: Some(SymbolId(0)),
+            to_symbol: Some(SymbolId::from_raw(0)),
             edge_kind: DispatchEdgeKind::RouteDispatch,
             guard_metadata: None,
             ordering: None,

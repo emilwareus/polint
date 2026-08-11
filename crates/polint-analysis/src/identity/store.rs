@@ -118,11 +118,11 @@ mod tests {
 
     fn record(id: u64, file: u32, kind: IdentityKind, site: Option<u64>) -> IdentityRecord {
         let language = LanguageTag::Go;
-        let span = Span::point(FileId(file), 1, 1);
+        let span = Span::point(FileId::from_raw(file), 1, 1);
         IdentityRecord {
             id: IdentityRecordId(id),
             kind,
-            file_id: FileId(file),
+            file_id: FileId::from_raw(file),
             span: span.clone(),
             language,
             package_or_module: Arc::from("pkg"),
@@ -142,7 +142,7 @@ mod tests {
                 language,
                 "pkg",
                 &format!("pkg.T{id}"),
-                FileId(file),
+                FileId::from_raw(file),
                 &span,
             )),
             originating_call_site_id: site.map(CallSiteId),
@@ -163,7 +163,7 @@ mod tests {
             IdentityStore::from_output(output, &interner, &BTreeSet::new(), &BTreeSet::new())
                 .expect("store");
         assert_eq!(store.records().len(), 2);
-        assert_eq!(store.records_for_file(FileId(0)).len(), 1);
+        assert_eq!(store.records_for_file(FileId::from_raw(0)).len(), 1);
         assert_eq!(store.records_for_language(LanguageTag::Go).len(), 2);
         assert_eq!(store.records_for_kind(IdentityKind::Callsite).len(), 1);
         assert!(store.records_for_kind(IdentityKind::Function).len() == 1);

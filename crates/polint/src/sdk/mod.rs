@@ -157,7 +157,7 @@ mod tests {
         assert_eq!(imports.edges().count(), 0);
         assert!(literals.all().is_empty());
         assert!(jsx.all().is_empty());
-        ctx.warn(&Span::point(FileId(0), 1, 1), "prelude warning");
+        ctx.warn(&Span::point(FileId::from_raw(0), 1, 1), "prelude warning");
         Ok(())
     }
 
@@ -238,7 +238,7 @@ mod tests {
 
         let mut ctx = RuleCtx::new(&db, rule.meta(), RuleOptions::default());
         let tests = GoTests::build(&db);
-        assert!(collect_go_tests(tests, FileId(0)).is_empty());
+        assert!(collect_go_tests(tests, FileId::from_raw(0)).is_empty());
         rule.run(&db, &mut ctx).expect("prelude rule runs");
         let diagnostics = ctx.into_diagnostics();
         assert_eq!(diagnostics.len(), 1);

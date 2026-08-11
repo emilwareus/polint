@@ -984,7 +984,7 @@ mod tests {
     use polint_core::{FileId, FunctionId, Language, Span};
 
     fn span() -> Span {
-        Span::point(FileId(1), 1, 1)
+        Span::point(FileId::from_raw(1), 1, 1)
     }
 
     #[test]
@@ -1036,8 +1036,8 @@ mod tests {
             bodies: vec![MirBody {
                 id: MirBodyId(0),
                 language: Language::Go,
-                file: FileId(1),
-                function: FunctionId(1),
+                file: FileId::from_raw(1),
+                function: FunctionId::from_raw(1),
                 package: None,
                 module: None,
                 owner_stable_key: interner.intern("owner:test".to_string()),
@@ -1048,10 +1048,10 @@ mod tests {
             places: vec![PlaceFact {
                 id: PlaceId(0),
                 language: Language::Go,
-                file: Some(FileId(1)),
-                function: Some(FunctionId(1)),
+                file: Some(FileId::from_raw(1)),
+                function: Some(FunctionId::from_raw(1)),
                 root: PlaceRoot::Local {
-                    function: FunctionId(1),
+                    function: FunctionId::from_raw(1),
                     name: "x".to_string(),
                 },
                 projections: Vec::new(),
@@ -1092,8 +1092,8 @@ mod tests {
             bodies: vec![MirBody {
                 id: MirBodyId(0),
                 language: Language::TypeScript,
-                file: FileId(1),
-                function: FunctionId(1),
+                file: FileId::from_raw(1),
+                function: FunctionId::from_raw(1),
                 package: None,
                 module: None,
                 owner_stable_key: interner.intern("owner:test".to_string()),
@@ -1122,8 +1122,8 @@ mod tests {
                 in_throw: false,
                 id: CallSiteId(1),
                 language: Language::TypeScript,
-                file: FileId(1),
-                caller: FunctionId(1),
+                file: FileId::from_raw(1),
+                caller: FunctionId::from_raw(1),
                 owner_symbol: None,
                 body: MirBodyId(0),
                 operation: MirOpId(0),
@@ -1144,7 +1144,7 @@ mod tests {
             targets: Vec::new(),
             unresolved: vec![UnresolvedCallFact {
                 site: CallSiteId(1),
-                caller: FunctionId(1),
+                caller: FunctionId::from_raw(1),
                 status: CallTargetStatus::Unresolved,
                 reason: UnresolvedCallReason::DynamicProperty,
                 algorithm: CallAlgorithm::SyntaxOnly,
@@ -1188,8 +1188,8 @@ mod tests {
             bodies: vec![MirBody {
                 id: MirBodyId(0),
                 language: Language::Go,
-                file: FileId(1),
-                function: FunctionId(1),
+                file: FileId::from_raw(1),
+                function: FunctionId::from_raw(1),
                 package: None,
                 module: None,
                 owner_stable_key: interner.intern("owner:mem".to_string()),
@@ -1201,10 +1201,10 @@ mod tests {
                 PlaceFact {
                     id: PlaceId(0),
                     language: Language::Go,
-                    file: Some(FileId(1)),
-                    function: Some(FunctionId(1)),
+                    file: Some(FileId::from_raw(1)),
+                    function: Some(FunctionId::from_raw(1)),
                     root: PlaceRoot::Parameter {
-                        function: FunctionId(1),
+                        function: FunctionId::from_raw(1),
                         index: 0,
                         name: Some("arg0".to_string()),
                     },
@@ -1215,10 +1215,10 @@ mod tests {
                 PlaceFact {
                     id: PlaceId(1),
                     language: Language::Go,
-                    file: Some(FileId(1)),
-                    function: Some(FunctionId(1)),
+                    file: Some(FileId::from_raw(1)),
+                    function: Some(FunctionId::from_raw(1)),
                     root: PlaceRoot::Local {
-                        function: FunctionId(1),
+                        function: FunctionId::from_raw(1),
                         name: "tmp".to_string(),
                     },
                     projections: Vec::new(),
@@ -1309,8 +1309,8 @@ mod tests {
             bodies: vec![MirBody {
                 id: MirBodyId(0),
                 language: Language::TypeScript,
-                file: FileId(1),
-                function: FunctionId(1),
+                file: FileId::from_raw(1),
+                function: FunctionId::from_raw(1),
                 package: None,
                 module: None,
                 owner_stable_key: interner.intern("owner:tito".to_string()),
@@ -1321,10 +1321,10 @@ mod tests {
             places: vec![PlaceFact {
                 id: PlaceId(0),
                 language: Language::TypeScript,
-                file: Some(FileId(1)),
-                function: Some(FunctionId(1)),
+                file: Some(FileId::from_raw(1)),
+                function: Some(FunctionId::from_raw(1)),
                 root: PlaceRoot::Parameter {
-                    function: FunctionId(1),
+                    function: FunctionId::from_raw(1),
                     index: 0,
                     name: Some("arg0".to_string()),
                 },
@@ -1396,8 +1396,8 @@ mod tests {
             bodies: vec![MirBody {
                 id: MirBodyId(0),
                 language: Language::TypeScript,
-                file: FileId(1),
-                function: FunctionId(1),
+                file: FileId::from_raw(1),
+                function: FunctionId::from_raw(1),
                 package: None,
                 module: None,
                 owner_stable_key: interner.intern("owner:tito-overwrite".to_string()),
@@ -1409,10 +1409,10 @@ mod tests {
                 PlaceFact {
                     id: PlaceId(0),
                     language: Language::TypeScript,
-                    file: Some(FileId(1)),
-                    function: Some(FunctionId(1)),
+                    file: Some(FileId::from_raw(1)),
+                    function: Some(FunctionId::from_raw(1)),
                     root: PlaceRoot::Parameter {
-                        function: FunctionId(1),
+                        function: FunctionId::from_raw(1),
                         index: 0,
                         name: Some("arg0".to_string()),
                     },
@@ -1423,10 +1423,10 @@ mod tests {
                 PlaceFact {
                     id: PlaceId(1),
                     language: Language::TypeScript,
-                    file: Some(FileId(1)),
-                    function: Some(FunctionId(1)),
+                    file: Some(FileId::from_raw(1)),
+                    function: Some(FunctionId::from_raw(1)),
                     root: PlaceRoot::Local {
-                        function: FunctionId(1),
+                        function: FunctionId::from_raw(1),
                         name: "tmp".to_string(),
                     },
                     projections: Vec::new(),
@@ -1504,8 +1504,8 @@ mod tests {
             bodies: vec![MirBody {
                 id: MirBodyId(0),
                 language: Language::TypeScript,
-                file: FileId(1),
-                function: FunctionId(1),
+                file: FileId::from_raw(1),
+                function: FunctionId::from_raw(1),
                 package: None,
                 module: None,
                 owner_stable_key: interner.intern("owner:tito-unknown-write".to_string()),
@@ -1517,10 +1517,10 @@ mod tests {
                 PlaceFact {
                     id: PlaceId(0),
                     language: Language::TypeScript,
-                    file: Some(FileId(1)),
-                    function: Some(FunctionId(1)),
+                    file: Some(FileId::from_raw(1)),
+                    function: Some(FunctionId::from_raw(1)),
                     root: PlaceRoot::Parameter {
-                        function: FunctionId(1),
+                        function: FunctionId::from_raw(1),
                         index: 0,
                         name: Some("arg0".to_string()),
                     },
@@ -1531,10 +1531,10 @@ mod tests {
                 PlaceFact {
                     id: PlaceId(1),
                     language: Language::TypeScript,
-                    file: Some(FileId(1)),
-                    function: Some(FunctionId(1)),
+                    file: Some(FileId::from_raw(1)),
+                    function: Some(FunctionId::from_raw(1)),
                     root: PlaceRoot::Local {
-                        function: FunctionId(1),
+                        function: FunctionId::from_raw(1),
                         name: "tmp".to_string(),
                     },
                     projections: Vec::new(),
@@ -1607,8 +1607,8 @@ mod tests {
             bodies: vec![MirBody {
                 id: MirBodyId(0),
                 language: Language::TypeScript,
-                file: FileId(1),
-                function: FunctionId(1),
+                file: FileId::from_raw(1),
+                function: FunctionId::from_raw(1),
                 package: None,
                 module: None,
                 owner_stable_key: interner.intern("owner:tito-branch-overwrite".to_string()),
@@ -1620,10 +1620,10 @@ mod tests {
                 PlaceFact {
                     id: PlaceId(0),
                     language: Language::TypeScript,
-                    file: Some(FileId(1)),
-                    function: Some(FunctionId(1)),
+                    file: Some(FileId::from_raw(1)),
+                    function: Some(FunctionId::from_raw(1)),
                     root: PlaceRoot::Parameter {
-                        function: FunctionId(1),
+                        function: FunctionId::from_raw(1),
                         index: 0,
                         name: Some("arg0".to_string()),
                     },
@@ -1634,10 +1634,10 @@ mod tests {
                 PlaceFact {
                     id: PlaceId(1),
                     language: Language::TypeScript,
-                    file: Some(FileId(1)),
-                    function: Some(FunctionId(1)),
+                    file: Some(FileId::from_raw(1)),
+                    function: Some(FunctionId::from_raw(1)),
                     root: PlaceRoot::Local {
-                        function: FunctionId(1),
+                        function: FunctionId::from_raw(1),
                         name: "tmp".to_string(),
                     },
                     projections: Vec::new(),
@@ -1729,8 +1729,8 @@ mod tests {
             bodies: vec![MirBody {
                 id: MirBodyId(0),
                 language: Language::Go,
-                file: FileId(1),
-                function: FunctionId(1),
+                file: FileId::from_raw(1),
+                function: FunctionId::from_raw(1),
                 package: None,
                 module: None,
                 owner_stable_key: interner.intern("owner:ext".to_string()),
@@ -1759,8 +1759,8 @@ mod tests {
                 in_throw: false,
                 id: CallSiteId(1),
                 language: Language::Go,
-                file: FileId(1),
-                caller: FunctionId(1),
+                file: FileId::from_raw(1),
+                caller: FunctionId::from_raw(1),
                 owner_symbol: None,
                 body: MirBodyId(0),
                 operation: MirOpId(0),
@@ -1781,7 +1781,7 @@ mod tests {
             targets: Vec::new(),
             unresolved: vec![UnresolvedCallFact {
                 site: CallSiteId(1),
-                caller: FunctionId(1),
+                caller: FunctionId::from_raw(1),
                 status: CallTargetStatus::Unresolved,
                 reason: UnresolvedCallReason::DynamicProperty,
                 algorithm: CallAlgorithm::SyntaxOnly,

@@ -1655,6 +1655,10 @@ fn add_import_alias_reference(
             let draft = import_alias_reference_draft(alias, SymbolPrecision::Unresolved);
             builder.add_unresolved_reference(draft);
         }
+        _ => {
+            let draft = import_alias_reference_draft(alias, SymbolPrecision::Unresolved);
+            builder.add_unresolved_reference(draft);
+        }
     }
 }
 

@@ -1128,14 +1128,14 @@ fn push_module_import(
     span: Span,
     language: Language,
 ) {
-    db.push_import(ImportFact {
-        id: polint_core::ImportId(0),
+    db.push_import(ImportFact::new(
+        polint_core::ImportId::from_raw(0),
         file,
-        package: None,
-        path: path.to_string(),
+        None,
+        path.to_string(),
         span,
         language,
-    });
+    ));
 }
 
 #[derive(Clone, Copy)]
@@ -1248,17 +1248,17 @@ fn extract_declarations(
 }
 
 fn push_ts_module_function(db: &mut dyn FactDatabase, ctx: TsAstCtx<'_>) -> FunctionId {
-    db.push_function(FunctionFact {
-        id: FunctionId(0),
-        file: ctx.file,
-        name: TS_JS_MODULE_FUNCTION_NAME.to_string(),
-        span: span_from_byte_range(ctx.file, ctx.source, 0, ctx.source.len()),
-        language: ctx.language,
-        is_test: false,
-        is_exported: false,
-        cyclomatic_complexity: 1,
-        calls: Vec::new(),
-    })
+    db.push_function(FunctionFact::new(
+        FunctionId::from_raw(0),
+        ctx.file,
+        TS_JS_MODULE_FUNCTION_NAME.to_string(),
+        span_from_byte_range(ctx.file, ctx.source, 0, ctx.source.len()),
+        ctx.language,
+        false,
+        false,
+        1,
+        Vec::new(),
+    ))
 }
 
 fn extract_commonjs_exported_function_assignment(
@@ -1998,26 +1998,26 @@ fn push_ts_function(
     }) {
         return existing.id;
     }
-    let function_id = db.push_function(FunctionFact {
-        id: FunctionId(0),
-        file: ctx.file,
-        name: spec.name.clone(),
-        span: span.clone(),
-        language: ctx.language,
-        is_test: spec.name.contains("test") || spec.name.contains("spec"),
-        is_exported: spec.is_exported,
-        cyclomatic_complexity: spec.cyclomatic_complexity,
-        calls: spec.calls,
-    });
+    let function_id = db.push_function(FunctionFact::new(
+        FunctionId::from_raw(0),
+        ctx.file,
+        spec.name.clone(),
+        span.clone(),
+        ctx.language,
+        spec.name.contains("test") || spec.name.contains("spec"),
+        spec.is_exported,
+        spec.cyclomatic_complexity,
+        spec.calls,
+    ));
 
     if spec.is_component_like {
         // syntax-level component heuristic: PascalCase or JSX-returning syntax only.
-        db.push_ts_component(TsComponentFact {
-            file: ctx.file,
-            function: Some(function_id),
-            name: spec.name,
+        db.push_ts_component(TsComponentFact::new(
+            ctx.file,
+            Some(function_id),
+            spec.name,
             span,
-        });
+        ));
     }
 
     function_id
@@ -2046,13 +2046,13 @@ fn push_ts_class(
     }) {
         return;
     }
-    db.push_ts_class(TsClassFact {
+    db.push_ts_class(TsClassFact::new(
         file,
-        name: name.clone(),
-        span: span.clone(),
+        name.clone(),
+        span.clone(),
         is_exported,
         is_component_like,
-    });
+    ));
     push_ts_function(
         db,
         TsAstCtx {
@@ -2072,12 +2072,7 @@ fn push_ts_class(
 
     if is_component_like {
         // syntax-level component heuristic: PascalCase classes are component-like only.
-        db.push_ts_component(TsComponentFact {
-            file,
-            function: None,
-            name: name.clone(),
-            span,
-        });
+        db.push_ts_component(TsComponentFact::new(file, None, name.clone(), span));
     }
 
     for element in &class.body.body {
@@ -3846,12 +3841,12 @@ fn push_string_literal_from_oxc(
     value: String,
     span: oxc_span::Span,
 ) {
-    db.push_string_literal(StringLiteralFact {
-        file: ctx.file,
+    db.push_string_literal(StringLiteralFact::new(
+        ctx.file,
         value,
-        span: span_from_oxc(ctx.file, ctx.source, span),
-        language: ctx.language,
-    });
+        span_from_oxc(ctx.file, ctx.source, span),
+        ctx.language,
+    ));
 }
 
 fn push_regex_literal_from_oxc(
@@ -3875,12 +3870,12 @@ fn extract_jsx_element_attributes(
         match item {
             JSXAttributeItem::Attribute(attribute) => {
                 if let Some(name) = jsx_attribute_name(&attribute.name) {
-                    db.push_jsx_attribute(JsxAttributeFact {
-                        file: ctx.file,
+                    db.push_jsx_attribute(JsxAttributeFact::new(
+                        ctx.file,
                         name,
-                        value: attribute.value.as_ref().and_then(jsx_attribute_value),
-                        span: span_from_oxc(ctx.file, ctx.source, attribute.span),
-                    });
+                        attribute.value.as_ref().and_then(jsx_attribute_value),
+                        span_from_oxc(ctx.file, ctx.source, attribute.span),
+                    ));
                 }
                 if let Some(value) = &attribute.value {
                     walk_jsx_attribute_value_for_literals(db, ctx, value);

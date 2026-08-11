@@ -1313,14 +1313,14 @@ mod tests {
             Capabilities::new().dataflow(),
         )];
         let plan = AnalysisPlan::from_rules(&rules, None, &BTreeMap::new());
-        let file = SourceFile {
-            id: crate::core::FileId(0),
-            path: "src/app.go".into(),
-            relative_path: "src/app.go".to_string(),
-            language: Language::Go,
-            source: "".into(),
-            content_hash: "hash".to_string(),
-        };
+        let file = SourceFile::new(
+            crate::core::FileId::from_raw(0),
+            "src/app.go".into(),
+            "src/app.go".to_string(),
+            Language::Go,
+            "".into(),
+            "hash".to_string(),
+        );
         let files = [&file];
 
         assert_eq!(

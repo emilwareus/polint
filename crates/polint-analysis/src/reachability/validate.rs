@@ -201,15 +201,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn span(file: FileId, start: u32, end: u32) -> Span {
-        Span {
-            file,
-            start_byte: start,
-            end_byte: end,
-            start_line: 1,
-            start_col: 1,
-            end_line: 1,
-            end_col: 1,
-        }
+        Span::new(file, start, end, 1, 1, 1, 1)
     }
 
     fn root(target: FunctionId, file: FileId, span: Span) -> ReachabilityRootFact {
@@ -243,17 +235,17 @@ mod tests {
             "cmd/app/main.go".to_string(),
             "package main\nfunc main() {}\n".to_string(),
         );
-        let function = db.push_function(FunctionFact {
-            id: FunctionId(1),
+        let function = db.push_function(FunctionFact::new(
+            FunctionId::from_raw(1),
             file,
-            name: "main".to_string(),
-            span: span(file, 1, 2),
-            language: Language::Go,
-            is_test: false,
-            is_exported: false,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "main".to_string(),
+            span(file, 1, 2),
+            Language::Go,
+            false,
+            false,
+            1,
+            Vec::new(),
+        ));
         (db, file, function)
     }
 
@@ -274,7 +266,7 @@ mod tests {
         let (mut db, file, _function) = db_with_function();
         // Bypass store referential validation by replacing via the unchecked path
         // is not available; instead point at a function id absent from db.
-        let dangling = root(FunctionId(999), file, span(file, 1, 2));
+        let dangling = root(FunctionId::from_raw(999), file, span(file, 1, 2));
         // The store would reject this, so validate against a hand-built db state:
         // push the root directly through the public replace path with a valid
         // function set, then assert validate flags the dangling reference by
@@ -328,7 +320,7 @@ mod tests {
     #[test]
     fn unresolved_configured_root_with_sentinel_ids_is_not_flagged_dangling() {
         // IN-04: an Unresolved configured root carries sentinel target/file ids by
-        // design (FunctionId(u64::MAX) / FileId(u32::MAX)). validate_root must NOT
+        // design (FunctionId::from_raw(u64::MAX) / FileId::from_raw(u32::MAX)). validate_root must NOT
         // report those as dangling references — they are intentional, not real refs.
         // The SAME sentinel values on a Resolved root MUST still be flagged, proving
         // the skip is gated on RootStatus::Unresolved, not unconditional.
@@ -337,13 +329,13 @@ mod tests {
         let files: BTreeSet<FileId> = BTreeSet::new();
         let entrypoints: BTreeSet<crate::ids::EntrypointId> = BTreeSet::new();
 
-        let sentinel_file = FileId(u32::MAX);
+        let sentinel_file = FileId::from_raw(u32::MAX);
         let sentinel_span = span(sentinel_file, 0, 0);
         let mut root = ReachabilityRootFact {
             id: ReachabilityRootId(0),
             kind: RootKind::ConfiguredEntrypoint,
             language: Language::Unknown,
-            target_function: FunctionId(u64::MAX),
+            target_function: FunctionId::from_raw(u64::MAX),
             target_symbol: None,
             originating_entrypoint: None,
             file: sentinel_file,

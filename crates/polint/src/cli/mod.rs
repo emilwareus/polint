@@ -3030,6 +3030,7 @@ fn status_label(status: ResolutionStatus) -> &'static str {
         ResolutionStatus::SetupMissing => "setup_missing",
         ResolutionStatus::Dynamic => "dynamic",
         ResolutionStatus::Unsupported => "unsupported",
+        _ => "unknown",
     }
 }
 
@@ -3040,6 +3041,7 @@ fn resolution_precision_label(precision: crate::core::ResolutionPrecision) -> &'
         crate::core::ResolutionPrecision::ExternalPackage => "external_package",
         crate::core::ResolutionPrecision::Heuristic => "heuristic",
         crate::core::ResolutionPrecision::None => "none",
+        _ => "unknown",
     }
 }
 
@@ -3050,6 +3052,7 @@ fn symbol_status_label(status: SymbolResolutionStatus) -> &'static str {
         SymbolResolutionStatus::Ambiguous => "ambiguous",
         SymbolResolutionStatus::SetupMissing => "setup_missing",
         SymbolResolutionStatus::Unsupported => "unsupported",
+        _ => "unknown",
     }
 }
 
@@ -3063,6 +3066,7 @@ fn symbol_precision_label(precision: SymbolPrecision) -> &'static str {
         SymbolPrecision::Ambiguous => "ambiguous",
         SymbolPrecision::SetupMissing => "setup_missing",
         SymbolPrecision::Unsupported => "unsupported",
+        _ => "unknown",
     }
 }
 

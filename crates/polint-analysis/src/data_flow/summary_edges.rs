@@ -535,7 +535,7 @@ mod tests {
         SummaryFact {
             id: SummaryId(1),
             callable_stable_key: stable_key_for_test("callable:identity"),
-            function: FunctionId(1),
+            function: FunctionId::from_raw(1),
             domain: SummaryDomainKind::DataFlowTito,
             status,
             precision: SummaryPrecision::Local,
@@ -562,7 +562,7 @@ mod tests {
         SummaryEventFact {
             id: SummaryEventId(1),
             callable_stable_key: stable_key_for_test("callable:identity"),
-            function: FunctionId(1),
+            function: FunctionId::from_raw(1),
             domain,
             event_kind: "missing_summary".to_string(),
             reason: "test".to_string(),

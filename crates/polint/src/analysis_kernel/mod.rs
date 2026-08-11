@@ -469,15 +469,15 @@ mod tests {
     use std::time::Instant;
 
     fn span(file: crate::core::FileId, start_byte: u32) -> Span {
-        Span {
+        Span::new(
             file,
             start_byte,
-            end_byte: start_byte + 10,
-            start_line: 1,
-            start_col: start_byte + 1,
-            end_line: 1,
-            end_col: start_byte + 11,
-        }
+            start_byte + 10,
+            1,
+            start_byte + 1,
+            1,
+            start_byte + 11,
+        )
     }
 
     fn db_with_one_fact_from_every_current_family() -> AnalysisDb {
@@ -487,202 +487,191 @@ mod tests {
             "src/app.tsx".to_string(),
             "import React from 'react';\nexport function Button() { return <button aria-label=\"Save\">Save</button>; }\n".to_string(),
         );
-        let package = db.push_package(PackageFact {
-            id: PackageId(99),
+        let package = db.push_package(PackageFact::new(
+            PackageId::from_raw(99),
             file,
-            name: "app".to_string(),
-            span: span(file, 0),
-            language: Language::Tsx,
-        });
-        let function = db.push_function(FunctionFact {
-            id: FunctionId(99),
+            "app".to_string(),
+            span(file, 0),
+            Language::Tsx,
+        ));
+        let function = db.push_function(FunctionFact::new(
+            FunctionId::from_raw(99),
             file,
-            name: "Button".to_string(),
-            span: span(file, 27),
-            language: Language::Tsx,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: vec!["React.createElement".to_string()],
-        });
-        let import = db.push_import(ImportFact {
-            id: ImportId(99),
+            "Button".to_string(),
+            span(file, 27),
+            Language::Tsx,
+            false,
+            true,
+            1,
+            vec!["React.createElement".to_string()],
+        ));
+        let import = db.push_import(ImportFact::new(
+            ImportId::from_raw(99),
             file,
-            package: None,
-            path: "react".to_string(),
-            span: span(file, 0),
-            language: Language::Tsx,
-        });
-        let branch = db.push_branch(BranchObligation {
-            id: crate::core::BranchId(99),
-            function: Some(function),
+            None,
+            "react".to_string(),
+            span(file, 0),
+            Language::Tsx,
+        ));
+        let branch = db.push_branch(BranchObligation::new(
+            crate::core::BranchId::from_raw(99),
+            Some(function),
             file,
-            decision_span: span(file, 40),
-            condition_text: "enabled".to_string(),
-            edge_label: "true".to_string(),
-            is_error_path: false,
-            stable_fingerprint: "branch:key".to_string(),
-        });
-        db.push_test(TestFact {
+            span(file, 40),
+            "enabled".to_string(),
+            "true".to_string(),
+            false,
+            "branch:key".to_string(),
+        ));
+        db.push_test(TestFact::new(
             file,
-            function: Some(function),
-            name: "TestButton".to_string(),
-            span: span(file, 50),
-            evidence_terms: vec!["render".to_string()],
-            assertion_count: 1,
-            subtest_count: 0,
-            subtest_names: Vec::new(),
-            table_rows: 0,
-        });
-        db.push_coverage(CoverageFact {
-            branch,
-            covered: Some(true),
-            source: "fixture".to_string(),
-        });
-        db.push_ts_component(TsComponentFact {
+            Some(function),
+            "TestButton".to_string(),
+            span(file, 50),
+            vec!["render".to_string()],
+            1,
+            0,
+            Vec::new(),
+            0,
+        ));
+        db.push_coverage(CoverageFact::new(branch, Some(true), "fixture".to_string()));
+        db.push_ts_component(TsComponentFact::new(
             file,
-            function: Some(function),
-            name: "Button".to_string(),
-            span: span(file, 27),
-        });
-        db.push_ts_class(TsClassFact {
+            Some(function),
+            "Button".to_string(),
+            span(file, 27),
+        ));
+        db.push_ts_class(TsClassFact::new(
             file,
-            name: "Dialog".to_string(),
-            span: span(file, 61),
-            is_exported: true,
-            is_component_like: false,
-        });
-        db.push_string_literal(StringLiteralFact {
+            "Dialog".to_string(),
+            span(file, 61),
+            true,
+            false,
+        ));
+        db.push_string_literal(StringLiteralFact::new(
             file,
-            value: "Save".to_string(),
-            span: span(file, 88),
-            language: Language::Tsx,
-        });
-        db.push_jsx_attribute(JsxAttributeFact {
+            "Save".to_string(),
+            span(file, 88),
+            Language::Tsx,
+        ));
+        db.push_jsx_attribute(JsxAttributeFact::new(
             file,
-            name: "aria-label".to_string(),
-            value: Some("Save".to_string()),
-            span: span(file, 72),
-        });
+            "aria-label".to_string(),
+            Some("Save".to_string()),
+            span(file, 72),
+        ));
         db.replace_module_graph_facts(
-            vec![ResolvedImportFact {
-                id: ResolvedImportId(99),
+            vec![ResolvedImportFact::new(
+                ResolvedImportId::from_raw(99),
                 import,
-                from_file: file,
-                target_node: Some(ModuleNodeId(1)),
-                status: ResolutionStatus::Resolved,
-                precision: ResolutionPrecision::ExactFile,
-                reason: None,
-            }],
+                file,
+                Some(ModuleNodeId::from_raw(1)),
+                ResolutionStatus::Resolved,
+                ResolutionPrecision::ExactFile,
+                None,
+            )],
             vec![
-                ModuleNode {
-                    id: ModuleNodeId(99),
-                    kind: ModuleNodeKind::File,
-                    label: "src/app.tsx".to_string(),
-                    file: Some(file),
-                    package: Some(package),
-                    language: Some(Language::Tsx),
-                },
-                ModuleNode {
-                    id: ModuleNodeId(100),
-                    kind: ModuleNodeKind::External,
-                    label: "react".to_string(),
-                    file: None,
-                    package: None,
-                    language: Some(Language::Tsx),
-                },
+                ModuleNode::new(
+                    ModuleNodeId::from_raw(99),
+                    ModuleNodeKind::File,
+                    "src/app.tsx".to_string(),
+                    Some(file),
+                    Some(package),
+                    Some(Language::Tsx),
+                ),
+                ModuleNode::new(
+                    ModuleNodeId::from_raw(100),
+                    ModuleNodeKind::External,
+                    "react".to_string(),
+                    None,
+                    None,
+                    Some(Language::Tsx),
+                ),
             ],
-            vec![ModuleEdge {
-                id: ModuleEdgeId(99),
-                from: ModuleNodeId(0),
-                to: ModuleNodeId(1),
-                import: Some(import),
-                resolved_import: Some(ResolvedImportId(0)),
-                kind: ModuleEdgeKind::Imports,
-                status: ResolutionStatus::Resolved,
-            }],
+            vec![ModuleEdge::new(
+                ModuleEdgeId::from_raw(99),
+                ModuleNodeId::from_raw(0),
+                ModuleNodeId::from_raw(1),
+                Some(import),
+                Some(ResolvedImportId::from_raw(0)),
+                ModuleEdgeKind::Imports,
+                ResolutionStatus::Resolved,
+            )],
         );
         let interner = db.stable_key_interner();
         db.replace_symbol_graph_facts(
-            vec![SymbolFact {
-                id: SymbolId(0),
-                language: Language::Tsx,
-                name: "Button".to_string(),
-                qualified_name: "Button".to_string(),
-                kind: SymbolKind::Function,
-                namespace: SymbolNamespace::Value,
-                file: Some(file),
-                package: Some(package),
-                module: Some(ModuleNodeId(0)),
-                owner: None,
-                primary_span: Some(span(file, 27)),
-                is_exported: true,
-                stable_key: interner.intern("symbol:Button".to_string()),
-                precision: SymbolPrecision::ExactLocal,
-            }],
-            vec![DefinitionFact {
-                id: DefinitionId(0),
-                symbol: SymbolId(0),
-                language: Language::Tsx,
-                name: "Button".to_string(),
-                qualified_name: "Button".to_string(),
-                kind: DefinitionKind::Declaration,
-                namespace: SymbolNamespace::Value,
-                file: Some(file),
-                package: Some(package),
-                module: Some(ModuleNodeId(0)),
-                owner: None,
-                primary_span: Some(span(file, 27)),
-                is_primary: true,
-                is_exported: true,
-                stable_key: interner.intern("definition:Button".to_string()),
-                precision: SymbolPrecision::ExactLocal,
-            }],
-            vec![ReferenceFact {
-                id: ReferenceId(0),
-                language: Language::Tsx,
-                name: "Button".to_string(),
-                qualified_name: "Button".to_string(),
-                kind: ReferenceKind::Read,
-                namespace: SymbolNamespace::Value,
-                file: Some(file),
-                package: Some(package),
-                module: Some(ModuleNodeId(0)),
-                owner: None,
-                primary_span: Some(span(file, 27)),
-                target: Some(SymbolId(0)),
-                candidates: Vec::new(),
-                stable_key: interner.intern("reference:Button".to_string()),
-                status: SymbolResolutionStatus::Resolved,
-                precision: SymbolPrecision::ExactLocal,
-            }],
+            vec![SymbolFact::new(
+                SymbolId::from_raw(0),
+                Language::Tsx,
+                "Button".to_string(),
+                "Button".to_string(),
+                SymbolKind::Function,
+                SymbolNamespace::Value,
+                Some(file),
+                Some(package),
+                Some(ModuleNodeId::from_raw(0)),
+                None,
+                Some(span(file, 27)),
+                true,
+                interner.intern("symbol:Button".to_string()),
+                SymbolPrecision::ExactLocal,
+            )],
+            vec![DefinitionFact::new(
+                DefinitionId::from_raw(0),
+                SymbolId::from_raw(0),
+                Language::Tsx,
+                "Button".to_string(),
+                "Button".to_string(),
+                DefinitionKind::Declaration,
+                SymbolNamespace::Value,
+                Some(file),
+                Some(package),
+                Some(ModuleNodeId::from_raw(0)),
+                None,
+                Some(span(file, 27)),
+                true,
+                true,
+                interner.intern("definition:Button".to_string()),
+                SymbolPrecision::ExactLocal,
+            )],
+            vec![ReferenceFact::new(
+                ReferenceId::from_raw(0),
+                Language::Tsx,
+                "Button".to_string(),
+                "Button".to_string(),
+                ReferenceKind::Read,
+                SymbolNamespace::Value,
+                Some(file),
+                Some(package),
+                Some(ModuleNodeId::from_raw(0)),
+                None,
+                Some(span(file, 27)),
+                Some(SymbolId::from_raw(0)),
+                Vec::new(),
+                interner.intern("reference:Button".to_string()),
+                SymbolResolutionStatus::Resolved,
+                SymbolPrecision::ExactLocal,
+            )],
         );
         db.replace_metric_facts(
-            vec![FileMetricFact {
-                file,
-                language: Language::Tsx,
-                line_count: 2,
-                non_empty_line_count: 2,
-                byte_count: 100,
-                function_count: 1,
-            }],
-            vec![FunctionMetricFact {
+            vec![FileMetricFact::new(file, Language::Tsx, 2, 2, 100, 1)],
+            vec![FunctionMetricFact::new(
                 function,
                 file,
-                name: "Button".to_string(),
-                span: span(file, 27),
-                language: Language::Tsx,
-                line_count: 1,
-                byte_count: 10,
-            }],
-            vec![ComplexityMetricFact {
+                "Button".to_string(),
+                span(file, 27),
+                Language::Tsx,
+                1,
+                10,
+            )],
+            vec![ComplexityMetricFact::new(
                 function,
                 file,
-                name: "Button".to_string(),
-                span: span(file, 27),
-                language: Language::Tsx,
-                cyclomatic_complexity: 1,
-            }],
+                "Button".to_string(),
+                span(file, 27),
+                Language::Tsx,
+                1,
+            )],
         );
         db
     }

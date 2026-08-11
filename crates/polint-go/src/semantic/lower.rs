@@ -356,7 +356,7 @@ mod tests {
         )
         .expect("valid protocol");
         let lowered = lower_go_semantic(&db, &output).expect("lowered");
-        assert_eq!(lowered.functions[0].file, Some(FileId(0)));
+        assert_eq!(lowered.functions[0].file, Some(FileId::from_raw(0)));
     }
 
     #[test]

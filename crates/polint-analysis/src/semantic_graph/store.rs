@@ -298,7 +298,11 @@ mod tests {
         // CallConstraint anchored at node-B.
         SemanticGraphOutput {
             nodes: vec![
-                node(0, NodeKind::Function(FunctionId(1)), "node|function|a"),
+                node(
+                    0,
+                    NodeKind::Function(FunctionId::from_raw(1)),
+                    "node|function|a",
+                ),
                 node(1, NodeKind::Callsite(CallSiteId(2)), "node|callsite|b"),
             ],
             edges: vec![edge(0, 0, 1, EdgeKind::Call, "edge|call|a|b")],
@@ -317,7 +321,11 @@ mod tests {
         let normalized = SemanticGraphOutput {
             nodes: vec![
                 node(99, NodeKind::Callsite(CallSiteId(2)), "node|callsite|z"),
-                node(7, NodeKind::Function(FunctionId(1)), "node|function|a"),
+                node(
+                    7,
+                    NodeKind::Function(FunctionId::from_raw(1)),
+                    "node|function|a",
+                ),
             ],
             edges: Vec::new(),
             constraints: Vec::new(),
@@ -378,7 +386,7 @@ mod tests {
         assert_eq!(store.edges().len(), 1);
         assert_eq!(
             store
-                .nodes_for_kind(&NodeKind::Function(FunctionId(0)))
+                .nodes_for_kind(&NodeKind::Function(FunctionId::from_raw(0)))
                 .len(),
             1
         );
@@ -432,7 +440,7 @@ mod tests {
         let output = SemanticGraphOutput {
             nodes: vec![node(
                 0,
-                NodeKind::Function(FunctionId(1)),
+                NodeKind::Function(FunctionId::from_raw(1)),
                 "node|function|a",
             )],
             // Edge targets node id 5 which does not resolve to a stored node.
@@ -495,7 +503,11 @@ mod tests {
         // byte-identical normalized output and identical dense IDs.
         let base = SemanticGraphOutput {
             nodes: vec![
-                node(0, NodeKind::Function(FunctionId(1)), "node|function|a"),
+                node(
+                    0,
+                    NodeKind::Function(FunctionId::from_raw(1)),
+                    "node|function|a",
+                ),
                 node(1, NodeKind::Callsite(CallSiteId(2)), "node|callsite|b"),
             ],
             edges: Vec::new(),
@@ -540,7 +552,7 @@ mod tests {
         let output = SemanticGraphOutput {
             nodes: vec![node(
                 0,
-                NodeKind::Function(FunctionId(1)),
+                NodeKind::Function(FunctionId::from_raw(1)),
                 "node|function|a",
             )],
             edges: Vec::new(),

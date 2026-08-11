@@ -112,22 +112,22 @@ mod tests {
         let mut db = LocalAnalysisDb::new();
         let main = add_file(&mut db, "cmd/main.go");
         let worker = add_file(&mut db, "internal/worker.go");
-        db.push_import(ImportFact {
-            id: ImportId(99),
-            file: main,
-            package: None,
-            path: "fmt".to_string(),
-            span: span(main),
-            language: Language::Go,
-        });
-        db.push_import(ImportFact {
-            id: ImportId(99),
-            file: worker,
-            package: None,
-            path: "context".to_string(),
-            span: span(worker),
-            language: Language::Go,
-        });
+        db.push_import(ImportFact::new(
+            ImportId::from_raw(99),
+            main,
+            None,
+            "fmt".to_string(),
+            span(main),
+            Language::Go,
+        ));
+        db.push_import(ImportFact::new(
+            ImportId::from_raw(99),
+            worker,
+            None,
+            "context".to_string(),
+            span(worker),
+            Language::Go,
+        ));
 
         let dot = ImportGraph::from_db(&db).to_dot();
         let repeated = ImportGraph::from_db(&db).to_dot();
@@ -144,17 +144,17 @@ mod tests {
     fn function_graph_dot_includes_available_calls() {
         let mut db = LocalAnalysisDb::new();
         let file = add_file(&mut db, "cmd/main.go");
-        db.push_function(FunctionFact {
-            id: FunctionId(99),
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(99),
             file,
-            name: "Authorize".to_string(),
-            span: span(file),
-            language: Language::Go,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: vec!["charge".to_string(), "validateUser".to_string()],
-        });
+            "Authorize".to_string(),
+            span(file),
+            Language::Go,
+            false,
+            true,
+            1,
+            vec!["charge".to_string(), "validateUser".to_string()],
+        ));
 
         let dot = FunctionGraph::from_db(&db, "Authorize").to_dot();
 

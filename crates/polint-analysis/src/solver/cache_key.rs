@@ -26,7 +26,7 @@ pub const SOLVER_SCHEMA_LABEL: &str = "solver-run-output-2";
 /// adding or bumping an algorithm version requires extending this list.
 ///
 /// Per D-15 the digest additionally folds in the [`SolverBudget`] knobs (via
-/// [`budget_parts`]), so a budget-default change — or a config-driven budget
+/// [`solver_budget_digest_parts`]), so a budget-default change — or a config-driven budget
 /// override — changes the parameter digest and invalidates downstream. This is the
 /// "solver budgets participate in the cache key" contract (forward-compatible with
 /// CACHE-01/02).

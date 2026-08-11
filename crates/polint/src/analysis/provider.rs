@@ -332,7 +332,7 @@ mod semantic_mir_provider {
     use crate::core::{FileId, FunctionId, Language, Span};
 
     fn span() -> Span {
-        Span::new(FileId(1), 1, 2, 1, 1, 1, 2)
+        Span::new(FileId::from_raw(1), 1, 2, 1, 1, 1, 2)
     }
 
     fn body(
@@ -344,8 +344,8 @@ mod semantic_mir_provider {
         MirBody {
             id: MirBodyId(id),
             language: Language::Go,
-            file: FileId(1),
-            function: FunctionId(function),
+            file: FileId::from_raw(1),
+            function: FunctionId::from_raw(function),
             package: None,
             module: None,
             owner_stable_key: interner.intern(stable_key.to_string()),
@@ -364,10 +364,10 @@ mod semantic_mir_provider {
         PlaceFact {
             id: PlaceId(id),
             language: Language::Go,
-            file: Some(FileId(1)),
-            function: Some(FunctionId(function)),
+            file: Some(FileId::from_raw(1)),
+            function: Some(FunctionId::from_raw(function)),
             root: PlaceRoot::Local {
-                function: FunctionId(function),
+                function: FunctionId::from_raw(function),
                 name: stable_key.to_string(),
             },
             projections: Vec::new(),

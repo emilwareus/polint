@@ -15,89 +15,16 @@
         let go_span = test_span(go_file, 1);
         let ts_span = test_span(ts_file, 1);
 
-        db.push_package(PackageFact {
-            id: PackageId(99),
-            file: go_file,
-            name: "payment".to_string(),
-            span: go_span.clone(),
-            language: Language::Go,
-        });
-        let go_function = db.push_function(FunctionFact {
-            id: FunctionId(99),
-            file: go_file,
-            name: "Charge".to_string(),
-            span: go_span.clone(),
-            language: Language::Go,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 3,
-            calls: vec!["authorize".to_string()],
-        });
-        let ts_function = db.push_function(FunctionFact {
-            id: FunctionId(99),
-            file: ts_file,
-            name: "Button".to_string(),
-            span: ts_span.clone(),
-            language: Language::Tsx,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: vec!["render".to_string()],
-        });
-        db.push_import(ImportFact {
-            id: ImportId(99),
-            file: go_file,
-            package: None,
-            path: "context".to_string(),
-            span: go_span.clone(),
-            language: Language::Go,
-        });
-        db.push_branch(BranchObligation {
-            id: BranchId(99),
-            function: Some(go_function),
-            file: go_file,
-            decision_span: go_span.clone(),
-            condition_text: "err != nil".to_string(),
-            edge_label: "true".to_string(),
-            is_error_path: true,
-            stable_fingerprint: "branch".to_string(),
-        });
-        db.push_test(TestFact {
-            file: go_file,
-            function: Some(go_function),
-            name: "TestCharge".to_string(),
-            span: go_span,
-            evidence_terms: vec!["err".to_string()],
-            assertion_count: 1,
-            subtest_count: 0,
-            subtest_names: Vec::new(),
-            table_rows: 0,
-        });
-        db.push_ts_component(TsComponentFact {
-            file: ts_file,
-            function: Some(ts_function),
-            name: "Button".to_string(),
-            span: ts_span.clone(),
-        });
-        db.push_ts_class(TsClassFact {
-            file: ts_file,
-            name: "Dialog".to_string(),
-            span: ts_span.clone(),
-            is_exported: true,
-            is_component_like: true,
-        });
-        db.push_string_literal(StringLiteralFact {
-            file: ts_file,
-            value: "Pay".to_string(),
-            span: ts_span.clone(),
-            language: Language::Tsx,
-        });
-        db.push_jsx_attribute(JsxAttributeFact {
-            file: ts_file,
-            name: "aria-label".to_string(),
-            value: Some("Pay".to_string()),
-            span: ts_span,
-        });
+        db.push_package(PackageFact::new(PackageId::from_raw(99), go_file, "payment".to_string(), go_span.clone(), Language::Go));
+        let go_function = db.push_function(FunctionFact::new(FunctionId::from_raw(99), go_file, "Charge".to_string(), go_span.clone(), Language::Go, false, true, 3, vec!["authorize".to_string()]));
+        let ts_function = db.push_function(FunctionFact::new(FunctionId::from_raw(99), ts_file, "Button".to_string(), ts_span.clone(), Language::Tsx, false, true, 1, vec!["render".to_string()]));
+        db.push_import(ImportFact::new(ImportId::from_raw(99), go_file, None, "context".to_string(), go_span.clone(), Language::Go));
+        db.push_branch(BranchObligation::new(BranchId::from_raw(99), Some(go_function), go_file, go_span.clone(), "err != nil".to_string(), "true".to_string(), true, "branch".to_string()));
+        db.push_test(TestFact::new(go_file, Some(go_function), "TestCharge".to_string(), go_span, vec!["err".to_string()], 1, 0, Vec::new(), 0));
+        db.push_ts_component(TsComponentFact::new(ts_file, Some(ts_function), "Button".to_string(), ts_span.clone()));
+        db.push_ts_class(TsClassFact::new(ts_file, "Dialog".to_string(), ts_span.clone(), true, true));
+        db.push_string_literal(StringLiteralFact::new(ts_file, "Pay".to_string(), ts_span.clone(), Language::Tsx));
+        db.push_jsx_attribute(JsxAttributeFact::new(ts_file, "aria-label".to_string(), Some("Pay".to_string()), ts_span));
 
         let packages = Packages::build(&db);
         let files = SourceFiles::build(&db);
@@ -178,22 +105,8 @@
             "package second\n".to_string(),
         );
 
-        db.push_import(ImportFact {
-            id: ImportId(99),
-            file: second_file,
-            package: None,
-            path: "fmt".to_string(),
-            span: test_span(second_file, 1),
-            language: Language::Go,
-        });
-        db.push_import(ImportFact {
-            id: ImportId(99),
-            file: first_file,
-            package: None,
-            path: "strings".to_string(),
-            span: test_span(first_file, 1),
-            language: Language::Go,
-        });
+        db.push_import(ImportFact::new(ImportId::from_raw(99), second_file, None, "fmt".to_string(), test_span(second_file, 1), Language::Go));
+        db.push_import(ImportFact::new(ImportId::from_raw(99), first_file, None, "strings".to_string(), test_span(first_file, 1), Language::Go));
 
         let imports = Imports::build(&db);
 
@@ -225,39 +138,9 @@
             "package users\n".to_string(),
         );
 
-        db.push_test(TestFact {
-            file: production_file,
-            function: None,
-            name: "TestInline".to_string(),
-            span: test_span(production_file, 1),
-            evidence_terms: Vec::new(),
-            assertion_count: 1,
-            subtest_count: 0,
-            subtest_names: Vec::new(),
-            table_rows: 0,
-        });
-        db.push_test(TestFact {
-            file: companion_file,
-            function: None,
-            name: "TestPayment".to_string(),
-            span: test_span(companion_file, 1),
-            evidence_terms: Vec::new(),
-            assertion_count: 1,
-            subtest_count: 0,
-            subtest_names: Vec::new(),
-            table_rows: 0,
-        });
-        db.push_test(TestFact {
-            file: unrelated_file,
-            function: None,
-            name: "TestUserPayment".to_string(),
-            span: test_span(unrelated_file, 1),
-            evidence_terms: Vec::new(),
-            assertion_count: 1,
-            subtest_count: 0,
-            subtest_names: Vec::new(),
-            table_rows: 0,
-        });
+        db.push_test(TestFact::new(production_file, None, "TestInline".to_string(), test_span(production_file, 1), Vec::new(), 1, 0, Vec::new(), 0));
+        db.push_test(TestFact::new(companion_file, None, "TestPayment".to_string(), test_span(companion_file, 1), Vec::new(), 1, 0, Vec::new(), 0));
+        db.push_test(TestFact::new(unrelated_file, None, "TestUserPayment".to_string(), test_span(unrelated_file, 1), Vec::new(), 1, 0, Vec::new(), 0));
 
         let tests = GoTests::build(&db);
 
@@ -292,12 +175,7 @@
         end_line: u32,
         end_col: u32,
     ) -> DiagnosticRange {
-        DiagnosticRange {
-            start_line,
-            start_col,
-            end_line,
-            end_col,
-        }
+        DiagnosticRange::new(start_line, start_col, end_line, end_col)
     }
 
     #[test]
@@ -453,40 +331,14 @@
         );
         let span = test_span(file, 1);
 
-        let function = db.push_function(FunctionFact {
-            id: FunctionId(99),
-            file,
-            name: "main".to_string(),
-            span: span.clone(),
-            language: Language::Go,
-            is_test: false,
-            is_exported: false,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
-        let import = db.push_import(ImportFact {
-            id: ImportId(99),
-            file,
-            package: None,
-            path: "fmt".to_string(),
-            span: span.clone(),
-            language: Language::Go,
-        });
-        let branch = db.push_branch(BranchObligation {
-            id: BranchId(99),
-            function: Some(function),
-            file,
-            decision_span: span,
-            condition_text: "err != nil".to_string(),
-            edge_label: "true".to_string(),
-            is_error_path: true,
-            stable_fingerprint: "branch".to_string(),
-        });
+        let function = db.push_function(FunctionFact::new(FunctionId::from_raw(99), file, "main".to_string(), span.clone(), Language::Go, false, false, 1, Vec::new()));
+        let import = db.push_import(ImportFact::new(ImportId::from_raw(99), file, None, "fmt".to_string(), span.clone(), Language::Go));
+        let branch = db.push_branch(BranchObligation::new(BranchId::from_raw(99), Some(function), file, span, "err != nil".to_string(), "true".to_string(), true, "branch".to_string()));
 
-        assert_eq!(file, FileId(0));
-        assert_eq!(function, FunctionId(0));
-        assert_eq!(import, ImportId(0));
-        assert_eq!(branch, BranchId(0));
+        assert_eq!(file, FileId::from_raw(0));
+        assert_eq!(function, FunctionId::from_raw(0));
+        assert_eq!(import, ImportId::from_raw(0));
+        assert_eq!(branch, BranchId::from_raw(0));
 
         let stored = db.file(file).expect("source file exists");
         let shared: Arc<str> = Arc::clone(&stored.source);
@@ -507,25 +359,13 @@
             "package billing\n".to_string(),
         );
 
-        let first = db.push_package(PackageFact {
-            id: PackageId(99),
-            file: first_file,
-            name: "payment".to_string(),
-            span: test_span(first_file, 1),
-            language: Language::Go,
-        });
-        let second = db.push_package(PackageFact {
-            id: PackageId(99),
-            file: second_file,
-            name: "billing".to_string(),
-            span: test_span(second_file, 1),
-            language: Language::Go,
-        });
+        let first = db.push_package(PackageFact::new(PackageId::from_raw(99), first_file, "payment".to_string(), test_span(first_file, 1), Language::Go));
+        let second = db.push_package(PackageFact::new(PackageId::from_raw(99), second_file, "billing".to_string(), test_span(second_file, 1), Language::Go));
 
-        assert_eq!(first, PackageId(0));
-        assert_eq!(second, PackageId(1));
-        assert_eq!(db.packages()[0].id, PackageId(0));
-        assert_eq!(db.packages()[1].id, PackageId(1));
+        assert_eq!(first, PackageId::from_raw(0));
+        assert_eq!(second, PackageId::from_raw(1));
+        assert_eq!(db.packages()[0].id, PackageId::from_raw(0));
+        assert_eq!(db.packages()[1].id, PackageId::from_raw(1));
     }
 
     #[test]
@@ -544,20 +384,8 @@
         let first_span = test_span(first_file, 1);
         let second_span = test_span(second_file, 1);
 
-        db.push_package(PackageFact {
-            id: PackageId(99),
-            file: first_file,
-            name: "payment".to_string(),
-            span: first_span.clone(),
-            language: Language::Go,
-        });
-        db.push_package(PackageFact {
-            id: PackageId(99),
-            file: second_file,
-            name: "billing".to_string(),
-            span: second_span.clone(),
-            language: Language::Go,
-        });
+        db.push_package(PackageFact::new(PackageId::from_raw(99), first_file, "payment".to_string(), first_span.clone(), Language::Go));
+        db.push_package(PackageFact::new(PackageId::from_raw(99), second_file, "billing".to_string(), second_span.clone(), Language::Go));
 
         assert_eq!(db.packages().len(), 2);
         assert_eq!(db.packages()[0].file, first_file);

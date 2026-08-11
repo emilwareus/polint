@@ -139,21 +139,8 @@
         let go_span = test_span(go_file, 1);
         let ts_span = test_span(ts_file, 1);
 
-        let import = db.push_import(ImportFact {
-            id: ImportId(999),
-            file: go_file,
-            package: None,
-            path: "fmt".to_string(),
-            span: go_span,
-            language: Language::Go,
-        });
-        db.push_ts_class(TsClassFact {
-            file: ts_file,
-            name: "Button".to_string(),
-            span: ts_span,
-            is_exported: true,
-            is_component_like: true,
-        });
+        let import = db.push_import(ImportFact::new(ImportId::from_raw(999), go_file, None, "fmt".to_string(), go_span, Language::Go));
+        db.push_ts_class(TsClassFact::new(ts_file, "Button".to_string(), ts_span, true, true));
 
         let import_meta = db
             .metadata_for(FactRef::new(FactFamily::Import, import.0))
@@ -181,83 +168,16 @@
         db.restore_file_facts(
             file,
             CachedFileFacts {
-                packages: vec![PackageFact {
-                    id: PackageId(99),
-                    file,
-                    name: "main".to_string(),
-                    span: span.clone(),
-                    language: Language::Go,
-                }],
-                functions: vec![FunctionFact {
-                    id: FunctionId(99),
-                    file,
-                    name: "Button".to_string(),
-                    span: span.clone(),
-                    language: Language::Tsx,
-                    is_test: false,
-                    is_exported: true,
-                    cyclomatic_complexity: 1,
-                    calls: vec!["render".to_string()],
-                }],
-                imports: vec![ImportFact {
-                    id: ImportId(99),
-                    file,
-                    package: Some("react".to_string()),
-                    path: "react".to_string(),
-                    span: span.clone(),
-                    language: Language::Tsx,
-                }],
-                branches: vec![BranchObligation {
-                    id: BranchId(99),
-                    function: Some(FunctionId(99)),
-                    file,
-                    decision_span: span.clone(),
-                    condition_text: "enabled".to_string(),
-                    edge_label: "true".to_string(),
-                    is_error_path: false,
-                    stable_fingerprint: "branch".to_string(),
-                }],
-                tests: vec![TestFact {
-                    file,
-                    function: Some(FunctionId(99)),
-                    name: "TestButton".to_string(),
-                    span: span.clone(),
-                    evidence_terms: vec!["render".to_string()],
-                    assertion_count: 1,
-                    subtest_count: 0,
-                    subtest_names: Vec::new(),
-                    table_rows: 0,
-                }],
-                coverage: vec![CoverageFact {
-                    branch: BranchId(99),
-                    covered: Some(true),
-                    source: "synthetic".to_string(),
-                }],
-                ts_components: vec![TsComponentFact {
-                    file,
-                    function: Some(FunctionId(99)),
-                    name: "Button".to_string(),
-                    span: span.clone(),
-                }],
-                ts_classes: vec![TsClassFact {
-                    file,
-                    name: "Dialog".to_string(),
-                    span: span.clone(),
-                    is_exported: true,
-                    is_component_like: false,
-                }],
-                string_literals: vec![StringLiteralFact {
-                    file,
-                    value: "Save".to_string(),
-                    span: span.clone(),
-                    language: Language::Tsx,
-                }],
-                jsx_attributes: vec![JsxAttributeFact {
-                    file,
-                    name: "aria-label".to_string(),
-                    value: Some("Save".to_string()),
-                    span,
-                }],
+                packages: vec![PackageFact::new(PackageId::from_raw(99), file, "main".to_string(), span.clone(), Language::Go)],
+                functions: vec![FunctionFact::new(FunctionId::from_raw(99), file, "Button".to_string(), span.clone(), Language::Tsx, false, true, 1, vec!["render".to_string()])],
+                imports: vec![ImportFact::new(ImportId::from_raw(99), file, Some("react".to_string()), "react".to_string(), span.clone(), Language::Tsx)],
+                branches: vec![BranchObligation::new(BranchId::from_raw(99), Some(FunctionId::from_raw(99)), file, span.clone(), "enabled".to_string(), "true".to_string(), false, "branch".to_string())],
+                tests: vec![TestFact::new(file, Some(FunctionId::from_raw(99)), "TestButton".to_string(), span.clone(), vec!["render".to_string()], 1, 0, Vec::new(), 0)],
+                coverage: vec![CoverageFact::new(BranchId::from_raw(99), Some(true), "synthetic".to_string())],
+                ts_components: vec![TsComponentFact::new(file, Some(FunctionId::from_raw(99)), "Button".to_string(), span.clone())],
+                ts_classes: vec![TsClassFact::new(file, "Dialog".to_string(), span.clone(), true, false)],
+                string_literals: vec![StringLiteralFact::new(file, "Save".to_string(), span.clone(), Language::Tsx)],
+                jsx_attributes: vec![JsxAttributeFact::new(file, "aria-label".to_string(), Some("Save".to_string()), span)],
             },
         );
 
@@ -455,43 +375,10 @@
             "src/payment.go".to_string(),
             "package payments\nfunc Authorize() {}".to_string(),
         );
-        let function = source_db.push_function(FunctionFact {
-            id: FunctionId(999),
-            file: source_file,
-            name: "Authorize".to_string(),
-            span: test_span(source_file, 2),
-            language: Language::Go,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 2,
-            calls: vec!["audit".to_string()],
-        });
-        let branch = source_db.push_branch(BranchObligation {
-            id: BranchId(999),
-            function: Some(function),
-            file: source_file,
-            decision_span: test_span(source_file, 3),
-            condition_text: "err != nil".to_string(),
-            edge_label: "true".to_string(),
-            is_error_path: true,
-            stable_fingerprint: "branch".to_string(),
-        });
-        source_db.push_coverage(CoverageFact {
-            branch,
-            covered: Some(false),
-            source: "static".to_string(),
-        });
-        source_db.push_test(TestFact {
-            file: source_file,
-            function: Some(function),
-            name: "TestAuthorize".to_string(),
-            span: test_span(source_file, 5),
-            evidence_terms: vec!["Authorize".to_string()],
-            assertion_count: 1,
-            subtest_count: 0,
-            subtest_names: Vec::new(),
-            table_rows: 0,
-        });
+        let function = source_db.push_function(FunctionFact::new(FunctionId::from_raw(999), source_file, "Authorize".to_string(), test_span(source_file, 2), Language::Go, false, true, 2, vec!["audit".to_string()]));
+        let branch = source_db.push_branch(BranchObligation::new(BranchId::from_raw(999), Some(function), source_file, test_span(source_file, 3), "err != nil".to_string(), "true".to_string(), true, "branch".to_string()));
+        source_db.push_coverage(CoverageFact::new(branch, Some(false), "static".to_string()));
+        source_db.push_test(TestFact::new(source_file, Some(function), "TestAuthorize".to_string(), test_span(source_file, 5), vec!["Authorize".to_string()], 1, 0, Vec::new(), 0));
 
         let cached = source_db.facts_for_file(source_file);
 
@@ -501,27 +388,8 @@
             "src/payment.go".to_string(),
             "package payments\nfunc Authorize() {}".to_string(),
         );
-        let existing_function = restored_db.push_function(FunctionFact {
-            id: FunctionId(999),
-            file: target_file,
-            name: "Existing".to_string(),
-            span: test_span(target_file, 1),
-            language: Language::Go,
-            is_test: false,
-            is_exported: false,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
-        restored_db.push_branch(BranchObligation {
-            id: BranchId(999),
-            function: Some(existing_function),
-            file: target_file,
-            decision_span: test_span(target_file, 1),
-            condition_text: "existing".to_string(),
-            edge_label: "true".to_string(),
-            is_error_path: false,
-            stable_fingerprint: "existing".to_string(),
-        });
+        let existing_function = restored_db.push_function(FunctionFact::new(FunctionId::from_raw(999), target_file, "Existing".to_string(), test_span(target_file, 1), Language::Go, false, false, 1, Vec::new()));
+        restored_db.push_branch(BranchObligation::new(BranchId::from_raw(999), Some(existing_function), target_file, test_span(target_file, 1), "existing".to_string(), "true".to_string(), false, "existing".to_string()));
 
         restored_db.restore_file_facts(target_file, cached);
 
@@ -555,13 +423,7 @@
             "src/secret.go".to_string(),
             "package main\nconst token = \"super-secret-full-source\"".to_string(),
         );
-        db.push_package(PackageFact {
-            id: PackageId(999),
-            file,
-            name: "main".to_string(),
-            span: test_span(file, 1),
-            language: Language::Go,
-        });
+        db.push_package(PackageFact::new(PackageId::from_raw(999), file, "main".to_string(), test_span(file, 1), Language::Go));
 
         let cached = CachedFileAnalysis {
             schema: "go-facts-v1".to_string(),
@@ -587,20 +449,8 @@
         let first_span = test_span(file, 1);
         let second_span = test_span(file, 5);
 
-        db.push_ts_class(TsClassFact {
-            file,
-            name: "Button".to_string(),
-            span: first_span.clone(),
-            is_exported: true,
-            is_component_like: true,
-        });
-        db.push_ts_class(TsClassFact {
-            file,
-            name: "Store".to_string(),
-            span: second_span.clone(),
-            is_exported: false,
-            is_component_like: false,
-        });
+        db.push_ts_class(TsClassFact::new(file, "Button".to_string(), first_span.clone(), true, true));
+        db.push_ts_class(TsClassFact::new(file, "Store".to_string(), second_span.clone(), false, false));
 
         let classes = db.ts_classes();
         assert_eq!(classes.len(), 2);
@@ -625,13 +475,7 @@
             "class Dialog {}".to_string(),
         );
         let span = test_span(file, 1);
-        db.push_ts_class(TsClassFact {
-            file,
-            name: "Dialog".to_string(),
-            span,
-            is_exported: false,
-            is_component_like: true,
-        });
+        db.push_ts_class(TsClassFact::new(file, "Dialog".to_string(), span, false, true));
 
         let classes = TsClasses::build(&db);
 

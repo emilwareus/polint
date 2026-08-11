@@ -626,15 +626,15 @@ mod tests {
     use polint_core::{FileId, FunctionId, Language};
 
     fn span() -> Span {
-        Span::new(FileId(1), 1, 2, 1, 1, 1, 2)
+        Span::new(FileId::from_raw(1), 1, 2, 1, 1, 1, 2)
     }
 
     fn body(interner: &polint_core::StableKeyInterner) -> MirBody {
         MirBody {
             id: MirBodyId(1),
             language: Language::Go,
-            file: FileId(1),
-            function: FunctionId(1),
+            file: FileId::from_raw(1),
+            function: FunctionId::from_raw(1),
             package: None,
             module: None,
             owner_stable_key: interner.intern("owner".to_string()),

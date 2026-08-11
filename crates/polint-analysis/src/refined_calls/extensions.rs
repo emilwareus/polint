@@ -334,24 +334,24 @@ mod tests {
             "src/app.ts".to_string(),
             "function caller() { model(); }\n".to_string(),
         );
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "caller".to_string(),
-            span: span(),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: vec!["model".to_string()],
-        });
+            "caller".to_string(),
+            span(),
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            vec!["model".to_string()],
+        ));
         db.replace_call_facts(CallOutput {
             sites: vec![CallSiteFact {
                 in_throw: false,
                 id: CallSiteId(0),
                 language: Language::TypeScript,
                 file,
-                caller: FunctionId(0),
+                caller: FunctionId::from_raw(0),
                 owner_symbol: None,
                 body: MirBodyId(0),
                 operation: MirOpId(0),
@@ -392,6 +392,6 @@ mod tests {
     }
 
     fn span() -> Span {
-        Span::point(FileId(0), 1, 1)
+        Span::point(FileId::from_raw(0), 1, 1)
     }
 }

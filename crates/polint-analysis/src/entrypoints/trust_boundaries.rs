@@ -321,10 +321,10 @@ mod tests {
             language: Language::TypeScript,
             framework_id: "test.framework".to_string(),
             kind,
-            target_function: FunctionId(1),
+            target_function: FunctionId::from_raw(1),
             target_symbol: None,
-            registration_span: Span::point(FileId(1), 1, 1),
-            registration_file: FileId(1),
+            registration_span: Span::point(FileId::from_raw(1), 1, 1),
+            registration_file: FileId::from_raw(1),
             trigger_metadata: TriggerMetadata {
                 method: method.map(String::from),
                 path: path.map(String::from),
@@ -478,17 +478,17 @@ mod tests {
             "src/app.ts".to_string(),
             "function errorMiddleware(err, req, res, next) {}".to_string(),
         );
-        let function = db.push_function(FunctionFact {
-            id: FunctionId(0),
+        let function = db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "errorMiddleware".to_string(),
-            span: Span::point(file, 1, 1),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: false,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "errorMiddleware".to_string(),
+            Span::point(file, 1, 1),
+            Language::TypeScript,
+            false,
+            false,
+            1,
+            Vec::new(),
+        ));
         db.replace_semantic_mir(MirOutput {
             bodies: Vec::new(),
             places: vec![

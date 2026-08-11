@@ -620,15 +620,15 @@ mod tests {
     use polint_core::{FileId, FunctionId, Language, Span};
 
     fn span() -> Span {
-        Span::new(FileId(1), 1, 2, 1, 1, 1, 2)
+        Span::new(FileId::from_raw(1), 1, 2, 1, 1, 1, 2)
     }
 
     fn body(interner: &polint_core::StableKeyInterner) -> MirBody {
         MirBody {
             id: MirBodyId(0),
             language: Language::Go,
-            file: FileId(1),
-            function: FunctionId(1),
+            file: FileId::from_raw(1),
+            function: FunctionId::from_raw(1),
             package: None,
             module: None,
             owner_stable_key: interner.intern("owner".to_string()),
@@ -642,10 +642,10 @@ mod tests {
         PlaceFact {
             id: PlaceId(0),
             language: Language::Go,
-            file: Some(FileId(1)),
-            function: Some(FunctionId(1)),
+            file: Some(FileId::from_raw(1)),
+            function: Some(FunctionId::from_raw(1)),
             root: PlaceRoot::Local {
-                function: FunctionId(1),
+                function: FunctionId::from_raw(1),
                 name: "value".to_string(),
             },
             projections: Vec::new(),
@@ -665,7 +665,7 @@ mod tests {
             body: Some(MirBodyId(0)),
             operation: Some(operation),
             language: Language::Go,
-            file: FileId(1),
+            file: FileId::from_raw(1),
             span: span(),
             construct: stable_key.to_string(),
             source_evidence: stable_key.to_string(),

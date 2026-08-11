@@ -156,27 +156,19 @@ mod tests {
     use polint_core::{FileId, Span};
 
     fn span_bytes(file: FileId, start: u32, end: u32) -> Span {
-        Span {
-            file,
-            start_byte: start,
-            end_byte: end,
-            start_line: 1,
-            start_col: 1,
-            end_line: 1,
-            end_col: 1,
-        }
+        Span::new(file, start, end, 1, 1, 1, 1)
     }
 
     fn root(function: u64, kind: RootKind, entrypoint: Option<u64>) -> ReachabilityRootFact {
-        let span = span_bytes(FileId(1), function as u32, function as u32 + 1);
+        let span = span_bytes(FileId::from_raw(1), function as u32, function as u32 + 1);
         ReachabilityRootFact {
             id: ReachabilityRootId(0),
             kind,
             language: Language::Go,
-            target_function: FunctionId(function),
+            target_function: FunctionId::from_raw(function),
             target_symbol: None,
             originating_entrypoint: entrypoint.map(EntrypointId),
-            file: FileId(1),
+            file: FileId::from_raw(1),
             span: span.clone(),
             precision: RootPrecision::ResolvedStatic,
             provenance: RootProvenance::NativeDiscovery,
@@ -186,7 +178,7 @@ mod tests {
                 kind,
                 Language::Go,
                 &format!("pkg.F{function}"),
-                FileId(1),
+                FileId::from_raw(1),
                 &span,
             )),
         }
@@ -226,8 +218,12 @@ mod tests {
         assert_eq!(store.roots_for_kind(RootKind::Main).len(), 1);
         assert_eq!(store.roots_for_kind(RootKind::Init).len(), 1);
         assert_eq!(store.roots_for_language(Language::Go).len(), 2);
-        assert_eq!(store.roots_for_function(FunctionId(1)).len(), 1);
-        assert!(store.roots_for_function(FunctionId(99)).is_empty());
+        assert_eq!(store.roots_for_function(FunctionId::from_raw(1)).len(), 1);
+        assert!(
+            store
+                .roots_for_function(FunctionId::from_raw(99))
+                .is_empty()
+        );
     }
 
     #[test]

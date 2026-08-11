@@ -2609,7 +2609,7 @@ func (svc *Service) authorize(user User) bool {
             .iter()
             .find(|function| function.name == "Service.authorize")
             .expect("method fact should retain existing receiver-qualified name");
-        assert_eq!(function.id, FunctionId(0));
+        assert_eq!(function.id, FunctionId::from_raw(0));
         assert_eq!(function.language, Language::Go);
 
         let output = lower_go_mir(&db);
@@ -2619,7 +2619,7 @@ func (svc *Service) authorize(user User) bool {
                 function,
                 index: 0,
                 name: Some(name),
-            } if *function == FunctionId(0) && name == "svc"
+            } if *function == FunctionId::from_raw(0) && name == "svc"
         )));
         assert!(
             db.resolve_stable_key(output.bodies[0].owner_stable_key)

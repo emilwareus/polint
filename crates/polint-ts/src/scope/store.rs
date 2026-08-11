@@ -272,8 +272,8 @@ mod tests {
 
         assert_eq!(store.scopes().len(), 1);
         assert_eq!(store.bindings().len(), 3);
-        assert_eq!(store.scopes_for_file(FileId(1)).len(), 1);
-        assert_eq!(store.bindings_for_file(FileId(1)).len(), 3);
+        assert_eq!(store.scopes_for_file(FileId::from_raw(1)).len(), 1);
+        assert_eq!(store.bindings_for_file(FileId::from_raw(1)).len(), 3);
         assert!(
             store
                 .scope_by_stable_key(interner.intern("scope:a"))
@@ -294,7 +294,7 @@ mod tests {
     fn scope(interner: &StableKeyInterner, stable_key: &str, id: TsScopeId) -> TsScopeFact {
         TsScopeFact {
             id,
-            file: FileId(1),
+            file: FileId::from_raw(1),
             span: span(),
             stable_key: interner.intern(stable_key),
             parent_scope_key: None,
@@ -311,7 +311,7 @@ mod tests {
     ) -> TsBindingFact {
         TsBindingFact {
             id,
-            file: FileId(1),
+            file: FileId::from_raw(1),
             span: span(),
             stable_key: interner.intern(stable_key),
             scope_key: interner.intern(scope_key),
@@ -330,6 +330,6 @@ mod tests {
     }
 
     fn span() -> Span {
-        Span::new(FileId(1), 1, 4, 1, 1, 1, 4)
+        Span::new(FileId::from_raw(1), 1, 4, 1, 1, 1, 4)
     }
 }

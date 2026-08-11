@@ -188,15 +188,7 @@
     }
 
     fn test_span(file: FileId, line: u32) -> Span {
-        Span {
-            file,
-            start_byte: 0,
-            end_byte: 1,
-            start_line: line,
-            start_col: 1,
-            end_line: line,
-            end_col: 2,
-        }
+        Span::new(file, 0, 1, line, 1, line, 2)
     }
 
     fn test_scope(name: &str, file: FileId, status: SemanticStatus) -> ScopeFact {
@@ -226,7 +218,7 @@ None,
             id: MirBodyId(id),
             language: Language::TypeScript,
             file,
-            function: FunctionId(id),
+            function: FunctionId::from_raw(id),
             package: None,
             module: None,
             owner_stable_key: interner.intern(format!("function:{stable_key}")),
@@ -241,9 +233,9 @@ None,
             id: PlaceId(id),
             language: Language::TypeScript,
             file: Some(file),
-            function: Some(FunctionId(0)),
+            function: Some(FunctionId::from_raw(0)),
             root: PlaceRoot::Local {
-                function: FunctionId(0),
+                function: FunctionId::from_raw(0),
                 name: stable_key.to_string(),
             },
             projections: Vec::new(),
@@ -263,7 +255,7 @@ None,
             id: MirOpId(id),
             body,
             ordinal: id as u32,
-            span: test_span(FileId(0), 1),
+            span: test_span(FileId::from_raw(0), 1),
             kind: MirOperationKind::Assign {
                 place,
                 value: MirValue::Place(value),
@@ -284,8 +276,8 @@ None,
             body: None,
             operation: None,
             language: Language::TypeScript,
-            file: FileId(0),
-            span: test_span(FileId(0), 1),
+            file: FileId::from_raw(0),
+            span: test_span(FileId::from_raw(0), 1),
             construct: "dynamic-property".to_string(),
             source_evidence: "target[key]".to_string(),
             affected_places: Vec::new(),
@@ -314,7 +306,7 @@ None,
             language: Language::TypeScript,
             file,
             caller,
-            owner_symbol: Some(SymbolId(caller.0 + 100)),
+            owner_symbol: Some(SymbolId::from_raw(caller.0 + 100)),
             body: MirBodyId(id),
             operation: MirOpId(id),
             span: test_span(file, 1),
@@ -348,8 +340,8 @@ None,
             id: crate::analysis::ids::CallTargetId(id),
             site,
             caller,
-            target_function: Some(FunctionId(id + 10)),
-            target_symbol: Some(SymbolId(id + 20)),
+            target_function: Some(FunctionId::from_raw(id + 10)),
+            target_symbol: Some(SymbolId::from_raw(id + 20)),
             edge_kind: CallEdgeKind::Direct,
             algorithm: CallAlgorithm::DirectReference,
             status: CallTargetStatus::Resolved,
@@ -401,20 +393,20 @@ None,
                     &interner,
                     1,
                     file,
-                    FunctionId(1),
+                    FunctionId::from_raw(1),
                     "call-site:first",
                 )],
                 targets: vec![test_call_target(
                     &interner,
                     1,
                     CallSiteId(1),
-                    FunctionId(1),
+                    FunctionId::from_raw(1),
                     "call-target:first",
                 )],
                 unresolved: vec![test_unresolved_call(
                     &interner,
                     CallSiteId(1),
-                    FunctionId(1),
+                    FunctionId::from_raw(1),
                     "unresolved:first",
                 )],
             };
@@ -423,7 +415,7 @@ None,
                     &interner,
                     2,
                     file,
-                    FunctionId(2),
+                    FunctionId::from_raw(2),
                     "call-site:second",
                 )],
                 targets: Vec::new(),
@@ -432,12 +424,12 @@ None,
 
             db.replace_call_facts(first).expect("first call replace");
             assert!(db.call_store().is_some());
-            assert_eq!(db.call_sites_by_caller(FunctionId(1)).len(), 1);
+            assert_eq!(db.call_sites_by_caller(FunctionId::from_raw(1)).len(), 1);
             assert_eq!(db.call_targets_by_site(CallSiteId(1)).len(), 1);
-            assert_eq!(db.outgoing_calls_by_function(FunctionId(1)).len(), 1);
-            assert_eq!(db.outgoing_calls_by_symbol(SymbolId(101)).len(), 1);
-            assert_eq!(db.incoming_calls_by_symbol(SymbolId(21)).len(), 1);
-            assert_eq!(db.incoming_calls_by_function(FunctionId(11)).len(), 1);
+            assert_eq!(db.outgoing_calls_by_function(FunctionId::from_raw(1)).len(), 1);
+            assert_eq!(db.outgoing_calls_by_symbol(SymbolId::from_raw(101)).len(), 1);
+            assert_eq!(db.incoming_calls_by_symbol(SymbolId::from_raw(21)).len(), 1);
+            assert_eq!(db.incoming_calls_by_function(FunctionId::from_raw(11)).len(), 1);
             assert_eq!(
                 db.unresolved_calls_by_reason(
                     crate::analysis::calls::facts::UnresolvedCallReason::FunctionValue,
@@ -670,20 +662,20 @@ None,
                     &interner,
                     0,
                     file,
-                    FunctionId(1),
+                    FunctionId::from_raw(1),
                     "call-site:metadata",
                 )],
                 targets: vec![test_call_target(
                     &interner,
                     0,
                     CallSiteId(0),
-                    FunctionId(1),
+                    FunctionId::from_raw(1),
                     "call-target:metadata",
                 )],
                 unresolved: vec![test_unresolved_call(
                     &interner,
                     CallSiteId(0),
-                    FunctionId(1),
+                    FunctionId::from_raw(1),
                     "unresolved:metadata",
                 )],
             })
@@ -717,14 +709,14 @@ None,
             );
             let interner = db.stable_key_interner();
             let mut site =
-                test_call_site(&interner, 0, file, FunctionId(1), "call-site:unsupported");
+                test_call_site(&interner, 0, file, FunctionId::from_raw(1), "call-site:unsupported");
             site.status = CallTargetStatus::Unsupported;
             site.precision = CallPrecision::Unsupported;
             let mut target = test_call_target(
                 &interner,
                 0,
                 CallSiteId(0),
-                FunctionId(1),
+                FunctionId::from_raw(1),
                 "call-target:setup-missing",
             );
             target.status = CallTargetStatus::SetupMissing;
@@ -732,7 +724,7 @@ None,
             let unresolved = test_unresolved_call(
                 &interner,
                 CallSiteId(0),
-                FunctionId(1),
+                FunctionId::from_raw(1),
                 "unresolved:unknown",
             );
 

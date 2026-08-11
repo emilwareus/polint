@@ -261,10 +261,10 @@ mod tests {
     #[test]
     fn scope_and_binding_rows_keep_dense_ids_separate_from_stable_keys() {
         let interner = polint_core::StableKeyInterner::default();
-        let span = Span::point(FileId(1), 1, 1);
+        let span = Span::point(FileId::from_raw(1), 1, 1);
         let scope = TsScopeFact {
             id: TsScopeId(99),
-            file: FileId(1),
+            file: FileId::from_raw(1),
             span: span.clone(),
             stable_key: interner.intern("scope:module"),
             parent_scope_key: None,
@@ -272,7 +272,7 @@ mod tests {
         };
         let binding = TsBindingFact {
             id: TsBindingId(7),
-            file: FileId(1),
+            file: FileId::from_raw(1),
             span,
             stable_key: interner.intern("binding:value"),
             scope_key: scope.stable_key,

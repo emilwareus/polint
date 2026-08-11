@@ -201,8 +201,8 @@ mod tests {
         IdentityRecord {
             id: IdentityRecordId(0),
             kind: IdentityKind::Callsite,
-            file_id: FileId(1),
-            span: Span::point(FileId(1), 3, 4),
+            file_id: FileId::from_raw(1),
+            span: Span::point(FileId::from_raw(1), 3, 4),
             language: LanguageTag::Go,
             package_or_module: Arc::from("example.com/pkg"),
             container_path: Arc::from("pkg.Caller"),

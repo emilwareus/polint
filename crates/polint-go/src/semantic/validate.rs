@@ -104,7 +104,7 @@ pub fn validate_go_semantic_output(
 /// (`method_set` / `address_taken` / `instantiated_type` / `dynamic_dispatch`) are
 /// whole-reachable-program SET facts. A single malformed harvest row must NOT nuke the
 /// entire Go fact set (which would zero RTA repo-wide) — it is DROPPED at the store
-/// boundary ([`GoSemanticFactsOutput::drop_invalid_harvest_rows`]) before validation. The
+/// boundary (`GoSemanticFactsOutput::drop_invalid_harvest_rows`) before validation. The
 /// rejection PREDICATES below are the single source of truth shared by that drop filter
 /// and by [`validate_go_semantic_output`] (a post-drop defense-in-depth assertion): each
 /// returns `Some(reason)` for a row that must not be stored, `None` for a valid one. The

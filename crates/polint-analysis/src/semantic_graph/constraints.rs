@@ -136,7 +136,7 @@ impl ConstraintKind {
 
     /// Applies `map` in place to every `SemanticNodeId` this payload references,
     /// used to rewrite endpoints through the node-densification remap. Matched
-    /// WITHOUT `..` for the same drift-proofing as [`referenced_nodes`].
+    /// WITHOUT `..` for the same drift-proofing as [`ConstraintKind::referenced_nodes`].
     pub fn remap_nodes(&mut self, map: impl Fn(SemanticNodeId) -> SemanticNodeId) {
         match self {
             Self::CopyEdge { dst, src } => {

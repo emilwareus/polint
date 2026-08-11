@@ -187,10 +187,10 @@ mod tests {
     #[test]
     fn fact_rows_keep_dense_ids_separate_from_stable_keys() {
         let interner = polint_core::StableKeyInterner::default();
-        let span = Span::point(FileId(3), 10, 4);
+        let span = Span::point(FileId::from_raw(3), 10, 4);
         let function = TsInventoryFunctionFact {
             id: TsInventoryFunctionId(99),
-            file: FileId(3),
+            file: FileId::from_raw(3),
             span: span.clone(),
             stable_key: interner.intern("file=src/a.ts|span=10:4|kind=arrow"),
             lexical_parent_key: Some(interner.intern("file=src/a.ts|scope=module")),
@@ -200,7 +200,7 @@ mod tests {
         };
         let callsite = TsInventoryCallsiteFact {
             id: TsInventoryCallsiteId(7),
-            file: FileId(3),
+            file: FileId::from_raw(3),
             span,
             stable_key: interner.intern("file=src/a.ts|span=11:2|kind=call"),
             lexical_parent_key: Some(function.stable_key),

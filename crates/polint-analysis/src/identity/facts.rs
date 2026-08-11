@@ -280,8 +280,8 @@ mod tests {
         IdentityRecord {
             id: IdentityRecordId(0),
             kind: IdentityKind::Function,
-            file_id: FileId(3),
-            span: Span::point(FileId(3), 4, 5),
+            file_id: FileId::from_raw(3),
+            span: Span::point(FileId::from_raw(3), 4, 5),
             language: LanguageTag::Go,
             package_or_module: Arc::from("example.com/pkg"),
             container_path: Arc::from("pkg.Type"),
@@ -399,16 +399,16 @@ mod tests {
             LanguageTag::Go,
             "a",
             "b/c",
-            FileId(1),
-            &Span::point(FileId(1), 1, 1),
+            FileId::from_raw(1),
+            &Span::point(FileId::from_raw(1), 1, 1),
         );
         let right = compute_identity_stable_key(
             IdentityKind::Function,
             LanguageTag::Go,
             "a/b",
             "c",
-            FileId(1),
-            &Span::point(FileId(1), 1, 1),
+            FileId::from_raw(1),
+            &Span::point(FileId::from_raw(1), 1, 1),
         );
         assert_ne!(left, right);
     }
@@ -420,16 +420,16 @@ mod tests {
             LanguageTag::Go,
             "a|b",
             "c",
-            FileId(1),
-            &Span::point(FileId(1), 1, 1),
+            FileId::from_raw(1),
+            &Span::point(FileId::from_raw(1), 1, 1),
         );
         let right = compute_identity_stable_key(
             IdentityKind::Function,
             LanguageTag::Go,
             "a",
             "b|c",
-            FileId(1),
-            &Span::point(FileId(1), 1, 1),
+            FileId::from_raw(1),
+            &Span::point(FileId::from_raw(1), 1, 1),
         );
         assert_ne!(left, right);
     }

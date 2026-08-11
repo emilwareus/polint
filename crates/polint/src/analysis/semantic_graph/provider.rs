@@ -665,15 +665,7 @@ mod tests {
     }
 
     fn span(file: crate::core::FileId, start: u32, end: u32) -> Span {
-        Span {
-            file,
-            start_byte: start,
-            end_byte: end,
-            start_line: 1,
-            start_col: 1,
-            end_line: 1,
-            end_col: 1,
-        }
+        Span::new(file, start, end, 1, 1, 1, 1)
     }
 
     fn db_with_go_main() -> AnalysisDb {
@@ -683,24 +675,24 @@ mod tests {
             "cmd/app/main.go".to_string(),
             "package main\nfunc main() {}\n".to_string(),
         );
-        db.push_package(PackageFact {
-            id: PackageId(0),
+        db.push_package(PackageFact::new(
+            PackageId::from_raw(0),
             file,
-            name: "main".to_string(),
-            span: span(file, 0, 1),
-            language: Language::Go,
-        });
-        db.push_function(FunctionFact {
-            id: FunctionId(1),
+            "main".to_string(),
+            span(file, 0, 1),
+            Language::Go,
+        ));
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(1),
             file,
-            name: "main".to_string(),
-            span: span(file, 1, 2),
-            language: Language::Go,
-            is_test: false,
-            is_exported: false,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "main".to_string(),
+            span(file, 1, 2),
+            Language::Go,
+            false,
+            false,
+            1,
+            Vec::new(),
+        ));
         db
     }
 
@@ -855,24 +847,24 @@ evidence = ["cmd/app/main.go:1"]
                 "cmd/app/main.go".to_string(),
                 "package main\nfunc main() {}\n".to_string(),
             );
-            db.push_function(FunctionFact {
-                id: FunctionId(7),
+            db.push_function(FunctionFact::new(
+                FunctionId::from_raw(7),
                 file,
-                name: "main".to_string(),
-                span: span(file, 1, 2),
-                language: Language::Go,
-                is_test: false,
-                is_exported: false,
-                cyclomatic_complexity: 1,
-                calls: Vec::new(),
-            });
-            db.push_package(PackageFact {
-                id: PackageId(0),
+                "main".to_string(),
+                span(file, 1, 2),
+                Language::Go,
+                false,
+                false,
+                1,
+                Vec::new(),
+            ));
+            db.push_package(PackageFact::new(
+                PackageId::from_raw(0),
                 file,
-                name: "main".to_string(),
-                span: span(file, 0, 1),
-                language: Language::Go,
-            });
+                "main".to_string(),
+                span(file, 0, 1),
+                Language::Go,
+            ));
             db
         };
         let first_digest = run(&mut first).output_digest;

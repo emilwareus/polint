@@ -2708,17 +2708,17 @@ mod tests {
             "src/main.ts".to_string(),
             "export function handler() { client.dangerous(); }\n".to_string(),
         );
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "handler".to_string(),
-            span: Span::point(file, 1, 1),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: vec![call.to_string()],
-        });
+            "handler".to_string(),
+            Span::point(file, 1, 1),
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            vec![call.to_string()],
+        ));
         db
     }
 
@@ -3443,17 +3443,17 @@ mod tests {
         line: u32,
         is_test: bool,
     ) -> FunctionId {
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: name.to_string(),
-            span: Span::point(file, line, 1),
-            language: Language::Go,
+            name.to_string(),
+            Span::point(file, line, 1),
+            Language::Go,
             is_test,
-            is_exported: false,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        })
+            false,
+            1,
+            Vec::new(),
+        ))
     }
 
     fn call_site(id: u64, file: FileId, caller: FunctionId, callee: &str) -> CallSiteFact {

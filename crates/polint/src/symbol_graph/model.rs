@@ -104,22 +104,22 @@ impl CachedSymbolFact {
     }
 
     pub(crate) fn into_fact(self, interner: &StableKeyInterner) -> SymbolFact {
-        SymbolFact {
-            id: self.id,
-            language: self.language,
-            name: self.name,
-            qualified_name: self.qualified_name,
-            kind: self.kind,
-            namespace: self.namespace,
-            file: self.file,
-            package: self.package,
-            module: self.module,
-            owner: self.owner,
-            primary_span: self.primary_span,
-            is_exported: self.is_exported,
-            stable_key: interner.intern(self.stable_key_text),
-            precision: self.precision,
-        }
+        SymbolFact::new(
+            self.id,
+            self.language,
+            self.name,
+            self.qualified_name,
+            self.kind,
+            self.namespace,
+            self.file,
+            self.package,
+            self.module,
+            self.owner,
+            self.primary_span,
+            self.is_exported,
+            interner.intern(self.stable_key_text),
+            self.precision,
+        )
     }
 }
 
@@ -146,24 +146,24 @@ impl CachedDefinitionFact {
     }
 
     pub(crate) fn into_fact(self, interner: &StableKeyInterner) -> DefinitionFact {
-        DefinitionFact {
-            id: self.id,
-            symbol: self.symbol,
-            language: self.language,
-            name: self.name,
-            qualified_name: self.qualified_name,
-            kind: self.kind,
-            namespace: self.namespace,
-            file: self.file,
-            package: self.package,
-            module: self.module,
-            owner: self.owner,
-            primary_span: self.primary_span,
-            is_primary: self.is_primary,
-            is_exported: self.is_exported,
-            stable_key: interner.intern(self.stable_key_text),
-            precision: self.precision,
-        }
+        DefinitionFact::new(
+            self.id,
+            self.symbol,
+            self.language,
+            self.name,
+            self.qualified_name,
+            self.kind,
+            self.namespace,
+            self.file,
+            self.package,
+            self.module,
+            self.owner,
+            self.primary_span,
+            self.is_primary,
+            self.is_exported,
+            interner.intern(self.stable_key_text),
+            self.precision,
+        )
     }
 }
 
@@ -190,24 +190,24 @@ impl CachedReferenceFact {
     }
 
     pub(crate) fn into_fact(self, interner: &StableKeyInterner) -> ReferenceFact {
-        ReferenceFact {
-            id: self.id,
-            language: self.language,
-            name: self.name,
-            qualified_name: self.qualified_name,
-            kind: self.kind,
-            namespace: self.namespace,
-            file: self.file,
-            package: self.package,
-            module: self.module,
-            owner: self.owner,
-            primary_span: self.primary_span,
-            target: self.target,
-            candidates: self.candidates,
-            stable_key: interner.intern(self.stable_key_text),
-            status: self.status,
-            precision: self.precision,
-        }
+        ReferenceFact::new(
+            self.id,
+            self.language,
+            self.name,
+            self.qualified_name,
+            self.kind,
+            self.namespace,
+            self.file,
+            self.package,
+            self.module,
+            self.owner,
+            self.primary_span,
+            self.target,
+            self.candidates,
+            interner.intern(self.stable_key_text),
+            self.status,
+            self.precision,
+        )
     }
 }
 

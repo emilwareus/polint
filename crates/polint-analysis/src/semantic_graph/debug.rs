@@ -167,8 +167,18 @@ mod tests {
         let interner = db.stable_key_interner();
         let output = SemanticGraphOutput {
             nodes: vec![
-                node(&interner, 0, FunctionId(1), "node:function:target"),
-                node(&interner, 1, FunctionId(2), "node:function:callsite"),
+                node(
+                    &interner,
+                    0,
+                    FunctionId::from_raw(1),
+                    "node:function:target",
+                ),
+                node(
+                    &interner,
+                    1,
+                    FunctionId::from_raw(2),
+                    "node:function:callsite",
+                ),
             ],
             edges: Vec::new(),
             constraints: vec![ConstraintFact {

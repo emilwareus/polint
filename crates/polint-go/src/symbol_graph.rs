@@ -1283,7 +1283,7 @@ fn go_stable_reference_key(
     symbol_key_inputs: &BTreeMap<String, StableSymbolKey>,
 ) -> String {
     let span = span_for_file(files, &reference.file, &reference.span)
-        .unwrap_or_else(|| Span::point(FileId(u32::MAX), 1, 1));
+        .unwrap_or_else(|| Span::point(FileId::from_raw(u32::MAX), 1, 1));
     symbol_key_inputs
         .get(&reference.target_key)
         .cloned()

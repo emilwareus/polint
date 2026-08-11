@@ -59,6 +59,7 @@ pub fn symbol_status_category(status: SymbolResolutionStatus) -> UnknownCategory
             UnknownCategory::MissingFact
         }
         SymbolResolutionStatus::Resolved => UnknownCategory::MissingFact,
+        _ => UnknownCategory::MissingFact,
     }
 }
 
@@ -70,6 +71,7 @@ pub fn resolution_status_label(status: ResolutionStatus) -> &'static str {
         ResolutionStatus::SetupMissing => "setup_missing",
         ResolutionStatus::Dynamic => "dynamic",
         ResolutionStatus::Unsupported => "unsupported",
+        _ => "unknown",
     }
 }
 
@@ -80,6 +82,7 @@ pub fn resolution_precision_label(precision: ResolutionPrecision) -> &'static st
         ResolutionPrecision::ExternalPackage => "external_package",
         ResolutionPrecision::Heuristic => "heuristic",
         ResolutionPrecision::None => "none",
+        _ => "unknown",
     }
 }
 
@@ -92,6 +95,7 @@ pub fn unresolved_reason_label(reason: UnresolvedReason) -> &'static str {
         UnresolvedReason::UnsupportedImport => "unsupported_import",
         UnresolvedReason::ResolverError => "resolver_error",
         UnresolvedReason::OutsideWorkspace => "outside_workspace",
+        _ => "unknown",
     }
 }
 
@@ -102,6 +106,7 @@ pub fn symbol_status_label(status: SymbolResolutionStatus) -> &'static str {
         SymbolResolutionStatus::Ambiguous => "ambiguous",
         SymbolResolutionStatus::SetupMissing => "setup_missing",
         SymbolResolutionStatus::Unsupported => "unsupported",
+        _ => "unknown",
     }
 }
 
@@ -115,6 +120,7 @@ pub fn symbol_precision_label(precision: SymbolPrecision) -> &'static str {
         SymbolPrecision::Ambiguous => "ambiguous",
         SymbolPrecision::SetupMissing => "setup_missing",
         SymbolPrecision::Unsupported => "unsupported",
+        _ => "unknown",
     }
 }
 
@@ -124,6 +130,7 @@ pub fn artifact_for_resolution_status(status: ResolutionStatus) -> &'static str 
         ResolutionStatus::Dynamic | ResolutionStatus::Unsupported => "provider",
         ResolutionStatus::Unresolved => "model",
         ResolutionStatus::External | ResolutionStatus::Resolved => "rule",
+        _ => "unknown",
     }
 }
 

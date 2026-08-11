@@ -184,18 +184,28 @@ mod tests {
                     &interner,
                     "function:b",
                     TsInventoryFunctionId(40),
-                    FileId(1),
+                    FileId::from_raw(1),
                 ),
                 function(
                     &interner,
                     "function:a",
                     TsInventoryFunctionId(20),
-                    FileId(1),
+                    FileId::from_raw(1),
                 ),
             ],
             callsites: vec![
-                callsite(&interner, "call:b", TsInventoryCallsiteId(8), FileId(1)),
-                callsite(&interner, "call:a", TsInventoryCallsiteId(4), FileId(1)),
+                callsite(
+                    &interner,
+                    "call:b",
+                    TsInventoryCallsiteId(8),
+                    FileId::from_raw(1),
+                ),
+                callsite(
+                    &interner,
+                    "call:a",
+                    TsInventoryCallsiteId(4),
+                    FileId::from_raw(1),
+                ),
             ],
         }
         .normalized(&interner);
@@ -234,18 +244,28 @@ mod tests {
                         &interner,
                         "function:a",
                         TsInventoryFunctionId(10),
-                        FileId(1),
+                        FileId::from_raw(1),
                     ),
                     function(
                         &interner,
                         "function:b",
                         TsInventoryFunctionId(11),
-                        FileId(2),
+                        FileId::from_raw(2),
                     ),
                 ],
                 callsites: vec![
-                    callsite(&interner, "call:a", TsInventoryCallsiteId(10), FileId(1)),
-                    callsite(&interner, "call:b", TsInventoryCallsiteId(11), FileId(2)),
+                    callsite(
+                        &interner,
+                        "call:a",
+                        TsInventoryCallsiteId(10),
+                        FileId::from_raw(1),
+                    ),
+                    callsite(
+                        &interner,
+                        "call:b",
+                        TsInventoryCallsiteId(11),
+                        FileId::from_raw(2),
+                    ),
                 ],
             },
             &interner,
@@ -253,19 +273,19 @@ mod tests {
 
         assert_eq!(store.functions().len(), 2);
         assert_eq!(store.callsites().len(), 2);
-        assert_eq!(store.functions_for_file(FileId(1)).len(), 1);
-        assert_eq!(store.callsites_for_file(FileId(2)).len(), 1);
+        assert_eq!(store.functions_for_file(FileId::from_raw(1)).len(), 1);
+        assert_eq!(store.callsites_for_file(FileId::from_raw(2)).len(), 1);
         assert_eq!(
             store
                 .function_by_stable_key(interner.intern("function:a"))
                 .map(|function| function.file),
-            Some(FileId(1))
+            Some(FileId::from_raw(1))
         );
         assert_eq!(
             store
                 .callsite_by_stable_key(interner.intern("call:b"))
                 .map(|callsite| callsite.file),
-            Some(FileId(2))
+            Some(FileId::from_raw(2))
         );
         assert_eq!(
             store
@@ -316,14 +336,6 @@ mod tests {
     }
 
     fn span(file: FileId) -> Span {
-        Span {
-            file,
-            start_byte: 1,
-            end_byte: 5,
-            start_line: 1,
-            start_col: 1,
-            end_line: 1,
-            end_col: 5,
-        }
+        Span::new(file, 1, 5, 1, 1, 1, 5)
     }
 }

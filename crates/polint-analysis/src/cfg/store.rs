@@ -66,7 +66,7 @@ mod tests {
     use polint_core::{FileId, FunctionId, Language, Span};
 
     fn span() -> Span {
-        Span::new(FileId(1), 1, 2, 1, 1, 1, 2)
+        Span::new(FileId::from_raw(1), 1, 2, 1, 1, 1, 2)
     }
 
     fn function(
@@ -77,9 +77,9 @@ mod tests {
         CfgFunctionFact {
             id: CfgFunctionId(id),
             body: MirBodyId(id),
-            function: FunctionId(id),
+            function: FunctionId::from_raw(id),
             language: Language::Go,
-            file: FileId(1),
+            file: FileId::from_raw(1),
             span: span(),
             entry_node: CfgNodeId(1),
             normal_exit_node: CfgNodeId(2),

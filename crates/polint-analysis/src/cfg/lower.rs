@@ -594,7 +594,7 @@ mod tests {
 
     fn span(start: usize, end: usize) -> Span {
         Span::new(
-            FileId(1),
+            FileId::from_raw(1),
             start as u32,
             end as u32,
             1,
@@ -608,8 +608,8 @@ mod tests {
         MirBody {
             id: MirBodyId(0),
             language,
-            file: FileId(1),
-            function: FunctionId(1),
+            file: FileId::from_raw(1),
+            function: FunctionId::from_raw(1),
             package: None,
             module: None,
             owner_stable_key: interner.intern("ts:function:f".to_string()),
@@ -659,7 +659,7 @@ mod tests {
             body: Some(MirBodyId(0)),
             operation,
             language: Language::TypeScript,
-            file: FileId(1),
+            file: FileId::from_raw(1),
             span: span(ordinal as usize, ordinal as usize + 1),
             construct: construct.to_string(),
             source_evidence: construct.to_string(),
@@ -681,10 +681,10 @@ mod tests {
         PlaceFact {
             id: PlaceId(id),
             language,
-            file: Some(FileId(1)),
-            function: Some(FunctionId(1)),
+            file: Some(FileId::from_raw(1)),
+            function: Some(FunctionId::from_raw(1)),
             root: PlaceRoot::Local {
-                function: FunctionId(1),
+                function: FunctionId::from_raw(1),
                 name: name.to_string(),
             },
             projections: Vec::new(),

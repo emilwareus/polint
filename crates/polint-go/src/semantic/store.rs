@@ -14,7 +14,7 @@ use crate::semantic::validate::validate_go_semantic_output;
 pub const GO_SEMANTIC_PROVIDER_ID: &str = "polint.go.semantic";
 
 /// Per-family count of duplicate STRUCTURAL rows (packages/functions/method_sets) collapsed
-/// keep-first by [`GoSemanticFactsOutput::collapse_duplicate_structural_keys`], plus whether
+/// keep-first by `GoSemanticFactsOutput::collapse_duplicate_structural_keys`, plus whether
 /// any collapsed duplicate was "conflicting" (FIX-08).
 ///
 /// The structural families are keyed by official Go identity (`package` / `fn.String()` /
@@ -793,8 +793,8 @@ mod tests {
         a.stable_key = interner.intern("dup");
         b.stable_key = interner.intern("dup");
         // Same stable_key, different span → conflicting duplicate.
-        a.span = Some(Span::new(FileId(0), 10, 20, 1, 1, 1, 11));
-        b.span = Some(Span::new(FileId(0), 30, 40, 2, 1, 2, 11));
+        a.span = Some(Span::new(FileId::from_raw(0), 10, 20, 1, 1, 1, 11));
+        b.span = Some(Span::new(FileId::from_raw(0), 30, 40, 2, 1, 2, 11));
         let output = GoSemanticFactsOutput {
             functions: vec![a, b],
             ..GoSemanticFactsOutput::default()

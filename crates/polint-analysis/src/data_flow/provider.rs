@@ -522,17 +522,17 @@ mod tests {
             "src/main.ts".to_string(),
             "export function handler(req: Request) {}\n".to_string(),
         );
-        let function = db.push_function(FunctionFact {
-            id: FunctionId(0),
+        let function = db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "handler".to_string(),
-            span: Span::point(file, 1, 1),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "handler".to_string(),
+            Span::point(file, 1, 1),
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
         db.replace_semantic_mir(MirOutput {
             bodies: vec![mir_body(&interner, file, function)],
             places: vec![parameter_place(file, function)],
@@ -579,17 +579,17 @@ mod tests {
             "src/main.ts".to_string(),
             "export function handler(req: Request, res: Response) {}\n".to_string(),
         );
-        let function = db.push_function(FunctionFact {
-            id: FunctionId(0),
+        let function = db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "handler".to_string(),
-            span: Span::point(file, 1, 1),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "handler".to_string(),
+            Span::point(file, 1, 1),
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
         db.replace_semantic_mir(MirOutput {
             bodies: vec![mir_body(&interner, file, function)],
             places: vec![

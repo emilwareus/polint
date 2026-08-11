@@ -139,15 +139,15 @@ impl FactDatabase for LocalFactDb {
         source: Arc<str>,
         content_hash: String,
     ) -> FileId {
-        let id = FileId(self.files.len() as u32);
-        self.files.push(SourceFile {
+        let id = FileId::from_raw(self.files.len() as u32);
+        self.files.push(SourceFile::new(
             id,
             path,
             relative_path,
             language,
             source,
             content_hash,
-        });
+        ));
         id
     }
 

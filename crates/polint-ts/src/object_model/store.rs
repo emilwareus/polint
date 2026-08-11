@@ -374,9 +374,9 @@ mod tests {
         let interner = StableKeyInterner::default();
         let output = TsObjectModelOutput {
             allocations: vec![
-                allocation(&interner, "object:b", 9, FileId(2)),
-                allocation(&interner, "object:a", 8, FileId(1)),
-                allocation(&interner, "object:a", 7, FileId(1)),
+                allocation(&interner, "object:b", 9, FileId::from_raw(2)),
+                allocation(&interner, "object:a", 8, FileId::from_raw(1)),
+                allocation(&interner, "object:a", 7, FileId::from_raw(1)),
             ],
             property_writes: vec![
                 property_write(&interner, "write:b", 4, "object:b"),
@@ -433,8 +433,8 @@ mod tests {
         let store = TsObjectModelStore::from_output(
             TsObjectModelOutput {
                 allocations: vec![
-                    allocation(&interner, "object:a", 9, FileId(1)),
-                    allocation(&interner, "object:b", 8, FileId(2)),
+                    allocation(&interner, "object:a", 9, FileId::from_raw(1)),
+                    allocation(&interner, "object:b", 8, FileId::from_raw(2)),
                 ],
                 property_writes: vec![property_write(&interner, "write:a", 3, "object:a")],
                 property_reads: vec![property_read(&interner, "read:a", 2, "object:a")],
@@ -447,12 +447,12 @@ mod tests {
         assert_eq!(store.allocations().len(), 2);
         assert_eq!(store.property_writes().len(), 1);
         assert_eq!(store.property_reads().len(), 1);
-        assert_eq!(store.allocations_for_file(FileId(1)).len(), 1);
+        assert_eq!(store.allocations_for_file(FileId::from_raw(1)).len(), 1);
         assert_eq!(
             store
                 .allocation_by_stable_key(interner.intern("object:b"))
                 .map(|allocation| allocation.file),
-            Some(FileId(2))
+            Some(FileId::from_raw(2))
         );
         assert_eq!(
             store
@@ -474,8 +474,8 @@ mod tests {
         let error = TsObjectModelStore::try_from_output(
             TsObjectModelOutput {
                 allocations: vec![
-                    allocation(&interner, "object:a", 1, FileId(1)),
-                    allocation(&interner, "object:a", 2, FileId(1)),
+                    allocation(&interner, "object:a", 1, FileId::from_raw(1)),
+                    allocation(&interner, "object:a", 2, FileId::from_raw(1)),
                 ],
                 property_writes: Vec::new(),
                 property_reads: Vec::new(),
@@ -521,8 +521,8 @@ mod tests {
     ) -> TsPropertyWriteFact {
         TsPropertyWriteFact {
             id: TsPropertyWriteId(original_id),
-            file: FileId(1),
-            span: Span::point(FileId(1), original_id as u32, 1),
+            file: FileId::from_raw(1),
+            span: Span::point(FileId::from_raw(1), original_id as u32, 1),
             stable_key: interner.intern(stable_key),
             base_object_stable_key: interner.intern(base_object_stable_key),
             property_key: property_key(),
@@ -541,8 +541,8 @@ mod tests {
     ) -> TsPropertyReadFact {
         TsPropertyReadFact {
             id: TsPropertyReadId(original_id),
-            file: FileId(1),
-            span: Span::point(FileId(1), original_id as u32, 1),
+            file: FileId::from_raw(1),
+            span: Span::point(FileId::from_raw(1), original_id as u32, 1),
             stable_key: interner.intern(stable_key),
             base_object_stable_key: interner.intern(base_object_stable_key),
             property_key: property_key(),

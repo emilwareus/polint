@@ -562,13 +562,13 @@ fn extract_package(db: &mut dyn FactDatabase, file: FileId, source: &str, root: 
         return;
     };
 
-    db.push_package(PackageFact {
-        id: polint_core::PackageId(0),
+    db.push_package(PackageFact::new(
+        polint_core::PackageId::from_raw(0),
         file,
-        name: name.to_string(),
-        span: node_span(file, source, identifier),
-        language: Language::Go,
-    });
+        name.to_string(),
+        node_span(file, source, identifier),
+        Language::Go,
+    ));
 }
 
 fn node_span(file: FileId, source: &str, node: Node<'_>) -> Span {
@@ -659,14 +659,14 @@ fn push_import_from_node(db: &mut dyn FactDatabase, file: FileId, source: &str, 
     };
     let package = import_alias(source, node, path_node);
 
-    db.push_import(ImportFact {
-        id: polint_core::ImportId(0),
+    db.push_import(ImportFact::new(
+        polint_core::ImportId::from_raw(0),
         file,
         package,
         path,
-        span: node_span(file, source, node),
-        language: Language::Go,
-    });
+        node_span(file, source, node),
+        Language::Go,
+    ));
 }
 
 fn import_alias(source: &str, spec: Node<'_>, path: Node<'_>) -> Option<String> {
@@ -716,12 +716,12 @@ fn extract_string_literals(db: &mut dyn FactDatabase, file: FileId, source: &str
             return;
         };
 
-        db.push_string_literal(StringLiteralFact {
+        db.push_string_literal(StringLiteralFact::new(
             file,
             value,
-            span: node_span(file, source, node),
-            language: Language::Go,
-        });
+            node_span(file, source, node),
+            Language::Go,
+        ));
     });
 }
 
@@ -756,21 +756,21 @@ fn extract_functions(db: &mut dyn FactDatabase, file: FileId, source: &str, root
         };
         let span = node_span(file, source, node);
         let is_test = is_go_test_entry(&file_path, &simple_name, node, source);
-        let fact = FunctionFact {
-            id: FunctionId(0),
+        let fact = FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: name.clone(),
-            span: span.clone(),
-            language: Language::Go,
+            name.clone(),
+            span.clone(),
+            Language::Go,
             is_test,
-            is_exported: simple_name.chars().next().is_some_and(char::is_uppercase),
-            cyclomatic_complexity: body_node
+            simple_name.chars().next().is_some_and(char::is_uppercase),
+            body_node
                 .map(|body| go_cyclomatic_complexity(source, body))
                 .unwrap_or(1),
-            calls: body_node
+            body_node
                 .map(|body| extract_calls(source, body))
                 .unwrap_or_default(),
-        };
+        );
         let function_id = db.push_function(fact);
 
         if let Some(body) = body_node {
@@ -917,17 +917,17 @@ fn go_test_fact(
     source: &str,
     body: Node<'_>,
 ) -> TestFact {
-    TestFact {
+    TestFact::new(
         file,
-        function: Some(function),
+        Some(function),
         name,
         span,
-        evidence_terms: go_test_evidence_terms(source, body),
-        assertion_count: go_assertion_count(source, body),
-        subtest_count: go_subtest_count(source, body),
-        subtest_names: go_subtest_literal_names(source, body),
-        table_rows: go_table_rows(source, body),
-    }
+        go_test_evidence_terms(source, body),
+        go_assertion_count(source, body),
+        go_subtest_count(source, body),
+        go_subtest_literal_names(source, body),
+        go_table_rows(source, body),
+    )
 }
 
 fn go_subtest_count(source: &str, body: Node<'_>) -> u32 {
@@ -1581,16 +1581,16 @@ fn push_branch(
         &normalized_condition,
         edge_label,
     ]);
-    db.push_branch(BranchObligation {
-        id: BranchId(0),
-        function: Some(target.function),
-        file: target.file,
+    db.push_branch(BranchObligation::new(
+        BranchId::from_raw(0),
+        Some(target.function),
+        target.file,
         decision_span,
         condition_text,
-        edge_label: edge_label.to_string(),
+        edge_label.to_string(),
         is_error_path,
         stable_fingerprint,
-    })
+    ))
 }
 
 fn normalize_branch_condition(condition_text: &str) -> String {

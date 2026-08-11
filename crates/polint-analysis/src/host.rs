@@ -1849,7 +1849,7 @@ mod tests {
             id: CallSiteId(0),
             language: Language::TypeScript,
             file,
-            caller: FunctionId(0),
+            caller: FunctionId::from_raw(0),
             owner_symbol: None,
             body: MirBodyId(0),
             operation: MirOpId(0),

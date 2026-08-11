@@ -85,6 +85,7 @@ impl fmt::Display for Severity {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TextRange {
     pub start_line: u32,
     pub start_col: u32,
@@ -108,23 +109,27 @@ impl TextRange {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Label {
     pub range: TextRange,
     pub message: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Suggestion {
     pub message: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Fix {
     pub message: String,
     pub replacement: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Evidence {
     pub label: String,
     pub value: String,
@@ -1045,4 +1050,28 @@ pub fn diagnostic_fingerprint(
         &end_col,
         message,
     ])
+}
+
+impl Label {
+    /// Constructs a diagnostic label.
+    pub fn new(range: TextRange, message: String) -> Self {
+        Self { range, message }
+    }
+}
+
+impl Suggestion {
+    /// Constructs a diagnostic suggestion.
+    pub fn new(message: String) -> Self {
+        Self { message }
+    }
+}
+
+impl Fix {
+    /// Constructs a diagnostic fix.
+    pub fn new(message: String, replacement: Option<String>) -> Self {
+        Self {
+            message,
+            replacement,
+        }
+    }
 }

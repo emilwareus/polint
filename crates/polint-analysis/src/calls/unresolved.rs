@@ -239,31 +239,23 @@ mod tests {
     use polint_core::{FileId, FunctionId, Language, Span};
 
     fn span(file: FileId, line: u32) -> Span {
-        Span {
-            file,
-            start_byte: line * 10,
-            end_byte: line * 10 + 4,
-            start_line: line,
-            start_col: 1,
-            end_line: line,
-            end_col: 5,
-        }
+        Span::new(file, line * 10, line * 10 + 4, line, 1, line, 5)
     }
 
     fn db_with_function(language: Language, path: &str) -> (LocalAnalysisDb, FileId, FunctionId) {
         let mut db = LocalAnalysisDb::new();
         let file = db.add_file(PathBuf::from(path), path.to_string(), String::new());
-        let function = db.push_function(FunctionFact {
-            id: FunctionId(999),
+        let function = db.push_function(FunctionFact::new(
+            FunctionId::from_raw(999),
             file,
-            name: "caller".to_string(),
-            span: span(file, 1),
+            "caller".to_string(),
+            span(file, 1),
             language,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
         (db, file, function)
     }
 
@@ -393,7 +385,7 @@ mod tests {
             function,
             10,
             CallCallee::Identifier {
-                reference: Some(polint_core::ReferenceId(1)),
+                reference: Some(polint_core::ReferenceId::from_raw(1)),
                 name: "run".to_string(),
             },
             CallSyntaxKind::Function,

@@ -1274,23 +1274,23 @@ mod abstract_domains {
             "src/app.ts".to_string(),
             "export function app() { let value = 1; return value; }\n".to_string(),
         );
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "app".to_string(),
-            span: span(file),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "app".to_string(),
+            span(file),
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
         db.replace_semantic_mir(MirOutput {
             bodies: vec![MirBody {
                 id: MirBodyId(0),
                 language: Language::TypeScript,
                 file,
-                function: FunctionId(0),
+                function: FunctionId::from_raw(0),
                 package: None,
                 module: None,
                 owner_stable_key: interner.intern("function:app".to_string()),
@@ -1302,9 +1302,9 @@ mod abstract_domains {
                 id: PlaceId(0),
                 language: Language::TypeScript,
                 file: Some(file),
-                function: Some(FunctionId(0)),
+                function: Some(FunctionId::from_raw(0)),
                 root: PlaceRoot::Local {
-                    function: FunctionId(0),
+                    function: FunctionId::from_raw(0),
                     name: "value".to_string(),
                 },
                 projections: Vec::new(),
@@ -1334,7 +1334,7 @@ mod abstract_domains {
             functions: vec![CfgFunctionFact {
                 id: CfgFunctionId(0),
                 body: MirBodyId(0),
-                function: FunctionId(0),
+                function: FunctionId::from_raw(0),
                 language: Language::TypeScript,
                 file,
                 span: span(file),
@@ -1399,15 +1399,7 @@ mod abstract_domains {
     }
 
     fn span(file: FileId) -> Span {
-        Span {
-            file,
-            start_byte: 0,
-            end_byte: 10,
-            start_line: 1,
-            start_col: 1,
-            end_line: 1,
-            end_col: 11,
-        }
+        Span::new(file, 0, 10, 1, 1, 1, 11)
     }
 
     fn domain_diagnostics(
@@ -1507,7 +1499,15 @@ mod type_value_alias_validation {
                     body: None,
                     source_place: Some(PlaceId(55)),
                     source_operation: Some(MirOpId(56)),
-                    span: Some(Span::new(crate::core::FileId(0), 10, 2, 2, 1, 1, 1)),
+                    span: Some(Span::new(
+                        crate::core::FileId::from_raw(0),
+                        10,
+                        2,
+                        2,
+                        1,
+                        1,
+                        1,
+                    )),
                     provenance: ValueProvenance::Native,
                     stable_key: crate::core::stable_key_for_test("allocation:bad"),
                 }],
@@ -1732,15 +1732,15 @@ mod semantic_mir {
                 body(
                     &interner,
                     0,
-                    FunctionId(0),
-                    span(FileId(0), 0, 20),
+                    FunctionId::from_raw(0),
+                    span(FileId::from_raw(0), 0, 20),
                     "body:dup",
                 ),
                 body(
                     &interner,
                     1,
-                    FunctionId(99),
-                    span(FileId(0), 0, 999),
+                    FunctionId::from_raw(99),
+                    span(FileId::from_raw(0), 0, 999),
                     "body:dup",
                 ),
             ],
@@ -1748,7 +1748,7 @@ mod semantic_mir {
                 place(
                     &interner,
                     0,
-                    FunctionId(99),
+                    FunctionId::from_raw(99),
                     vec![PlaceProjection::IndexUnknown {
                         evidence: String::new(),
                     }],
@@ -1760,7 +1760,7 @@ mod semantic_mir {
                 id: MirOpId(0),
                 body: MirBodyId(0),
                 ordinal: 0,
-                span: span(FileId(0), 0, 20),
+                span: span(FileId::from_raw(0), 0, 20),
                 kind: MirOperationKind::Call {
                     site: CallSiteId(0),
                     callee: MirValue::Unknown {
@@ -1777,8 +1777,8 @@ mod semantic_mir {
                 body: Some(MirBodyId(0)),
                 operation: Some(MirOpId(0)),
                 language: Language::TypeScript,
-                file: FileId(0),
-                span: span(FileId(0), 0, 20),
+                file: FileId::from_raw(0),
+                span: span(FileId::from_raw(0), 0, 20),
                 construct: String::new(),
                 source_evidence: String::new(),
                 affected_places: Vec::new(),
@@ -1823,8 +1823,8 @@ mod semantic_mir {
             bodies: vec![body(
                 &interner,
                 0,
-                FunctionId(0),
-                span(FileId(0), 0, 20),
+                FunctionId::from_raw(0),
+                span(FileId::from_raw(0), 0, 20),
                 "body:ok",
             )],
             places: Vec::new(),
@@ -1871,17 +1871,17 @@ mod semantic_mir {
             "src/app.ts".to_string(),
             "export function app() { return 1; }\n".to_string(),
         );
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "app".to_string(),
-            span: span(file, 0, 33),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "app".to_string(),
+            span(file, 0, 33),
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
         db
     }
 
@@ -1916,7 +1916,7 @@ mod semantic_mir {
         PlaceFact {
             id: PlaceId(id),
             language: Language::TypeScript,
-            file: Some(FileId(0)),
+            file: Some(FileId::from_raw(0)),
             function: Some(function),
             root: PlaceRoot::Local {
                 function,
@@ -1936,8 +1936,8 @@ mod semantic_mir {
         PlaceFact {
             id: PlaceId(id),
             language: Language::TypeScript,
-            file: Some(FileId(0)),
-            function: Some(FunctionId(0)),
+            file: Some(FileId::from_raw(0)),
+            function: Some(FunctionId::from_raw(0)),
             root: PlaceRoot::CallReturn {
                 call: CallSiteId(0),
             },
@@ -1948,15 +1948,15 @@ mod semantic_mir {
     }
 
     fn span(file: FileId, start_byte: u32, end_byte: u32) -> Span {
-        Span {
+        Span::new(
             file,
             start_byte,
             end_byte,
-            start_line: 1,
-            start_col: start_byte + 1,
-            end_line: 1,
-            end_col: end_byte + 1,
-        }
+            1,
+            start_byte + 1,
+            1,
+            end_byte + 1,
+        )
     }
 
     fn evidence_labels(diagnostic: &crate::diagnostics::Diagnostic) -> BTreeSet<&str> {
@@ -2014,7 +2014,7 @@ mod cfg {
                 operation: None,
                 block: BasicBlockId(99),
                 kind: CfgNodeKind::Operation,
-                span: Some(Span::new(FileId(0), 10, 1, 1, 11, 1, 2)),
+                span: Some(Span::new(FileId::from_raw(0), 10, 1, 1, 11, 1, 2)),
                 generated: false,
                 operation_ordinal: 0,
                 stable_key: interner.intern("cfg:node:bad"),
@@ -2204,17 +2204,17 @@ mod cfg {
             "src/app.ts".to_string(),
             "export function app() { return 1; }\n".to_string(),
         );
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "app".to_string(),
-            span: span(file),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "app".to_string(),
+            span(file),
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
         db
     }
 
@@ -2228,10 +2228,10 @@ mod cfg {
         CfgFunctionFact {
             id,
             body: MirBodyId(0),
-            function: FunctionId(0),
+            function: FunctionId::from_raw(0),
             language: Language::TypeScript,
-            file: FileId(0),
-            span: span(FileId(0)),
+            file: FileId::from_raw(0),
+            span: span(FileId::from_raw(0)),
             entry_node,
             normal_exit_node,
             exceptional_exit_node: None,
@@ -2278,7 +2278,7 @@ mod cfg {
             operation: None,
             block,
             kind,
-            span: Some(span(FileId(0))),
+            span: Some(span(FileId::from_raw(0))),
             generated: true,
             operation_ordinal: 0,
             stable_key: interner.intern(stable_key),
@@ -2310,15 +2310,7 @@ mod cfg {
     }
 
     fn span(file: FileId) -> Span {
-        Span {
-            file,
-            start_byte: 0,
-            end_byte: 10,
-            start_line: 1,
-            start_col: 1,
-            end_line: 1,
-            end_col: 11,
-        }
+        Span::new(file, 0, 10, 1, 1, 1, 11)
     }
 
     fn cfg_diagnostics(
@@ -2367,12 +2359,12 @@ mod calls {
                 site(0, "call-site:dup"),
                 CallSiteFact {
                     id: CallSiteId(1),
-                    file: FileId(99),
-                    caller: FunctionId(99),
-                    owner_symbol: Some(SymbolId(99)),
+                    file: FileId::from_raw(99),
+                    caller: FunctionId::from_raw(99),
+                    owner_symbol: Some(SymbolId::from_raw(99)),
                     body: MirBodyId(99),
                     operation: MirOpId(99),
-                    span: Span::new(FileId(0), 10, 1, 1, 11, 1, 2),
+                    span: Span::new(FileId::from_raw(0), 10, 1, 1, 11, 1, 2),
                     arguments: vec![PlaceId(99)],
                     receiver: Some(PlaceId(98)),
                     result: Some(PlaceId(97)),
@@ -2402,7 +2394,7 @@ mod calls {
             ],
             unresolved: vec![UnresolvedCallFact {
                 site: CallSiteId(0),
-                caller: FunctionId(99),
+                caller: FunctionId::from_raw(99),
                 status: CallTargetStatus::Resolved,
                 reason: UnresolvedCallReason::Unknown,
                 algorithm: CallAlgorithm::DirectReference,
@@ -2454,8 +2446,8 @@ mod calls {
             targets: vec![CallTargetFact {
                 status: CallTargetStatus::Unsupported,
                 reason: Some(UnresolvedCallReason::FrameworkDispatch),
-                target_function: Some(FunctionId(1)),
-                target_symbol: Some(SymbolId(1)),
+                target_function: Some(FunctionId::from_raw(1)),
+                target_symbol: Some(SymbolId::from_raw(1)),
                 stable_key: crate::core::StableKeyId(1),
                 ..target(0, CallSiteId(0), "call-target:ok")
             }],
@@ -2531,12 +2523,12 @@ mod calls {
         let store =
             CallStore::from_output(output, &interner).expect("call store should index rows");
 
-        assert_eq!(store.sites_by_caller(FunctionId(0)).len(), 1);
+        assert_eq!(store.sites_by_caller(FunctionId::from_raw(0)).len(), 1);
         assert_eq!(store.targets_by_site(CallSiteId(0)).len(), 1);
-        assert_eq!(store.outgoing_by_function(FunctionId(0)).len(), 1);
-        assert_eq!(store.outgoing_by_symbol(SymbolId(0)).len(), 1);
-        assert_eq!(store.incoming_by_symbol(SymbolId(1)).len(), 1);
-        assert_eq!(store.incoming_by_function(FunctionId(1)).len(), 1);
+        assert_eq!(store.outgoing_by_function(FunctionId::from_raw(0)).len(), 1);
+        assert_eq!(store.outgoing_by_symbol(SymbolId::from_raw(0)).len(), 1);
+        assert_eq!(store.incoming_by_symbol(SymbolId::from_raw(1)).len(), 1);
+        assert_eq!(store.incoming_by_function(FunctionId::from_raw(1)).len(), 1);
         assert_eq!(
             store
                 .unresolved_by_reason(UnresolvedCallReason::DynamicProperty)
@@ -2572,33 +2564,33 @@ mod calls {
             "src/app.ts".to_string(),
             "export function app() { target(); }\n".to_string(),
         );
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "app".to_string(),
-            span: span(file),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
-        db.push_function(FunctionFact {
-            id: FunctionId(1),
+            "app".to_string(),
+            span(file),
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(1),
             file,
-            name: "target".to_string(),
-            span: span(file),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "target".to_string(),
+            span(file),
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
         let interner = db.stable_key_interner();
         db.replace_symbol_graph_facts(
             vec![
-                symbol(&interner, SymbolId(0), file, "app"),
-                symbol(&interner, SymbolId(1), file, "target"),
+                symbol(&interner, SymbolId::from_raw(0), file, "app"),
+                symbol(&interner, SymbolId::from_raw(1), file, "target"),
             ],
             Vec::new(),
             Vec::new(),
@@ -2612,22 +2604,22 @@ mod calls {
         file: FileId,
         name: &str,
     ) -> SymbolFact {
-        SymbolFact {
+        SymbolFact::new(
             id,
-            language: Language::TypeScript,
-            name: name.to_string(),
-            qualified_name: name.to_string(),
-            kind: SymbolKind::Function,
-            namespace: SymbolNamespace::Value,
-            file: Some(file),
-            package: None,
-            module: None,
-            owner: None,
-            primary_span: Some(span(file)),
-            is_exported: true,
-            stable_key: interner.intern(format!("symbol:{name}")),
-            precision: SymbolPrecision::ExactLocal,
-        }
+            Language::TypeScript,
+            name.to_string(),
+            name.to_string(),
+            SymbolKind::Function,
+            SymbolNamespace::Value,
+            Some(file),
+            None,
+            None,
+            None,
+            Some(span(file)),
+            true,
+            interner.intern(format!("symbol:{name}")),
+            SymbolPrecision::ExactLocal,
+        )
     }
 
     fn site(id: u64, _stable_key: &str) -> CallSiteFact {
@@ -2635,12 +2627,12 @@ mod calls {
             in_throw: false,
             id: CallSiteId(id),
             language: Language::TypeScript,
-            file: FileId(0),
-            caller: FunctionId(0),
-            owner_symbol: Some(SymbolId(0)),
+            file: FileId::from_raw(0),
+            caller: FunctionId::from_raw(0),
+            owner_symbol: Some(SymbolId::from_raw(0)),
             body: MirBodyId(0),
             operation: MirOpId(0),
-            span: span(FileId(0)),
+            span: span(FileId::from_raw(0)),
             kind: CallSyntaxKind::Function,
             callee: CallCallee::Identifier {
                 reference: None,
@@ -2659,9 +2651,9 @@ mod calls {
         CallTargetFact {
             id: CallTargetId(id),
             site,
-            caller: FunctionId(0),
-            target_function: Some(FunctionId(1)),
-            target_symbol: Some(SymbolId(1)),
+            caller: FunctionId::from_raw(0),
+            target_function: Some(FunctionId::from_raw(1)),
+            target_symbol: Some(SymbolId::from_raw(1)),
             edge_kind: CallEdgeKind::Direct,
             algorithm: CallAlgorithm::DirectReference,
             status: CallTargetStatus::Resolved,
@@ -2675,7 +2667,7 @@ mod calls {
     fn unresolved(site: u64, _stable_key: &str) -> UnresolvedCallFact {
         UnresolvedCallFact {
             site: CallSiteId(site),
-            caller: FunctionId(0),
+            caller: FunctionId::from_raw(0),
             status: CallTargetStatus::Unresolved,
             reason: UnresolvedCallReason::DynamicProperty,
             algorithm: CallAlgorithm::SyntaxOnly,
@@ -2686,15 +2678,7 @@ mod calls {
     }
 
     fn span(file: FileId) -> Span {
-        Span {
-            file,
-            start_byte: 0,
-            end_byte: 10,
-            start_line: 1,
-            start_col: 1,
-            end_line: 1,
-            end_col: 11,
-        }
+        Span::new(file, 0, 10, 1, 1, 1, 11)
     }
 
     fn call_diagnostics(
@@ -2745,7 +2729,7 @@ mod semantic_index {
             vec![GeneratedSymbolFact {
                 id: GeneratedSymbolId(99),
                 language: Language::TypeScript,
-                file: Some(FileId(404)),
+                file: Some(FileId::from_raw(404)),
                 package: None,
                 module: None,
                 symbol_stable_key: db.stable_key_interner().intern("symbol:answer"),
@@ -2754,7 +2738,7 @@ mod semantic_index {
                 generator: "test".to_string(),
                 generated_discriminator: String::new(),
                 kind: GeneratedSymbolKind::BuildGenerated,
-                span: Some(span(FileId(404), 0, 999)),
+                span: Some(span(FileId::from_raw(404), 0, 999)),
                 stable_key: db.stable_key_interner().intern("generated:bad"),
                 status: SemanticStatus::Resolved,
             }],
@@ -2798,7 +2782,7 @@ mod semantic_index {
             vec![GeneratedSymbolFact {
                 id: GeneratedSymbolId(0),
                 language: Language::TypeScript,
-                file: Some(FileId(0)),
+                file: Some(FileId::from_raw(0)),
                 package: None,
                 module: None,
                 symbol_stable_key: db.stable_key_interner().intern("symbol:answer"),
@@ -2807,7 +2791,7 @@ mod semantic_index {
                 generator: "test".to_string(),
                 generated_discriminator: "entrypoint".to_string(),
                 kind: GeneratedSymbolKind::BuildGenerated,
-                span: Some(span(FileId(0), 0, 1)),
+                span: Some(span(FileId::from_raw(0), 0, 1)),
                 stable_key: db.stable_key_interner().intern("generated:answer"),
                 status: SemanticStatus::Generated,
             }],
@@ -2860,7 +2844,7 @@ mod semantic_index {
             vec![ExportFact {
                 id: ExportId(0),
                 language: Language::TypeScript,
-                file: Some(FileId(0)),
+                file: Some(FileId::from_raw(0)),
                 package: None,
                 module: None,
                 scope: None,
@@ -2916,22 +2900,22 @@ mod semantic_index {
         );
         let interner = db.stable_key_interner();
         db.replace_symbol_graph_facts(
-            vec![SymbolFact {
-                id: SymbolId(0),
-                language: Language::TypeScript,
-                name: "answer".to_string(),
-                qualified_name: "answer".to_string(),
-                kind: SymbolKind::Constant,
-                namespace: SymbolNamespace::Value,
-                file: Some(file),
-                package: None,
-                module: None,
-                owner: None,
-                primary_span: Some(span(file, 13, 19)),
-                is_exported: true,
-                stable_key: interner.intern("symbol:answer".to_string()),
-                precision: SymbolPrecision::ExactLocal,
-            }],
+            vec![SymbolFact::new(
+                SymbolId::from_raw(0),
+                Language::TypeScript,
+                "answer".to_string(),
+                "answer".to_string(),
+                SymbolKind::Constant,
+                SymbolNamespace::Value,
+                Some(file),
+                None,
+                None,
+                None,
+                Some(span(file, 13, 19)),
+                true,
+                interner.intern("symbol:answer".to_string()),
+                SymbolPrecision::ExactLocal,
+            )],
             Vec::new(),
             Vec::new(),
         );
@@ -2939,15 +2923,15 @@ mod semantic_index {
     }
 
     fn span(file: FileId, start_byte: u32, end_byte: u32) -> Span {
-        Span {
+        Span::new(
             file,
             start_byte,
             end_byte,
-            start_line: 1,
-            start_col: start_byte + 1,
-            end_line: 1,
-            end_col: end_byte + 1,
-        }
+            1,
+            start_byte + 1,
+            1,
+            end_byte + 1,
+        )
     }
 
     fn evidence_labels(diagnostic: &crate::diagnostics::Diagnostic) -> BTreeSet<&str> {
@@ -2988,24 +2972,24 @@ mod topology {
             "src/app.ts".to_string(),
             "import './target';\n".to_string(),
         );
-        let import = db.push_import(ImportFact {
-            id: ImportId(99),
+        let import = db.push_import(ImportFact::new(
+            ImportId::from_raw(99),
             file,
-            package: None,
-            path: "./target".to_string(),
-            span: span(file),
-            language: Language::TypeScript,
-        });
+            None,
+            "./target".to_string(),
+            span(file),
+            Language::TypeScript,
+        ));
         db.replace_module_graph_facts(
-            vec![ResolvedImportFact {
-                id: ResolvedImportId(0),
+            vec![ResolvedImportFact::new(
+                ResolvedImportId::from_raw(0),
                 import,
-                from_file: file,
-                target_node: None,
-                status: ResolutionStatus::Unresolved,
-                precision: ResolutionPrecision::None,
-                reason: None,
-            }],
+                file,
+                None,
+                ResolutionStatus::Unresolved,
+                ResolutionPrecision::None,
+                None,
+            )],
             Vec::new(),
             Vec::new(),
         );
@@ -3014,7 +2998,7 @@ mod topology {
             packages: vec![package(
                 "package:bad",
                 Some(WorkspaceRootId(404)),
-                Some(ModuleNodeId(404)),
+                Some(ModuleNodeId::from_raw(404)),
                 "../escape",
                 TopologyPrecision::ExactStatic,
                 TopologyStatus::Present,
@@ -3026,7 +3010,7 @@ mod topology {
                 kind: SourceSetKind::Source,
                 path: r"src\app.ts".to_string(),
                 language: Some(Language::TypeScript),
-                files: vec![FileId(404)],
+                files: vec![FileId::from_raw(404)],
                 stable_key: crate::core::stable_key_for_test("source-set:bad"),
                 producer_id: "test",
                 precision: TopologyPrecision::ExactStatic,
@@ -3034,10 +3018,10 @@ mod topology {
             }],
             import_to_package_edges: vec![import_edge(
                 "import-to-package:bad",
-                Some(ImportId(404)),
-                Some(ResolvedImportId(404)),
+                Some(ImportId::from_raw(404)),
+                Some(ResolvedImportId::from_raw(404)),
                 Some("semantic:missing".to_string()),
-                Some(FileId(404)),
+                Some(FileId::from_raw(404)),
                 ImportToPackageStatus::Resolved,
                 TopologyPrecision::ExactStatic,
             )],
@@ -3103,14 +3087,14 @@ mod topology {
             "src/app.ts".to_string(),
             "import React from 'react';\n".to_string(),
         );
-        let import = db.push_import(ImportFact {
-            id: ImportId(99),
+        let import = db.push_import(ImportFact::new(
+            ImportId::from_raw(99),
             file,
-            package: None,
-            path: "react".to_string(),
-            span: span(file),
-            language: Language::TypeScript,
-        });
+            None,
+            "react".to_string(),
+            span(file),
+            Language::TypeScript,
+        ));
         db.replace_semantic_index_facts(
             Vec::new(),
             vec![SemanticImportFact {
@@ -3283,7 +3267,7 @@ mod topology {
             from_file,
             from_package: Some(TopologyPackageId(404)),
             to_package: None,
-            target_node: Some(ModuleNodeId(404)),
+            target_node: Some(ModuleNodeId::from_raw(404)),
             from_package_stable_key: None,
             to_package_stable_key: None,
             source_set_stable_key: None,
@@ -3297,15 +3281,7 @@ mod topology {
     }
 
     fn span(file: FileId) -> Span {
-        Span {
-            file,
-            start_byte: 0,
-            end_byte: 1,
-            start_line: 1,
-            start_col: 1,
-            end_line: 1,
-            end_col: 2,
-        }
+        Span::new(file, 0, 1, 1, 1, 1, 2)
     }
 
     fn topology_diagnostics(
@@ -5552,39 +5528,39 @@ mod tests {
             "src/other.ts".to_string(),
             "abcdef".to_string(),
         );
-        db.push_function(FunctionFact {
-            id: FunctionId(99),
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(99),
             file,
-            name: "too_long".to_string(),
-            span: span(file, 0, 4),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: false,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
-        db.push_function(FunctionFact {
-            id: FunctionId(99),
+            "too_long".to_string(),
+            span(file, 0, 4),
+            Language::TypeScript,
+            false,
+            false,
+            1,
+            Vec::new(),
+        ));
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(99),
             file,
-            name: "reversed".to_string(),
-            span: span(file, 2, 1),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: false,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
-        db.push_function(FunctionFact {
-            id: FunctionId(99),
+            "reversed".to_string(),
+            span(file, 2, 1),
+            Language::TypeScript,
+            false,
+            false,
+            1,
+            Vec::new(),
+        ));
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(99),
             file,
-            name: "wrong_file".to_string(),
-            span: span(other_file, 0, 1),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: false,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "wrong_file".to_string(),
+            span(other_file, 0, 1),
+            Language::TypeScript,
+            false,
+            false,
+            1,
+            Vec::new(),
+        ));
 
         let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
         let messages = diagnostics
@@ -5608,71 +5584,71 @@ mod tests {
             "src/app.tsx".to_string(),
             "export function Button() { return null; }\n".to_string(),
         );
-        db.push_branch(BranchObligation {
-            id: BranchId(99),
-            function: Some(FunctionId(404)),
+        db.push_branch(BranchObligation::new(
+            BranchId::from_raw(99),
+            Some(FunctionId::from_raw(404)),
             file,
-            decision_span: span(file, 0, 1),
-            condition_text: "enabled".to_string(),
-            edge_label: "true".to_string(),
-            is_error_path: false,
-            stable_fingerprint: "branch:key".to_string(),
-        });
-        db.push_test(TestFact {
+            span(file, 0, 1),
+            "enabled".to_string(),
+            "true".to_string(),
+            false,
+            "branch:key".to_string(),
+        ));
+        db.push_test(TestFact::new(
             file,
-            function: Some(FunctionId(405)),
-            name: "TestButton".to_string(),
-            span: span(file, 0, 1),
-            evidence_terms: Vec::new(),
-            assertion_count: 0,
-            subtest_count: 0,
-            subtest_names: Vec::new(),
-            table_rows: 0,
-        });
-        db.push_ts_component(TsComponentFact {
+            Some(FunctionId::from_raw(405)),
+            "TestButton".to_string(),
+            span(file, 0, 1),
+            Vec::new(),
+            0,
+            0,
+            Vec::new(),
+            0,
+        ));
+        db.push_ts_component(TsComponentFact::new(
             file,
-            function: Some(FunctionId(406)),
-            name: "Button".to_string(),
-            span: span(file, 0, 1),
-        });
+            Some(FunctionId::from_raw(406)),
+            "Button".to_string(),
+            span(file, 0, 1),
+        ));
         db.replace_module_graph_facts(
             Vec::new(),
-            vec![ModuleNode {
-                id: ModuleNodeId(99),
-                kind: ModuleNodeKind::File,
-                label: "missing".to_string(),
-                file: Some(FileId(404)),
-                package: Some(PackageId(405)),
-                language: Some(Language::Tsx),
-            }],
+            vec![ModuleNode::new(
+                ModuleNodeId::from_raw(99),
+                ModuleNodeKind::File,
+                "missing".to_string(),
+                Some(FileId::from_raw(404)),
+                Some(PackageId::from_raw(405)),
+                Some(Language::Tsx),
+            )],
             Vec::new(),
         );
         db.replace_metric_facts(
-            vec![FileMetricFact {
-                file: FileId(406),
-                language: Language::Tsx,
-                line_count: 1,
-                non_empty_line_count: 1,
-                byte_count: 1,
-                function_count: 0,
-            }],
-            vec![FunctionMetricFact {
-                function: FunctionId(407),
-                file: FileId(407),
-                name: "Button".to_string(),
-                span: span(file, 0, 1),
-                language: Language::Tsx,
-                line_count: 1,
-                byte_count: 1,
-            }],
-            vec![ComplexityMetricFact {
-                function: FunctionId(408),
-                file: FileId(408),
-                name: "Button".to_string(),
-                span: span(file, 0, 1),
-                language: Language::Tsx,
-                cyclomatic_complexity: 1,
-            }],
+            vec![FileMetricFact::new(
+                FileId::from_raw(406),
+                Language::Tsx,
+                1,
+                1,
+                1,
+                0,
+            )],
+            vec![FunctionMetricFact::new(
+                FunctionId::from_raw(407),
+                FileId::from_raw(407),
+                "Button".to_string(),
+                span(file, 0, 1),
+                Language::Tsx,
+                1,
+                1,
+            )],
+            vec![ComplexityMetricFact::new(
+                FunctionId::from_raw(408),
+                FileId::from_raw(408),
+                "Button".to_string(),
+                span(file, 0, 1),
+                Language::Tsx,
+                1,
+            )],
         );
 
         let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
@@ -5713,7 +5689,7 @@ mod tests {
     fn metadata_validation_reports_evidence_external_reference_failures() {
         let mut db = AnalysisDb::new();
         db.replace_evidence_facts(EvidenceOutput {
-            nodes: vec![evidence_node(0, FileId(404))],
+            nodes: vec![evidence_node(0, FileId::from_raw(404))],
             ..EvidenceOutput::empty()
         })
         .expect("evidence store accepts external refs for kernel validation");
@@ -5895,15 +5871,15 @@ mod tests {
     }
 
     fn span(file: FileId, start_byte: u32, end_byte: u32) -> Span {
-        Span {
+        Span::new(
             file,
             start_byte,
             end_byte,
-            start_line: 1,
-            start_col: start_byte + 1,
-            end_line: 1,
-            end_col: end_byte + 1,
-        }
+            1,
+            start_byte + 1,
+            1,
+            end_byte + 1,
+        )
     }
 
     fn evidence_node(id: u64, file: FileId) -> EvidenceNodeFact {

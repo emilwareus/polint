@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 /// File, package, module, or external target participating in the module graph.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ModuleNode {
     pub id: ModuleNodeId,
     pub kind: ModuleNodeKind,
@@ -21,6 +22,7 @@ pub struct ModuleNode {
 
 /// Relationship edge between two module graph nodes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ModuleEdge {
     pub id: ModuleEdgeId,
     pub from: ModuleNodeId,
@@ -33,6 +35,7 @@ pub struct ModuleEdge {
 
 /// Setup-aware resolution result for one syntactic import fact.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ResolvedImportFact {
     pub id: ResolvedImportId,
     pub import: ImportId,
@@ -44,6 +47,7 @@ pub struct ResolvedImportFact {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ModuleNodeKind {
     File,
     Package,
@@ -52,6 +56,7 @@ pub enum ModuleNodeKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ModuleEdgeKind {
     Contains,
     Imports,
@@ -59,6 +64,7 @@ pub enum ModuleEdgeKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ResolutionStatus {
     Resolved,
     External,
@@ -69,6 +75,7 @@ pub enum ResolutionStatus {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ResolutionPrecision {
     ExactFile,
     Package,
@@ -78,6 +85,7 @@ pub enum ResolutionPrecision {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum UnresolvedReason {
     NotFound,
     SetupMissing,
@@ -86,4 +94,70 @@ pub enum UnresolvedReason {
     UnsupportedImport,
     ResolverError,
     OutsideWorkspace,
+}
+impl ModuleNode {
+    /// Constructs a module-graph node from its complete fact fields.
+    pub fn new(
+        id: ModuleNodeId,
+        kind: ModuleNodeKind,
+        label: String,
+        file: Option<FileId>,
+        package: Option<PackageId>,
+        language: Option<Language>,
+    ) -> Self {
+        Self {
+            id,
+            kind,
+            label,
+            file,
+            package,
+            language,
+        }
+    }
+}
+
+impl ModuleEdge {
+    /// Constructs a module-graph edge from its complete fact fields.
+    pub fn new(
+        id: ModuleEdgeId,
+        from: ModuleNodeId,
+        to: ModuleNodeId,
+        import: Option<ImportId>,
+        resolved_import: Option<ResolvedImportId>,
+        kind: ModuleEdgeKind,
+        status: ResolutionStatus,
+    ) -> Self {
+        Self {
+            id,
+            from,
+            to,
+            import,
+            resolved_import,
+            kind,
+            status,
+        }
+    }
+}
+
+impl ResolvedImportFact {
+    /// Constructs a resolved-import fact from its complete fields.
+    pub fn new(
+        id: ResolvedImportId,
+        import: ImportId,
+        from_file: FileId,
+        target_node: Option<ModuleNodeId>,
+        status: ResolutionStatus,
+        precision: ResolutionPrecision,
+        reason: Option<UnresolvedReason>,
+    ) -> Self {
+        Self {
+            id,
+            import,
+            from_file,
+            target_node,
+            status,
+            precision,
+            reason,
+        }
+    }
 }

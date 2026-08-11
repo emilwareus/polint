@@ -532,15 +532,7 @@ mod tests {
     use polint_core::{FileId, FunctionId, Language, Span};
 
     fn span(file: FileId, line: u32, start_byte: u32) -> Span {
-        Span {
-            file,
-            start_byte,
-            end_byte: start_byte + 4,
-            start_line: line,
-            start_col: 1,
-            end_line: line,
-            end_col: 5,
-        }
+        Span::new(file, start_byte, start_byte + 4, line, 1, line, 5)
     }
 
     fn add_file_and_function(
@@ -552,17 +544,17 @@ mod tests {
             relative_path.to_string(),
             "function caller() {}".to_string(),
         );
-        let function = db.push_function(FunctionFact {
-            id: FunctionId(999),
+        let function = db.push_function(FunctionFact::new(
+            FunctionId::from_raw(999),
             file,
-            name: "caller".to_string(),
-            span: span(file, 1, 0),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "caller".to_string(),
+            span(file, 1, 0),
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
         (file, function)
     }
 

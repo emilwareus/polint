@@ -92,14 +92,7 @@ mod semantic_conversion {
     use std::path::PathBuf;
 
     fn source_file(relative_path: &str, source: &str) -> SourceFile {
-        SourceFile {
-            id: FileId(0),
-            path: PathBuf::from(relative_path),
-            relative_path: relative_path.to_string(),
-            language: Language::Go,
-            source: source.to_string().into(),
-            content_hash: "test-hash".to_string(),
-        }
+        SourceFile::new(FileId::from_raw(0), PathBuf::from(relative_path), relative_path.to_string(), Language::Go, source.to_string().into(), "test-hash".to_string())
     }
 
     fn derive(json: &[u8]) -> polint_analysis::symbol_graph::semantic::SemanticIndexOutput {
@@ -257,14 +250,7 @@ mod semantic_setup_missing {
     use std::path::PathBuf;
 
     fn source_file(relative_path: &str, source: &str) -> SourceFile {
-        SourceFile {
-            id: FileId(0),
-            path: PathBuf::from(relative_path),
-            relative_path: relative_path.to_string(),
-            language: Language::Go,
-            source: source.to_string().into(),
-            content_hash: "test-hash".to_string(),
-        }
+        SourceFile::new(FileId::from_raw(0), PathBuf::from(relative_path), relative_path.to_string(), Language::Go, source.to_string().into(), "test-hash".to_string())
     }
 
     fn parse(json: &[u8]) -> GoSidecarOutput {

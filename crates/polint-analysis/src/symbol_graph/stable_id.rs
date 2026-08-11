@@ -189,21 +189,21 @@ pub fn reference_id_from_key(key: &StableReferenceKey) -> ReferenceId {
 }
 
 pub fn symbol_id_from_key_with_hash(key: &StableSymbolKey, hash: StableKeyHash) -> SymbolId {
-    SymbolId(id_from_stable_key_with_hash(&key.stable_key(), hash))
+    SymbolId::from_raw(id_from_stable_key_with_hash(&key.stable_key(), hash))
 }
 
 pub fn definition_id_from_key_with_hash(
     key: &StableDefinitionKey,
     hash: StableKeyHash,
 ) -> DefinitionId {
-    DefinitionId(id_from_stable_key_with_hash(&key.stable_key(), hash))
+    DefinitionId::from_raw(id_from_stable_key_with_hash(&key.stable_key(), hash))
 }
 
 pub fn reference_id_from_key_with_hash(
     key: &StableReferenceKey,
     hash: StableKeyHash,
 ) -> ReferenceId {
-    ReferenceId(id_from_stable_key_with_hash(&key.stable_key(), hash))
+    ReferenceId::from_raw(id_from_stable_key_with_hash(&key.stable_key(), hash))
 }
 
 fn id_from_stable_key_with_hash(stable_key: &str, hash: StableKeyHash) -> u64 {
@@ -302,6 +302,7 @@ fn namespace_key(namespace: SymbolNamespace) -> &'static str {
         SymbolNamespace::Package => "package",
         SymbolNamespace::Module => "module",
         SymbolNamespace::Unknown => "unknown",
+        _ => "unknown",
     }
 }
 
@@ -326,6 +327,7 @@ fn kind_key(kind: SymbolKind) -> &'static str {
         SymbolKind::Import => "import",
         SymbolKind::Export => "export",
         SymbolKind::Unknown => "unknown",
+        _ => "unknown",
     }
 }
 
@@ -339,15 +341,15 @@ mod symbol_graph_stable_ids {
     use polint_core::{DefinitionId, Language, ReferenceId, Span, SymbolId};
 
     fn span(start_byte: u32, end_byte: u32) -> Span {
-        Span {
-            file: polint_core::FileId(7),
+        Span::new(
+            polint_core::FileId::from_raw(7),
             start_byte,
             end_byte,
-            start_line: 3,
-            start_col: 5,
-            end_line: 3,
-            end_col: 9,
-        }
+            3,
+            5,
+            3,
+            9,
+        )
     }
 
     fn button_key() -> StableSymbolKey {
@@ -420,14 +422,8 @@ mod symbol_graph_stable_ids {
 
     #[test]
     fn stable_ids_do_not_include_transient_file_ids() {
-        let first = Span {
-            file: polint_core::FileId(1),
-            ..span(10, 16)
-        };
-        let second = Span {
-            file: polint_core::FileId(99),
-            ..span(10, 16)
-        };
+        let first = Span::new(polint_core::FileId::from_raw(1), 10, 16, 3, 5, 3, 9);
+        let second = Span::new(polint_core::FileId::from_raw(99), 10, 16, 3, 5, 3, 9);
         let left = StableSymbolKey::new(
             Language::TypeScript,
             Some("module:ui".to_string()),
@@ -506,8 +502,8 @@ mod symbol_graph_stable_ids {
             span(30, 36),
         ));
 
-        assert!(matches!(symbol, SymbolId(_)));
-        assert!(matches!(definition, DefinitionId(_)));
-        assert!(matches!(reference, ReferenceId(_)));
+        let _: SymbolId = symbol;
+        let _: DefinitionId = definition;
+        let _: ReferenceId = reference;
     }
 }

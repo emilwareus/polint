@@ -1685,28 +1685,20 @@ mod tests {
     use std::path::PathBuf;
 
     fn span(file: FileId, line: u32, start_byte: u32) -> Span {
-        Span {
-            file,
-            start_byte,
-            end_byte: start_byte + 4,
-            start_line: line,
-            start_col: 1,
-            end_line: line,
-            end_col: 5,
-        }
+        Span::new(file, start_byte, start_byte + 4, line, 1, line, 5)
     }
 
     fn span_for_needle(file: FileId, source: &str, needle: &str) -> Span {
         let start = source.find(needle).expect("needle in source") as u32;
-        Span {
+        Span::new(
             file,
-            start_byte: start,
-            end_byte: start + needle.len() as u32,
-            start_line: 1,
-            start_col: 1,
-            end_line: 1,
-            end_col: 1 + needle.len() as u32,
-        }
+            start,
+            start + needle.len() as u32,
+            1,
+            1,
+            1,
+            1 + needle.len() as u32,
+        )
     }
 
     fn add_ts_file(db: &mut impl AnalysisHost, path: &str) -> FileId {
@@ -1730,28 +1722,28 @@ mod tests {
     }
 
     fn add_function(db: &mut impl AnalysisHost, file: FileId, name: &str, line: u32) -> FunctionId {
-        db.push_function(FunctionFact {
-            id: FunctionId(999),
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(999),
             file,
-            name: name.to_string(),
-            span: span(file, line, line * 10),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        })
+            name.to_string(),
+            span(file, line, line * 10),
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ))
     }
 
     fn add_import(db: &mut impl AnalysisHost, file: FileId, path: &str, line: u32) -> ImportId {
-        db.push_import(ImportFact {
-            id: ImportId(999),
+        db.push_import(ImportFact::new(
+            ImportId::from_raw(999),
             file,
-            package: None,
-            path: path.to_string(),
-            span: span(file, line, line * 10),
-            language: Language::TypeScript,
-        })
+            None,
+            path.to_string(),
+            span(file, line, line * 10),
+            Language::TypeScript,
+        ))
     }
 
     fn make_call_site(

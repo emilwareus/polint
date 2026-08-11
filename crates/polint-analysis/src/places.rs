@@ -234,8 +234,8 @@ mod tests {
             &PlaceStableContext::for_test(),
             PlaceInsert {
                 language: Language::TypeScript,
-                file: Some(FileId(1)),
-                function: Some(FunctionId(10)),
+                file: Some(FileId::from_raw(1)),
+                function: Some(FunctionId::from_raw(10)),
                 root,
                 projections,
                 status: PlaceStatus::Resolved,
@@ -249,16 +249,16 @@ mod tests {
     fn place_stable_keys_distinguish_supported_root_kinds() {
         let roots = [
             PlaceRoot::Local {
-                function: FunctionId(10),
+                function: FunctionId::from_raw(10),
                 name: "value".to_string(),
             },
             PlaceRoot::Parameter {
-                function: FunctionId(10),
+                function: FunctionId::from_raw(10),
                 index: 0,
                 name: Some("value".to_string()),
             },
             PlaceRoot::Global {
-                symbol: Some(SymbolId(3)),
+                symbol: Some(SymbolId::from_raw(3)),
                 name: "value".to_string(),
             },
             PlaceRoot::Temporary {
@@ -287,7 +287,7 @@ mod tests {
     fn place_projection_stable_keys_preserve_projection_order() {
         let ordered = single_place_key(
             PlaceRoot::Local {
-                function: FunctionId(10),
+                function: FunctionId::from_raw(10),
                 name: "value".to_string(),
             },
             vec![
@@ -307,7 +307,7 @@ mod tests {
         );
         let reversed = single_place_key(
             PlaceRoot::Local {
-                function: FunctionId(10),
+                function: FunctionId::from_raw(10),
                 name: "value".to_string(),
             },
             vec![
@@ -340,10 +340,10 @@ mod tests {
             &PlaceStableContext::for_test(),
             PlaceInsert {
                 language: Language::Go,
-                file: Some(FileId(1)),
-                function: Some(FunctionId(10)),
+                file: Some(FileId::from_raw(1)),
+                function: Some(FunctionId::from_raw(10)),
                 root: PlaceRoot::Local {
-                    function: FunctionId(10),
+                    function: FunctionId::from_raw(10),
                     name: "zeta".to_string(),
                 },
                 projections: Vec::new(),
@@ -355,10 +355,10 @@ mod tests {
             &PlaceStableContext::for_test(),
             PlaceInsert {
                 language: Language::Go,
-                file: Some(FileId(1)),
-                function: Some(FunctionId(10)),
+                file: Some(FileId::from_raw(1)),
+                function: Some(FunctionId::from_raw(10)),
                 root: PlaceRoot::Local {
-                    function: FunctionId(10),
+                    function: FunctionId::from_raw(10),
                     name: "alpha".to_string(),
                 },
                 projections: Vec::new(),
@@ -392,8 +392,8 @@ mod tests {
             &context,
             PlaceInsert {
                 language: Language::Go,
-                file: Some(FileId(1)),
-                function: Some(FunctionId(10)),
+                file: Some(FileId::from_raw(1)),
+                function: Some(FunctionId::from_raw(10)),
                 root: PlaceRoot::Temporary {
                     body: MirBodyId(4),
                     ordinal: 12,
@@ -408,8 +408,8 @@ mod tests {
             &context,
             PlaceInsert {
                 language: Language::Go,
-                file: Some(FileId(99)),
-                function: Some(FunctionId(77)),
+                file: Some(FileId::from_raw(99)),
+                function: Some(FunctionId::from_raw(77)),
                 root: PlaceRoot::Temporary {
                     body: MirBodyId(44),
                     ordinal: 12,

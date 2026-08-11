@@ -484,7 +484,7 @@ fn type_subject(value: &str) -> Option<TypeSubject> {
         symbol
             .parse()
             .ok()
-            .map(|id| TypeSubject::Symbol(polint_core::SymbolId(id)))
+            .map(|id| TypeSubject::Symbol(polint_core::SymbolId::from_raw(id)))
     } else if let Some(id) = value.strip_prefix("synthetic:") {
         Some(TypeSubject::Synthetic(id.to_string()))
     } else {

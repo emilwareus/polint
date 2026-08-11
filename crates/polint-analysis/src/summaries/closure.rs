@@ -799,7 +799,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     fn span() -> Span {
-        Span::point(FileId(1), 1, 1)
+        Span::point(FileId::from_raw(1), 1, 1)
     }
 
     fn summary_fact(
@@ -810,7 +810,7 @@ mod tests {
         SummaryFact {
             id: SummaryId(0),
             callable_stable_key: stable_key_for_test(callable_key),
-            function: FunctionId(function_id),
+            function: FunctionId::from_raw(function_id),
             domain,
             status: SummaryStatus::Present,
             precision: SummaryPrecision::Local,
@@ -825,7 +825,7 @@ mod tests {
         SummaryFact {
             id: SummaryId(0),
             callable_stable_key: stable_key_for_test(callable_key),
-            function: FunctionId(function_id),
+            function: FunctionId::from_raw(function_id),
             domain: SummaryDomainKind::ControlEffects,
             status: SummaryStatus::Present,
             precision: SummaryPrecision::Local,
@@ -841,8 +841,8 @@ mod tests {
             in_throw: false,
             id: CallSiteId(id),
             language: Language::TypeScript,
-            file: FileId(1),
-            caller: FunctionId(caller),
+            file: FileId::from_raw(1),
+            caller: FunctionId::from_raw(caller),
             owner_symbol: None,
             body: MirBodyId(caller),
             operation: MirOpId(id),
@@ -865,8 +865,8 @@ mod tests {
         CallTargetFact {
             id: CallTargetId(id),
             site: CallSiteId(site_id),
-            caller: FunctionId(caller),
-            target_function: Some(FunctionId(target_func)),
+            caller: FunctionId::from_raw(caller),
+            target_function: Some(FunctionId::from_raw(target_func)),
             target_symbol: None,
             edge_kind: CallEdgeKind::Direct,
             algorithm: CallAlgorithm::DirectReference,
@@ -945,7 +945,7 @@ mod tests {
 
         // A's call effects should have callee control digest joined in
         let store = db.summary_store().expect("summary store should exist");
-        let a_summaries = store.summaries_by_function(FunctionId(1));
+        let a_summaries = store.summaries_by_function(FunctionId::from_raw(1));
         let a_call_effects = a_summaries
             .iter()
             .find(|s| s.domain == SummaryDomainKind::CallEffects)
@@ -989,7 +989,7 @@ mod tests {
         assert_eq!(result.non_recursive_sccs, 3);
         let store = db.summary_store().expect("summary store should exist");
         let a_call_effects = store
-            .summaries_by_function(FunctionId(1))
+            .summaries_by_function(FunctionId::from_raw(1))
             .into_iter()
             .find(|summary| summary.domain == SummaryDomainKind::CallEffects)
             .expect("A should have call effects");
@@ -1023,7 +1023,7 @@ mod tests {
             "leaf SCCs with no callees should not be rewritten"
         );
         let store = db.summary_store().expect("summary store should exist");
-        let leaf_summaries = store.summaries_by_function(FunctionId(1));
+        let leaf_summaries = store.summaries_by_function(FunctionId::from_raw(1));
         assert!(
             leaf_summaries
                 .iter()
@@ -1137,7 +1137,7 @@ mod tests {
         // Verify that if budget exceeded, summaries have BudgetExceeded status
         if result.budget_exceeded_sccs > 0 {
             let store = db.summary_store().expect("store should exist");
-            let a_summaries = store.summaries_by_function(FunctionId(1));
+            let a_summaries = store.summaries_by_function(FunctionId::from_raw(1));
             assert!(
                 a_summaries
                     .iter()
@@ -1270,7 +1270,7 @@ mod tests {
         let joined = join_callee_digests_into(
             &current,
             &[CalleeInfo {
-                callee_function: FunctionId(2),
+                callee_function: FunctionId::from_raw(2),
                 callee_digests,
                 resolved: true,
             }],

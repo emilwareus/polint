@@ -42,28 +42,28 @@ impl GoSyntaxStore {
     }
 
     pub fn push_package(&mut self, mut fact: PackageFact) -> PackageId {
-        let id = PackageId(self.packages.len() as u64);
+        let id = PackageId::from_raw(self.packages.len() as u64);
         fact.id = id;
         self.packages.push(fact);
         id
     }
 
     pub fn push_function(&mut self, mut fact: FunctionFact) -> FunctionId {
-        let id = FunctionId(self.functions.len() as u64);
+        let id = FunctionId::from_raw(self.functions.len() as u64);
         fact.id = id;
         self.functions.push(fact);
         id
     }
 
     pub fn push_import(&mut self, mut fact: ImportFact) -> ImportId {
-        let id = ImportId(self.imports.len() as u64);
+        let id = ImportId::from_raw(self.imports.len() as u64);
         fact.id = id;
         self.imports.push(fact);
         id
     }
 
     pub fn push_branch(&mut self, mut fact: BranchObligation) -> BranchId {
-        let id = BranchId(self.branches.len() as u64);
+        let id = BranchId::from_raw(self.branches.len() as u64);
         fact.id = id;
         self.branches.push(fact);
         id

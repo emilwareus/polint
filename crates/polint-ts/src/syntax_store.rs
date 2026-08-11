@@ -1,4 +1,4 @@
-//! TS/JS syntax fact store registered on the host [`FactDatabase`].
+//! TS/JS syntax fact store registered on the host [`polint_analysis_api::FactDatabase`].
 
 use std::any::Any;
 

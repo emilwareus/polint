@@ -155,20 +155,23 @@ mod tests {
         // Each variant wraps an existing v1.2 identity newtype (D-04); no parallel
         // identity is invented.
         let nodes = [
-            NodeKind::Function(FunctionId(1)),
+            NodeKind::Function(FunctionId::from_raw(1)),
             NodeKind::Callsite(CallSiteId(2)),
             NodeKind::Scope(ScopeId(3)),
             NodeKind::Place(PlaceId(4)),
             NodeKind::AbstractObject(ObjectTokenId(5)),
-            NodeKind::Module(ModuleNodeId(6)),
-            NodeKind::Package(PackageId(7)),
+            NodeKind::Module(ModuleNodeId::from_raw(6)),
+            NodeKind::Package(PackageId::from_raw(7)),
         ];
         assert_eq!(nodes.len(), 7);
     }
 
     #[test]
     fn node_kind_labels_are_stable_snake_case() {
-        assert_eq!(NodeKind::Function(FunctionId(0)).as_str(), "function");
+        assert_eq!(
+            NodeKind::Function(FunctionId::from_raw(0)).as_str(),
+            "function"
+        );
         assert_eq!(NodeKind::Callsite(CallSiteId(0)).as_str(), "callsite");
         assert_eq!(NodeKind::Scope(ScopeId(0)).as_str(), "scope");
         assert_eq!(NodeKind::Place(PlaceId(0)).as_str(), "place");
@@ -176,8 +179,14 @@ mod tests {
             NodeKind::AbstractObject(ObjectTokenId(0)).as_str(),
             "abstract_object"
         );
-        assert_eq!(NodeKind::Module(ModuleNodeId(0)).as_str(), "module");
-        assert_eq!(NodeKind::Package(PackageId(0)).as_str(), "package");
+        assert_eq!(
+            NodeKind::Module(ModuleNodeId::from_raw(0)).as_str(),
+            "module"
+        );
+        assert_eq!(
+            NodeKind::Package(PackageId::from_raw(0)).as_str(),
+            "package"
+        );
     }
 
     #[test]
@@ -196,13 +205,13 @@ mod tests {
             }
         }
         let variants = [
-            assert_all(&NodeKind::Function(FunctionId(0))),
+            assert_all(&NodeKind::Function(FunctionId::from_raw(0))),
             assert_all(&NodeKind::Callsite(CallSiteId(0))),
             assert_all(&NodeKind::Scope(ScopeId(0))),
             assert_all(&NodeKind::Place(PlaceId(0))),
             assert_all(&NodeKind::AbstractObject(ObjectTokenId(0))),
-            assert_all(&NodeKind::Module(ModuleNodeId(0))),
-            assert_all(&NodeKind::Package(PackageId(0))),
+            assert_all(&NodeKind::Module(ModuleNodeId::from_raw(0))),
+            assert_all(&NodeKind::Package(PackageId::from_raw(0))),
         ];
         assert_eq!(variants.len(), 7);
     }
@@ -211,9 +220,9 @@ mod tests {
     fn node_kind_module_variant_uses_module_node_id() {
         // V3 correction guard: the module node composes `core::ModuleNodeId`, not a
         // (non-existent) `ModuleId`.
-        let module = NodeKind::Module(ModuleNodeId(42));
+        let module = NodeKind::Module(ModuleNodeId::from_raw(42));
         match module {
-            NodeKind::Module(id) => assert_eq!(id, ModuleNodeId(42)),
+            NodeKind::Module(id) => assert_eq!(id, ModuleNodeId::from_raw(42)),
             _ => panic!("expected module variant"),
         }
     }
@@ -267,7 +276,7 @@ mod tests {
         let db = crate::LocalAnalysisDb::new();
         let node = SemanticNodeFact {
             id: SemanticNodeId(7),
-            kind: NodeKind::Function(FunctionId(3)),
+            kind: NodeKind::Function(FunctionId::from_raw(3)),
             precision: SemanticPrecision::SetupAware,
             stable_key: db.stable_key_interner().intern("node|function|pkg.F"),
         };

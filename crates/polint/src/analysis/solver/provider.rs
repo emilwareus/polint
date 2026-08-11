@@ -306,7 +306,7 @@ mod tests {
     ) -> SemanticNodeFact {
         SemanticNodeFact {
             id: SemanticNodeId(id),
-            kind: NodeKind::Function(FunctionId(id)),
+            kind: NodeKind::Function(FunctionId::from_raw(id)),
             precision: SemanticPrecision::Conservative,
             stable_key: interner.intern(stable_key),
         }

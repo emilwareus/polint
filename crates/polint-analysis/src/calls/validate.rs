@@ -383,12 +383,12 @@ mod tests {
                 site(0, "call-site:dup"),
                 CallSiteFact {
                     id: CallSiteId(1),
-                    file: FileId(99),
-                    caller: FunctionId(99),
-                    owner_symbol: Some(SymbolId(99)),
+                    file: FileId::from_raw(99),
+                    caller: FunctionId::from_raw(99),
+                    owner_symbol: Some(SymbolId::from_raw(99)),
                     body: MirBodyId(99),
                     operation: MirOpId(99),
-                    span: Span::new(FileId(0), 10, 1, 1, 11, 1, 2),
+                    span: Span::new(FileId::from_raw(0), 10, 1, 1, 11, 1, 2),
                     arguments: vec![PlaceId(99)],
                     receiver: Some(PlaceId(98)),
                     result: Some(PlaceId(97)),
@@ -418,7 +418,7 @@ mod tests {
             ],
             unresolved: vec![UnresolvedCallFact {
                 site: CallSiteId(0),
-                caller: FunctionId(99),
+                caller: FunctionId::from_raw(99),
                 status: CallTargetStatus::Resolved,
                 reason: UnresolvedCallReason::Unknown,
                 algorithm: CallAlgorithm::DirectReference,
@@ -471,8 +471,8 @@ mod tests {
             targets: vec![CallTargetFact {
                 status: CallTargetStatus::Unsupported,
                 reason: Some(UnresolvedCallReason::FrameworkDispatch),
-                target_function: Some(FunctionId(1)),
-                target_symbol: Some(SymbolId(1)),
+                target_function: Some(FunctionId::from_raw(1)),
+                target_symbol: Some(SymbolId::from_raw(1)),
                 stable_key: polint_core::StableKeyId(1),
                 ..target(0, CallSiteId(0), "call-target:ok")
             }],
@@ -551,12 +551,12 @@ mod tests {
         let store =
             CallStore::from_output(output, &interner).expect("call store should index rows");
 
-        assert_eq!(store.sites_by_caller(FunctionId(0)).len(), 1);
+        assert_eq!(store.sites_by_caller(FunctionId::from_raw(0)).len(), 1);
         assert_eq!(store.targets_by_site(CallSiteId(0)).len(), 1);
-        assert_eq!(store.outgoing_by_function(FunctionId(0)).len(), 1);
-        assert_eq!(store.outgoing_by_symbol(SymbolId(0)).len(), 1);
-        assert_eq!(store.incoming_by_symbol(SymbolId(1)).len(), 1);
-        assert_eq!(store.incoming_by_function(FunctionId(1)).len(), 1);
+        assert_eq!(store.outgoing_by_function(FunctionId::from_raw(0)).len(), 1);
+        assert_eq!(store.outgoing_by_symbol(SymbolId::from_raw(0)).len(), 1);
+        assert_eq!(store.incoming_by_symbol(SymbolId::from_raw(1)).len(), 1);
+        assert_eq!(store.incoming_by_function(FunctionId::from_raw(1)).len(), 1);
         assert_eq!(
             store
                 .unresolved_by_reason(UnresolvedCallReason::DynamicProperty)
@@ -592,33 +592,33 @@ mod tests {
             "src/app.ts".to_string(),
             "export function app() { target(); }\n".to_string(),
         );
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "app".to_string(),
-            span: span(file),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
-        db.push_function(FunctionFact {
-            id: FunctionId(1),
+            "app".to_string(),
+            span(file),
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(1),
             file,
-            name: "target".to_string(),
-            span: span(file),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "target".to_string(),
+            span(file),
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
         let interner = db.stable_key_interner();
         db.replace_symbol_graph_facts(
             vec![
-                symbol(&interner, SymbolId(0), file, "app"),
-                symbol(&interner, SymbolId(1), file, "target"),
+                symbol(&interner, SymbolId::from_raw(0), file, "app"),
+                symbol(&interner, SymbolId::from_raw(1), file, "target"),
             ],
             Vec::new(),
             Vec::new(),
@@ -632,22 +632,22 @@ mod tests {
         file: FileId,
         name: &str,
     ) -> SymbolFact {
-        SymbolFact {
+        SymbolFact::new(
             id,
-            language: Language::TypeScript,
-            name: name.to_string(),
-            qualified_name: name.to_string(),
-            kind: SymbolKind::Function,
-            namespace: SymbolNamespace::Value,
-            file: Some(file),
-            package: None,
-            module: None,
-            owner: None,
-            primary_span: Some(span(file)),
-            is_exported: true,
-            stable_key: interner.intern(format!("symbol:{name}")),
-            precision: SymbolPrecision::ExactLocal,
-        }
+            Language::TypeScript,
+            name.to_string(),
+            name.to_string(),
+            SymbolKind::Function,
+            SymbolNamespace::Value,
+            Some(file),
+            None,
+            None,
+            None,
+            Some(span(file)),
+            true,
+            interner.intern(format!("symbol:{name}")),
+            SymbolPrecision::ExactLocal,
+        )
     }
 
     fn site(id: u64, _stable_key: &str) -> CallSiteFact {
@@ -655,12 +655,12 @@ mod tests {
             in_throw: false,
             id: CallSiteId(id),
             language: Language::TypeScript,
-            file: FileId(0),
-            caller: FunctionId(0),
-            owner_symbol: Some(SymbolId(0)),
+            file: FileId::from_raw(0),
+            caller: FunctionId::from_raw(0),
+            owner_symbol: Some(SymbolId::from_raw(0)),
             body: MirBodyId(0),
             operation: MirOpId(0),
-            span: span(FileId(0)),
+            span: span(FileId::from_raw(0)),
             kind: CallSyntaxKind::Function,
             callee: CallCallee::Identifier {
                 reference: None,
@@ -679,9 +679,9 @@ mod tests {
         CallTargetFact {
             id: CallTargetId(id),
             site,
-            caller: FunctionId(0),
-            target_function: Some(FunctionId(1)),
-            target_symbol: Some(SymbolId(1)),
+            caller: FunctionId::from_raw(0),
+            target_function: Some(FunctionId::from_raw(1)),
+            target_symbol: Some(SymbolId::from_raw(1)),
             edge_kind: CallEdgeKind::Direct,
             algorithm: CallAlgorithm::DirectReference,
             status: CallTargetStatus::Resolved,
@@ -695,7 +695,7 @@ mod tests {
     fn unresolved(site: u64, _stable_key: &str) -> UnresolvedCallFact {
         UnresolvedCallFact {
             site: CallSiteId(site),
-            caller: FunctionId(0),
+            caller: FunctionId::from_raw(0),
             status: CallTargetStatus::Unresolved,
             reason: UnresolvedCallReason::DynamicProperty,
             algorithm: CallAlgorithm::SyntaxOnly,
@@ -706,15 +706,7 @@ mod tests {
     }
 
     fn span(file: FileId) -> Span {
-        Span {
-            file,
-            start_byte: 0,
-            end_byte: 10,
-            start_line: 1,
-            start_col: 1,
-            end_line: 1,
-            end_col: 11,
-        }
+        Span::new(file, 0, 10, 1, 1, 1, 11)
     }
 
     fn call_diagnostics(diagnostics: &[polint_core::Diagnostic]) -> Vec<&polint_core::Diagnostic> {

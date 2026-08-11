@@ -251,7 +251,7 @@ mod tests {
     use polint_core::{FileId, FunctionId, Language, Span, StableKeyInterner, SymbolId};
 
     fn span() -> Span {
-        Span::point(FileId(1), 1, 1)
+        Span::point(FileId::from_raw(1), 1, 1)
     }
 
     fn site(interner: &StableKeyInterner, id: u64, caller: u64, stable_key: &str) -> CallSiteFact {
@@ -259,9 +259,9 @@ mod tests {
             in_throw: false,
             id: CallSiteId(id),
             language: Language::TypeScript,
-            file: FileId(1),
-            caller: FunctionId(caller),
-            owner_symbol: Some(SymbolId(caller + 100)),
+            file: FileId::from_raw(1),
+            caller: FunctionId::from_raw(caller),
+            owner_symbol: Some(SymbolId::from_raw(caller + 100)),
             body: MirBodyId(caller),
             operation: MirOpId(id),
             span: span(),
@@ -289,9 +289,9 @@ mod tests {
         CallTargetFact {
             id: CallTargetId(id),
             site: CallSiteId(site),
-            caller: FunctionId(caller),
-            target_function: Some(FunctionId(id + 10)),
-            target_symbol: Some(SymbolId(id + 20)),
+            caller: FunctionId::from_raw(caller),
+            target_function: Some(FunctionId::from_raw(id + 10)),
+            target_symbol: Some(SymbolId::from_raw(id + 20)),
             edge_kind: CallEdgeKind::Direct,
             algorithm: CallAlgorithm::DirectReference,
             status: CallTargetStatus::Resolved,
@@ -311,7 +311,7 @@ mod tests {
     ) -> UnresolvedCallFact {
         UnresolvedCallFact {
             site: CallSiteId(site),
-            caller: FunctionId(caller),
+            caller: FunctionId::from_raw(caller),
             status: CallTargetStatus::Unresolved,
             reason,
             algorithm: CallAlgorithm::SyntaxOnly,
@@ -409,24 +409,24 @@ mod tests {
         assert_eq!(store.sites().len(), 2);
         assert_eq!(store.targets().len(), 2);
         assert_eq!(store.unresolved().len(), 1);
-        assert_eq!(store.sites_by_caller(FunctionId(1)).len(), 2);
+        assert_eq!(store.sites_by_caller(FunctionId::from_raw(1)).len(), 2);
         assert_eq!(
             interner
                 .resolve(store.targets_by_site(CallSiteId(1))[0].stable_key)
                 .as_ref(),
             "target-a"
         );
-        assert_eq!(store.outgoing_by_function(FunctionId(1)).len(), 2);
-        assert_eq!(store.outgoing_by_symbol(SymbolId(101)).len(), 2);
+        assert_eq!(store.outgoing_by_function(FunctionId::from_raw(1)).len(), 2);
+        assert_eq!(store.outgoing_by_symbol(SymbolId::from_raw(101)).len(), 2);
         assert_eq!(
             interner
-                .resolve(store.incoming_by_symbol(SymbolId(21))[0].stable_key)
+                .resolve(store.incoming_by_symbol(SymbolId::from_raw(21))[0].stable_key)
                 .as_ref(),
             "target-a"
         );
         assert_eq!(
             interner
-                .resolve(store.incoming_by_function(FunctionId(11))[0].stable_key)
+                .resolve(store.incoming_by_function(FunctionId::from_raw(11))[0].stable_key)
                 .as_ref(),
             "target-a"
         );

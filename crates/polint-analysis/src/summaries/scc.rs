@@ -310,7 +310,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     fn span() -> Span {
-        Span::point(FileId(1), 1, 1)
+        Span::point(FileId::from_raw(1), 1, 1)
     }
 
     /// Create a minimal SummaryFact for a function.
@@ -318,7 +318,7 @@ mod tests {
         crate::summaries::facts::SummaryFact {
             id: SummaryId(0),
             callable_stable_key: stable_key_for_test(callable_key),
-            function: FunctionId(function_id),
+            function: FunctionId::from_raw(function_id),
             domain: SummaryDomainKind::ControlEffects,
             status: SummaryStatus::Present,
             precision: SummaryPrecision::Local,
@@ -335,8 +335,8 @@ mod tests {
             in_throw: false,
             id: CallSiteId(id),
             language: Language::TypeScript,
-            file: FileId(1),
-            caller: FunctionId(caller),
+            file: FileId::from_raw(1),
+            caller: FunctionId::from_raw(caller),
             owner_symbol: None,
             body: MirBodyId(caller),
             operation: MirOpId(id),
@@ -360,8 +360,8 @@ mod tests {
         CallTargetFact {
             id: CallTargetId(id),
             site: CallSiteId(site_id),
-            caller: FunctionId(caller),
-            target_function: Some(FunctionId(target_func)),
+            caller: FunctionId::from_raw(caller),
+            target_function: Some(FunctionId::from_raw(target_func)),
             target_symbol: None,
             edge_kind: CallEdgeKind::Direct,
             algorithm: CallAlgorithm::DirectReference,

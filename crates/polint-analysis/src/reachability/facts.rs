@@ -208,27 +208,19 @@ mod tests {
     }
 
     fn span_bytes(file: FileId, start: u32, end: u32) -> Span {
-        Span {
-            file,
-            start_byte: start,
-            end_byte: end,
-            start_line: 1,
-            start_col: 1,
-            end_line: 1,
-            end_col: 1,
-        }
+        Span::new(file, start, end, 1, 1, 1, 1)
     }
 
     fn sample_root() -> ReachabilityRootFact {
-        let span = span_bytes(FileId(3), 4, 9);
+        let span = span_bytes(FileId::from_raw(3), 4, 9);
         ReachabilityRootFact {
             id: ReachabilityRootId(0),
             kind: RootKind::Main,
             language: Language::Go,
-            target_function: FunctionId(10),
-            target_symbol: Some(SymbolId(20)),
+            target_function: FunctionId::from_raw(10),
+            target_symbol: Some(SymbolId::from_raw(20)),
             originating_entrypoint: None,
-            file: FileId(3),
+            file: FileId::from_raw(3),
             span: span.clone(),
             precision: RootPrecision::ResolvedStatic,
             provenance: RootProvenance::NativeDiscovery,
@@ -238,7 +230,7 @@ mod tests {
                 RootKind::Main,
                 Language::Go,
                 "main.main",
-                FileId(3),
+                FileId::from_raw(3),
                 &span,
             )),
         }
@@ -328,12 +320,12 @@ mod tests {
     fn stable_key_disambiguates_field_boundaries() {
         // Two roots whose joined fields differ only by where a `|` falls
         // (`a|b`,`c` vs `a`,`b|c`) must produce distinct stable keys.
-        let span = span_bytes(FileId(1), 1, 1);
+        let span = span_bytes(FileId::from_raw(1), 1, 1);
         let left = compute_reachability_root_stable_key(
             RootKind::Exported,
             Language::Go,
             "a|b",
-            FileId(1),
+            FileId::from_raw(1),
             &span,
         );
         // A sibling whose function identity is "b|c" joined the same way proves
@@ -342,7 +334,7 @@ mod tests {
             RootKind::Exported,
             Language::Go,
             "b|c",
-            FileId(1),
+            FileId::from_raw(1),
             &span,
         );
         assert_ne!(left, right_with_pipe);
@@ -357,8 +349,8 @@ mod tests {
             RootKind::Main,
             Language::Go,
             "main.main",
-            FileId(3),
-            &span_bytes(FileId(3), 4, 9),
+            FileId::from_raw(3),
+            &span_bytes(FileId::from_raw(3), 4, 9),
         );
         assert_eq!(key, "reachability_root|main|go|main.main|3|4..9");
     }

@@ -107,24 +107,24 @@ impl ModuleGraphBuilder {
         }
 
         let Some(info) = self.files.get(&file) else {
-            return self.insert_node(ModuleNode {
-                id: ModuleNodeId(0),
-                kind: ModuleNodeKind::File,
-                label: format!("<unknown:{}>", file.0),
-                file: Some(file),
-                package: None,
-                language: None,
-            });
+            return self.insert_node(ModuleNode::new(
+                ModuleNodeId::from_raw(0),
+                ModuleNodeKind::File,
+                format!("<unknown:{}>", file.0),
+                Some(file),
+                None,
+                None,
+            ));
         };
 
-        let node = self.insert_node(ModuleNode {
-            id: ModuleNodeId(0),
-            kind: ModuleNodeKind::File,
-            label: info.relative_path.clone(),
-            file: Some(file),
-            package: None,
-            language: Some(info.language),
-        });
+        let node = self.insert_node(ModuleNode::new(
+            ModuleNodeId::from_raw(0),
+            ModuleNodeKind::File,
+            info.relative_path.clone(),
+            Some(file),
+            None,
+            Some(info.language),
+        ));
         self.file_nodes.insert(file, node);
         node
     }
@@ -150,14 +150,14 @@ impl ModuleGraphBuilder {
             return node;
         }
 
-        let node = self.insert_node(ModuleNode {
-            id: ModuleNodeId(0),
-            kind: ModuleNodeKind::Package,
-            label: label.clone(),
-            file: None,
+        let node = self.insert_node(ModuleNode::new(
+            ModuleNodeId::from_raw(0),
+            ModuleNodeKind::Package,
+            label.clone(),
+            None,
             package,
             language,
-        });
+        ));
         self.package_nodes.insert(label, node);
         node
     }
@@ -168,14 +168,14 @@ impl ModuleGraphBuilder {
             return node;
         }
 
-        let node = self.insert_node(ModuleNode {
-            id: ModuleNodeId(0),
-            kind: ModuleNodeKind::Module,
-            label: label.clone(),
-            file: None,
-            package: None,
-            language: None,
-        });
+        let node = self.insert_node(ModuleNode::new(
+            ModuleNodeId::from_raw(0),
+            ModuleNodeKind::Module,
+            label.clone(),
+            None,
+            None,
+            None,
+        ));
         self.module_nodes.insert(label, node);
         node
     }
@@ -191,14 +191,14 @@ impl ModuleGraphBuilder {
             return node;
         }
 
-        let node = self.insert_node(ModuleNode {
-            id: ModuleNodeId(0),
-            kind: ModuleNodeKind::External,
+        let node = self.insert_node(ModuleNode::new(
+            ModuleNodeId::from_raw(0),
+            ModuleNodeKind::External,
             label,
-            file: None,
-            package: None,
+            None,
+            None,
             language,
-        });
+        ));
         self.external_nodes.insert(key, node);
         node
     }
@@ -236,6 +236,7 @@ impl ModuleGraphBuilder {
         let status = match kind {
             ModuleEdgeKind::DependsOn => ResolutionStatus::External,
             ModuleEdgeKind::Imports | ModuleEdgeKind::Contains => ResolutionStatus::Resolved,
+            _ => ResolutionStatus::Unsupported,
         };
         self.link(from, to, import, None, kind, status);
     }
@@ -259,7 +260,12 @@ impl ModuleGraphBuilder {
         owner: ModuleNodeId,
         draft: ResolvedImportDraft,
     ) -> ResolvedImportFact {
-        self.apply_resolved_import_draft_with_id(import, owner, draft, ResolvedImportId(0))
+        self.apply_resolved_import_draft_with_id(
+            import,
+            owner,
+            draft,
+            ResolvedImportId::from_raw(0),
+        )
     }
 
     pub fn apply_resolved_import_draft_with_id(
@@ -284,15 +290,15 @@ impl ModuleGraphBuilder {
             );
         }
 
-        ResolvedImportFact {
-            id: resolved_import,
-            import: import.id,
-            from_file: import.file,
+        ResolvedImportFact::new(
+            resolved_import,
+            import.id,
+            import.file,
             target_node,
-            status: draft.status,
-            precision: draft.precision,
-            reason: draft.reason,
-        }
+            draft.status,
+            draft.precision,
+            draft.reason,
+        )
     }
 
     pub fn finish(mut self) -> ModuleGraphOutput {
@@ -342,22 +348,23 @@ impl ModuleGraphBuilder {
             ModuleNodeKind::External => {
                 self.ensure_external_node(draft.label.clone(), draft.language)
             }
+            _ => self.insert_draft_node(draft),
         }
     }
 
     fn insert_draft_node(&mut self, draft: &ModuleNodeDraft) -> ModuleNodeId {
-        self.insert_node(ModuleNode {
-            id: ModuleNodeId(0),
-            kind: draft.kind,
-            label: draft.label.clone(),
-            file: draft.file,
-            package: draft.package,
-            language: draft.language,
-        })
+        self.insert_node(ModuleNode::new(
+            ModuleNodeId::from_raw(0),
+            draft.kind,
+            draft.label.clone(),
+            draft.file,
+            draft.package,
+            draft.language,
+        ))
     }
 
     fn insert_node(&mut self, mut node: ModuleNode) -> ModuleNodeId {
-        let id = ModuleNodeId(self.nodes.len() as u64);
+        let id = ModuleNodeId::from_raw(self.nodes.len() as u64);
         node.id = id;
         self.nodes.push(node);
         id
@@ -384,15 +391,15 @@ impl ModuleGraphBuilder {
             return;
         }
 
-        self.edges.push(ModuleEdge {
-            id: ModuleEdgeId(0),
+        self.edges.push(ModuleEdge::new(
+            ModuleEdgeId::from_raw(0),
             from,
             to,
             import,
             resolved_import,
             kind,
             status,
-        });
+        ));
     }
 }
 
@@ -504,6 +511,7 @@ fn edge_kind_rank(kind: ModuleEdgeKind) -> u8 {
         ModuleEdgeKind::Contains => 0,
         ModuleEdgeKind::Imports => 1,
         ModuleEdgeKind::DependsOn => 2,
+        _ => 3,
     }
 }
 
@@ -515,6 +523,7 @@ fn status_rank(status: ResolutionStatus) -> u8 {
         ResolutionStatus::SetupMissing => 3,
         ResolutionStatus::Dynamic => 4,
         ResolutionStatus::Unsupported => 5,
+        _ => 6,
     }
 }
 
@@ -553,9 +562,12 @@ mod tests {
 
     #[test]
     fn module_graph_resolver_contracts_module_node_draft_supports_all_target_kinds() {
-        let file = ModuleNodeDraft::file(FileId(7), "src/app.ts", Language::TypeScript);
-        let package =
-            ModuleNodeDraft::package("ts:app", Some(PackageId(3)), Some(Language::TypeScript));
+        let file = ModuleNodeDraft::file(FileId::from_raw(7), "src/app.ts", Language::TypeScript);
+        let package = ModuleNodeDraft::package(
+            "ts:app",
+            Some(PackageId::from_raw(3)),
+            Some(Language::TypeScript),
+        );
         let module = ModuleNodeDraft::module(".");
 
         assert_eq!(file.kind, ModuleNodeKind::File);
@@ -571,14 +583,14 @@ mod tests {
             "src/app.ts".to_string(),
             "import React from 'react';\n".to_string(),
         );
-        db.push_import(ImportFact {
-            id: ImportId(99),
+        db.push_import(ImportFact::new(
+            ImportId::from_raw(99),
             file,
-            package: None,
-            path: "react".to_string(),
-            span: Span::point(file, 1, 1),
-            language: Language::TypeScript,
-        });
+            None,
+            "react".to_string(),
+            Span::point(file, 1, 1),
+            Language::TypeScript,
+        ));
         let import = &db.imports()[0];
         let mut builder = ModuleGraphBuilder::new(&db);
         let owner = builder.ensure_module_node(".");

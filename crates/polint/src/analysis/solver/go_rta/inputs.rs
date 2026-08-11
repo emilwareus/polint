@@ -887,15 +887,7 @@ mod tests {
     use crate::go::semantic::store::GoSemanticFactsOutput;
 
     fn span(file: crate::core::FileId, start: u32, end: u32) -> Span {
-        Span {
-            file,
-            start_byte: start,
-            end_byte: end,
-            start_line: 1,
-            start_col: 1,
-            end_line: 1,
-            end_col: 1,
-        }
+        Span::new(file, start, end, 1, 1, 1, 1)
     }
 
     /// `from_db` joins the stored Go-frontend facts to the already-built semantic-graph
@@ -912,17 +904,17 @@ mod tests {
         let method_span = span(file, 10, 40);
 
         // Core function for the concrete method (pkg.File).Read.
-        let function_id = db.push_function(FunctionFact {
-            id: FunctionId(0),
+        let function_id = db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "Read".to_string(),
-            span: method_span.clone(),
-            language: Language::Go,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "Read".to_string(),
+            method_span.clone(),
+            Language::Go,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
 
         // The semantic-graph function node, keyed exactly like the builder would key it.
         let node_stable_key = function_node_key(
@@ -1051,17 +1043,17 @@ mod tests {
             "package pkg\n".to_string(),
         );
         // Core method declaration spans bytes 10..40 (the full `func (D) Speak() {...}`).
-        let function_id = db.push_function(FunctionFact {
-            id: FunctionId(0),
+        let function_id = db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "Dog.Speak".to_string(),
-            span: span(file, 10, 40),
-            language: Language::Go,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "Dog.Speak".to_string(),
+            span(file, 10, 40),
+            Language::Go,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
         let node_stable_key = function_node_key(
             &db.stable_key_interner(),
             &db,
@@ -1141,17 +1133,17 @@ mod tests {
             "package pkg\n".to_string(),
         );
         let push = |db: &mut AnalysisDb, id: u64, start: u32, end: u32| {
-            db.push_function(FunctionFact {
-                id: FunctionId(id),
+            db.push_function(FunctionFact::new(
+                FunctionId::from_raw(id),
                 file,
-                name: "F".to_string(),
-                span: span(file, start, end),
-                language: Language::Go,
-                is_test: false,
-                is_exported: true,
-                cyclomatic_complexity: 1,
-                calls: Vec::new(),
-            })
+                "F".to_string(),
+                span(file, start, end),
+                Language::Go,
+                false,
+                true,
+                1,
+                Vec::new(),
+            ))
         };
         let outer = push(&mut db, 0, 0, 100);
         let inner = push(&mut db, 1, 40, 60);
@@ -1176,17 +1168,17 @@ mod tests {
             "package pkg\n".to_string(),
         );
         let push = |db: &mut AnalysisDb, id: u64, start: u32, end: u32| {
-            db.push_function(FunctionFact {
-                id: FunctionId(id),
+            db.push_function(FunctionFact::new(
+                FunctionId::from_raw(id),
                 file,
-                name: "F".to_string(),
-                span: span(file, start, end),
-                language: Language::Go,
-                is_test: false,
-                is_exported: true,
-                cyclomatic_complexity: 1,
-                calls: Vec::new(),
-            })
+                "F".to_string(),
+                span(file, start, end),
+                Language::Go,
+                false,
+                true,
+                1,
+                Vec::new(),
+            ))
         };
         let _outer = push(&mut db, 0, 0, 100);
         let inner = push(&mut db, 1, 40, 60);
@@ -1212,12 +1204,12 @@ mod tests {
             in_throw: false,
             id: CallSiteId(id),
             language: Language::Go,
-            file: FileId(1),
+            file: FileId::from_raw(1),
             caller,
             owner_symbol: None,
             body: MirBodyId(0),
             operation: MirOpId(0),
-            span: span(FileId(1), start, end),
+            span: span(FileId::from_raw(1), start, end),
             kind: CallSyntaxKind::Method,
             callee: CallCallee::Unknown {
                 reason: crate::analysis::calls::facts::UnresolvedCallReason::InterfaceDispatch,
@@ -1238,8 +1230,8 @@ mod tests {
     #[test]
     fn select_constraint_callsite_disambiguates_by_caller_and_dynamic_status() {
         use crate::analysis::calls::facts::CallTargetStatus;
-        let caller_a = FunctionId(10);
-        let caller_b = FunctionId(20);
+        let caller_a = FunctionId::from_raw(10);
+        let caller_b = FunctionId::from_raw(20);
         let interner = crate::core::StableKeyInterner::default();
 
         // All four share the SAME span (a method chain at one outer span). Among caller_a's
@@ -1294,8 +1286,8 @@ mod tests {
     #[test]
     fn select_constraint_callsite_degrades_gracefully_and_is_deterministic() {
         use crate::analysis::calls::facts::CallTargetStatus;
-        let caller_a = FunctionId(10);
-        let caller_b = FunctionId(20);
+        let caller_a = FunctionId::from_raw(10);
+        let caller_b = FunctionId::from_raw(20);
         let interner = crate::core::StableKeyInterner::default();
 
         // Two dynamic sites at one span for DIFFERENT callers, plus a static one. Caller
@@ -1382,17 +1374,17 @@ mod tests {
             "package pkg\n".to_string(),
         );
         let push = |db: &mut AnalysisDb, id: u64, start: u32, end: u32| {
-            db.push_function(FunctionFact {
-                id: FunctionId(id),
+            db.push_function(FunctionFact::new(
+                FunctionId::from_raw(id),
                 file,
-                name: "F".to_string(),
-                span: span(file, start, end),
-                language: Language::Go,
-                is_test: false,
-                is_exported: true,
-                cyclomatic_complexity: 1,
-                calls: Vec::new(),
-            })
+                "F".to_string(),
+                span(file, start, end),
+                Language::Go,
+                false,
+                true,
+                1,
+                Vec::new(),
+            ))
         };
         let outer = push(&mut db, 0, 0, 100);
         let inner = push(&mut db, 1, 40, 60);
@@ -1448,17 +1440,17 @@ mod tests {
             "pkg/file.go".to_string(),
             "package pkg\n".to_string(),
         );
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "F".to_string(),
-            span: span(file, 0, 100),
-            language: Language::Go,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "F".to_string(),
+            span(file, 0, 100),
+            Language::Go,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
         // 45..50 is neither exact nor a zero-width point, so no match (no loose
         // containment for ranged spans).
         assert!(matching_core_function_for(&db, file, "F", &span(file, 45, 50)).is_none());
@@ -1483,28 +1475,28 @@ mod tests {
             "package b\n".to_string(),
         );
         // Same name "Handler", same byte span, but DIFFERENT files.
-        let in_a = db.push_function(FunctionFact {
-            id: FunctionId(0),
-            file: file_a,
-            name: "Handler".to_string(),
-            span: span(file_a, 10, 40),
-            language: Language::Go,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
-        let in_b = db.push_function(FunctionFact {
-            id: FunctionId(1),
-            file: file_b,
-            name: "Handler".to_string(),
-            span: span(file_b, 10, 40),
-            language: Language::Go,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+        let in_a = db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
+            file_a,
+            "Handler".to_string(),
+            span(file_a, 10, 40),
+            Language::Go,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
+        let in_b = db.push_function(FunctionFact::new(
+            FunctionId::from_raw(1),
+            file_b,
+            "Handler".to_string(),
+            span(file_b, 10, 40),
+            Language::Go,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
 
         // Each file's span resolves to its OWN file's function — never the other file's.
         let matched_a = matching_core_function_for(&db, file_a, "Handler", &span(file_a, 10, 40))
@@ -1534,28 +1526,28 @@ mod tests {
             "b/file.go".to_string(),
             "package b\n".to_string(),
         );
-        let fn_a = db.push_function(FunctionFact {
-            id: FunctionId(0),
-            file: file_a,
-            name: "Run".to_string(),
-            span: span(file_a, 10, 40),
-            language: Language::Go,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
-        let fn_b = db.push_function(FunctionFact {
-            id: FunctionId(1),
-            file: file_b,
-            name: "Run".to_string(),
-            span: span(file_b, 10, 40),
-            language: Language::Go,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+        let fn_a = db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
+            file_a,
+            "Run".to_string(),
+            span(file_a, 10, 40),
+            Language::Go,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
+        let fn_b = db.push_function(FunctionFact::new(
+            FunctionId::from_raw(1),
+            file_b,
+            "Run".to_string(),
+            span(file_b, 10, 40),
+            Language::Go,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
         let key_a = function_node_key(
             &db.stable_key_interner(),
             &db,
@@ -1655,28 +1647,28 @@ mod tests {
             "package pkg\n".to_string(),
         );
         // Core method `Dog.Speak` (10..40) and core free function `Speak` (50..80).
-        let method_id = db.push_function(FunctionFact {
-            id: FunctionId(0),
+        let method_id = db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "Dog.Speak".to_string(),
-            span: span(file, 10, 40),
-            language: Language::Go,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
-        let free_id = db.push_function(FunctionFact {
-            id: FunctionId(1),
+            "Dog.Speak".to_string(),
+            span(file, 10, 40),
+            Language::Go,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
+        let free_id = db.push_function(FunctionFact::new(
+            FunctionId::from_raw(1),
             file,
-            name: "Speak".to_string(),
-            span: span(file, 50, 80),
-            language: Language::Go,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "Speak".to_string(),
+            span(file, 50, 80),
+            Language::Go,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
         let method_key = function_node_key(
             &db.stable_key_interner(),
             &db,

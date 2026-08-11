@@ -20,6 +20,7 @@ pub(crate) fn resolution_metadata(
         }
         ResolutionPrecision::Heuristic => (FactPrecision::Heuristic, FactConfidence::Medium),
         ResolutionPrecision::None => resolution_status_metadata(status),
+        _ => (FactPrecision::Unsupported, FactConfidence::Low),
     }
 }
 
@@ -34,6 +35,7 @@ pub(crate) fn resolution_status_metadata(
         ResolutionStatus::SetupMissing => (FactPrecision::SetupMissing, FactConfidence::Low),
         ResolutionStatus::Dynamic => (FactPrecision::Heuristic, FactConfidence::Low),
         ResolutionStatus::Unsupported => (FactPrecision::Unsupported, FactConfidence::Low),
+        _ => (FactPrecision::Unsupported, FactConfidence::Low),
     }
 }
 
@@ -47,5 +49,6 @@ pub(crate) fn symbol_metadata(precision: SymbolPrecision) -> (FactPrecision, Fac
         SymbolPrecision::Ambiguous => (FactPrecision::Ambiguous, FactConfidence::Low),
         SymbolPrecision::SetupMissing => (FactPrecision::SetupMissing, FactConfidence::Low),
         SymbolPrecision::Unsupported => (FactPrecision::Unsupported, FactConfidence::Low),
+        _ => (FactPrecision::Unsupported, FactConfidence::Low),
     }
 }

@@ -2199,6 +2199,7 @@ fn symbol_precision_label(precision: SymbolPrecision) -> &'static str {
         SymbolPrecision::Ambiguous => "ambiguous",
         SymbolPrecision::SetupMissing => "setup_missing",
         SymbolPrecision::Unsupported => "unsupported",
+        _ => "unknown",
     }
 }
 
@@ -2209,6 +2210,7 @@ fn symbol_resolution_status_label(status: SymbolResolutionStatus) -> &'static st
         SymbolResolutionStatus::Ambiguous => "ambiguous",
         SymbolResolutionStatus::SetupMissing => "setup_missing",
         SymbolResolutionStatus::Unsupported => "unsupported",
+        _ => "unknown",
     }
 }
 
@@ -2599,6 +2601,7 @@ fn symbol_kind_label(kind: crate::core::SymbolKind) -> &'static str {
         crate::core::SymbolKind::Import => "import",
         crate::core::SymbolKind::Export => "export",
         crate::core::SymbolKind::Unknown => "unknown",
+        _ => "unknown",
     }
 }
 
@@ -2610,6 +2613,7 @@ fn symbol_namespace_label(namespace: crate::core::SymbolNamespace) -> &'static s
         crate::core::SymbolNamespace::Package => "package",
         crate::core::SymbolNamespace::Module => "module",
         crate::core::SymbolNamespace::Unknown => "unknown",
+        _ => "unknown",
     }
 }
 
@@ -2640,7 +2644,7 @@ mod cfg_debug_json {
             functions: vec![CfgFunctionFact {
                 id: CfgFunctionId(0),
                 body: MirBodyId(0),
-                function: FunctionId(0),
+                function: FunctionId::from_raw(0),
                 language: Language::TypeScript,
                 file,
                 span: span(file),
@@ -2744,7 +2748,7 @@ mod cfg_debug_json {
             operation: None,
             block: BasicBlockId(id),
             kind,
-            span: Some(span(FileId(0))),
+            span: Some(span(FileId::from_raw(0))),
             generated: true,
             operation_ordinal: id as u32,
             stable_key: interner.intern(stable_key),
@@ -2775,15 +2779,7 @@ mod cfg_debug_json {
     }
 
     fn span(file: FileId) -> Span {
-        Span {
-            file,
-            start_byte: 0,
-            end_byte: 10,
-            start_line: 1,
-            start_col: 1,
-            end_line: 1,
-            end_col: 11,
-        }
+        Span::new(file, 0, 10, 1, 1, 1, 11)
     }
 }
 
@@ -2883,7 +2879,7 @@ mod calls_debug_json {
             targets: Vec::new(),
             unresolved: vec![UnresolvedCallFact {
                 site: CallSiteId(0),
-                caller: FunctionId(0),
+                caller: FunctionId::from_raw(0),
                 status: CallTargetStatus::Unresolved,
                 reason: UnresolvedCallReason::FunctionValue,
                 algorithm: CallAlgorithm::SyntaxOnly,
@@ -2932,33 +2928,13 @@ mod calls_debug_json {
             "src/app.ts".to_string(),
             "export function app() { target(); dynamic[name](); }\n".to_string(),
         );
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
-            file,
-            name: "app".to_string(),
-            span: span(file),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
-        db.push_function(FunctionFact {
-            id: FunctionId(1),
-            file,
-            name: "target".to_string(),
-            span: span(file),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+        db.push_function(FunctionFact::new(FunctionId::from_raw(0), file, "app".to_string(), span(file), Language::TypeScript, false, true, 1, Vec::new()));
+        db.push_function(FunctionFact::new(FunctionId::from_raw(1), file, "target".to_string(), span(file), Language::TypeScript, false, true, 1, Vec::new()));
         let interner = db.stable_key_interner();
         db.replace_symbol_graph_facts(
             vec![
-                symbol(&interner, SymbolId(0), file, "app"),
-                symbol(&interner, SymbolId(1), file, "target"),
+                symbol(&interner, SymbolId::from_raw(0), file, "app"),
+                symbol(&interner, SymbolId::from_raw(1), file, "target"),
             ],
             Vec::new(),
             Vec::new(),
@@ -2971,12 +2947,12 @@ mod calls_debug_json {
             in_throw: false,
             id: CallSiteId(id),
             language: Language::TypeScript,
-            file: FileId(0),
-            caller: FunctionId(0),
-            owner_symbol: Some(SymbolId(0)),
+            file: FileId::from_raw(0),
+            caller: FunctionId::from_raw(0),
+            owner_symbol: Some(SymbolId::from_raw(0)),
             body: MirBodyId(0),
             operation: MirOpId(0),
-            span: span(FileId(0)),
+            span: span(FileId::from_raw(0)),
             kind: CallSyntaxKind::Function,
             callee: CallCallee::Identifier {
                 reference: None,
@@ -2995,9 +2971,9 @@ mod calls_debug_json {
         CallTargetFact {
             id: CallTargetId(id),
             site: CallSiteId(0),
-            caller: FunctionId(0),
-            target_function: Some(FunctionId(1)),
-            target_symbol: Some(SymbolId(1)),
+            caller: FunctionId::from_raw(0),
+            target_function: Some(FunctionId::from_raw(1)),
+            target_symbol: Some(SymbolId::from_raw(1)),
             edge_kind: CallEdgeKind::Direct,
             algorithm: CallAlgorithm::DirectReference,
             status: CallTargetStatus::Resolved,
@@ -3011,7 +2987,7 @@ mod calls_debug_json {
     fn unresolved(stable_key: &str) -> UnresolvedCallFact {
         UnresolvedCallFact {
             site: CallSiteId(0),
-            caller: FunctionId(0),
+            caller: FunctionId::from_raw(0),
             status: CallTargetStatus::Unresolved,
             reason: UnresolvedCallReason::DynamicProperty,
             algorithm: CallAlgorithm::SyntaxOnly,
@@ -3027,34 +3003,11 @@ mod calls_debug_json {
         file: FileId,
         name: &str,
     ) -> SymbolFact {
-        SymbolFact {
-            id,
-            language: Language::TypeScript,
-            name: name.to_string(),
-            qualified_name: name.to_string(),
-            kind: SymbolKind::Function,
-            namespace: SymbolNamespace::Value,
-            file: Some(file),
-            package: None,
-            module: None,
-            owner: None,
-            primary_span: Some(span(file)),
-            is_exported: true,
-            stable_key: interner.intern(format!("symbol:{name}")),
-            precision: SymbolPrecision::ExactLocal,
-        }
+        SymbolFact::new(id, Language::TypeScript, name.to_string(), name.to_string(), SymbolKind::Function, SymbolNamespace::Value, Some(file), None, None, None, Some(span(file)), true, interner.intern(format!("symbol:{name}")), SymbolPrecision::ExactLocal)
     }
 
     fn span(file: FileId) -> Span {
-        Span {
-            file,
-            start_byte: 0,
-            end_byte: 10,
-            start_line: 1,
-            start_col: 1,
-            end_line: 1,
-            end_col: 11,
-        }
+        Span::new(file, 0, 10, 1, 1, 1, 11)
     }
 }
 
@@ -3208,23 +3161,13 @@ mod semantic_mir_debug_json {
             "src/app.ts".to_string(),
             "export function app(value: number) { return value + 1; }\n".to_string(),
         );
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
-            file,
-            name: "app".to_string(),
-            span: span(file, 0, 54),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+        db.push_function(FunctionFact::new(FunctionId::from_raw(0), file, "app".to_string(), span(file, 0, 54), Language::TypeScript, false, true, 1, Vec::new()));
         db.replace_semantic_mir(MirOutput {
             bodies: vec![MirBody {
                 id: MirBodyId(0),
                 language: Language::TypeScript,
                 file,
-                function: FunctionId(0),
+                function: FunctionId::from_raw(0),
                 package: None,
                 module: None,
                 owner_stable_key: interner.intern("function:app".to_string()),
@@ -3236,9 +3179,9 @@ mod semantic_mir_debug_json {
                 id: PlaceId(0),
                 language: Language::TypeScript,
                 file: Some(file),
-                function: Some(FunctionId(0)),
+                function: Some(FunctionId::from_raw(0)),
                 root: PlaceRoot::Local {
-                    function: FunctionId(0),
+                    function: FunctionId::from_raw(0),
                     name: "value".to_string(),
                 },
                 projections: vec![PlaceProjection::Property("count".to_string())],
@@ -3308,15 +3251,7 @@ mod semantic_mir_debug_json {
     }
 
     fn span(file: FileId, start_byte: u32, end_byte: u32) -> Span {
-        Span {
-            file,
-            start_byte,
-            end_byte,
-            start_line: 1,
-            start_col: start_byte + 1,
-            end_line: 1,
-            end_col: end_byte + 1,
-        }
+        Span::new(file, start_byte, end_byte, 1, start_byte + 1, 1, end_byte + 1)
     }
 }
 
@@ -3419,7 +3354,7 @@ mod abstract_domains_debug_json {
                 SummaryFact {
                     id: SummaryId(0),
                     callable_stable_key: crate::core::stable_key_for_test("func::app"),
-                    function: FunctionId(0),
+                    function: FunctionId::from_raw(0),
                     domain: SummaryDomainKind::ControlEffects,
                     status: SummaryStatus::Present,
                     precision: SummaryPrecision::Local,
@@ -3431,7 +3366,7 @@ mod abstract_domains_debug_json {
                 SummaryFact {
                     id: SummaryId(1),
                     callable_stable_key: crate::core::stable_key_for_test("func::app"),
-                    function: FunctionId(0),
+                    function: FunctionId::from_raw(0),
                     domain: SummaryDomainKind::MemoryEffects,
                     status: SummaryStatus::Unknown,
                     precision: SummaryPrecision::UnknownTop,
@@ -3444,7 +3379,7 @@ mod abstract_domains_debug_json {
             events: vec![SummaryEventFact {
                 id: SummaryEventId(0),
                 callable_stable_key: crate::core::stable_key_for_test("func::app"),
-                function: FunctionId(0),
+                function: FunctionId::from_raw(0),
                 domain: SummaryDomainKind::CallEffects,
                 event_kind: "unresolved_callee".to_string(),
                 reason: "dynamic".to_string(),
@@ -3519,7 +3454,7 @@ mod abstract_domains_debug_json {
             summaries: vec![SummaryFact {
                 id: SummaryId(0),
                 callable_stable_key: crate::core::stable_key_for_test("func::app"),
-                function: FunctionId(0),
+                function: FunctionId::from_raw(0),
                 domain: SummaryDomainKind::ControlEffects,
                 status: SummaryStatus::Present,
                 precision: SummaryPrecision::Local,
@@ -3531,7 +3466,7 @@ mod abstract_domains_debug_json {
             events: vec![SummaryEventFact {
                 id: SummaryEventId(0),
                 callable_stable_key: crate::core::stable_key_for_test("func::app"),
-                function: FunctionId(0),
+                function: FunctionId::from_raw(0),
                 domain: SummaryDomainKind::CallEffects,
                 event_kind: "unresolved_callee".to_string(),
                 reason: "dynamic".to_string(),
@@ -3591,7 +3526,7 @@ mod abstract_domains_debug_json {
             summaries: vec![SummaryFact {
                 id: SummaryId(0),
                 callable_stable_key: crate::core::stable_key_for_test("func::app"),
-                function: FunctionId(0),
+                function: FunctionId::from_raw(0),
                 domain: SummaryDomainKind::ControlEffects,
                 status: SummaryStatus::Present,
                 precision: SummaryPrecision::Local,
@@ -3729,23 +3664,13 @@ mod abstract_domains_debug_json {
             "src/app.ts".to_string(),
             "export function app() { let value = 1; return value; }\n".to_string(),
         );
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
-            file,
-            name: "app".to_string(),
-            span: span(file),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+        db.push_function(FunctionFact::new(FunctionId::from_raw(0), file, "app".to_string(), span(file), Language::TypeScript, false, true, 1, Vec::new()));
         db.replace_semantic_mir(MirOutput {
             bodies: vec![MirBody {
                 id: MirBodyId(0),
                 language: Language::TypeScript,
                 file,
-                function: FunctionId(0),
+                function: FunctionId::from_raw(0),
                 package: None,
                 module: None,
                 owner_stable_key: interner.intern("function:app".to_string()),
@@ -3757,9 +3682,9 @@ mod abstract_domains_debug_json {
                 id: PlaceId(0),
                 language: Language::TypeScript,
                 file: Some(file),
-                function: Some(FunctionId(0)),
+                function: Some(FunctionId::from_raw(0)),
                 root: PlaceRoot::Local {
-                    function: FunctionId(0),
+                    function: FunctionId::from_raw(0),
                     name: "value".to_string(),
                 },
                 projections: Vec::new(),
@@ -3789,15 +3714,7 @@ mod abstract_domains_debug_json {
     }
 
     fn span(file: FileId) -> Span {
-        Span {
-            file,
-            start_byte: 0,
-            end_byte: 10,
-            start_line: 1,
-            start_col: 1,
-            end_line: 1,
-            end_col: 11,
-        }
+        Span::new(file, 0, 10, 1, 1, 1, 11)
     }
 }
 

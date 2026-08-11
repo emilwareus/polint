@@ -3,6 +3,7 @@ use crate::ids::FileId;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TextRange {
     pub start_byte: u32,
     pub end_byte: u32,
@@ -18,6 +19,7 @@ impl TextRange {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Span {
     pub file: FileId,
     pub start_byte: u32,

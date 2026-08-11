@@ -126,20 +126,20 @@ mod tests {
     use polint_core::{FileId, Language, Span};
 
     fn source_file(relative_path: &str, text: &str) -> SourceFile {
-        SourceFile {
-            id: FileId(1),
-            path: PathBuf::from(relative_path),
-            relative_path: relative_path.to_string(),
-            language: Language::TypeScript,
-            source: Arc::from(text),
-            content_hash: "test".to_string(),
-        }
+        SourceFile::new(
+            FileId::from_raw(1),
+            PathBuf::from(relative_path),
+            relative_path.to_string(),
+            Language::TypeScript,
+            Arc::from(text),
+            "test".to_string(),
+        )
     }
 
     fn byte_span(text: &str, needle: &str) -> Span {
         let start = text.find(needle).expect("needle present") as u32;
         let end = start + needle.len() as u32;
-        let mut span = Span::point(FileId(1), 0, 0);
+        let mut span = Span::point(FileId::from_raw(1), 0, 0);
         span.start_byte = start;
         span.end_byte = end;
         span
@@ -150,7 +150,7 @@ mod tests {
         IdentityRecord {
             id: IdentityRecordId(0),
             kind: IdentityKind::Function,
-            file_id: FileId(1),
+            file_id: FileId::from_raw(1),
             span: span.clone(),
             language,
             package_or_module: Arc::from("src/foo.ts"),
@@ -170,7 +170,7 @@ mod tests {
                 language,
                 "src/foo.ts",
                 "foo",
-                FileId(1),
+                FileId::from_raw(1),
                 &span,
             )),
             originating_call_site_id: None,
@@ -187,7 +187,7 @@ mod tests {
         // A function spanning from the start of the file to the first byte of
         // line 3 renders 1-based line/column with a half-open end column.
         let text = MULTI_LINE_LF;
-        let mut span = Span::point(FileId(1), 0, 0);
+        let mut span = Span::point(FileId::from_raw(1), 0, 0);
         span.start_byte = 0;
         // End just past the closing brace `}` at the start of line 3.
         span.end_byte = text.find('}').expect("brace") as u32 + 1;
@@ -229,11 +229,11 @@ mod tests {
         let lf = MULTI_LINE_LF;
         let crlf = "function foo() {\r\n  return 1;\r\n}\r\n";
 
-        let mut lf_span = Span::point(FileId(1), 0, 0);
+        let mut lf_span = Span::point(FileId::from_raw(1), 0, 0);
         lf_span.start_byte = 0;
         lf_span.end_byte = lf.find('}').expect("brace") as u32 + 1;
 
-        let mut crlf_span = Span::point(FileId(1), 0, 0);
+        let mut crlf_span = Span::point(FileId::from_raw(1), 0, 0);
         crlf_span.start_byte = 0;
         crlf_span.end_byte = crlf.find('}').expect("brace") as u32 + 1;
 

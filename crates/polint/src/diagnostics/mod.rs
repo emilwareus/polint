@@ -2660,10 +2660,7 @@ mod tests {
         assert_eq!(diagnostic.message, "policy failed");
         assert_eq!(
             diagnostic.labels,
-            vec![Label {
-                range: label_range,
-                message: "related expression".to_string()
-            }]
+            vec![Label::new(label_range, "related expression".to_string())]
         );
         assert_eq!(
             diagnostic.evidence,
@@ -2674,16 +2671,14 @@ mod tests {
         );
         assert_eq!(
             diagnostic.suggestions,
-            vec![Suggestion {
-                message: "Prefer safe_api here".to_string()
-            }]
+            vec![Suggestion::new("Prefer safe_api here".to_string())]
         );
         assert_eq!(
             diagnostic.fix,
-            Some(Fix {
-                message: "Replace unsafe_api".to_string(),
-                replacement: Some("safe_api".to_string())
-            })
+            Some(Fix::new(
+                "Replace unsafe_api".to_string(),
+                Some("safe_api".to_string())
+            ))
         );
         assert_eq!(
             diagnostic.help,
@@ -2701,40 +2696,28 @@ mod tests {
         let changed_start_line = Diagnostic::warning(
             "project/rule",
             "src/lib.rs",
-            TextRange {
-                start_line: 5,
-                ..range
-            },
+            TextRange::new(5, range.start_col, range.end_line, range.end_col),
             "policy failed",
         )
         .stable_fingerprint;
         let changed_start_col = Diagnostic::warning(
             "project/rule",
             "src/lib.rs",
-            TextRange {
-                start_col: 3,
-                ..range
-            },
+            TextRange::new(range.start_line, 3, range.end_line, range.end_col),
             "policy failed",
         )
         .stable_fingerprint;
         let changed_end_line = Diagnostic::warning(
             "project/rule",
             "src/lib.rs",
-            TextRange {
-                end_line: 5,
-                ..range
-            },
+            TextRange::new(range.start_line, range.start_col, 5, range.end_col),
             "policy failed",
         )
         .stable_fingerprint;
         let changed_end_col = Diagnostic::warning(
             "project/rule",
             "src/lib.rs",
-            TextRange {
-                end_col: 10,
-                ..range
-            },
+            TextRange::new(range.start_line, range.start_col, range.end_line, 10),
             "policy failed",
         )
         .stable_fingerprint;

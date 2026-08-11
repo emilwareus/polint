@@ -58,13 +58,15 @@ pub fn derive_requested_metrics(
     let file_metrics = db
         .files()
         .iter()
-        .map(|file| FileMetricFact {
-            file: file.id,
-            language: file.language,
-            line_count: line_count(&file.source),
-            non_empty_line_count: non_empty_line_count(&file.source),
-            byte_count: saturating_u32(file.source.len()),
-            function_count: function_counts.get(&file.id).copied().unwrap_or_default(),
+        .map(|file| {
+            FileMetricFact::new(
+                file.id,
+                file.language,
+                line_count(&file.source),
+                non_empty_line_count(&file.source),
+                saturating_u32(file.source.len()),
+                function_counts.get(&file.id).copied().unwrap_or_default(),
+            )
         })
         .collect::<Vec<_>>();
 
@@ -72,17 +74,19 @@ pub fn derive_requested_metrics(
         .functions()
         .iter()
         .filter(|function| !is_synthetic_ts_js_module_function(function))
-        .map(|function| FunctionMetricFact {
-            function: function.id,
-            file: function.file,
-            name: function.name.clone(),
-            span: function.span.clone(),
-            language: function.language,
-            line_count: span_line_count(&function.span),
-            byte_count: function
-                .span
-                .end_byte
-                .saturating_sub(function.span.start_byte),
+        .map(|function| {
+            FunctionMetricFact::new(
+                function.id,
+                function.file,
+                function.name.clone(),
+                function.span.clone(),
+                function.language,
+                span_line_count(&function.span),
+                function
+                    .span
+                    .end_byte
+                    .saturating_sub(function.span.start_byte),
+            )
         })
         .collect::<Vec<_>>();
 
@@ -90,13 +94,15 @@ pub fn derive_requested_metrics(
         .functions()
         .iter()
         .filter(|function| !is_synthetic_ts_js_module_function(function))
-        .map(|function| ComplexityMetricFact {
-            function: function.id,
-            file: function.file,
-            name: function.name.clone(),
-            span: function.span.clone(),
-            language: function.language,
-            cyclomatic_complexity: function.cyclomatic_complexity,
+        .map(|function| {
+            ComplexityMetricFact::new(
+                function.id,
+                function.file,
+                function.name.clone(),
+                function.span.clone(),
+                function.language,
+                function.cyclomatic_complexity,
+            )
         })
         .collect::<Vec<_>>();
 

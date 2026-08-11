@@ -806,8 +806,8 @@ mod tests {
         }));
         assert!(output.types.types.iter().any(|row| {
             row.status == TypeStatus::Unsupported
-                && row.file == Some(FileId(0))
-                && row.function == Some(FunctionId(0))
+                && row.file == Some(FileId::from_raw(0))
+                && row.function == Some(FunctionId::from_raw(0))
                 && row.body == Some(MirBodyId(0))
                 && row.operation == Some(MirOpId(2))
                 && row.place == Some(PlaceId(1))
@@ -822,17 +822,17 @@ mod tests {
             "service.go".to_string(),
             "package service".to_string(),
         );
-        let function = db.push_function(FunctionFact {
-            id: FunctionId(0),
+        let function = db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "Service.Authorize".to_string(),
-            span: Span::point(file, 1, 1),
-            language: Language::Go,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "Service.Authorize".to_string(),
+            Span::point(file, 1, 1),
+            Language::Go,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
         let body = MirBody {
             id: MirBodyId(0),
             language: Language::Go,

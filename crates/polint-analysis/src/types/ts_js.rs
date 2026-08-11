@@ -1256,17 +1256,17 @@ export function narrow(user, value, dynamicKey) {
             "src/narrow.ts".to_string(),
             source.to_string(),
         );
-        let function = db.push_function(FunctionFact {
-            id: FunctionId(0),
+        let function = db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "narrow".to_string(),
-            span: span_for(source, file, "export function narrow", "}"),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "narrow".to_string(),
+            span_for(source, file, "export function narrow", "}"),
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
         let body = MirBody {
             id: MirBodyId(0),
             language: Language::TypeScript,

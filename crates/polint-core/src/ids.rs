@@ -5,6 +5,7 @@ macro_rules! id_newtype {
         #[derive(
             Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
         )]
+        #[non_exhaustive]
         pub struct $name(pub $ty);
 
         impl $name {
@@ -35,6 +36,7 @@ id_newtype!(DefinitionId, u64);
 id_newtype!(ReferenceId, u64);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct RuleId(pub String);
 
 impl RuleId {

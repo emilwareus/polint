@@ -272,7 +272,7 @@ mod tests {
         let fact = SummaryFact {
             id: SummaryId(1),
             callable_stable_key: polint_core::stable_key_for_test("func::main"),
-            function: FunctionId(10),
+            function: FunctionId::from_raw(10),
             domain: SummaryDomainKind::ControlEffects,
             status: SummaryStatus::Present,
             precision: SummaryPrecision::Local,
@@ -294,7 +294,7 @@ mod tests {
         let event = SummaryEventFact {
             id: SummaryEventId(1),
             callable_stable_key: polint_core::stable_key_for_test("func::main"),
-            function: FunctionId(10),
+            function: FunctionId::from_raw(10),
             domain: SummaryDomainKind::CallEffects,
             event_kind: "unresolved_callee".to_string(),
             reason: "dynamic dispatch".to_string(),

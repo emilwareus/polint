@@ -416,30 +416,22 @@ mod tests {
             "src/main.ts".to_string(),
             "export function main() {}\n".to_string(),
         );
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "main".to_string(),
-            span: span(file),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "main".to_string(),
+            span(file),
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
         db
     }
 
     fn span(file: FileId) -> Span {
-        Span {
-            file,
-            start_byte: 0,
-            end_byte: 10,
-            start_line: 1,
-            start_col: 1,
-            end_line: 1,
-            end_col: 11,
-        }
+        Span::new(file, 0, 10, 1, 1, 1, 11)
     }
 
     fn summary_fact(
@@ -452,7 +444,7 @@ mod tests {
         SummaryFact {
             id: SummaryId(id),
             callable_stable_key: stable_key_for_test(callable_key),
-            function: FunctionId(function),
+            function: FunctionId::from_raw(function),
             domain,
             status: SummaryStatus::Present,
             precision: SummaryPrecision::Local,
@@ -492,7 +484,7 @@ mod tests {
         SummaryEventFact {
             id: SummaryEventId(id),
             callable_stable_key: stable_key_for_test(callable_key),
-            function: FunctionId(function),
+            function: FunctionId::from_raw(function),
             domain: SummaryDomainKind::CallEffects,
             event_kind: "unresolved_callee".to_string(),
             reason: "dynamic".to_string(),

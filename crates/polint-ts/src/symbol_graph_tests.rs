@@ -31,14 +31,7 @@ mod semantic_scopes {
     use std::path::PathBuf;
 
     fn source_file(source: &str) -> SourceFile {
-        SourceFile {
-            id: FileId(0),
-            path: PathBuf::from("src/scopes.ts"),
-            relative_path: "src/scopes.ts".to_string(),
-            language: Language::TypeScript,
-            source: source.to_string().into(),
-            content_hash: "test-hash".to_string(),
-        }
+        SourceFile::new(FileId::from_raw(0), PathBuf::from("src/scopes.ts"), "src/scopes.ts".to_string(), Language::TypeScript, source.to_string().into(), "test-hash".to_string())
     }
 
     #[test]
@@ -145,14 +138,7 @@ mod semantic_imports_exports {
     use std::path::PathBuf;
 
     fn derive(source: &str) -> polint_analysis::symbol_graph::semantic::SemanticIndexOutput {
-        let file = SourceFile {
-            id: FileId(0),
-            path: PathBuf::from("src/imports.ts"),
-            relative_path: "src/imports.ts".to_string(),
-            language: Language::TypeScript,
-            source: source.to_string().into(),
-            content_hash: "test-hash".to_string(),
-        };
+        let file = SourceFile::new(FileId::from_raw(0), PathBuf::from("src/imports.ts"), "src/imports.ts".to_string(), Language::TypeScript, source.to_string().into(), "test-hash".to_string());
         let allocator = Allocator::default();
         let parsed = parse_ts_file(&allocator, &file);
         let semantic = SemanticBuilder::new().build(parsed.program()).semantic;
@@ -313,14 +299,7 @@ mod semantic_resolution {
     use std::path::PathBuf;
 
     fn derive(source: &str) -> polint_analysis::symbol_graph::semantic::SemanticIndexOutput {
-        let file = SourceFile {
-            id: FileId(0),
-            path: PathBuf::from("src/resolution.ts"),
-            relative_path: "src/resolution.ts".to_string(),
-            language: Language::TypeScript,
-            source: source.to_string().into(),
-            content_hash: "test-hash".to_string(),
-        };
+        let file = SourceFile::new(FileId::from_raw(0), PathBuf::from("src/resolution.ts"), "src/resolution.ts".to_string(), Language::TypeScript, source.to_string().into(), "test-hash".to_string());
         let allocator = Allocator::default();
         let parsed = parse_ts_file(&allocator, &file);
         let semantic = SemanticBuilder::new().build(parsed.program()).semantic;
@@ -343,14 +322,7 @@ mod semantic_resolution {
         Vec<SymbolFact>,
         SemanticIndexOutput,
     ) {
-        let file = SourceFile {
-            id: FileId(0),
-            path: PathBuf::from("src/resolution.ts"),
-            relative_path: "src/resolution.ts".to_string(),
-            language: Language::TypeScript,
-            source: source.to_string().into(),
-            content_hash: "test-hash".to_string(),
-        };
+        let file = SourceFile::new(FileId::from_raw(0), PathBuf::from("src/resolution.ts"), "src/resolution.ts".to_string(), Language::TypeScript, source.to_string().into(), "test-hash".to_string());
         let interner = polint_core::StableKeyInterner::default();
         let mut builder = SymbolGraphBuilder::new(interner.clone());
         let mut output = LanguageSymbolOutput::default();

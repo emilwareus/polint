@@ -196,7 +196,7 @@ mod tests {
         SummaryFact {
             id: SummaryId(id),
             callable_stable_key: stable_key_for_test(callable_key),
-            function: FunctionId(function),
+            function: FunctionId::from_raw(function),
             domain,
             status: SummaryStatus::Present,
             precision: SummaryPrecision::Local,
@@ -216,7 +216,7 @@ mod tests {
         SummaryEventFact {
             id: SummaryEventId(id),
             callable_stable_key: stable_key_for_test(callable_key),
-            function: FunctionId(function),
+            function: FunctionId::from_raw(function),
             domain: SummaryDomainKind::CallEffects,
             event_kind: "unresolved_callee".to_string(),
             reason: "dynamic".to_string(),
@@ -416,13 +416,13 @@ mod tests {
         assert!(tito.is_empty());
 
         // by function
-        let func1 = store.summaries_by_function(FunctionId(1));
+        let func1 = store.summaries_by_function(FunctionId::from_raw(1));
         assert_eq!(func1.len(), 2);
 
-        let func2 = store.summaries_by_function(FunctionId(2));
+        let func2 = store.summaries_by_function(FunctionId::from_raw(2));
         assert_eq!(func2.len(), 1);
 
-        let func99 = store.summaries_by_function(FunctionId(99));
+        let func99 = store.summaries_by_function(FunctionId::from_raw(99));
         assert!(func99.is_empty());
     }
 
@@ -468,7 +468,7 @@ mod tests {
         assert_eq!(store.all_summaries()[0].payload_digest, "updated");
         assert_eq!(store.all_summaries()[1].id.0, 1);
         assert_eq!(
-            store.summaries_by_function(FunctionId(1))[0].payload_digest,
+            store.summaries_by_function(FunctionId::from_raw(1))[0].payload_digest,
             "updated"
         );
     }
