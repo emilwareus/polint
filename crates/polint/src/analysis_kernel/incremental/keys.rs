@@ -35,33 +35,9 @@ pub(crate) const MODULE_GRAPH_TOPOLOGY_INPUT_FILE_NAMES: &[&str] = &[
     "tsconfig.json",
 ];
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum LayerKind {
-    SourceFiles,
-    GoSyntax,
-    TsSyntax,
-    ModuleGraph,
-    SymbolGraph,
-    ModuleTopology,
-    SemanticMir,
-    Cfg,
-    Calls,
-    AbstractDomains,
-    DirectSummaries,
-    TypeValueAlias,
-    DemandQuery,
-    Metrics,
-    Extension,
-}
+pub(crate) use polint_analysis_api::LayerKind;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum PrecisionTier {
-    Syntax,
-    SetupAware,
-    Exact,
-}
+pub(crate) use polint_analysis_api::PrecisionTier;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) struct LayerKey {
@@ -78,15 +54,7 @@ pub(crate) struct LayerKey {
     pub(crate) extension_digests: Arc<Vec<Digest>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub(crate) struct QueryKey {
-    pub(crate) query_kind: String,
-    pub(crate) query_version: String,
-    pub(crate) parameter_digest: Digest,
-    pub(crate) layer_digests: Vec<Digest>,
-    pub(crate) budget_digest: Digest,
-    pub(crate) precision_tier: PrecisionTier,
-}
+pub(crate) use polint_analysis_api::QueryKey;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) struct SummaryKey {
@@ -816,26 +784,6 @@ impl LayerKey {
                 "extension_digest_absent",
             )],
         )
-    }
-}
-
-impl QueryKey {
-    pub(crate) fn new(
-        query_kind: impl Into<String>,
-        query_version: impl Into<String>,
-        parameter_digest: Digest,
-        layer_digests: Vec<Digest>,
-        budget_digest: Digest,
-        precision_tier: PrecisionTier,
-    ) -> Self {
-        Self {
-            query_kind: query_kind.into(),
-            query_version: query_version.into(),
-            parameter_digest,
-            layer_digests: sorted_digests(layer_digests),
-            budget_digest,
-            precision_tier,
-        }
     }
 }
 

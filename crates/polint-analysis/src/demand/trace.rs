@@ -12,7 +12,7 @@ use super::scc::SccFixpointStatus;
 /// Trace entries record the internal execution flow of demand queries for
 /// debug output. Traces are only collected when trace mode is enabled.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) enum QueryTraceEntry {
+pub enum QueryTraceEntry {
     /// A query execution started.
     QueryStarted {
         kind: QueryKind,
@@ -70,37 +70,37 @@ pub(crate) enum QueryTraceEntry {
 /// the internal trace mode is active and is used for debug snapshots and
 /// eval fixture validation.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct QueryTrace {
+pub struct QueryTrace {
     entries: Vec<QueryTraceEntry>,
 }
 
 impl QueryTrace {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self::default()
     }
 
     /// Adds a trace entry.
-    pub(crate) fn push(&mut self, entry: QueryTraceEntry) {
+    pub fn push(&mut self, entry: QueryTraceEntry) {
         self.entries.push(entry);
     }
 
     /// Returns all trace entries.
-    pub(crate) fn entries(&self) -> &[QueryTraceEntry] {
+    pub fn entries(&self) -> &[QueryTraceEntry] {
         &self.entries
     }
 
     /// Returns the number of trace entries.
-    pub(crate) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.entries.len()
     }
 
     /// Returns whether the trace is empty.
-    pub(crate) fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
     /// Returns entries matching a given query kind.
-    pub(crate) fn entries_for_query(&self, kind: QueryKind) -> Vec<&QueryTraceEntry> {
+    pub fn entries_for_query(&self, kind: QueryKind) -> Vec<&QueryTraceEntry> {
         self.entries
             .iter()
             .filter(|entry| match entry {
@@ -112,7 +112,7 @@ impl QueryTrace {
     }
 
     /// Returns the number of SCC iterations recorded.
-    pub(crate) fn scc_iteration_count(&self) -> u32 {
+    pub fn scc_iteration_count(&self) -> u32 {
         self.entries
             .iter()
             .filter(|entry| matches!(entry, QueryTraceEntry::SccIteration { .. }))
@@ -120,7 +120,7 @@ impl QueryTrace {
     }
 
     /// Returns the number of quarantine skip events.
-    pub(crate) fn quarantine_skip_count(&self) -> u32 {
+    pub fn quarantine_skip_count(&self) -> u32 {
         self.entries
             .iter()
             .filter(|entry| matches!(entry, QueryTraceEntry::QuarantineSkipped { .. }))
@@ -129,7 +129,7 @@ impl QueryTrace {
 
     /// Returns a debug JSON representation of the trace.
     #[cfg(test)]
-    pub(crate) fn to_debug_json(&self) -> serde_json::Value {
+    pub fn to_debug_json(&self) -> serde_json::Value {
         serde_json::json!({
             "trace_entries": self.entries.len(),
             "scc_iterations": self.scc_iteration_count(),

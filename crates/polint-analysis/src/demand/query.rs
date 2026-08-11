@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::analysis_kernel::incremental::{Digest, DigestKind, PrecisionTier, QueryKey};
+use polint_analysis_api::{Digest, DigestKind, PrecisionTier, QueryKey};
 
 // ---------------------------------------------------------------------------
 // QueryKind — the set of demand query families
@@ -11,7 +11,7 @@ use crate::analysis_kernel::incremental::{Digest, DigestKind, PrecisionTier, Que
 /// Each variant represents a class of expensive computation that should be
 /// demand-driven rather than eagerly materialized for the entire repo.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub(crate) enum QueryKind {
+pub enum QueryKind {
     /// One-function CFG and control-dependence view.
     FunctionCfg,
     /// One-function def-use and data-dependence view.
@@ -29,7 +29,7 @@ pub(crate) enum QueryKind {
 }
 
 impl QueryKind {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::FunctionCfg => "function_cfg",
             Self::FunctionDefUse => "function_def_use",
@@ -41,7 +41,7 @@ impl QueryKind {
         }
     }
 
-    pub(crate) fn version(self) -> &'static str {
+    pub fn version(self) -> &'static str {
         // All queries start at version 1.
         "1"
     }
@@ -57,21 +57,21 @@ impl QueryKind {
 /// with an explicit `BudgetExceeded` status rather than silently running
 /// unbounded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub(crate) struct QueryBudget {
+pub struct QueryBudget {
     /// Maximum number of SCC iterations allowed for fixpoint queries.
-    pub(crate) max_iterations: u32,
+    pub max_iterations: u32,
     /// Maximum number of nodes visited during graph traversal queries.
-    pub(crate) max_nodes: u32,
+    pub max_nodes: u32,
     /// Maximum depth for recursive query evaluation.
-    pub(crate) max_depth: u32,
+    pub max_depth: u32,
 }
 
 impl QueryBudget {
-    pub(crate) const DEFAULT_MAX_ITERATIONS: u32 = 100;
-    pub(crate) const DEFAULT_MAX_NODES: u32 = 10_000;
-    pub(crate) const DEFAULT_MAX_DEPTH: u32 = 64;
+    pub const DEFAULT_MAX_ITERATIONS: u32 = 100;
+    pub const DEFAULT_MAX_NODES: u32 = 10_000;
+    pub const DEFAULT_MAX_DEPTH: u32 = 64;
 
-    pub(crate) fn default_budget() -> Self {
+    pub fn default_budget() -> Self {
         Self {
             max_iterations: Self::DEFAULT_MAX_ITERATIONS,
             max_nodes: Self::DEFAULT_MAX_NODES,
@@ -80,7 +80,7 @@ impl QueryBudget {
     }
 
     /// Returns a digest of this budget for cache identity.
-    pub(crate) fn digest(&self) -> Digest {
+    pub fn digest(&self) -> Digest {
         Digest::from_parts(
             DigestKind::ProviderParameters,
             "query_budget",
@@ -105,7 +105,7 @@ impl Default for QueryBudget {
 
 /// Outcome status of a demand query execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub(crate) enum QueryStatus {
+pub enum QueryStatus {
     /// Query completed with full results.
     Complete,
     /// Query completed but results are partial due to missing inputs.
@@ -123,7 +123,7 @@ pub(crate) enum QueryStatus {
 }
 
 impl QueryStatus {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Complete => "complete",
             Self::Partial => "partial",
@@ -143,16 +143,16 @@ impl QueryStatus {
 /// Result of a demand query execution, pairing output with status and
 /// metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct QueryResult<T> {
-    pub(crate) output: T,
-    pub(crate) status: QueryStatus,
-    pub(crate) precision: PrecisionTier,
-    pub(crate) iterations: u32,
-    pub(crate) nodes_visited: u32,
+pub struct QueryResult<T> {
+    pub output: T,
+    pub status: QueryStatus,
+    pub precision: PrecisionTier,
+    pub iterations: u32,
+    pub nodes_visited: u32,
 }
 
 impl<T> QueryResult<T> {
-    pub(crate) fn complete(output: T, precision: PrecisionTier) -> Self {
+    pub fn complete(output: T, precision: PrecisionTier) -> Self {
         Self {
             output,
             status: QueryStatus::Complete,
@@ -162,7 +162,7 @@ impl<T> QueryResult<T> {
         }
     }
 
-    pub(crate) fn budget_exceeded(output: T, precision: PrecisionTier, iterations: u32) -> Self {
+    pub fn budget_exceeded(output: T, precision: PrecisionTier, iterations: u32) -> Self {
         Self {
             output,
             status: QueryStatus::BudgetExceeded,
@@ -178,7 +178,7 @@ impl<T> QueryResult<T> {
 // ---------------------------------------------------------------------------
 
 /// Constructs a `QueryKey` for a demand query with the given parameters.
-pub(crate) fn demand_query_key(
+pub fn demand_query_key(
     kind: QueryKind,
     parameter_digest: Digest,
     layer_digests: Vec<Digest>,

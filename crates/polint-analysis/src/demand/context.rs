@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use super::query::{QueryBudget, QueryKind, QueryStatus};
 use super::trace::QueryTraceEntry;
-use crate::analysis_kernel::incremental::{Digest, DigestKind, LayerKind};
+use polint_analysis_api::{Digest, DigestKind, LayerKind};
 
 // ---------------------------------------------------------------------------
 // DependencyRead — a recorded read from the query context
@@ -16,15 +16,15 @@ use crate::analysis_kernel::incremental::{Digest, DigestKind, LayerKind};
 /// determine which cached query results need recomputation when upstream
 /// inputs change.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub(crate) struct DependencyRead {
-    pub(crate) kind: DependencyReadKind,
-    pub(crate) key: String,
-    pub(crate) digest: Digest,
+pub struct DependencyRead {
+    pub kind: DependencyReadKind,
+    pub key: String,
+    pub digest: Digest,
 }
 
 /// The kind of upstream dependency that was read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub(crate) enum DependencyReadKind {
+pub enum DependencyReadKind {
     /// Read a layer cache entry.
     Layer(LayerKind),
     /// Read a demand query result.
@@ -46,7 +46,7 @@ pub(crate) enum DependencyReadKind {
 /// cached query result is checked, the recorded dependencies are compared
 /// against current input digests to determine if the result is still valid.
 #[derive(Debug, Clone)]
-pub(crate) struct QueryContext {
+pub struct QueryContext {
     /// The query kind being executed.
     query_kind: QueryKind,
     /// Active resource budget.
@@ -65,20 +65,20 @@ pub(crate) struct QueryContext {
 
 /// An in-run memoized query result.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct MemoEntry {
-    pub(crate) output_digest: Digest,
-    pub(crate) status: QueryStatus,
+pub struct MemoEntry {
+    pub output_digest: Digest,
+    pub status: QueryStatus,
 }
 
 /// Key for in-run memoized results.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct MemoKey {
-    pub(crate) query_kind: QueryKind,
-    pub(crate) key: String,
+pub struct MemoKey {
+    pub query_kind: QueryKind,
+    pub key: String,
 }
 
 impl MemoKey {
-    pub(crate) fn new(query_kind: QueryKind, key: impl Into<String>) -> Self {
+    pub fn new(query_kind: QueryKind, key: impl Into<String>) -> Self {
         Self {
             query_kind,
             key: key.into(),
@@ -88,7 +88,7 @@ impl MemoKey {
 
 impl QueryContext {
     /// Creates a new query context for a demand query.
-    pub(crate) fn new(query_kind: QueryKind, budget: QueryBudget, trace_enabled: bool) -> Self {
+    pub fn new(query_kind: QueryKind, budget: QueryBudget, trace_enabled: bool) -> Self {
         Self {
             query_kind,
             budget,
@@ -101,7 +101,7 @@ impl QueryContext {
     }
 
     /// Records a layer dependency read.
-    pub(crate) fn read_layer(&mut self, layer_kind: LayerKind, key: &str, digest: Digest) {
+    pub fn read_layer(&mut self, layer_kind: LayerKind, key: &str, digest: Digest) {
         self.reads.push(DependencyRead {
             kind: DependencyReadKind::Layer(layer_kind),
             key: key.to_string(),
@@ -117,7 +117,7 @@ impl QueryContext {
     }
 
     /// Records a demand query dependency read.
-    pub(crate) fn read_query(&mut self, query_kind: QueryKind, key: &str, digest: Digest) {
+    pub fn read_query(&mut self, query_kind: QueryKind, key: &str, digest: Digest) {
         self.reads.push(DependencyRead {
             kind: DependencyReadKind::Query(query_kind),
             key: key.to_string(),
@@ -133,7 +133,7 @@ impl QueryContext {
     }
 
     /// Records a summary dependency read.
-    pub(crate) fn read_summary(&mut self, callable_key: &str, digest: Digest) {
+    pub fn read_summary(&mut self, callable_key: &str, digest: Digest) {
         self.reads.push(DependencyRead {
             kind: DependencyReadKind::Summary,
             key: callable_key.to_string(),
@@ -149,7 +149,7 @@ impl QueryContext {
     }
 
     /// Records an extension input dependency read.
-    pub(crate) fn read_extension(&mut self, extension_key: &str, digest: Digest) {
+    pub fn read_extension(&mut self, extension_key: &str, digest: Digest) {
         self.reads.push(DependencyRead {
             kind: DependencyReadKind::Extension,
             key: extension_key.to_string(),
@@ -165,33 +165,33 @@ impl QueryContext {
     }
 
     /// Checks if a memoized result exists for the given key.
-    pub(crate) fn memo_lookup(&self, key: &str) -> Option<&MemoEntry> {
+    pub fn memo_lookup(&self, key: &str) -> Option<&MemoEntry> {
         self.memo_lookup_for(self.query_kind, key)
     }
 
     /// Checks if a memoized result exists for a specific query family and key.
-    pub(crate) fn memo_lookup_for(&self, query_kind: QueryKind, key: &str) -> Option<&MemoEntry> {
+    pub fn memo_lookup_for(&self, query_kind: QueryKind, key: &str) -> Option<&MemoEntry> {
         self.memo_table.get(&MemoKey::new(query_kind, key))
     }
 
     /// Records a memoized result for the given key.
-    pub(crate) fn memo_store(&mut self, key: String, entry: MemoEntry) {
+    pub fn memo_store(&mut self, key: String, entry: MemoEntry) {
         self.memo_store_for(self.query_kind, key, entry);
     }
 
     /// Records a memoized result for a specific query family and key.
-    pub(crate) fn memo_store_for(&mut self, query_kind: QueryKind, key: String, entry: MemoEntry) {
+    pub fn memo_store_for(&mut self, query_kind: QueryKind, key: String, entry: MemoEntry) {
         self.memo_table.insert(MemoKey::new(query_kind, key), entry);
     }
 
     /// Returns the current recursion depth.
-    pub(crate) fn depth(&self) -> u32 {
+    pub fn depth(&self) -> u32 {
         self.depth
     }
 
     /// Enters a deeper recursion level, returning `None` if the budget
     /// max_depth would be exceeded.
-    pub(crate) fn enter_depth(&mut self) -> Option<u32> {
+    pub fn enter_depth(&mut self) -> Option<u32> {
         if self.depth >= self.budget.max_depth {
             if self.trace_enabled {
                 self.trace_entries.push(QueryTraceEntry::BudgetExceeded {
@@ -207,32 +207,32 @@ impl QueryContext {
     }
 
     /// Exits a recursion level.
-    pub(crate) fn exit_depth(&mut self) {
+    pub fn exit_depth(&mut self) {
         self.depth = self.depth.saturating_sub(1);
     }
 
     /// Returns the active budget.
-    pub(crate) fn budget(&self) -> &QueryBudget {
+    pub fn budget(&self) -> &QueryBudget {
         &self.budget
     }
 
     /// Returns the query kind.
-    pub(crate) fn query_kind(&self) -> QueryKind {
+    pub fn query_kind(&self) -> QueryKind {
         self.query_kind
     }
 
     /// Returns all recorded dependency reads.
-    pub(crate) fn reads(&self) -> &[DependencyRead] {
+    pub fn reads(&self) -> &[DependencyRead] {
         &self.reads
     }
 
     /// Returns the trace entries (empty if tracing is disabled).
-    pub(crate) fn trace_entries(&self) -> &[QueryTraceEntry] {
+    pub fn trace_entries(&self) -> &[QueryTraceEntry] {
         &self.trace_entries
     }
 
     /// Consumes the context and returns all collected dependency reads.
-    pub(crate) fn into_reads(self) -> Vec<DependencyRead> {
+    pub fn into_reads(self) -> Vec<DependencyRead> {
         self.reads
     }
 
@@ -240,7 +240,7 @@ impl QueryContext {
     ///
     /// This digest can be used for cache identity: if it matches a stored
     /// result's dependency digest, the result can be reused.
-    pub(crate) fn dependency_digest(&self) -> Digest {
+    pub fn dependency_digest(&self) -> Digest {
         if self.reads.is_empty() {
             return Digest::absent(DigestKind::DependencyLayer, "no_reads");
         }

@@ -22,7 +22,6 @@ pub(crate) mod adaptation;
 pub(crate) mod calls;
 pub(crate) mod cfg;
 pub(crate) mod data_flow;
-pub(crate) mod demand;
 pub(crate) mod domains;
 pub(crate) mod entrypoints;
 pub(crate) mod evidence;

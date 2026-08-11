@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::analysis_kernel::incremental::{Digest, DigestKind};
+use polint_analysis_api::{Digest, DigestKind};
 
 // ---------------------------------------------------------------------------
 // SCC graph types for summary fixpoint scheduling
@@ -14,23 +14,23 @@ use crate::analysis_kernel::incremental::{Digest, DigestKind};
 /// together through fixpoint iteration. The SCC graph captures these groups
 /// and the dependency edges between them.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SccComponent {
+pub struct SccComponent {
     /// Unique SCC identifier assigned in topological order.
-    pub(crate) id: SccId,
+    pub id: SccId,
     /// The callable stable keys that belong to this SCC.
-    pub(crate) members: BTreeSet<String>,
+    pub members: BTreeSet<String>,
     /// Whether this SCC contains more than one callable (is truly recursive).
-    pub(crate) is_recursive: bool,
+    pub is_recursive: bool,
     /// SCC IDs that this SCC depends on (callees in other SCCs).
-    pub(crate) depends_on: BTreeSet<SccId>,
+    pub depends_on: BTreeSet<SccId>,
     /// SCC IDs that depend on this SCC (callers in other SCCs).
-    pub(crate) depended_by: BTreeSet<SccId>,
+    pub depended_by: BTreeSet<SccId>,
 }
 
 /// Newtype for SCC identifiers. Assigned in topological order so lower IDs
 /// have no dependencies on higher IDs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub(crate) struct SccId(pub(crate) u32);
+pub struct SccId(pub u32);
 
 // ---------------------------------------------------------------------------
 // SCC graph
@@ -42,11 +42,11 @@ pub(crate) struct SccId(pub(crate) u32);
 /// an SCC with a higher ID. This allows summaries to be computed bottom-up,
 /// with fixpoint iteration only needed within recursive SCCs.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct SccGraph {
+pub struct SccGraph {
     /// Components in topological order (lowest ID first).
-    pub(crate) components: Vec<SccComponent>,
+    pub components: Vec<SccComponent>,
     /// Map from callable stable key to the SCC it belongs to.
-    pub(crate) callable_to_scc: BTreeMap<String, SccId>,
+    pub callable_to_scc: BTreeMap<String, SccId>,
 }
 
 impl SccGraph {
@@ -55,7 +55,7 @@ impl SccGraph {
     /// The `call_edges` map goes from caller callable_stable_key to the set
     /// of callee callable_stable_keys. The algorithm uses iterative Tarjan's
     /// SCC decomposition to produce a topologically ordered SCC list.
-    pub(crate) fn from_call_edges(call_edges: &BTreeMap<String, BTreeSet<String>>) -> Self {
+    pub fn from_call_edges(call_edges: &BTreeMap<String, BTreeSet<String>>) -> Self {
         // Collect all callable keys (both callers and callees)
         let mut all_callables = BTreeSet::new();
         for (caller, callees) in call_edges {
@@ -147,30 +147,30 @@ impl SccGraph {
     }
 
     /// Returns the SCC containing the given callable, if any.
-    pub(crate) fn scc_of(&self, callable_key: &str) -> Option<&SccComponent> {
+    pub fn scc_of(&self, callable_key: &str) -> Option<&SccComponent> {
         self.callable_to_scc
             .get(callable_key)
             .map(|&scc_id| &self.components[scc_id.0 as usize])
     }
 
     /// Returns the number of SCCs.
-    pub(crate) fn scc_count(&self) -> usize {
+    pub fn scc_count(&self) -> usize {
         self.components.len()
     }
 
     /// Returns the number of recursive SCCs.
-    pub(crate) fn recursive_scc_count(&self) -> usize {
+    pub fn recursive_scc_count(&self) -> usize {
         self.components.iter().filter(|c| c.is_recursive).count()
     }
 
     /// Returns a topological iteration order for summary computation.
     /// Lower SCC IDs come first (they have no dependencies on higher IDs).
-    pub(crate) fn topological_order(&self) -> impl Iterator<Item = &SccComponent> {
+    pub fn topological_order(&self) -> impl Iterator<Item = &SccComponent> {
         self.components.iter()
     }
 
     /// Returns an identity digest for the SCC graph suitable for cache keys.
-    pub(crate) fn digest(&self) -> Digest {
+    pub fn digest(&self) -> Digest {
         if self.components.is_empty() {
             return Digest::absent(DigestKind::ProviderOutput, "scc_graph_empty");
         }
@@ -201,7 +201,7 @@ impl SccGraph {
 
 /// Status of a summary SCC fixpoint computation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) enum SccFixpointStatus {
+pub enum SccFixpointStatus {
     /// SCC is non-recursive; single-pass computation completed.
     SinglePass,
     /// Fixpoint converged within the iteration budget.
@@ -211,7 +211,7 @@ pub(crate) enum SccFixpointStatus {
 }
 
 impl SccFixpointStatus {
-    pub(crate) fn as_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             Self::SinglePass => "single_pass",
             Self::Converged { .. } => "converged",
@@ -230,19 +230,19 @@ impl SccFixpointStatus {
 /// digests are stored so that invalidation can be checked without
 /// recomputing the fixpoint.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct SccCacheEntry {
+pub struct SccCacheEntry {
     /// The SCC ID this entry belongs to.
-    pub(crate) scc_id: SccId,
+    pub scc_id: SccId,
     /// Digest of the SCC structure (member set and dependency edges).
-    pub(crate) scc_digest: Digest,
+    pub scc_digest: Digest,
     /// Digests of member summaries at the time of computation.
-    pub(crate) member_summary_digests: BTreeMap<String, Digest>,
+    pub member_summary_digests: BTreeMap<String, Digest>,
     /// Digests of dependency SCC summaries at the time of computation.
-    pub(crate) dependency_scc_digests: BTreeMap<SccId, Digest>,
+    pub dependency_scc_digests: BTreeMap<SccId, Digest>,
     /// The fixpoint status from the original computation.
-    pub(crate) fixpoint_status: SccFixpointStatus,
+    pub fixpoint_status: SccFixpointStatus,
     /// Combined output digest for all summaries produced by this SCC.
-    pub(crate) output_digest: Digest,
+    pub output_digest: Digest,
 }
 
 impl SccCacheEntry {
@@ -250,7 +250,7 @@ impl SccCacheEntry {
     ///
     /// Backdating: if member summaries produce the same output digest as
     /// before, the entry is reusable even if upstream inputs changed.
-    pub(crate) fn is_valid(
+    pub fn is_valid(
         &self,
         current_scc_digest: &Digest,
         current_member_summary_digests: &BTreeMap<String, Digest>,

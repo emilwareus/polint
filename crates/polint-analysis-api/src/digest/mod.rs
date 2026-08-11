@@ -1,10 +1,12 @@
 mod input_snapshot;
+mod keys;
 mod stats;
 
 pub use input_snapshot::{
     FileSnapshot, GoLifecycleSnapshot, INPUT_SNAPSHOT_SCHEMA_VERSION, InputComponent,
     InputComponentStatus, InputSnapshot, ProviderSchemaSnapshot, TsJsLifecycleSnapshot,
 };
+pub use keys::{LayerKind, PrecisionTier, QueryKey};
 pub use stats::CacheStats;
 
 use serde::{Deserialize, Serialize};

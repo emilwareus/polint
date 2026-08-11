@@ -22,8 +22,8 @@ pub use callable_names::{
 };
 pub use digest::{
     CacheStats, Digest, DigestBuilder, DigestKind, FileSnapshot, GoLifecycleSnapshot,
-    INPUT_SNAPSHOT_SCHEMA_VERSION, InputComponent, InputComponentStatus, InputSnapshot,
-    ProviderSchemaSnapshot, TsJsLifecycleSnapshot,
+    INPUT_SNAPSHOT_SCHEMA_VERSION, InputComponent, InputComponentStatus, InputSnapshot, LayerKind,
+    PrecisionTier, ProviderSchemaSnapshot, QueryKey, TsJsLifecycleSnapshot,
 };
 pub use fact_store::{FactStore, FactStoreEntry};
 pub use metadata::{

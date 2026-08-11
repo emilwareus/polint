@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
-use crate::analysis_kernel::incremental::{Digest, DigestKind};
+use polint_analysis_api::{Digest, DigestKind};
 
 // ---------------------------------------------------------------------------
 // Extension quarantine types
@@ -11,7 +11,7 @@ use crate::analysis_kernel::incremental::{Digest, DigestKind};
 /// Reason an extension-produced or extension-influenced result was
 /// quarantined rather than trusted.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub(crate) enum QuarantineReason {
+pub enum QuarantineReason {
     /// Extension code changed since the last validated run.
     ExtensionCodeChanged,
     /// Extension declared inputs do not match observed reads.
@@ -37,7 +37,7 @@ pub(crate) enum QuarantineReason {
 }
 
 impl QuarantineReason {
-    pub(crate) fn as_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             Self::ExtensionCodeChanged => "extension_code_changed",
             Self::UndeclaredRead { .. } => "undeclared_read",
@@ -101,17 +101,17 @@ impl QuarantineReason {
 /// Quarantined results are not used for cache reuse or downstream
 /// computation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct QuarantineEntry {
+pub struct QuarantineEntry {
     /// The extension that caused the quarantine.
-    pub(crate) extension_key: String,
+    pub extension_key: String,
     /// The cache node or query result that was quarantined.
-    pub(crate) quarantined_key: String,
+    pub quarantined_key: String,
     /// Reason for quarantine.
-    pub(crate) reason: QuarantineReason,
+    pub reason: QuarantineReason,
     /// Digest of the extension code at the time of quarantine.
-    pub(crate) extension_digest: Digest,
+    pub extension_digest: Digest,
     /// Digest of the quarantined result that should not be reused.
-    pub(crate) quarantined_digest: Digest,
+    pub quarantined_digest: Digest,
 }
 
 // ---------------------------------------------------------------------------
@@ -124,39 +124,39 @@ pub(crate) struct QuarantineEntry {
 /// declared read sets, validation fixtures, or precision ceilings change,
 /// affected facts are recomputed rather than reused from stale cache.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct QuarantineSet {
+pub struct QuarantineSet {
     entries: Vec<QuarantineEntry>,
     quarantined_keys: BTreeSet<String>,
 }
 
 impl QuarantineSet {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self::default()
     }
 
     /// Adds a quarantine entry.
-    pub(crate) fn quarantine(&mut self, entry: QuarantineEntry) {
+    pub fn quarantine(&mut self, entry: QuarantineEntry) {
         self.quarantined_keys.insert(entry.quarantined_key.clone());
         self.entries.push(entry);
     }
 
     /// Returns whether a given key is quarantined.
-    pub(crate) fn is_quarantined(&self, key: &str) -> bool {
+    pub fn is_quarantined(&self, key: &str) -> bool {
         self.quarantined_keys.contains(key)
     }
 
     /// Returns all quarantine entries.
-    pub(crate) fn entries(&self) -> &[QuarantineEntry] {
+    pub fn entries(&self) -> &[QuarantineEntry] {
         &self.entries
     }
 
     /// Returns the number of quarantined results.
-    pub(crate) fn count(&self) -> usize {
+    pub fn count(&self) -> usize {
         self.entries.len()
     }
 
     /// Returns quarantine entries for a specific extension.
-    pub(crate) fn entries_for_extension(&self, extension_key: &str) -> Vec<&QuarantineEntry> {
+    pub fn entries_for_extension(&self, extension_key: &str) -> Vec<&QuarantineEntry> {
         self.entries
             .iter()
             .filter(|e| e.extension_key == extension_key)
@@ -164,7 +164,7 @@ impl QuarantineSet {
     }
 
     /// Returns a digest summarizing the quarantine state.
-    pub(crate) fn digest(&self) -> Digest {
+    pub fn digest(&self) -> Digest {
         if self.entries.is_empty() {
             return Digest::absent(DigestKind::ExtensionCode, "no_quarantine");
         }

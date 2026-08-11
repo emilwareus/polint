@@ -12,6 +12,7 @@ pub mod cache_key;
 pub mod calls;
 pub mod cfg;
 pub mod data_flow;
+pub mod demand;
 pub mod domains;
 pub mod entrypoints;
 pub mod error;
