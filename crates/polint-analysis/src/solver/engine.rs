@@ -3,8 +3,8 @@
 //! The engine owns the single deterministic `VecDeque` worklist that drives the
 //! registered [`super::policy::SolverPolicy`] impls to a **single fixpoint per
 //! run** (D-11), enforces the [`SolverBudget`] ceilings, projects the outcome to
-//! [`BudgetStatus`], and maintains a monotonic `u64` step counter (Plan 02 reads
-//! this for the provenance solver-step field, D-08). The worklist drain mirrors
+//! [`BudgetStatus`], and maintains a monotonic `u64` step counter used as the provenance solver-step
+//! field (D-08). The worklist drain mirrors
 //! the proven `points_to::solver` shape (`while let Some(..) = queue.pop_front()`
 //! with `if !budget_ok { break; }`) and `BTreeMap`/`BTreeSet`-ordered
 //! accumulation, which is what makes the output byte-stable (D-02).
@@ -22,11 +22,11 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 
-use crate::analysis::ids::DerivedEdgeId;
-use crate::analysis::points_to::facts::{PointsToPrecision, PointsToStatus};
-use crate::analysis::semantic_graph::constraints::{ConstraintFact, ConstraintKind};
-use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
-use crate::core::StableKeyId;
+use crate::ids::DerivedEdgeId;
+use crate::points_to::facts::{PointsToPrecision, PointsToStatus};
+use crate::semantic_graph::constraints::{ConstraintFact, ConstraintKind};
+use polint_analysis_api::{FactFamily, stable_key_from_parts};
+use polint_core::StableKeyId;
 
 use super::budget::{BudgetReason, BudgetStatus, SolverBudget};
 use super::facts::DerivedEdgeFact;
@@ -36,23 +36,23 @@ use super::store::SolverOutput;
 
 /// Result of a single unified solver run.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SolverRunResult {
+pub struct SolverRunResult {
     /// Per-policy outcomes, in the deterministic order the engine drained them.
-    pub(crate) policy_outcomes: Vec<PolicyRunRecord>,
+    pub policy_outcomes: Vec<PolicyRunRecord>,
     /// The combined budget outcome across all driven policies (worst-case wins:
     /// any policy exceeding its budget surfaces [`BudgetStatus::BudgetExceeded`]).
-    pub(crate) budget_status: BudgetStatus,
+    pub budget_status: BudgetStatus,
     /// Monotonic worklist step counter for this run (provenance solver-step).
-    pub(crate) steps: u64,
+    pub steps: u64,
     /// Stable reason labels for every policy or engine-level budget ceiling exhausted.
-    pub(crate) budget_reasons: BTreeSet<String>,
+    pub budget_reasons: BTreeSet<String>,
 }
 
 /// One policy's contribution recorded by the engine, tagged by policy id.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PolicyRunRecord {
-    pub(crate) policy_id: &'static str,
-    pub(crate) outcome: PolicyOutcome,
+pub struct PolicyRunRecord {
+    pub policy_id: &'static str,
+    pub outcome: PolicyOutcome,
 }
 
 /// The unified solver engine. Holds a closed, ordered set of registered policies
@@ -61,7 +61,7 @@ pub(crate) struct PolicyRunRecord {
 ///
 /// Reserved orchestration: production calls [`derive_edges`] directly; this engine is
 /// the seam concrete policies route through once Go/TS policies exist (see module docs).
-pub(crate) struct SolverEngine {
+pub struct SolverEngine {
     policies: Vec<Box<dyn SolverPolicy>>,
     budget: SolverBudget,
 }
@@ -69,7 +69,7 @@ pub(crate) struct SolverEngine {
 impl SolverEngine {
     /// Build an engine over a closed, ordered policy set. Order is the
     /// registration order; the worklist drains it deterministically.
-    pub(crate) fn new(policies: Vec<Box<dyn SolverPolicy>>, budget: SolverBudget) -> Self {
+    pub fn new(policies: Vec<Box<dyn SolverPolicy>>, budget: SolverBudget) -> Self {
         Self { policies, budget }
     }
 
@@ -77,7 +77,7 @@ impl SolverEngine {
     /// budget, accumulating outcomes in deterministic order (D-02). The monotonic
     /// step counter increments once per worklist step and latches budget
     /// exhaustion honestly (D-06/D-11) rather than looping unbounded.
-    pub(crate) fn run(&self, interner: &crate::core::StableKeyInterner) -> SolverRunResult {
+    pub fn run(&self, interner: &polint_core::StableKeyInterner) -> SolverRunResult {
         // Deterministic worklist of policy indices in stable registration order.
         // The bounded outer-iteration cap (D-11) guards against draining more
         // policies than the budget allows; policy-internal work contributes to
@@ -106,7 +106,7 @@ impl SolverEngine {
                 budget_reasons.extend(outcome.budget_reasons.iter().cloned());
             }
             // Fold the policy's own internal step count into the run counter so
-            // provenance (Plan 02) sees the full worklist progress.
+            // provenance records the full worklist progress.
             steps = steps.saturating_add(1 + outcome.steps);
             records.push(PolicyRunRecord {
                 policy_id: policy.id(),
@@ -155,9 +155,9 @@ impl SolverEngine {
     /// The engine still owns the single-fixpoint-per-run / bounded-outer-iteration
     /// contract (each policy runs one fixpoint; `run`'s `max_outer_iterations` bounds
     /// the policy drain; `derive_edges` is per-source bounded by `max_steps`).
-    pub(crate) fn run_to_solver_output(
+    pub fn run_to_solver_output(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         copy_edge_constraints: &[ConstraintFact],
     ) -> SolverOutput {
         // Step 1: the points-to CopyEdge closure, byte-identical to today's production.
@@ -266,15 +266,15 @@ fn combine_budget_status(a: BudgetStatus, b: BudgetStatus) -> BudgetStatus {
 /// derivation can never be laundered into a confident edge, even multiple hops
 /// downstream (review findings #4, #R2). The worklist cap (`budget.max_steps`) is
 /// applied PER SOURCE; exhausting it on one source sets the run-level
-/// [`crate::analysis::solver::budget::BudgetStatus::BudgetExceeded`] (surfaced as a
+/// [`crate::solver::budget::BudgetStatus::BudgetExceeded`] (surfaced as a
 /// provider diagnostic) WITHOUT silently dropping the other, independent sources
 /// (review finding #3). Edges fully derived before a source's cap was hit keep their
 /// honest status — exhaustion costs the edges never reached, not the ones already
 /// derived (review finding #R1). `solver_step` is a GLOBAL monotonic (non-decreasing)
 /// counter, independent of the per-source budget counter (review finding #R3). Derived
 /// edges never claim exact precision (D-06).
-pub(crate) fn derive_edges(
-    interner: &crate::core::StableKeyInterner,
+pub fn derive_edges(
+    interner: &polint_core::StableKeyInterner,
     constraints: &[ConstraintFact],
     budget: &SolverBudget,
 ) -> SolverOutput {
@@ -416,8 +416,8 @@ pub(crate) fn derive_edges(
                     .iter()
                     .map(|&key| ContributingFact { stable_key: key }),
                 &ConstraintKind::CopyEdge {
-                    dst: crate::analysis::ids::SemanticNodeId(node),
-                    src: crate::analysis::ids::SemanticNodeId(start),
+                    dst: crate::ids::SemanticNodeId(node),
+                    src: crate::ids::SemanticNodeId(start),
                 },
                 meta.step,
             );
@@ -432,8 +432,8 @@ pub(crate) fn derive_edges(
             );
             edges.push(DerivedEdgeFact {
                 id: DerivedEdgeId(0),
-                source: crate::analysis::ids::SemanticNodeId(start),
-                target: crate::analysis::ids::SemanticNodeId(node),
+                source: crate::ids::SemanticNodeId(start),
+                target: crate::ids::SemanticNodeId(node),
                 status: meta.status,
                 precision: meta.precision,
                 stable_key,
@@ -459,7 +459,7 @@ pub(crate) fn derive_edges(
 }
 
 fn model_edges(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     constraints: &[ConstraintFact],
     budget: &SolverBudget,
 ) -> (Vec<DerivedEdgeFact>, bool, BTreeSet<String>) {
@@ -596,7 +596,7 @@ impl PathMeta {
 /// `pub(crate)` so the Go RTA dispatch resolver (`go_rta::dispatch`) reuses the SAME
 /// severity ordering for its worst-trust edge status (D-09), rather than minting a
 /// parallel ranking.
-pub(crate) fn status_rank(status: PointsToStatus) -> u8 {
+pub fn status_rank(status: PointsToStatus) -> u8 {
     match status {
         PointsToStatus::Present => 0,
         PointsToStatus::Unknown => 1,
@@ -609,7 +609,7 @@ pub(crate) fn status_rank(status: PointsToStatus) -> u8 {
 /// Severity rank of a precision tier (#4): `FlowInsensitive` is the most precise a
 /// derived edge may claim (0); higher is weaker. `pub(crate)` for the same Go RTA
 /// reuse as [`status_rank`].
-pub(crate) fn precision_rank(precision: PointsToPrecision) -> u8 {
+pub fn precision_rank(precision: PointsToPrecision) -> u8 {
     match precision {
         PointsToPrecision::FlowInsensitive => 0,
         PointsToPrecision::LocalFlowSensitive => 1,
@@ -623,7 +623,7 @@ pub(crate) fn precision_rank(precision: PointsToPrecision) -> u8 {
 /// Worst-of-two derivation status (#4): the more severe (higher-ranked) one wins.
 /// Deterministic and independent of input order. `pub(crate)` so the Go RTA dispatch
 /// resolver inherits the WEAKEST status across its adopted derivation (D-09).
-pub(crate) fn weakest_status(a: PointsToStatus, b: PointsToStatus) -> PointsToStatus {
+pub fn weakest_status(a: PointsToStatus, b: PointsToStatus) -> PointsToStatus {
     if status_rank(a) >= status_rank(b) {
         a
     } else {
@@ -634,7 +634,7 @@ pub(crate) fn weakest_status(a: PointsToStatus, b: PointsToStatus) -> PointsToSt
 /// Worst-of-two precision (#4): the weaker (higher-ranked) tier wins. Deterministic
 /// and independent of input order. `pub(crate)` for the same Go RTA reuse as
 /// [`weakest_status`].
-pub(crate) fn weakest_precision(a: PointsToPrecision, b: PointsToPrecision) -> PointsToPrecision {
+pub fn weakest_precision(a: PointsToPrecision, b: PointsToPrecision) -> PointsToPrecision {
     if precision_rank(a) >= precision_rank(b) {
         a
     } else {
@@ -645,15 +645,12 @@ pub(crate) fn weakest_precision(a: PointsToPrecision, b: PointsToPrecision) -> P
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::ids::{ObjectTokenId, PointsToConstraintId, PtVarId, SemanticNodeId};
-    use crate::analysis::points_to::facts::{
+    use crate::ids::{ObjectTokenId, PointsToConstraintId, PtVarId, SemanticNodeId};
+    use crate::points_to::facts::{
         PointsToConstraintFact, PointsToConstraintKind, PointsToPrecision, PointsToStatus,
     };
-    use crate::analysis::points_to::solver::{PointsToBudget, solve_points_to};
-    use crate::analysis::solver::go_rta::GoRtaInputs;
-    use crate::analysis::solver::policy::{
-        GoRtaPolicy, PointsToPolicy, TsPointsToInputs, TsPointsToPolicy,
-    };
+    use crate::points_to::solver::{PointsToBudget, solve_points_to};
+    use crate::solver::policy::PointsToPolicy;
 
     fn constraint(stable_key: &str, kind: PointsToConstraintKind) -> PointsToConstraintFact {
         PointsToConstraintFact {
@@ -661,7 +658,7 @@ mod tests {
             kind,
             status: PointsToStatus::Present,
             precision: PointsToPrecision::FlowInsensitive,
-            stable_key: crate::core::stable_key_for_test(stable_key),
+            stable_key: polint_core::stable_key_for_test(stable_key),
         }
     }
 
@@ -709,14 +706,14 @@ mod tests {
         let budget = SolverBudget::default();
 
         let direct = solve_points_to(
-            &crate::core::test_stable_key_interner(),
+            &polint_core::test_stable_key_interner(),
             &constraints,
             PointsToBudget::default(),
         );
 
         let policy = PointsToPolicy::new(constraints);
         let engine = SolverEngine::new(vec![Box::new(policy)], budget);
-        let run = engine.run(&crate::core::test_stable_key_interner());
+        let run = engine.run(&polint_core::test_stable_key_interner());
 
         let via_engine = run.policy_outcomes[0]
             .outcome
@@ -736,9 +733,9 @@ mod tests {
             vec![Box::new(PointsToPolicy::new(constraints.clone()))],
             budget,
         )
-        .run(&crate::core::test_stable_key_interner());
+        .run(&polint_core::test_stable_key_interner());
         let second = SolverEngine::new(vec![Box::new(PointsToPolicy::new(constraints))], budget)
-            .run(&crate::core::test_stable_key_interner());
+            .run(&polint_core::test_stable_key_interner());
 
         assert_eq!(first, second);
         assert_eq!(first.budget_status, BudgetStatus::WithinBudget);
@@ -769,37 +766,10 @@ mod tests {
         budget.points_to.max_objects_per_var = 1;
 
         let engine = SolverEngine::new(vec![Box::new(PointsToPolicy::new(constraints))], budget);
-        let run = engine.run(&crate::core::test_stable_key_interner());
+        let run = engine.run(&polint_core::test_stable_key_interner());
 
         assert_eq!(run.budget_status, BudgetStatus::BudgetExceeded);
     }
-
-    #[test]
-    fn engine_drives_empty_go_rta_and_ts_inputs_to_zero_results() {
-        // Empty Go RTA and TS token snapshots derive nothing, proving the engine drives
-        // both policies without fabricating edges.
-        let budget = SolverBudget::default();
-        let engine = SolverEngine::new(
-            vec![
-                Box::new(GoRtaPolicy::new(GoRtaInputs::default())),
-                Box::new(TsPointsToPolicy::new(TsPointsToInputs::default())),
-            ],
-            budget,
-        );
-        let run = engine.run(&crate::core::test_stable_key_interner());
-
-        assert_eq!(run.policy_outcomes.len(), 2);
-        assert_eq!(run.policy_outcomes[0].policy_id, "go_rta");
-        assert_eq!(run.policy_outcomes[1].policy_id, "ts_points_to");
-        assert!(
-            run.policy_outcomes
-                .iter()
-                .all(|record| record.outcome.points_to.is_none()
-                    && record.outcome.derived_edges.is_empty())
-        );
-        assert_eq!(run.budget_status, BudgetStatus::WithinBudget);
-    }
-
     #[derive(Clone)]
     struct FixedPolicy {
         id: &'static str,
@@ -813,7 +783,7 @@ mod tests {
 
         fn solve(
             &self,
-            _interner: &crate::core::StableKeyInterner,
+            _interner: &polint_core::StableKeyInterner,
             _budget: &SolverBudget,
         ) -> PolicyOutcome {
             self.outcome.clone()
@@ -821,7 +791,7 @@ mod tests {
     }
 
     fn policy_edge(stable_key: &str, source: u64, target: u64) -> DerivedEdgeFact {
-        let interner = crate::core::test_stable_key_interner();
+        let interner = polint_core::test_stable_key_interner();
         let source = SemanticNodeId(source);
         let target = SemanticNodeId(target);
         let provenance = DerivedEdgeProvenance::new(
@@ -847,7 +817,7 @@ mod tests {
             target,
             status: PointsToStatus::Present,
             precision: PointsToPrecision::Heuristic,
-            stable_key: crate::core::stable_key_for_test(stable_key),
+            stable_key: polint_core::stable_key_for_test(stable_key),
             provenance,
         }
     }
@@ -875,7 +845,7 @@ mod tests {
         };
         let engine = SolverEngine::new(vec![Box::new(first), Box::new(second)], budget);
 
-        let run = engine.run(&crate::core::test_stable_key_interner());
+        let run = engine.run(&polint_core::test_stable_key_interner());
 
         assert_eq!(run.policy_outcomes.len(), 2);
         assert_eq!(run.policy_outcomes[1].policy_id, "edge_producer");
@@ -890,13 +860,13 @@ mod tests {
     #[test]
     fn empty_engine_reports_not_run() {
         let engine = SolverEngine::new(Vec::new(), SolverBudget::default());
-        let run = engine.run(&crate::core::test_stable_key_interner());
+        let run = engine.run(&polint_core::test_stable_key_interner());
         assert_eq!(run.budget_status, BudgetStatus::NotRun);
         assert!(run.policy_outcomes.is_empty());
     }
 
     fn copy_constraint(stable_key: &str, src: u64, dst: u64) -> ConstraintFact {
-        use crate::analysis::ids::{SemanticConstraintId, SemanticNodeId};
+        use crate::ids::{SemanticConstraintId, SemanticNodeId};
         ConstraintFact {
             id: SemanticConstraintId(0),
             kind: ConstraintKind::CopyEdge {
@@ -905,12 +875,12 @@ mod tests {
             },
             status: PointsToStatus::Present,
             precision: PointsToPrecision::FlowInsensitive,
-            stable_key: crate::core::stable_key_for_test(stable_key),
+            stable_key: polint_core::stable_key_for_test(stable_key),
         }
     }
 
     fn model_constraint(stable_key: &str, source: u64, target: u64) -> ConstraintFact {
-        use crate::analysis::ids::{SemanticConstraintId, SemanticNodeId};
+        use crate::ids::{SemanticConstraintId, SemanticNodeId};
         ConstraintFact {
             id: SemanticConstraintId(0),
             kind: ConstraintKind::ModelEdge {
@@ -923,7 +893,7 @@ mod tests {
             },
             status: PointsToStatus::Present,
             precision: PointsToPrecision::Heuristic,
-            stable_key: crate::core::stable_key_for_test(stable_key),
+            stable_key: polint_core::stable_key_for_test(stable_key),
         }
     }
 
@@ -936,12 +906,12 @@ mod tests {
             copy_constraint("copy|b-c", 2, 3),
         ];
         let output = derive_edges(
-            &crate::core::test_stable_key_interner(),
+            &polint_core::test_stable_key_interner(),
             &constraints,
             &SolverBudget::default(),
         );
 
-        use crate::analysis::ids::SemanticNodeId;
+        use crate::ids::SemanticNodeId;
         let transitive = output
             .derived_edges
             .iter()
@@ -956,7 +926,7 @@ mod tests {
     #[test]
     fn solver_model_edge_provenance_is_private_and_deterministic() {
         let output = derive_edges(
-            &crate::core::test_stable_key_interner(),
+            &polint_core::test_stable_key_interner(),
             &[model_constraint("model|register", 10, 20)],
             &SolverBudget::default(),
         );
@@ -968,7 +938,7 @@ mod tests {
             .expect("model edge derived");
         assert_eq!(edge.provenance.constraint_kind, "model_edge");
         assert_eq!(edge.provenance.contributing_len(), 1);
-        let interner = crate::core::test_stable_key_interner();
+        let interner = polint_core::test_stable_key_interner();
         assert_eq!(
             interner
                 .resolve(edge.provenance.contributing_facts[0].stable_key)
@@ -981,12 +951,12 @@ mod tests {
     #[test]
     fn solver_model_edge_cache_identity_changes_with_model_input() {
         let first = derive_edges(
-            &crate::core::test_stable_key_interner(),
+            &polint_core::test_stable_key_interner(),
             &[model_constraint("model|register-a", 10, 20)],
             &SolverBudget::default(),
         );
         let second = derive_edges(
-            &crate::core::test_stable_key_interner(),
+            &polint_core::test_stable_key_interner(),
             &[model_constraint("model|register-b", 10, 20)],
             &SolverBudget::default(),
         );
@@ -1004,7 +974,7 @@ mod tests {
         let mut budget = SolverBudget::default();
         budget.adaptation.max_model_derived_edges = 1;
         let output = derive_edges(
-            &crate::core::test_stable_key_interner(),
+            &polint_core::test_stable_key_interner(),
             &[
                 model_constraint("model|register-a", 10, 20),
                 model_constraint("model|register-b", 11, 21),
@@ -1021,7 +991,7 @@ mod tests {
         let mut budget = SolverBudget::default();
         budget.adaptation.max_targets_per_source = 1;
         let output = derive_edges(
-            &crate::core::test_stable_key_interner(),
+            &polint_core::test_stable_key_interner(),
             &[
                 model_constraint("model|register-a", 10, 20),
                 model_constraint("model|register-b", 10, 21),
@@ -1047,12 +1017,12 @@ mod tests {
         let constraints = vec![clean, untrusted];
 
         let output = derive_edges(
-            &crate::core::test_stable_key_interner(),
+            &polint_core::test_stable_key_interner(),
             &constraints,
             &SolverBudget::default(),
         );
 
-        use crate::analysis::ids::SemanticNodeId;
+        use crate::ids::SemanticNodeId;
         let edge = output
             .derived_edges
             .iter()
@@ -1081,18 +1051,18 @@ mod tests {
         ];
 
         let output = derive_edges(
-            &crate::core::test_stable_key_interner(),
+            &polint_core::test_stable_key_interner(),
             &constraints,
             &SolverBudget::default(),
         );
 
-        use crate::analysis::ids::SemanticNodeId;
+        use crate::ids::SemanticNodeId;
         let edge = output
             .derived_edges
             .iter()
             .find(|e| e.source == SemanticNodeId(1) && e.target == SemanticNodeId(3))
             .expect("transitive a -> c derived");
-        let interner = crate::core::test_stable_key_interner();
+        let interner = polint_core::test_stable_key_interner();
         let keys: Vec<String> = edge
             .provenance
             .contributing_facts
@@ -1122,12 +1092,12 @@ mod tests {
         };
 
         let output = derive_edges(
-            &crate::core::test_stable_key_interner(),
+            &polint_core::test_stable_key_interner(),
             &constraints,
             &budget,
         );
 
-        use crate::analysis::ids::SemanticNodeId;
+        use crate::ids::SemanticNodeId;
         assert!(
             output
                 .derived_edges
@@ -1157,10 +1127,10 @@ mod tests {
             copy_constraint("copy|c-d", 3, 4),
         ];
         let budget = SolverBudget::default();
-        use crate::analysis::ids::SemanticNodeId;
+        use crate::ids::SemanticNodeId;
 
         let base = derive_edges(
-            &crate::core::test_stable_key_interner(),
+            &polint_core::test_stable_key_interner(),
             &constraints,
             &budget,
         );
@@ -1170,7 +1140,7 @@ mod tests {
             .filter(|e| e.source == SemanticNodeId(1) && e.target == SemanticNodeId(4))
             .collect();
         assert_eq!(ad.len(), 1, "exactly one a -> d edge");
-        let interner = crate::core::test_stable_key_interner();
+        let interner = polint_core::test_stable_key_interner();
         let witness_key = ad[0].stable_key;
         let witness: Vec<String> = ad[0]
             .provenance
@@ -1186,11 +1156,11 @@ mod tests {
         // Delete a fact NOT on the witness path: the a -> d flow persists via the witness.
         let without_off_path: Vec<ConstraintFact> = constraints
             .iter()
-            .filter(|c| c.stable_key != crate::core::stable_key_for_test("copy|a-c"))
+            .filter(|c| c.stable_key != polint_core::stable_key_for_test("copy|a-c"))
             .cloned()
             .collect();
         let rerun_off = derive_edges(
-            &crate::core::test_stable_key_interner(),
+            &polint_core::test_stable_key_interner(),
             &without_off_path,
             &budget,
         );
@@ -1206,11 +1176,11 @@ mod tests {
         // the flow re-derives via the other path under a different identity.
         let without_witness: Vec<ConstraintFact> = constraints
             .iter()
-            .filter(|c| c.stable_key != crate::core::stable_key_for_test("copy|a-b"))
+            .filter(|c| c.stable_key != polint_core::stable_key_for_test("copy|a-b"))
             .cloned()
             .collect();
         let rerun_witness = derive_edges(
-            &crate::core::test_stable_key_interner(),
+            &polint_core::test_stable_key_interner(),
             &without_witness,
             &budget,
         );
@@ -1239,12 +1209,12 @@ mod tests {
         };
 
         let output = derive_edges(
-            &crate::core::test_stable_key_interner(),
+            &polint_core::test_stable_key_interner(),
             &constraints,
             &budget,
         );
 
-        use crate::analysis::ids::SemanticNodeId;
+        use crate::ids::SemanticNodeId;
         let edge_1_2 = output
             .derived_edges
             .iter()
@@ -1284,12 +1254,12 @@ mod tests {
         ];
 
         let output = derive_edges(
-            &crate::core::test_stable_key_interner(),
+            &polint_core::test_stable_key_interner(),
             &constraints,
             &SolverBudget::default(),
         );
 
-        use crate::analysis::ids::SemanticNodeId;
+        use crate::ids::SemanticNodeId;
         let edge = output
             .derived_edges
             .iter()
@@ -1303,7 +1273,7 @@ mod tests {
         assert_eq!(edge.precision, PointsToPrecision::Unknown);
         // Provenance must JUSTIFY the downgraded status: the adopted derivation is the
         // untrusted path, so its contributing facts are recorded (not the clean witness).
-        let interner = crate::core::test_stable_key_interner();
+        let interner = polint_core::test_stable_key_interner();
         let keys: Vec<String> = edge
             .provenance
             .contributing_facts
@@ -1337,12 +1307,12 @@ mod tests {
         ];
 
         let output = derive_edges(
-            &crate::core::test_stable_key_interner(),
+            &polint_core::test_stable_key_interner(),
             &constraints,
             &SolverBudget::default(),
         );
 
-        use crate::analysis::ids::SemanticNodeId;
+        use crate::ids::SemanticNodeId;
         let edge_ae = output
             .derived_edges
             .iter()
@@ -1372,12 +1342,12 @@ mod tests {
         ];
 
         let output = derive_edges(
-            &crate::core::test_stable_key_interner(),
+            &polint_core::test_stable_key_interner(),
             &constraints,
             &SolverBudget::default(),
         );
 
-        use crate::analysis::ids::SemanticNodeId;
+        use crate::ids::SemanticNodeId;
         let first = output
             .derived_edges
             .iter()
@@ -1429,21 +1399,17 @@ mod tests {
             copy_constraint("copy|b-c", 2, 3),
         ];
 
-        // The PRODUCTION engine shape (PointsToPolicy + GoRtaPolicy + TS token policy) under a
-        // tight object budget that the Andersen fold exhausts.
+        // A registered points-to policy may exhaust its own fold while the CopyEdge
+        // closure that contributes to the output still completes within budget.
         let mut budget = SolverBudget::default();
         budget.points_to.max_objects_per_var = 1;
         let engine = SolverEngine::new(
-            vec![
-                Box::new(PointsToPolicy::new(exhausting_points_to)),
-                Box::new(GoRtaPolicy::new(GoRtaInputs::default())),
-                Box::new(TsPointsToPolicy::new(TsPointsToInputs::default())),
-            ],
+            vec![Box::new(PointsToPolicy::new(exhausting_points_to))],
             budget,
         );
 
         let output = engine
-            .run_to_solver_output(&crate::core::test_stable_key_interner(), &copy_constraints);
+            .run_to_solver_output(&polint_core::test_stable_key_interner(), &copy_constraints);
 
         // The transitive CopyEdge closure is present (the points-to edges that DO enter
         // the output completed within budget).
@@ -1451,8 +1417,8 @@ mod tests {
             output
                 .derived_edges
                 .iter()
-                .any(|e| e.source == crate::analysis::ids::SemanticNodeId(1)
-                    && e.target == crate::analysis::ids::SemanticNodeId(3)),
+                .any(|e| e.source == crate::ids::SemanticNodeId(1)
+                    && e.target == crate::ids::SemanticNodeId(3)),
             "the CopyEdge closure a -> c must be present"
         );
         // The discarded Andersen fold's exhaustion must NOT surface at run level.
@@ -1462,95 +1428,6 @@ mod tests {
             "a discarded points-to fold's budget exhaustion must not pollute run-level status"
         );
     }
-
-    #[test]
-    fn run_to_solver_output_still_surfaces_go_rta_budget_exhaustion() {
-        let interner = crate::core::test_stable_key_interner();
-        // FINDING 3 honesty floor: excluding the DISCARDED points-to fold must not mask a
-        // policy whose edges DO enter the output. A Go RTA policy that latches
-        // BudgetExceeded (tight round cap on a multi-round chain) must still surface at run
-        // level even when the points-to fold is within budget.
-        use crate::analysis::ids::SemanticNodeId;
-        use crate::analysis::solver::go_rta::inputs::{GoRtaCallsite, GoRtaMethod};
-
-        let mut function_node = BTreeMap::new();
-        function_node.insert("main.main".to_string(), SemanticNodeId(1));
-        function_node.insert("(pkg.A).Step".to_string(), SemanticNodeId(3));
-        function_node.insert("(pkg.B).Step".to_string(), SemanticNodeId(5));
-        let mut method_sets = BTreeMap::new();
-        method_sets.insert("pkg.A".to_string(), BTreeSet::from(["Step".to_string()]));
-        method_sets.insert("pkg.B".to_string(), BTreeSet::from(["Step".to_string()]));
-        let mut method_set_keys = BTreeMap::new();
-        method_set_keys.insert("pkg.A".to_string(), interner.intern("ms|A"));
-        method_set_keys.insert("pkg.B".to_string(), interner.intern("ms|B"));
-        let mut methods_by_receiver = BTreeMap::new();
-        methods_by_receiver.insert(
-            "pkg.A".to_string(),
-            vec![GoRtaMethod {
-                method_name: "Step".to_string(),
-                qualified: "(pkg.A).Step".to_string(),
-                node: SemanticNodeId(3),
-            }],
-        );
-        methods_by_receiver.insert(
-            "pkg.B".to_string(),
-            vec![GoRtaMethod {
-                method_name: "Step".to_string(),
-                qualified: "(pkg.B).Step".to_string(),
-                node: SemanticNodeId(5),
-            }],
-        );
-        let instantiated = BTreeSet::from(["pkg.A".to_string(), "pkg.B".to_string()]);
-        let mut instantiated_keys = BTreeMap::new();
-        instantiated_keys.insert("pkg.A".to_string(), interner.intern("inst|A"));
-        instantiated_keys.insert("pkg.B".to_string(), interner.intern("inst|B"));
-        let go_inputs = GoRtaInputs {
-            roots: BTreeSet::from(["main.main".to_string()]),
-            callsites: vec![
-                GoRtaCallsite {
-                    caller: "main.main".to_string(),
-                    callsite_node: SemanticNodeId(2),
-                    callsite_stable_key: interner.intern("cs|main"),
-                    interface_method: Some("Step".to_string()),
-                    signature: None,
-                    dispatch_stable_key: interner.intern("dd|main"),
-                },
-                GoRtaCallsite {
-                    caller: "(pkg.A).Step".to_string(),
-                    callsite_node: SemanticNodeId(4),
-                    callsite_stable_key: interner.intern("cs|a"),
-                    interface_method: Some("Step".to_string()),
-                    signature: None,
-                    dispatch_stable_key: interner.intern("dd|a"),
-                },
-            ],
-            method_sets,
-            method_set_keys,
-            instantiated,
-            instantiated_keys,
-            methods_by_receiver,
-            function_node,
-            ..GoRtaInputs::default()
-        }
-        .finalize_indexes();
-
-        let mut budget = SolverBudget::default();
-        budget.go.max_rta_rounds = 1;
-        let engine = SolverEngine::new(
-            vec![
-                Box::new(PointsToPolicy::new(Vec::new())),
-                Box::new(GoRtaPolicy::new(go_inputs)),
-            ],
-            budget,
-        );
-        let output = engine.run_to_solver_output(&crate::core::test_stable_key_interner(), &[]);
-        assert_eq!(
-            output.budget_status,
-            BudgetStatus::BudgetExceeded,
-            "a Go RTA policy whose edges enter the output must still surface exhaustion"
-        );
-    }
-
     #[test]
     fn derive_edges_is_shuffle_stable() {
         let constraints = vec![
@@ -1562,34 +1439,30 @@ mod tests {
         shuffled.reverse();
 
         let a = derive_edges(
-            &crate::core::test_stable_key_interner(),
+            &polint_core::test_stable_key_interner(),
             &constraints,
             &SolverBudget::default(),
         );
         let b = derive_edges(
-            &crate::core::test_stable_key_interner(),
+            &polint_core::test_stable_key_interner(),
             &shuffled,
             &SolverBudget::default(),
         );
 
-        let interner = crate::core::test_stable_key_interner();
-        let a_json = crate::analysis::solver::facts::serialize_derived_edges_stable(
-            &interner,
-            &a.derived_edges,
-        )
-        .expect("serialize a");
-        let b_json = crate::analysis::solver::facts::serialize_derived_edges_stable(
-            &interner,
-            &b.derived_edges,
-        )
-        .expect("serialize b");
+        let interner = polint_core::test_stable_key_interner();
+        let a_json =
+            crate::solver::facts::serialize_derived_edges_stable(&interner, &a.derived_edges)
+                .expect("serialize a");
+        let b_json =
+            crate::solver::facts::serialize_derived_edges_stable(&interner, &b.derived_edges)
+                .expect("serialize b");
         assert_eq!(a_json, b_json);
     }
 
     #[test]
     fn derive_edges_stable_payload_ignores_reverse_intern_allocation_order() {
-        let forward_interner = crate::core::StableKeyInterner::default();
-        let reverse_interner = crate::core::StableKeyInterner::default();
+        let forward_interner = polint_core::StableKeyInterner::default();
+        let reverse_interner = polint_core::StableKeyInterner::default();
         let forward = vec![
             copy_constraint_on(&forward_interner, "copy|a-b", 1, 2),
             copy_constraint_on(&forward_interner, "copy|b-c", 2, 3),
@@ -1611,12 +1484,12 @@ mod tests {
 
         let a = derive_edges(&forward_interner, &forward, &SolverBudget::default());
         let b = derive_edges(&reverse_interner, &reverse, &SolverBudget::default());
-        let a_json = crate::analysis::solver::facts::serialize_derived_edges_stable(
+        let a_json = crate::solver::facts::serialize_derived_edges_stable(
             &forward_interner,
             &a.derived_edges,
         )
         .expect("serialize a");
-        let b_json = crate::analysis::solver::facts::serialize_derived_edges_stable(
+        let b_json = crate::solver::facts::serialize_derived_edges_stable(
             &reverse_interner,
             &b.derived_edges,
         )
@@ -1625,17 +1498,17 @@ mod tests {
     }
 
     fn copy_constraint_on(
-        interner: &crate::core::StableKeyInterner,
+        interner: &polint_core::StableKeyInterner,
         stable_key: &str,
         src: u64,
         dst: u64,
     ) -> ConstraintFact {
-        use crate::analysis::ids::SemanticConstraintId;
+        use crate::ids::SemanticConstraintId;
         ConstraintFact {
             id: SemanticConstraintId(0),
             kind: ConstraintKind::CopyEdge {
-                dst: crate::analysis::ids::SemanticNodeId(dst),
-                src: crate::analysis::ids::SemanticNodeId(src),
+                dst: crate::ids::SemanticNodeId(dst),
+                src: crate::ids::SemanticNodeId(src),
             },
             status: PointsToStatus::Present,
             precision: PointsToPrecision::FlowInsensitive,

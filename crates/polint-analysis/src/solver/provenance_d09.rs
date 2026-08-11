@@ -1,11 +1,11 @@
-//! D-09 deletion property (composition-root test: needs solver engine + policies).
+//! D-09 deletion property for the neutral solver engine.
 
-use crate::analysis::ids::{SemanticConstraintId, SemanticNodeId};
-use crate::analysis::points_to::facts::{PointsToPrecision, PointsToStatus};
-use crate::analysis::semantic_graph::constraints::{ConstraintFact, ConstraintKind};
-use crate::analysis::solver::budget::SolverBudget;
-use crate::analysis::solver::engine::derive_edges;
-use crate::core::{StableKeyId, StableKeyInterner};
+use crate::ids::{SemanticConstraintId, SemanticNodeId};
+use crate::points_to::facts::{PointsToPrecision, PointsToStatus};
+use crate::semantic_graph::constraints::{ConstraintFact, ConstraintKind};
+use crate::solver::budget::SolverBudget;
+use crate::solver::engine::derive_edges;
+use polint_core::{StableKeyId, StableKeyInterner};
 
 fn copy_constraint(
     interner: &StableKeyInterner,

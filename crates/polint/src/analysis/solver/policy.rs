@@ -1,144 +1,21 @@
-//! [`SolverPolicy`] scaffolding (D-03, D-07).
+//! Composition-root solver policies.
 //!
-//! A [`SolverPolicy`] is the abstraction the unified [`super::engine`] core drives:
-//! a policy contributes propagation/derivation over a **closed constraint
-//! snapshot** (D-11) and reports its budget outcome.
-//! [`PointsToPolicy`], which folds v1.2's
-//! `points_to::solver` fixpoint in **by composition** (D-03): it invokes the
-//! existing `solve_points_to` engine in place, so the points-to snapshot and
-//! determinism fixtures stay byte-identical. It does NOT rewrite the points-to
-//! fixpoint.
-//!
-//! The Go ([`GoRtaPolicy`]) and TS ([`TsPointsToPolicy`]) policies are the private
-//! language-specific edge-producing policies driven by the unified engine.
-//!
-//! See [`super`] for the D-04 naming-collision guard (unified core vs. the
-//! points-to sub-domain's internal `PointsToConstraintKind`/`PtVarId` language).
+//! The points-to policy contract and neutral Andersen composition live in
+//! `polint-analysis`. This module retains only policies that adapt the facade's
+//! concrete frontend snapshots: Go RTA and the TS/JS callsite projection.
 
-use std::collections::BTreeSet;
+pub(crate) use polint_analysis::solver::policy::{PolicyOutcome, SolverPolicy};
 
-#[cfg(test)]
-use crate::analysis::points_to::facts::PointsToConstraintFact;
-use crate::analysis::points_to::solver::PointsToSolveResult;
-#[cfg(test)]
-use crate::analysis::points_to::solver::solve_points_to;
-
-use super::budget::{BudgetStatus, SolverBudget};
-use super::facts::DerivedEdgeFact;
+use super::budget::SolverBudget;
 use super::go_rta::{GoRtaInputs, solve_go_rta};
+
 use ts_points_to::budget_status;
 pub(crate) use ts_points_to::{TsPointsToInputs, solve_ts_points_to};
 
-/// Outcome produced by a [`SolverPolicy`] when driven by the engine.
-///
-/// `points_to` carries the folded points-to sub-domain result (D-03) when the
-/// policy is the points-to domain; `derived_edges` carries a policy's derived edges
-/// (D-03) — the Go RTA and TS token policies produce
-/// `CallConstraint`-derived call edges here. Empty input snapshots leave both empty
-/// and report [`BudgetStatus::WithinBudget`] over zero derivation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PolicyOutcome {
-    /// Folded points-to sub-domain result, if this policy is the points-to domain.
-    pub(crate) points_to: Option<PointsToSolveResult>,
-    /// The policy's derived edges (D-03). The Go RTA policy fills this with its
-    /// resolved `DerivedEdgeFact`s; the points-to policy leaves it empty because its
-    /// CopyEdge closure flows through the free `engine::derive_edges` (the composition
-    /// that keeps points-to output byte-identical), not this channel.
-    pub(crate) derived_edges: Vec<DerivedEdgeFact>,
-    /// The policy's budget outcome, projected to the unified [`BudgetStatus`].
-    pub(crate) budget_status: BudgetStatus,
-    /// Stable reason labels for every budget ceiling this policy exhausted.
-    pub(crate) budget_reasons: BTreeSet<String>,
-    /// Number of worklist steps the policy reported consuming (sourced into the
-    /// engine's monotonic step counter for provenance in Plan 02).
-    pub(crate) steps: u64,
-}
-
-impl PolicyOutcome {
-    /// An honest-empty outcome: zero derivation, within budget, zero steps. Stays
-    /// semantically empty: no points-to result, no derived edges.
-    #[cfg(test)]
-    pub(crate) fn empty() -> Self {
-        Self {
-            points_to: None,
-            derived_edges: Vec::new(),
-            budget_status: BudgetStatus::WithinBudget,
-            budget_reasons: BTreeSet::new(),
-            steps: 0,
-        }
-    }
-}
-
-/// The abstraction the unified solver core drives (D-07).
-///
-/// An implementation contributes derivation over a closed snapshot and reports a
-/// budget outcome. The points-to policy folds the existing sub-domain; Go RTA and
-/// TS tokens are language-specific edge-producing policies.
-///
-/// Production routes edge derivation through [`super::engine::SolverEngine`], which
-/// merges the free [`super::engine::derive_edges`] CopyEdge closure with policy
-/// outputs.
-pub(crate) trait SolverPolicy {
-    /// Stable lowercase policy identifier (used in stable keys / diagnostics).
-    fn id(&self) -> &'static str;
-
-    /// Drive the policy to its single fixpoint over the closed snapshot, bounded
-    /// by `budget`. Returns the derived outcome + budget status.
-    fn solve(
-        &self,
-        interner: &crate::core::StableKeyInterner,
-        budget: &SolverBudget,
-    ) -> PolicyOutcome;
-}
-
-/// The points-to policy folds in the points-to sub-domain by
-/// composition (D-03). It owns a closed snapshot of points-to constraints and
-/// delegates to the existing `solve_points_to` fixpoint unchanged.
-#[cfg(test)]
-pub(crate) struct PointsToPolicy {
-    constraints: Vec<PointsToConstraintFact>,
-}
-
-#[cfg(test)]
-impl PointsToPolicy {
-    pub(crate) fn new(constraints: Vec<PointsToConstraintFact>) -> Self {
-        Self { constraints }
-    }
-}
-
-#[cfg(test)]
-impl SolverPolicy for PointsToPolicy {
-    fn id(&self) -> &'static str {
-        "points_to"
-    }
-
-    fn solve(
-        &self,
-        interner: &crate::core::StableKeyInterner,
-        budget: &SolverBudget,
-    ) -> PolicyOutcome {
-        // Composition, not rewrite (D-03): invoke the existing engine in place via
-        // the projected points-to budget. The result is byte-identical to calling
-        // `solve_points_to` directly.
-        let result = solve_points_to(interner, &self.constraints, budget.points_to_budget());
-        let budget_status = BudgetStatus::from_points_to(result.budget_status);
-        let budget_reasons = result.budget_reasons.clone();
-        PolicyOutcome {
-            points_to: Some(result),
-            // Points-to derived edges flow through `engine::derive_edges` (the
-            // byte-identical CopyEdge closure), not this channel.
-            derived_edges: Vec::new(),
-            budget_status,
-            budget_reasons,
-            steps: 0,
-        }
-    }
-}
-
 /// The real Go RTA policy (GO-05). Owns a CLOSED snapshot of the Go RTA
 /// inputs (reachability roots + the Go-frontend address-taken / instantiated-type /
-/// dispatch facts + method-sets + callsites), mirroring how [`PointsToPolicy`] owns
-/// its constraints. [`SolverPolicy::solve`] runs the RTA fixpoint
+/// dispatch facts + method-sets + callsites), mirroring the neutral points-to
+/// policy's closed snapshot. [`SolverPolicy::solve`] runs the RTA fixpoint
 /// ([`solve_go_rta`]) and returns the resolved call edges + budget status.
 pub(crate) struct GoRtaPolicy {
     inputs: GoRtaInputs,
@@ -161,7 +38,8 @@ impl SolverPolicy for GoRtaPolicy {
         budget: &SolverBudget,
     ) -> PolicyOutcome {
         // Run the RTA fixpoint over the closed snapshot (composition over the engine
-        // worklist, mirroring PointsToPolicy's fold). The output is already normalized.
+        // worklist, mirroring the neutral points-to policy's fold). The output is
+        // already normalized.
         let output = solve_go_rta(interner, &self.inputs, budget);
         PolicyOutcome {
             points_to: None,
@@ -506,7 +384,10 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use crate::analysis::ids::SemanticNodeId;
+    use crate::analysis::solver::budget::BudgetStatus;
+    use crate::analysis::solver::engine::SolverEngine;
     use crate::analysis::solver::go_rta::inputs::{GoRtaCallsite, GoRtaMethod};
+    use polint_analysis::solver::policy::PointsToPolicy;
 
     #[test]
     fn ts_policy_id_is_stable() {
@@ -518,17 +399,6 @@ mod tests {
         assert!(ts_outcome.derived_edges.is_empty());
         assert_eq!(ts_outcome.budget_status, BudgetStatus::WithinBudget);
     }
-
-    #[test]
-    fn empty_outcome_stays_semantically_empty() {
-        // empty() must carry no points-to result AND no derived edges.
-        let outcome = PolicyOutcome::empty();
-        assert!(outcome.points_to.is_none());
-        assert!(outcome.derived_edges.is_empty());
-        assert_eq!(outcome.budget_status, BudgetStatus::WithinBudget);
-        assert_eq!(outcome.steps, 0);
-    }
-
     #[test]
     fn go_rta_policy_derives_edges_from_a_resolvable_dispatch() {
         let interner = crate::core::test_stable_key_interner();
@@ -591,8 +461,111 @@ mod tests {
     }
 
     #[test]
-    fn points_to_policy_id_is_stable() {
-        let policy = PointsToPolicy::new(Vec::new());
-        assert_eq!(policy.id(), "points_to");
+    fn engine_drives_empty_go_rta_and_ts_inputs_to_zero_results() {
+        // Empty Go RTA and TS token snapshots derive nothing, proving the composition
+        // root drives both frontend policies without fabricating edges.
+        let budget = SolverBudget::default();
+        let engine = SolverEngine::new(
+            vec![
+                Box::new(GoRtaPolicy::new(GoRtaInputs::default())),
+                Box::new(TsPointsToPolicy::new(TsPointsToInputs::default())),
+            ],
+            budget,
+        );
+        let run = engine.run(&crate::core::test_stable_key_interner());
+
+        assert_eq!(run.policy_outcomes.len(), 2);
+        assert_eq!(run.policy_outcomes[0].policy_id, "go_rta");
+        assert_eq!(run.policy_outcomes[1].policy_id, "ts_points_to");
+        assert!(
+            run.policy_outcomes
+                .iter()
+                .all(|record| record.outcome.points_to.is_none()
+                    && record.outcome.derived_edges.is_empty())
+        );
+        assert_eq!(run.budget_status, BudgetStatus::WithinBudget);
+    }
+
+    #[test]
+    fn run_to_solver_output_still_surfaces_go_rta_budget_exhaustion() {
+        let interner = crate::core::test_stable_key_interner();
+        // Excluding the discarded points-to fold must not mask a policy whose edges
+        // enter the output. A Go RTA policy that exhausts its round cap must still
+        // surface BudgetExceeded at the merged output.
+        let mut function_node = BTreeMap::new();
+        function_node.insert("main.main".to_string(), SemanticNodeId(1));
+        function_node.insert("(pkg.A).Step".to_string(), SemanticNodeId(3));
+        function_node.insert("(pkg.B).Step".to_string(), SemanticNodeId(5));
+        let mut method_sets = BTreeMap::new();
+        method_sets.insert("pkg.A".to_string(), BTreeSet::from(["Step".to_string()]));
+        method_sets.insert("pkg.B".to_string(), BTreeSet::from(["Step".to_string()]));
+        let mut method_set_keys = BTreeMap::new();
+        method_set_keys.insert("pkg.A".to_string(), interner.intern("ms|A"));
+        method_set_keys.insert("pkg.B".to_string(), interner.intern("ms|B"));
+        let mut methods_by_receiver = BTreeMap::new();
+        methods_by_receiver.insert(
+            "pkg.A".to_string(),
+            vec![GoRtaMethod {
+                method_name: "Step".to_string(),
+                qualified: "(pkg.A).Step".to_string(),
+                node: SemanticNodeId(3),
+            }],
+        );
+        methods_by_receiver.insert(
+            "pkg.B".to_string(),
+            vec![GoRtaMethod {
+                method_name: "Step".to_string(),
+                qualified: "(pkg.B).Step".to_string(),
+                node: SemanticNodeId(5),
+            }],
+        );
+        let mut instantiated_keys = BTreeMap::new();
+        instantiated_keys.insert("pkg.A".to_string(), interner.intern("inst|A"));
+        instantiated_keys.insert("pkg.B".to_string(), interner.intern("inst|B"));
+        let go_inputs = GoRtaInputs {
+            roots: BTreeSet::from(["main.main".to_string()]),
+            callsites: vec![
+                GoRtaCallsite {
+                    caller: "main.main".to_string(),
+                    callsite_node: SemanticNodeId(2),
+                    callsite_stable_key: interner.intern("cs|main"),
+                    interface_method: Some("Step".to_string()),
+                    signature: None,
+                    dispatch_stable_key: interner.intern("dd|main"),
+                },
+                GoRtaCallsite {
+                    caller: "(pkg.A).Step".to_string(),
+                    callsite_node: SemanticNodeId(4),
+                    callsite_stable_key: interner.intern("cs|a"),
+                    interface_method: Some("Step".to_string()),
+                    signature: None,
+                    dispatch_stable_key: interner.intern("dd|a"),
+                },
+            ],
+            method_sets,
+            method_set_keys,
+            instantiated: BTreeSet::from(["pkg.A".to_string(), "pkg.B".to_string()]),
+            instantiated_keys,
+            methods_by_receiver,
+            function_node,
+            ..GoRtaInputs::default()
+        }
+        .finalize_indexes();
+
+        let mut budget = SolverBudget::default();
+        budget.go.max_rta_rounds = 1;
+        let engine = SolverEngine::new(
+            vec![
+                Box::new(PointsToPolicy::new(Vec::new())),
+                Box::new(GoRtaPolicy::new(go_inputs)),
+            ],
+            budget,
+        );
+        let output = engine.run_to_solver_output(&crate::core::test_stable_key_interner(), &[]);
+        assert_eq!(
+            output.budget_status,
+            BudgetStatus::BudgetExceeded,
+            "a Go RTA policy whose edges enter the output must still surface exhaustion"
+        );
     }
 }
