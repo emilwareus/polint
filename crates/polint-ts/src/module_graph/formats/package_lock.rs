@@ -1,4 +1,4 @@
-use crate::module_graph::topology::{TopologyPrecision, TopologyStatus};
+use polint_analysis::module_graph::topology::{TopologyPrecision, TopologyStatus};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 

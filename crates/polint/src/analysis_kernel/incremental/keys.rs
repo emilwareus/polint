@@ -14,12 +14,12 @@ use super::digest::{Digest, DigestKind};
 use crate::analysis_kernel::ProviderManifest;
 use crate::cache::{CACHE_VERSION, CacheKey};
 use crate::core::AnalysisDb;
-use crate::module_graph::formats::pnpm_workspace::parse_pnpm_workspace_packages;
-use crate::module_graph::paths::{
+use crate::repo_fs::{
     TOPOLOGY_LOCKFILE_MAX_BYTES, TOPOLOGY_MANIFEST_MAX_BYTES, normalize_repo_relative,
     normalize_repo_relative_input, read_repo_file_to_string_with_limit, read_repo_file_with_limit,
     repo_dir_path, repo_file_exists, repo_file_path, repo_relative_existing_path,
 };
+use polint_ts::module_graph::parse_pnpm_workspace_packages;
 
 pub(crate) const MODULE_GRAPH_TOPOLOGY_INPUT_FILE_NAMES: &[&str] = &[
     "go.mod",

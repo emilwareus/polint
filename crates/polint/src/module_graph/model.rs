@@ -1,13 +1,10 @@
-use crate::core::{
-    AnalysisDb, CapabilitySupport, ImportFact, ModuleEdge, ModuleNode, ResolvedImportFact,
-};
+use crate::core::{CapabilitySupport, ModuleEdge, ModuleNode, ResolvedImportFact};
 use crate::diagnostics::Diagnostic;
 use crate::module_graph::topology::{
     DependencyRequirementFact, ImportToPackageFact, RepoTopologyOverlayFact,
     ResolvedDependencyEdgeFact, SourceSetFact, TopologyPackageFact, WorkspaceRootFact,
 };
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 
 pub(crate) const MODULE_GRAPH_LAYER_SCHEMA: &str = "module-graph-facts-v3";
 pub(crate) const MODULE_TOPOLOGY_LAYER_SCHEMA: &str = "module-topology-facts-v2";
@@ -38,19 +35,7 @@ pub(crate) struct ModuleTopologyLayerPayload {
     pub(crate) import_to_package_edges: Vec<ImportToPackageFact>,
 }
 
-/// Resolver input remains facade-owned until the concrete adapter split because
-/// its optional TS resolver context is language-specific.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct ResolverInput<'a> {
-    pub(crate) root: &'a Path,
-    pub(crate) db: &'a AnalysisDb,
-    pub(crate) import: &'a ImportFact,
-    pub(crate) ts_resolver: Option<&'a crate::module_graph::ts::TsResolverContext>,
-    pub(crate) owner_module: Option<crate::core::ModuleNodeId>,
-    pub(crate) owner_package: Option<crate::core::ModuleNodeId>,
-}
-
 // Neutral builder and draft contracts are owned by polint-analysis.
 pub(crate) use polint_analysis::module_graph::model::{
-    ModuleGraphBuilder, ModuleNodeDraft, ResolvedImportDraft, sort_packages,
+    ModuleGraphBuilder, ResolvedImportDraft, sort_packages,
 };

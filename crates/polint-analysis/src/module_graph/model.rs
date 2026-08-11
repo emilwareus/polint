@@ -14,6 +14,19 @@ pub struct ModuleGraphOutput {
     pub edges: Vec<ModuleEdge>,
 }
 
+/// Common input passed from the facade composition root to a language resolver.
+///
+/// The language adapter owns resolver state; this value only carries repository
+/// context and the syntax fact being resolved.
+#[derive(Clone, Copy)]
+pub struct ResolverInput<'a> {
+    pub root: &'a Path,
+    pub db: &'a dyn FactDatabase,
+    pub import: &'a ImportFact,
+    pub owner_module: Option<ModuleNodeId>,
+    pub owner_package: Option<ModuleNodeId>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ModuleGraphBuilder {
     files: BTreeMap<FileId, FileNodeInfo>,

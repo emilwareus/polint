@@ -371,7 +371,7 @@ fn sorted_functions(db: &AnalysisDb) -> Vec<&FunctionFact> {
 }
 
 fn normalized_file_path(file: &SourceFile) -> String {
-    crate::module_graph::paths::normalize_repo_relative(&file.relative_path)
+    crate::repo_fs::normalize_repo_relative(&file.relative_path)
         .unwrap_or_else(|| file.relative_path.clone())
 }
 

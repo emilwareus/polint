@@ -10,9 +10,11 @@ description = "TypeScript/JavaScript language frontend, Oxc parsing, and TS synt
 
 [dependencies]
 anyhow.workspace = true
+json-strip-comments.workspace = true
 oxc_allocator.workspace = true
 oxc_ast.workspace = true
 oxc_parser.workspace = true
+oxc_resolver.workspace = true
 oxc_semantic.workspace = true
 oxc_span.workspace = true
 polint-analysis.workspace = true
@@ -22,6 +24,7 @@ polint-frontend-api.workspace = true
 rayon.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_norway.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
 

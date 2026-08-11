@@ -1,6 +1,6 @@
 use serde_norway::Value as YamlValue;
 
-pub(crate) fn parse_pnpm_workspace_packages(contents: &str) -> Vec<String> {
+pub fn parse_pnpm_workspace_packages(contents: &str) -> Vec<String> {
     let Ok(value) = serde_norway::from_str::<YamlValue>(contents) else {
         return Vec::new();
     };

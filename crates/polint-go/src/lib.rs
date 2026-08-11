@@ -9,6 +9,7 @@ mod hash;
 pub mod lifecycle;
 mod local_db;
 mod mir;
+pub mod module_graph;
 #[doc(hidden)]
 pub use mir::lower_go_mir;
 #[allow(dead_code)]

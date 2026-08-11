@@ -1,4 +1,4 @@
-use crate::module_graph::topology::{RequirementKind, TopologyPrecision, TopologyStatus};
+use polint_analysis::module_graph::topology::{RequirementKind, TopologyPrecision, TopologyStatus};
 
 pub(crate) const GO_MOD_SOURCE_LABEL: &str = "go.mod";
 
@@ -315,7 +315,9 @@ fn strip_go_line_comment(line: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::module_graph::topology::{RequirementKind, TopologyPrecision, TopologyStatus};
+    use polint_analysis::module_graph::topology::{
+        RequirementKind, TopologyPrecision, TopologyStatus,
+    };
 
     #[test]
     fn parse_go_mod_reads_module_go_requires_replaces_and_excludes() {

@@ -458,13 +458,6 @@ fn canonical_repo_target(
     Ok(target)
 }
 
-pub(crate) fn normalize_repo_relative_path(root: &Path, path: &Path) -> Option<String> {
-    let root = normalize_path(root)?;
-    let path = normalize_path(path)?;
-    let relative = path.strip_prefix(root).ok()?;
-    normalize_repo_relative(relative.to_string_lossy())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

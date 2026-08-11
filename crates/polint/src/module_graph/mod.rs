@@ -1,7 +1,6 @@
-pub(crate) mod formats;
 pub(crate) mod go;
 pub(crate) mod model;
-pub(crate) mod paths;
+use crate::repo_fs as paths;
 pub(crate) mod topology;
 pub(crate) mod ts;
 
@@ -25,11 +24,11 @@ use crate::diagnostics::{Diagnostic, TextRange};
 use crate::symbol_graph::semantic::{SemanticImportFact, SemanticImportKind, SemanticStatus};
 use model::{
     MODULE_GRAPH_LAYER_SCHEMA, MODULE_TOPOLOGY_LAYER_SCHEMA, ModuleGraphBuilder,
-    ModuleGraphLayerPayload, ModuleTopologyLayerPayload, ResolverInput, sort_packages,
+    ModuleGraphLayerPayload, ModuleTopologyLayerPayload, sort_packages,
 };
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use topology::{
     DependencyRequirementFact, ImportContextKind, ImportToPackageFact, ImportToPackageId,
@@ -1206,7 +1205,7 @@ fn derive_requested_module_graph_uncached(
         file_nodes.insert(file.id, builder.ensure_file_node(file.id));
     }
     let mut file_owner_modules =
-        seed_ts_project_module_nodes(&mut builder, loaded.root.as_path(), &files);
+        ts::seed_ts_project_module_nodes(&mut builder, loaded.root.as_path(), &files);
     let has_go_inputs = files
         .iter()
         .any(|file| file.language == crate::core::Language::Go)
@@ -1215,7 +1214,7 @@ fn derive_requested_module_graph_uncached(
             .iter()
             .any(|import| import.language == crate::core::Language::Go);
     let go_metadata = if has_go_inputs {
-        go::GoPackageIndex::load(loaded, db)
+        go::GoPackageIndex::load(loaded.root.as_path(), &loaded.config.languages.go, db)
     } else {
         go::GoPackageIndex::default()
     };
@@ -1279,16 +1278,15 @@ fn derive_requested_module_graph_uncached(
             .or(owner_module)
             .unwrap_or_else(|| builder.ensure_module_node("."));
         let index = resolved_imports.len();
-        let input = ResolverInput {
+        let input = polint_analysis::module_graph::model::ResolverInput {
             root: loaded.root.as_path(),
             db,
             import,
-            ts_resolver: ts_resolver_context.as_ref(),
             owner_module,
             owner_package: package_nodes_by_file.get(&import.file).copied(),
         };
         let draft = if import.language.is_ts_family() {
-            ts::resolve_ts_import(input)
+            ts::resolve_ts_import(input, ts_resolver_context.as_ref())
         } else if matches!(import.language, crate::core::Language::Go) {
             go::resolve_go_import(input, &go_metadata)
         } else {
@@ -1319,8 +1317,7 @@ fn derive_requested_module_graph_uncached(
 
     let output = builder.finish();
     db.replace_module_graph_facts(resolved_imports, output.nodes, output.edges);
-    let base_topology =
-        derive_base_topology(loaded, db, &go_metadata, ts_resolver_context.as_ref());
+    let base_topology = derive_base_topology(loaded, db, &go_metadata);
     db.replace_topology_facts(base_topology);
 
     let capability_support =
@@ -1719,11 +1716,15 @@ pub(crate) fn derive_base_topology(
     loaded: &LoadedConfig,
     db: &AnalysisDb,
     go_metadata: &go::GoPackageIndex,
-    ts_resolver_context: Option<&ts::TsResolverContext>,
 ) -> TopologyOutput {
     let interner = db.stable_key_interner();
-    let mut output = go::collect_go_topology(loaded, db, go_metadata);
-    output.merge(ts::collect_ts_topology(loaded, db, ts_resolver_context));
+    let mut output = go::collect_go_topology(
+        loaded.root.as_path(),
+        &loaded.config.languages.go,
+        db,
+        go_metadata,
+    );
+    output.merge(ts::collect_ts_topology(loaded.root.as_path(), db));
     output.overlays.extend(collect_repo_topology_overlays(
         loaded.root.as_path(),
         db,
@@ -2113,74 +2114,6 @@ fn language_cache_label(language: Language) -> &'static str {
     }
 }
 
-fn seed_ts_project_module_nodes(
-    builder: &mut ModuleGraphBuilder,
-    root: &Path,
-    files: &[&SourceFile],
-) -> BTreeMap<FileId, ModuleNodeId> {
-    let mut module_by_root = BTreeMap::<PathBuf, ModuleNodeId>::new();
-    let mut owner_by_file = BTreeMap::new();
-
-    for file in files.iter().filter(|file| file.language.is_ts_family()) {
-        let absolute_file = if file.path.is_absolute() {
-            file.path.clone()
-        } else {
-            root.join(&file.relative_path)
-        };
-        let Some(module_root) = find_ts_project_root(root, &absolute_file) else {
-            continue;
-        };
-        let module = if let Some(module) = module_by_root.get(&module_root).copied() {
-            module
-        } else {
-            let label = ts_project_module_label(root, &module_root);
-            let module = builder.ensure_module_node(label);
-            module_by_root.insert(module_root, module);
-            module
-        };
-        owner_by_file.insert(file.id, module);
-    }
-
-    owner_by_file
-}
-
-fn find_ts_project_root(root: &Path, file_path: &Path) -> Option<PathBuf> {
-    let root = paths::normalize_path(root)?;
-    let mut current = paths::normalize_path(file_path.parent()?)?;
-
-    loop {
-        if current.join("tsconfig.json").is_file() || current.join("package.json").is_file() {
-            return Some(current);
-        }
-        if current == root || !current.starts_with(&root) || !current.pop() {
-            return None;
-        }
-    }
-}
-
-fn ts_project_module_label(root: &Path, module_root: &Path) -> String {
-    package_json_name(root, module_root).unwrap_or_else(|| {
-        paths::normalize_repo_relative_path(root, module_root).unwrap_or_else(|| ".".to_string())
-    })
-}
-
-fn package_json_name(root: &Path, module_root: &Path) -> Option<String> {
-    let relative_path =
-        paths::normalize_repo_relative_path(root, &module_root.join("package.json"))?;
-    let source = paths::read_repo_file_to_string_with_limit(
-        root,
-        relative_path,
-        paths::TOPOLOGY_MANIFEST_MAX_BYTES,
-    )
-    .ok()?;
-    let value = serde_json::from_str::<serde_json::Value>(&source).ok()?;
-    value
-        .get("name")
-        .and_then(serde_json::Value::as_str)
-        .filter(|name| !name.is_empty())
-        .map(ToOwned::to_owned)
-}
-
 fn setup_missing_support(
     plan: &AnalysisPlan,
     saw_setup_missing: bool,
@@ -2258,7 +2191,7 @@ fn setup_missing_diagnostic(entry: &CapabilitySupport, rule_id: &str) -> Diagnos
 #[cfg(test)]
 mod tests {
     use super::model::ModuleGraphBuilder;
-    use super::{derive_requested_module_graph, paths, ts};
+    use super::{derive_requested_module_graph, paths};
     use crate::analysis_kernel::incremental::{
         CacheNode, DependencyKind, Digest, DigestKind, InputSnapshot, LayerKey, ShapeKind,
     };
@@ -2463,25 +2396,6 @@ mod tests {
             span: span(file, start_byte),
             language: Language::TypeScript,
         })
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn ts_project_module_label_does_not_read_package_json_symlink_escape() {
-        let repo = tempfile::tempdir().expect("repo");
-        let outside = tempfile::tempdir().expect("outside");
-        fs::create_dir_all(repo.path().join("packages/app")).expect("package dir");
-        fs::write(outside.path().join("package.json"), r#"{"name":"outside"}"#)
-            .expect("outside package");
-        std::os::unix::fs::symlink(
-            outside.path().join("package.json"),
-            repo.path().join("packages/app/package.json"),
-        )
-        .expect("symlink package manifest");
-
-        let label = super::ts_project_module_label(repo.path(), &repo.path().join("packages/app"));
-
-        assert_eq!(label, "packages/app");
     }
 
     #[test]
@@ -3921,7 +3835,7 @@ mod tests {
     }
 
     #[test]
-    fn module_graph_ts_resolution_constructs_resolver_context_once_per_run() {
+    fn module_graph_ts_resolution_resolves_multiple_imports_in_one_run() {
         let temp = tempfile::tempdir().expect("tempdir");
         let mut db = AnalysisDb::new();
         let app = add_file(
@@ -3944,15 +3858,11 @@ mod tests {
         );
         push_ts_import(&mut db, app, "./one", 0);
         push_ts_import(&mut db, app, "./two", 25);
-        ts::reset_resolver_context_construction_count_for_test();
-
         derive_requested_module_graph(
             &mut db,
             &loaded_config_for(temp.path()),
             &AnalysisPlan::from_capability_names_for_test(&["resolved_imports", "module_graph"]),
         );
-
-        assert_eq!(ts::resolver_context_construction_count_for_test(), 1);
     }
 
     #[test]

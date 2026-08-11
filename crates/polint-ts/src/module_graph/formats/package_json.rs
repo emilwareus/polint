@@ -1,4 +1,4 @@
-use crate::module_graph::topology::{RequirementKind, TopologyPrecision, TopologyStatus};
+use polint_analysis::module_graph::topology::{RequirementKind, TopologyPrecision, TopologyStatus};
 use serde_json::Value;
 
 pub(crate) const PACKAGE_JSON_SOURCE_LABEL: &str = "package.json";

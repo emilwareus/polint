@@ -4,7 +4,7 @@ use std::path::Path;
 
 use super::manifest::{ExtensionActivationStatus, ExtensionManifest};
 use crate::analysis_kernel::incremental::{Digest, DigestKind};
-use crate::module_graph::paths::{
+use crate::repo_fs::{
     TOPOLOGY_LOCKFILE_MAX_BYTES, TOPOLOGY_MANIFEST_MAX_BYTES, normalize_repo_relative_input,
     read_repo_file_with_limit,
 };

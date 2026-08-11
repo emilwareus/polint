@@ -2,7 +2,7 @@ use super::go_mod::{
     GoReplacementDirective, GoUnsupportedDirective, parse_directive_lines,
     parse_replacement_directive, unsupported_directive,
 };
-use crate::module_graph::topology::{TopologyPrecision, TopologyStatus};
+use polint_analysis::module_graph::topology::{TopologyPrecision, TopologyStatus};
 
 pub(crate) const GO_WORK_SOURCE_LABEL: &str = "go.work";
 
@@ -96,7 +96,9 @@ fn apply_go_work_directive(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::module_graph::topology::{RequirementKind, TopologyPrecision, TopologyStatus};
+    use polint_analysis::module_graph::topology::{
+        RequirementKind, TopologyPrecision, TopologyStatus,
+    };
 
     #[test]
     fn parse_go_work_reads_use_roots_and_replaces() {

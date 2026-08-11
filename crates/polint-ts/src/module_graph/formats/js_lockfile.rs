@@ -1,5 +1,5 @@
-use crate::module_graph::formats::package_lock::parse_package_lock;
-use crate::module_graph::topology::{TopologyPrecision, TopologyStatus};
+use super::package_lock::parse_package_lock;
+use polint_analysis::module_graph::topology::{TopologyPrecision, TopologyStatus};
 use serde_json::Value as JsonValue;
 use serde_norway::Value as YamlValue;
 use std::collections::BTreeSet;

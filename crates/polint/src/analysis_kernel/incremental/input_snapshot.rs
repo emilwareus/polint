@@ -5,7 +5,7 @@ use crate::analysis::extensions::discovery::{DiscoveredExtension, discover_local
 use crate::analysis_kernel::ProviderManifest;
 use crate::config::LoadedConfig;
 use crate::core::AnalysisDb;
-use crate::module_graph::paths::{
+use crate::repo_fs::{
     TOPOLOGY_LOCKFILE_MAX_BYTES, TOPOLOGY_MANIFEST_MAX_BYTES, normalize_repo_relative,
     normalize_repo_relative_input, read_repo_file_to_string_with_limit, read_repo_file_with_limit,
     repo_file_exists, repo_file_path, repo_relative_existing_path,
@@ -369,9 +369,9 @@ fn file_digest_component(
                 let detail = format!("unsupported={normalized}: {}", error.stable_reason());
                 if matches!(
                     error,
-                    crate::module_graph::paths::RepoFileReadError::TooLarge { .. }
-                        | crate::module_graph::paths::RepoFileReadError::AbsolutePath
-                        | crate::module_graph::paths::RepoFileReadError::EscapesRepo
+                    crate::repo_fs::RepoFileReadError::TooLarge { .. }
+                        | crate::repo_fs::RepoFileReadError::AbsolutePath
+                        | crate::repo_fs::RepoFileReadError::EscapesRepo
                 ) {
                     unsupported.push(detail);
                 } else {
