@@ -38,10 +38,7 @@ pub fn outgoing_edges(
     dead_code,
     reason = "Private evidence query helpers are consumed by subsequent path/rendering plans."
 )]
-pub fn nodes_by_edge_kind(
-    store: &EvidenceStore,
-    kind: EvidenceEdgeKind,
-) -> Vec<&EvidenceNodeFact> {
+pub fn nodes_by_edge_kind(store: &EvidenceStore, kind: EvidenceEdgeKind) -> Vec<&EvidenceNodeFact> {
     let mut nodes = store
         .by_edge_kind(kind)
         .into_iter()

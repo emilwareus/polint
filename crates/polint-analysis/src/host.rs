@@ -607,7 +607,6 @@ pub trait AnalysisHost: FactDatabase {
         *store_mut::<AliasStore>(self, ALIAS_STORE_FAMILY) =
             AliasStore::from_normalized_output(output.aliases);
     }
-
 }
 
 impl<T: FactDatabase + ?Sized> AnalysisHost for T {}

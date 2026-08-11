@@ -3,11 +3,11 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::AnalysisHost;
 use crate::reachability::facts::{
     ReachabilityRootFact, RootKind, RootPrecision, RootProvenance, RootStatus,
 };
-use crate::AnalysisHost;
-use polint_core::{FileId};
+use polint_core::FileId;
 
 /// Produces a debug JSON snapshot of all reachability facts in the db.
 ///
@@ -107,17 +107,15 @@ fn provenance_label(provenance: RootProvenance) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::AnalysisHost;
+    use crate::LocalAnalysisDb;
     use crate::ids::ReachabilityRootId;
     use crate::reachability::facts::{
         RootKind, RootPrecision, RootProvenance, RootStatus, compute_reachability_root_stable_key,
     };
-    use crate::reachability::store::{
-        REACHABILITY_PROVIDER_ID, ReachabilityProviderOutput,
-    };
-    use crate::AnalysisHost;
-use crate::LocalAnalysisDb;
-use polint_core::{FileId, FunctionId, Language, Span};
-use polint_analysis_api::{FunctionFact};
+    use crate::reachability::store::{REACHABILITY_PROVIDER_ID, ReachabilityProviderOutput};
+    use polint_analysis_api::FunctionFact;
+    use polint_core::{FileId, FunctionId, Language, Span};
     use std::path::PathBuf;
 
     fn span(file: FileId, start: u32, end: u32) -> Span {

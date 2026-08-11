@@ -1,9 +1,9 @@
-use polint_analysis::demand::DemandQueryTrace;
 use super::{CacheStats, Digest, DigestKind, InputSnapshot, PrecisionTier, ProviderOutputMeta};
 #[cfg(test)]
 use crate::analysis::summaries::provider::SccClosureDebugSnapshot;
 use crate::analysis_kernel::StoreStatus;
 use crate::analysis_kernel::{PrecisionCeiling, ProviderManifest};
+use polint_analysis::demand::DemandQueryTrace;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct KernelRunReport {

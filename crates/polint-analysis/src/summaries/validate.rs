@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use polint_analysis_api::{FactFamily, FactPrecision, FactRef};
 use crate::AnalysisHost;
-use polint_core::{StableKeyInterner};
+use polint_analysis_api::{FactFamily, FactPrecision, FactRef};
+use polint_core::StableKeyInterner;
 use polint_core::{Diagnostic, DiagnosticRange};
 
 use super::facts::{
@@ -395,16 +395,18 @@ fn push_summary_diagnostic(
 #[cfg(test)]
 mod tests {
     use super::validate_summaries;
+    use crate::LocalAnalysisDb;
     use crate::ids::{SummaryEventId, SummaryId};
     use crate::summaries::facts::{
         SummaryDomainKind, SummaryEventFact, SummaryFact, SummaryPrecision, SummaryProvenance,
         SummaryStatus,
     };
     use crate::summaries::store::SummaryOutput;
-    use polint_analysis_api::{FactConfidence, FactFamily, FactMeta, FactPrecision, FactRef, ValidationStatus};
-use crate::LocalAnalysisDb;
-use polint_core::{FileId, FunctionId, Language, Span, stable_key_for_test};
-use polint_analysis_api::{FunctionFact};
+    use polint_analysis_api::FunctionFact;
+    use polint_analysis_api::{
+        FactConfidence, FactFamily, FactMeta, FactPrecision, FactRef, ValidationStatus,
+    };
+    use polint_core::{FileId, FunctionId, Language, Span, stable_key_for_test};
     use std::path::PathBuf;
 
     fn base_db() -> LocalAnalysisDb {

@@ -1,9 +1,9 @@
 use std::collections::BTreeSet;
 
+use crate::AnalysisHost;
 use crate::reachability::facts::{ReachabilityRootFact, RootStatus};
 use crate::reachability::store::REACHABILITY_PROVIDER_ID;
 use polint_analysis_api::FactPrecision;
-use crate::AnalysisHost;
 use polint_core::{Diagnostic, DiagnosticRange};
 
 /// Validates the stored reachability facts, emitting a diagnostic per problem:
@@ -122,10 +122,7 @@ fn validate_root(
 /// Reachability-from-roots is setup-aware/conservative — the producer must never
 /// claim [`FactPrecision::Exact`]. Returns a diagnostic when the ceiling is
 /// exceeded so the caller can record it.
-pub fn reject_exact_precision(
-    precision: FactPrecision,
-    stable_key: &str,
-) -> Option<Diagnostic> {
+pub fn reject_exact_precision(precision: FactPrecision, stable_key: &str) -> Option<Diagnostic> {
     if precision == FactPrecision::Exact {
         Some(precision_ceiling_diagnostic(stable_key))
     } else {
@@ -192,15 +189,15 @@ fn precision_ceiling_diagnostic(stable_key: &str) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::AnalysisHost;
+    use crate::LocalAnalysisDb;
     use crate::ids::ReachabilityRootId;
     use crate::reachability::facts::{
         RootKind, RootPrecision, RootProvenance, RootStatus, compute_reachability_root_stable_key,
     };
     use crate::reachability::store::ReachabilityProviderOutput;
-    use crate::AnalysisHost;
-use crate::LocalAnalysisDb;
-use polint_core::{FileId, FunctionId, Language, Span};
-use polint_analysis_api::{FunctionFact};
+    use polint_analysis_api::FunctionFact;
+    use polint_core::{FileId, FunctionId, Language, Span};
     use std::path::PathBuf;
 
     fn span(file: FileId, start: u32, end: u32) -> Span {

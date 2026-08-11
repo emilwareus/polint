@@ -3,6 +3,7 @@ use super::facts::{
     DataFlowNodeKind, DataFlowPrecision, DataFlowProvenance, DataFlowStatus, DataFlowValidation,
 };
 use super::store::{DataFlowOutput, next_data_flow_edge_id, next_data_flow_node_id};
+use crate::AnalysisHost;
 use crate::calls::facts::{CallSiteFact, CallSyntaxKind, CallTargetStatus};
 use crate::ids::{CallSiteId, DataFlowBudgetId, DataFlowNodeId, PlaceId};
 use crate::refined_calls::facts::{RefinedCallConfidence, RefinedCallEdgeFact};
@@ -10,8 +11,7 @@ use crate::summaries::facts::{
     FlowRoot, SummaryDomainKind, SummaryFact, SummaryPrecision, SummaryStatus,
 };
 use polint_analysis_api::{FactFamily, stable_key_from_parts};
-use crate::AnalysisHost;
-use polint_core::{Language};
+use polint_core::Language;
 
 pub fn derive_direct_call_edges(db: &impl AnalysisHost, output: &mut DataFlowOutput) {
     let interner_handle = db.stable_key_interner();
@@ -626,9 +626,7 @@ fn precision(edge: &RefinedCallEdgeFact) -> DataFlowPrecision {
     match edge.precision {
         crate::calls::facts::CallPrecision::Exact => DataFlowPrecision::Exact,
         crate::calls::facts::CallPrecision::SetupAware => DataFlowPrecision::SetupAware,
-        crate::calls::facts::CallPrecision::Conservative => {
-            DataFlowPrecision::Conservative
-        }
+        crate::calls::facts::CallPrecision::Conservative => DataFlowPrecision::Conservative,
         crate::calls::facts::CallPrecision::Heuristic => DataFlowPrecision::Heuristic,
         crate::calls::facts::CallPrecision::Ambiguous
         | crate::calls::facts::CallPrecision::Unknown => DataFlowPrecision::Unknown,
@@ -655,8 +653,8 @@ fn summary_precision(precision: SummaryPrecision) -> DataFlowPrecision {
 
 #[cfg(test)]
 mod tests {
-    use crate::LocalAnalysisDb;
     use super::*;
+    use crate::LocalAnalysisDb;
     use crate::calls::facts::{
         CallAlgorithm, CallCallee, CallEdgeKind, CallPrecision, CallProvenance, CallSiteFact,
         CallSyntaxKind, UnresolvedCallReason,

@@ -7,13 +7,13 @@ use super::facts::{
     SummaryStatus,
 };
 use super::scc::{Scc, SccSchedule};
+use crate::AnalysisHost;
 use crate::calls::facts::CallTargetStatus;
+use crate::demand::{DemandQueryEngine, DemandQueryResult};
 use crate::ids::{SummaryEventId, SummaryId};
 use crate::summaries::scc::resolved_member_keys;
-use polint_analysis_api::{FactFamily, stable_key_from_parts};
 use polint_analysis_api::{Digest, DigestKind, PrecisionTier, QueryKey};
-use crate::demand::{DemandQueryEngine, DemandQueryResult};
-use crate::AnalysisHost;
+use polint_analysis_api::{FactFamily, stable_key_from_parts};
 use polint_core::{FunctionId, StableKeyId};
 
 // ---------------------------------------------------------------------------
@@ -782,8 +782,8 @@ fn merge_updated_summaries(
 
 #[cfg(test)]
 mod tests {
-    use crate::LocalAnalysisDb;
     use super::*;
+    use crate::LocalAnalysisDb;
     use crate::calls::facts::{
         CallAlgorithm, CallCallee, CallEdgeKind, CallPrecision, CallProvenance, CallSiteFact,
         CallSyntaxKind, CallTargetFact, CallTargetStatus,

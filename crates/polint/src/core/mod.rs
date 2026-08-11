@@ -52,7 +52,10 @@ pub(crate) const CFG_PROVIDER_ID: &str = "polint.cfg";
 pub(crate) const CALLS_PROVIDER_ID: &str = "polint.calls";
 pub(crate) const POLINT_ABSTRACT_DOMAINS_PROVIDER_ID: &str = "polint.abstract_domains";
 pub(crate) const POLINT_DIRECT_SUMMARIES_PROVIDER_ID: &str = "polint.direct_summaries";
-#[allow(dead_code, reason = "Entrypoint metadata writers retained until dual accessors are removed.")]
+#[allow(
+    dead_code,
+    reason = "Entrypoint metadata writers retained until dual accessors are removed."
+)]
 pub(crate) const ENTRYPOINTS_PROVIDER_ID: &str = "polint.entrypoints";
 pub(super) const METRICS_PROVIDER_ID: &str = "polint.metrics";
 pub(super) const FUNCTION_SIZE_METRIC_NAME: &str = "function_size";

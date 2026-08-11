@@ -28,21 +28,6 @@ pub(crate) use change_set::{ChangeKind, ChangeSet, ChangeSetRow};
     test,
     allow(
         unused_imports,
-        reason = "Unit tests exercise only selected re-exported demand query vocabulary terms."
-    )
-)]
-#[cfg_attr(
-    not(test),
-    expect(
-        unused_imports,
-        reason = "Demand query engine infrastructure is established before Plan 04 wires real demand-driven consumers."
-    )
-)]
-pub(crate) use polint_analysis::demand::{DemandQueryEngine, DemandQueryResult, DemandQueryTrace, DemandQueryTraceEntry};
-#[cfg_attr(
-    test,
-    allow(
-        unused_imports,
         reason = "Unit tests exercise only selected re-exported cache vocabulary terms."
     )
 )]
@@ -121,6 +106,23 @@ pub(crate) use keys::{
 pub(crate) use layer_cache::{
     LAYER_CACHE_MANIFEST_SCHEMA, LayerCacheManifest, LayerCacheReadOutcome, LayerCacheReadStatus,
     LayerCacheStore, LayerCacheWriteStatus, relative_manifest_dependency_source,
+};
+#[cfg_attr(
+    test,
+    allow(
+        unused_imports,
+        reason = "Unit tests exercise only selected re-exported demand query vocabulary terms."
+    )
+)]
+#[cfg_attr(
+    not(test),
+    expect(
+        unused_imports,
+        reason = "Demand query engine infrastructure is established before Plan 04 wires real demand-driven consumers."
+    )
+)]
+pub(crate) use polint_analysis::demand::{
+    DemandQueryEngine, DemandQueryResult, DemandQueryTrace, DemandQueryTraceEntry,
 };
 #[cfg_attr(
     test,

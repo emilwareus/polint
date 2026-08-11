@@ -1,10 +1,10 @@
+use crate::AnalysisHost;
 use crate::entrypoints::dispatch::derive_dispatch_edges;
 use crate::entrypoints::recognizers_go::recognize_go_entrypoints;
 use crate::entrypoints::recognizers_ts::recognize_ts_entrypoints;
 use crate::entrypoints::store::EntrypointOutput;
 use crate::entrypoints::trust_boundaries::derive_trust_boundaries;
 use crate::entrypoints::unresolved::merge_unresolved;
-use crate::AnalysisHost;
 
 /// Orchestrate entrypoint extraction by calling Go and TS/JS recognizers,
 /// then deriving trust boundaries, dispatch edges, and merging unresolved facts.
@@ -41,8 +41,8 @@ pub fn extract_entrypoints(db: &impl AnalysisHost) -> EntrypointOutput {
 
 #[cfg(test)]
 mod tests {
-    use crate::LocalAnalysisDb;
     use super::*;
+    use crate::LocalAnalysisDb;
 
     #[test]
     fn extract_entrypoints_produces_empty_output_for_empty_db() {

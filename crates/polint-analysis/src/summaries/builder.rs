@@ -6,18 +6,16 @@ use super::facts::{
     SummaryFact, SummaryFlowEdge, SummaryPrecision, SummaryProvenance, SummaryStatus,
 };
 use super::store::SummaryOutput;
+use crate::AnalysisHost;
 use crate::calls::facts::UnresolvedCallFact;
 use crate::cfg::facts::{BasicBlockFact, BasicBlockKind, CfgEdgeFact, CfgEdgeKind};
 use crate::cfg::ids::CfgFunctionId;
-use crate::domains::facts::{
-    DomainLocation, DomainObservationFact, DomainSlot, DomainValue,
-};
+use crate::domains::facts::{DomainLocation, DomainObservationFact, DomainSlot, DomainValue};
 use crate::ids::{MirBodyId, PlaceId, SummaryEventId, SummaryId};
 use crate::mir_body::MirBody;
 use crate::mir_op::{AssignMode, MirOperationKind, MirValue};
 use crate::places::PlaceRoot;
 use polint_analysis_api::{FactFamily, stable_key_from_parts};
-use crate::AnalysisHost;
 use polint_core::{FunctionId, StableKeyId};
 
 /// Computes direct (local, single-function) summaries from LocalAnalysisDb facts.
@@ -45,8 +43,7 @@ impl DirectSummaryBuilder {
         };
 
         let operations_by_body: BTreeMap<MirBodyId, Vec<&crate::mir_op::MirOperation>> = {
-            let mut map: BTreeMap<MirBodyId, Vec<&crate::mir_op::MirOperation>> =
-                BTreeMap::new();
+            let mut map: BTreeMap<MirBodyId, Vec<&crate::mir_op::MirOperation>> = BTreeMap::new();
             for op in db.mir_operations() {
                 map.entry(op.body).or_default().push(op);
             }
@@ -466,7 +463,8 @@ fn build_call_effects(
     let unresolved_count = function_unresolved.len() as u32;
 
     // Get call targets for this function from the call store
-    { let call_store = db.calls_store();
+    {
+        let call_store = db.calls_store();
         let targets = call_store.outgoing_by_function(function);
         for target in &targets {
             direct_callees.insert(db.resolve_stable_key(target.stable_key).to_string());
@@ -972,8 +970,8 @@ fn classify_domain_output(
 
 #[cfg(test)]
 mod tests {
-    use crate::LocalAnalysisDb;
     use super::*;
+    use crate::LocalAnalysisDb;
     use crate::calls::facts::{
         CallAlgorithm, CallCallee, CallPrecision, CallProvenance as CallProvenanceFact,
         CallSiteFact, CallSyntaxKind, CallTargetStatus, UnresolvedCallFact, UnresolvedCallReason,

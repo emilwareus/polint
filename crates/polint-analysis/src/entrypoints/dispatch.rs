@@ -1,11 +1,11 @@
+use crate::AnalysisHost;
 use crate::entrypoints::facts::{
     DispatchEdgeKind, EntrypointFact, EntrypointKind, FrameworkDispatchEdgeFact,
 };
 use crate::entrypoints::provider::ENTRYPOINTS_PROVIDER_ID;
 use crate::ids::DispatchEdgeId;
 use polint_analysis_api::{FactFamily, stable_key_from_parts};
-use crate::AnalysisHost;
-use polint_core::{StableKeyId};
+use polint_core::StableKeyId;
 
 /// Derive framework dispatch edge facts from recognized entrypoints.
 ///
@@ -110,13 +110,13 @@ fn dispatch_edge_stable_key(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::LocalAnalysisDb;
     use crate::entrypoints::facts::{
         EntrypointConfidence, EntrypointPrecision, EntrypointProvenance, EntrypointStatus,
         TriggerMetadata,
     };
     use crate::ids::EntrypointId;
-use crate::LocalAnalysisDb;
-use polint_core::{FileId, FunctionId, Language, Span};
+    use polint_core::{FileId, FunctionId, Language, Span};
 
     fn make_entrypoint(kind: EntrypointKind, framework_id: &str) -> EntrypointFact {
         EntrypointFact {

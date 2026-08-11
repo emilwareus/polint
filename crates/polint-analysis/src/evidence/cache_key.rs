@@ -1,6 +1,4 @@
-use crate::evidence::facts::{
-    EvidenceQueryBudget, EvidenceRankingMode, EvidenceRendererMode,
-};
+use crate::evidence::facts::{EvidenceQueryBudget, EvidenceRankingMode, EvidenceRendererMode};
 use polint_analysis_api::{Digest, DigestKind, InputComponent, InputSnapshot};
 
 pub const EVIDENCE_SCHEMA_LABEL: &str = "evidence-facts-1";
@@ -94,7 +92,10 @@ fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[I
 #[cfg(test)]
 mod tests {
     use super::*;
-    use polint_analysis_api::{GoLifecycleSnapshot, InputComponent, InputComponentStatus, InputSnapshot, TsJsLifecycleSnapshot};
+    use polint_analysis_api::{
+        GoLifecycleSnapshot, InputComponent, InputComponentStatus, InputSnapshot,
+        TsJsLifecycleSnapshot,
+    };
 
     #[test]
     fn parameters_include_schema_budget_ranking_and_renderer() {

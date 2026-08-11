@@ -378,7 +378,10 @@ pub(super) fn data_flow_validation_metadata(validation: DataFlowValidation) -> V
     }
 }
 
-#[allow(dead_code, reason = "Retained for AnalysisDb metadata until dual accessors are removed.")]
+#[allow(
+    dead_code,
+    reason = "Retained for AnalysisDb metadata until dual accessors are removed."
+)]
 pub(super) fn data_flow_status_label(status: DataFlowStatus) -> &'static str {
     match status {
         DataFlowStatus::Present => "present",
@@ -390,7 +393,10 @@ pub(super) fn data_flow_status_label(status: DataFlowStatus) -> &'static str {
     }
 }
 
-#[allow(dead_code, reason = "Retained for AnalysisDb metadata until dual accessors are removed.")]
+#[allow(
+    dead_code,
+    reason = "Retained for AnalysisDb metadata until dual accessors are removed."
+)]
 pub(super) fn data_flow_precision_label(precision: DataFlowPrecision) -> &'static str {
     match precision {
         DataFlowPrecision::Exact => "exact",
@@ -402,7 +408,10 @@ pub(super) fn data_flow_precision_label(precision: DataFlowPrecision) -> &'stati
     }
 }
 
-#[allow(dead_code, reason = "Retained for AnalysisDb metadata until dual accessors are removed.")]
+#[allow(
+    dead_code,
+    reason = "Retained for AnalysisDb metadata until dual accessors are removed."
+)]
 pub(super) fn data_flow_validation_label(validation: DataFlowValidation) -> &'static str {
     match validation {
         DataFlowValidation::Native => "native",
@@ -481,7 +490,10 @@ pub(super) fn evidence_validation_metadata(validation: EvidenceValidation) -> Va
     }
 }
 
-#[allow(dead_code, reason = "Retained for AnalysisDb metadata until dual accessors are removed.")]
+#[allow(
+    dead_code,
+    reason = "Retained for AnalysisDb metadata until dual accessors are removed."
+)]
 pub(super) fn evidence_status_label(status: EvidenceStatus) -> &'static str {
     match status {
         EvidenceStatus::Present => "present",
@@ -494,7 +506,10 @@ pub(super) fn evidence_status_label(status: EvidenceStatus) -> &'static str {
     }
 }
 
-#[allow(dead_code, reason = "Retained for AnalysisDb metadata until dual accessors are removed.")]
+#[allow(
+    dead_code,
+    reason = "Retained for AnalysisDb metadata until dual accessors are removed."
+)]
 pub(super) fn evidence_precision_label(precision: EvidencePrecision) -> &'static str {
     match precision {
         EvidencePrecision::Exact => "exact",
@@ -506,7 +521,10 @@ pub(super) fn evidence_precision_label(precision: EvidencePrecision) -> &'static
     }
 }
 
-#[allow(dead_code, reason = "Retained for AnalysisDb metadata until dual accessors are removed.")]
+#[allow(
+    dead_code,
+    reason = "Retained for AnalysisDb metadata until dual accessors are removed."
+)]
 pub(super) fn evidence_provenance_label(provenance: EvidenceProvenance) -> &'static str {
     match provenance {
         EvidenceProvenance::Native => "native",
@@ -518,7 +536,10 @@ pub(super) fn evidence_provenance_label(provenance: EvidenceProvenance) -> &'sta
     }
 }
 
-#[allow(dead_code, reason = "Retained for AnalysisDb metadata until dual accessors are removed.")]
+#[allow(
+    dead_code,
+    reason = "Retained for AnalysisDb metadata until dual accessors are removed."
+)]
 pub(super) fn evidence_validation_label(validation: EvidenceValidation) -> &'static str {
     match validation {
         EvidenceValidation::Native => "native",

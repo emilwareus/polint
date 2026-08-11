@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::AnalysisHost;
 use crate::entrypoints::provider::ENTRYPOINTS_PROVIDER_ID;
 use polint_analysis_api::{FactFamily, FactPrecision};
-use crate::AnalysisHost;
 use polint_core::{Diagnostic, DiagnosticRange};
 
 pub fn validate_entrypoints(db: &impl AnalysisHost, diagnostics: &mut Vec<Diagnostic>) {

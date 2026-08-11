@@ -1,3 +1,4 @@
+use crate::AnalysisHost;
 use crate::entrypoints::facts::{
     EntrypointFact, EntrypointKind, EntrypointPrecision, EntrypointStatus,
 };
@@ -7,9 +8,8 @@ use crate::reachability::facts::{
     compute_reachability_root_stable_key,
 };
 use crate::reachability::store::REACHABILITY_PROVIDER_ID;
-use crate::AnalysisHost;
-use polint_core::{Language};
-use polint_analysis_api::{FunctionFact};
+use polint_analysis_api::FunctionFact;
+use polint_core::Language;
 
 /// Sentinel target for a configured root that resolves to no function. The store
 /// referential check intentionally treats this as a non-member of the valid
@@ -66,7 +66,10 @@ pub fn discover_reachability_roots(
 /// Go `Main` (`func main` in `package main`) and `Init` (`func init`, any
 /// package) roots. Both are `RootPrecision::ResolvedStatic` when the underlying
 /// facts are present (D-08). Returns at most one root per function.
-fn go_main_init_roots(db: &impl AnalysisHost, function: &FunctionFact) -> Vec<ReachabilityRootFact> {
+fn go_main_init_roots(
+    db: &impl AnalysisHost,
+    function: &FunctionFact,
+) -> Vec<ReachabilityRootFact> {
     if function.language != Language::Go {
         // D-11: TS/JS never synthesize Main/Init roots.
         return Vec::new();
@@ -143,7 +146,10 @@ fn exported_root(db: &impl AnalysisHost, function: &FunctionFact) -> Option<Reac
 /// `EntrypointKind::Test` maps to `RootKind::Test`; every other kind maps to
 /// `RootKind::FrameworkEntrypoint`. The root carries `originating_entrypoint =
 /// Some(ep.id)` and inherits the entrypoint's precision and status.
-fn entrypoint_bridge_root(db: &impl AnalysisHost, entrypoint: &EntrypointFact) -> ReachabilityRootFact {
+fn entrypoint_bridge_root(
+    db: &impl AnalysisHost,
+    entrypoint: &EntrypointFact,
+) -> ReachabilityRootFact {
     let kind = match entrypoint.kind {
         EntrypointKind::Test => RootKind::Test,
         _ => RootKind::FrameworkEntrypoint,
@@ -186,7 +192,10 @@ fn entrypoint_bridge_root(db: &impl AnalysisHost, entrypoint: &EntrypointFact) -
 /// `RootStatus::Unresolved` / `RootProvenance::Configured` roots — never silent
 /// drops, never filesystem reads outside the repo (the entries are matched only
 /// against in-DB facts).
-fn configured_roots_for(db: &impl AnalysisHost, configured: &[String]) -> Vec<ReachabilityRootFact> {
+fn configured_roots_for(
+    db: &impl AnalysisHost,
+    configured: &[String],
+) -> Vec<ReachabilityRootFact> {
     configured
         .iter()
         .map(|entry| match resolve_configured_function(db, entry) {
@@ -363,7 +372,10 @@ enum ConfiguredResolution<'a> {
 /// Accepts `pkg/path.Name`, `path#name`, or a bare `name`. The trailing identifier
 /// selects candidates by `FunctionFact.name`; the leading prefix (when present) is
 /// honored to disambiguate same-named candidates rather than discarded.
-fn resolve_configured_function<'a>(db: &'a impl AnalysisHost, entry: &str) -> ConfiguredResolution<'a> {
+fn resolve_configured_function<'a>(
+    db: &'a impl AnalysisHost,
+    entry: &str,
+) -> ConfiguredResolution<'a> {
     let (prefix, needle) = split_configured_entry(entry);
 
     let candidates: Vec<&FunctionFact> = db
@@ -486,16 +498,16 @@ fn unresolved_span() -> polint_core::Span {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::AnalysisHost;
+    use crate::LocalAnalysisDb;
     use crate::entrypoints::facts::{
         EntrypointConfidence, EntrypointFact, EntrypointKind, EntrypointPrecision,
         EntrypointProvenance, EntrypointStatus, TriggerMetadata,
     };
     use crate::entrypoints::store::EntrypointOutput;
     use crate::ids::EntrypointId;
-    use crate::AnalysisHost;
-use crate::LocalAnalysisDb;
-use polint_core::{FileId, FunctionId, Language, PackageId, Span, SymbolId};
-use polint_analysis_api::{FunctionFact, PackageFact};
+    use polint_analysis_api::{FunctionFact, PackageFact};
+    use polint_core::{FileId, FunctionId, Language, PackageId, Span, SymbolId};
     use std::path::PathBuf;
 
     fn span(file: FileId, start: u32, end: u32) -> Span {

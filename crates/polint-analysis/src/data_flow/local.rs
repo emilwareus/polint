@@ -8,13 +8,11 @@ use super::facts::{
 use super::store::{
     DataFlowOutput, next_data_flow_budget_id, next_data_flow_edge_id, next_data_flow_node_id,
 };
+use crate::AnalysisHost;
 use crate::ids::{DataFlowBudgetId, DataFlowNodeId, MirBodyId, PlaceId};
-use crate::mir_op::{
-    AssignMode, ConservativeAction, MirOperation, MirOperationKind, MirValue,
-};
+use crate::mir_op::{AssignMode, ConservativeAction, MirOperation, MirOperationKind, MirValue};
 use crate::places::{PlaceFact, PlaceProjection};
 use polint_analysis_api::{FactFamily, stable_key_from_parts};
-use crate::AnalysisHost;
 use polint_core::{FunctionId, Language};
 
 pub fn derive_local_value_flow(db: &impl AnalysisHost, output: &mut DataFlowOutput) {
@@ -665,13 +663,13 @@ pub fn node_from_place(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::AnalysisHost;
+    use crate::LocalAnalysisDb;
     use crate::ids::{CallSiteId, MirBodyId, MirOpId, MirPredicateId, PlaceId};
     use crate::mir_body::{MirBody, MirOutput, MirStatus};
     use crate::mir_op::{AssignMode, MirOperation, MirOperationKind, MirValue};
     use crate::places::{PlaceFact, PlaceProjection, PlaceRoot, PlaceStatus};
-    use crate::AnalysisHost;
-use crate::LocalAnalysisDb;
-use polint_core::{FileId, FunctionId, Language, Span};
+    use polint_core::{FileId, FunctionId, Language, Span};
 
     #[test]
     fn local_builder_derives_parameter_local_return_flow() {

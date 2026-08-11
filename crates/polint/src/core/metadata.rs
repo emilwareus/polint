@@ -692,7 +692,10 @@ pub(super) fn domain_status_metadata(
     (fact_precision, confidence)
 }
 
-#[allow(dead_code, reason = "Retained for AnalysisDb metadata until dual accessors are removed.")]
+#[allow(
+    dead_code,
+    reason = "Retained for AnalysisDb metadata until dual accessors are removed."
+)]
 pub(super) fn entrypoint_precision_metadata(
     status: EntrypointStatus,
     precision: EntrypointPrecision,

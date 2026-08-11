@@ -5,9 +5,7 @@ use super::facts::{
     TypeSubject,
 };
 use super::store::TypeValueAliasOutput;
-use crate::access_paths::facts::{
-    AccessPathFact, AccessPathProjection, AccessPathStatus,
-};
+use crate::access_paths::facts::{AccessPathFact, AccessPathProjection, AccessPathStatus};
 use crate::aliases::facts::{
     AliasAnswerFact, AliasOperand, AliasPrecision, AliasReason, AliasStatus,
 };
@@ -29,8 +27,8 @@ use crate::values::facts::{
     AllocationKind, AllocationTokenFact, ValueFact, ValueKind, ValuePrecision, ValueProvenance,
     ValueStatus, ValueSubject,
 };
-use polint_core::{Language, StableKeyId};
 use polint_core::{Diagnostic, DiagnosticRange};
+use polint_core::{Language, StableKeyId};
 
 pub struct ExtensionTypeValueAliasMerge {
     pub output: TypeValueAliasOutput,
@@ -758,9 +756,7 @@ fn type_precision(precision: ExtensionFactPrecision) -> TypePrecision {
 fn type_confidence(fact: &AcceptedExtensionFact) -> TypeConfidence {
     match fact.confidence {
         crate::extensions::sinks::ExtensionFactConfidence::High => TypeConfidence::High,
-        crate::extensions::sinks::ExtensionFactConfidence::Medium => {
-            TypeConfidence::Medium
-        }
+        crate::extensions::sinks::ExtensionFactConfidence::Medium => TypeConfidence::Medium,
         crate::extensions::sinks::ExtensionFactConfidence::Low => TypeConfidence::Low,
     }
 }

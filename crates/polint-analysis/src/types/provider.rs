@@ -4,15 +4,15 @@ use super::cache_key::{
 };
 use super::facts::{NarrowedTypeFact, TypeFact};
 use super::store::TypeValueAliasOutput;
+use crate::AnalysisHost;
 use crate::access_paths::facts::AccessPathFact;
 use crate::aliases::facts::AliasAnswerFact;
 use crate::points_to::facts::{PointsToConstraintFact, PointsToSetFact};
 use crate::values::facts::{AllocationTokenFact, ValueFact};
 use polint_analysis_api::ProviderManifest;
 use polint_analysis_api::{CacheStats, Digest, DigestKind, InputComponent, InputSnapshot};
-use crate::AnalysisHost;
-use polint_core::{StableKeyInterner};
 use polint_core::Diagnostic;
+use polint_core::StableKeyInterner;
 use serde::Serialize;
 
 pub const TYPE_VALUE_ALIAS_PROVIDER_ID: &str = "polint.type_value_alias";

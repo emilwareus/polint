@@ -1,3 +1,4 @@
+use crate::AnalysisHost;
 use crate::entrypoints::facts::{
     EntrypointFact, EntrypointKind, TrustBoundaryFact, TrustBoundarySourceKind,
 };
@@ -5,7 +6,6 @@ use crate::entrypoints::provider::ENTRYPOINTS_PROVIDER_ID;
 use crate::ids::TrustBoundaryId;
 use crate::places::{PlaceFact, PlaceRoot};
 use polint_analysis_api::{FactFamily, stable_key_from_parts};
-use crate::AnalysisHost;
 use polint_core::{Language, StableKeyId};
 
 /// Derive trust boundary facts from recognized entrypoints.
@@ -298,6 +298,7 @@ fn trust_boundary_stable_key(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::LocalAnalysisDb;
     use crate::entrypoints::facts::{
         EntrypointConfidence, EntrypointPrecision, EntrypointProvenance, EntrypointStatus,
         TriggerMetadata,
@@ -305,9 +306,8 @@ mod tests {
     use crate::ids::{EntrypointId, PlaceId};
     use crate::mir_body::MirOutput;
     use crate::places::PlaceStatus;
-use crate::LocalAnalysisDb;
-use polint_core::{FileId, FunctionId, Language, Span};
-use polint_analysis_api::{FunctionFact};
+    use polint_analysis_api::FunctionFact;
+    use polint_core::{FileId, FunctionId, Language, Span};
     use std::path::PathBuf;
 
     fn make_entrypoint(

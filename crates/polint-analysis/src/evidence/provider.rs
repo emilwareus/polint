@@ -9,6 +9,7 @@ use super::facts::{
     EvidenceValidation,
 };
 use super::store::EvidenceOutput;
+use crate::AnalysisHost;
 use crate::cfg::facts::{CfgPrecision, CfgStatus};
 use crate::data_flow::facts::{
     DataFlowConfidence, DataFlowEdgeFact, DataFlowEdgeKind, DataFlowNodeFact, DataFlowNodeKind,
@@ -18,7 +19,6 @@ use crate::ids::{EvidenceEdgeId, EvidenceNodeId};
 use polint_analysis_api::ProviderManifest;
 use polint_analysis_api::{CacheStats, Digest, DigestKind, InputComponent, InputSnapshot};
 use polint_analysis_api::{FactFamily, stable_key_from_parts};
-use crate::AnalysisHost;
 use polint_core::Diagnostic;
 
 pub const EVIDENCE_PROVIDER_ID: &str = "polint.evidence";

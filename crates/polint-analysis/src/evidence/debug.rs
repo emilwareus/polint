@@ -141,9 +141,7 @@ pub fn evidence_debug_report(
             exact: store
                 .edges()
                 .iter()
-                .filter(|edge| {
-                    edge.precision == crate::evidence::facts::EvidencePrecision::Exact
-                })
+                .filter(|edge| edge.precision == crate::evidence::facts::EvidencePrecision::Exact)
                 .count(),
             partial: store
                 .paths()
@@ -160,8 +158,7 @@ pub fn evidence_debug_report(
                 .edges()
                 .iter()
                 .filter(|edge| {
-                    edge.provenance
-                        == crate::evidence::facts::EvidenceProvenance::Extension
+                    edge.provenance == crate::evidence::facts::EvidenceProvenance::Extension
                 })
                 .count(),
             budget_limited: store

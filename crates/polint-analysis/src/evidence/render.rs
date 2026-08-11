@@ -307,9 +307,7 @@ mod tests {
         EvidenceUnknownReason, EvidenceValidation,
     };
     use crate::evidence::store::EvidenceOutput;
-    use crate::ids::{
-        EvidenceEdgeId, EvidenceNodeId, EvidenceOmittedRegionId, EvidencePathId,
-    };
+    use crate::ids::{EvidenceEdgeId, EvidenceNodeId, EvidenceOmittedRegionId, EvidencePathId};
 
     #[test]
     fn bundle_json_is_deterministic_and_bounded() {
@@ -543,8 +541,7 @@ mod tests {
                     query_mode: EvidenceQueryMode::Path,
                     graph_schema: "evidence.graph.v1".to_string(),
                     query_budget: Default::default(),
-                    ranking:
-                        crate::evidence::facts::EvidenceRankingMode::DeterministicDisplay,
+                    ranking: crate::evidence::facts::EvidenceRankingMode::DeterministicDisplay,
                     renderer: crate::evidence::facts::EvidenceRendererMode::Json,
                     upstream_digest_keys: Vec::new(),
                     stable_key: polint_core::stable_key_for_test("replay:bundle"),

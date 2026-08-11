@@ -3,11 +3,11 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::AnalysisHost;
 use crate::entrypoints::facts::{
     DispatchEdgeKind, EntrypointKind, EntrypointPrecision, EntrypointStatus,
     TrustBoundarySourceKind, UnresolvedFrameworkReason,
 };
-use crate::AnalysisHost;
 use polint_core::{FileId, Language};
 
 /// Produces a debug JSON snapshot of all framework entrypoint facts in the db.
@@ -380,18 +380,16 @@ fn unresolved_reason_label(reason: UnresolvedFrameworkReason) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use crate::LocalAnalysisDb;
     use super::*;
+    use crate::LocalAnalysisDb;
     use crate::entrypoints::facts::{
-        EntrypointConfidence, EntrypointProvenance, EntrypointFact, FrameworkDispatchEdgeFact, TriggerMetadata,
-        TrustBoundaryFact, UnresolvedFrameworkFact,
+        EntrypointConfidence, EntrypointFact, EntrypointProvenance, FrameworkDispatchEdgeFact,
+        TriggerMetadata, TrustBoundaryFact, UnresolvedFrameworkFact,
     };
     use crate::entrypoints::store::EntrypointOutput;
-    use crate::ids::{
-        DispatchEdgeId, EntrypointId, TrustBoundaryId, UnresolvedFrameworkId,
-    };
-    use polint_core::{FunctionId, Language, Span, SymbolId};
+    use crate::ids::{DispatchEdgeId, EntrypointId, TrustBoundaryId, UnresolvedFrameworkId};
     use polint_analysis_api::FunctionFact;
+    use polint_core::{FunctionId, Language, Span, SymbolId};
     use std::path::PathBuf;
 
     fn test_db_empty() -> LocalAnalysisDb {

@@ -455,7 +455,10 @@ impl AnalysisDb {
             .expect("DataFlowStore is installed when AnalysisDb is constructed")
     }
 
-    #[allow(dead_code, reason = "Retained for AnalysisDb until dual accessors are removed.")]
+    #[allow(
+        dead_code,
+        reason = "Retained for AnalysisDb until dual accessors are removed."
+    )]
     fn data_flow_store_mut(&mut self) -> &mut DataFlowStore {
         self.fact_store_mut(DATA_FLOW_STORE_FAMILY)
             .expect("DataFlowStore is installed when AnalysisDb is constructed")
@@ -466,7 +469,10 @@ impl AnalysisDb {
             .expect("EvidenceStore is installed when AnalysisDb is constructed")
     }
 
-    #[allow(dead_code, reason = "Retained for AnalysisDb until dual accessors are removed.")]
+    #[allow(
+        dead_code,
+        reason = "Retained for AnalysisDb until dual accessors are removed."
+    )]
     fn evidence_store_mut(&mut self) -> &mut EvidenceStore {
         self.fact_store_mut(EVIDENCE_STORE_FAMILY)
             .expect("EvidenceStore is installed when AnalysisDb is constructed")
@@ -497,7 +503,10 @@ impl AnalysisDb {
             .expect("EntrypointStore is installed when AnalysisDb is constructed")
     }
 
-    #[allow(dead_code, reason = "Retained for AnalysisDb until dual accessors are removed.")]
+    #[allow(
+        dead_code,
+        reason = "Retained for AnalysisDb until dual accessors are removed."
+    )]
     fn entrypoint_store_mut(&mut self) -> &mut EntrypointStore {
         self.fact_store_mut(ENTRYPOINT_STORE_FAMILY)
             .expect("EntrypointStore is installed when AnalysisDb is constructed")
@@ -995,7 +1004,10 @@ impl AnalysisDb {
         Ok(())
     }
 
-    #[allow(dead_code, reason = "Retained for AnalysisDb until dual accessors are removed.")]
+    #[allow(
+        dead_code,
+        reason = "Retained for AnalysisDb until dual accessors are removed."
+    )]
     pub(crate) fn identity_records(&self) -> &[IdentityRecord] {
         self.identity_store_inner().records()
     }
@@ -1037,7 +1049,10 @@ impl AnalysisDb {
         Ok(())
     }
 
-    #[allow(dead_code, reason = "Retained for AnalysisDb until dual accessors are removed.")]
+    #[allow(
+        dead_code,
+        reason = "Retained for AnalysisDb until dual accessors are removed."
+    )]
     pub(crate) fn replace_data_flow_facts(
         &mut self,
         output: DataFlowOutput,
@@ -1049,7 +1064,10 @@ impl AnalysisDb {
         Ok(())
     }
 
-    #[allow(dead_code, reason = "Retained for AnalysisDb until dual accessors are removed.")]
+    #[allow(
+        dead_code,
+        reason = "Retained for AnalysisDb until dual accessors are removed."
+    )]
     pub(crate) fn replace_evidence_facts(
         &mut self,
         output: EvidenceOutput,
@@ -1149,7 +1167,10 @@ impl AnalysisDb {
         self.calls_store().unresolved()
     }
 
-    #[allow(dead_code, reason = "Retained for AnalysisDb until dual accessors are removed.")]
+    #[allow(
+        dead_code,
+        reason = "Retained for AnalysisDb until dual accessors are removed."
+    )]
     pub(crate) fn call_store(&self) -> Option<&CallStore> {
         Some(self.calls_store())
     }
@@ -1246,7 +1267,10 @@ impl AnalysisDb {
         *self.summary_store_mut() = store;
     }
 
-    #[allow(dead_code, reason = "Retained for AnalysisDb until dual accessors are removed.")]
+    #[allow(
+        dead_code,
+        reason = "Retained for AnalysisDb until dual accessors are removed."
+    )]
     pub(crate) fn merge_summary_facts_without_metadata(
         &mut self,
         summaries: &[SummaryFact],
@@ -1257,7 +1281,10 @@ impl AnalysisDb {
             .merge_updates(summaries, events, &interner);
     }
 
-    #[allow(dead_code, reason = "Retained for AnalysisDb until dual accessors are removed.")]
+    #[allow(
+        dead_code,
+        reason = "Retained for AnalysisDb until dual accessors are removed."
+    )]
     pub(crate) fn refresh_summary_metadata_after_bulk_update(&mut self) {
         self.refresh_summary_metadata();
     }
@@ -1326,7 +1353,10 @@ impl AnalysisDb {
         &self.adaptation_store_inner().rejected
     }
 
-    #[allow(dead_code, reason = "Retained for AnalysisDb until dual accessors are removed.")]
+    #[allow(
+        dead_code,
+        reason = "Retained for AnalysisDb until dual accessors are removed."
+    )]
     pub(crate) fn replace_entrypoint_facts(
         &mut self,
         output: EntrypointOutput,
@@ -1576,7 +1606,10 @@ impl AnalysisDb {
         &self.go_semantic_store().output().package_errors
     }
 
-    #[allow(dead_code, reason = "Retained for AnalysisDb until dual accessors are removed.")]
+    #[allow(
+        dead_code,
+        reason = "Retained for AnalysisDb until dual accessors are removed."
+    )]
     pub(crate) fn trust_boundary_facts(&self) -> &[TrustBoundaryFact] {
         self.entrypoint_store_inner().trust_boundaries()
     }
@@ -1744,7 +1777,10 @@ impl AnalysisDb {
         self.finish_fact_meta_insertions(&[FactFamily::RefinedCallEdge]);
     }
 
-    #[allow(dead_code, reason = "Retained for AnalysisDb until dual accessors are removed.")]
+    #[allow(
+        dead_code,
+        reason = "Retained for AnalysisDb until dual accessors are removed."
+    )]
     fn refresh_data_flow_metadata(&mut self, interner: &crate::core::StableKeyInterner) {
         self.fact_meta.remove_family(FactFamily::DataFlowNode);
         self.fact_meta.remove_family(FactFamily::DataFlowEdge);
@@ -1781,7 +1817,10 @@ impl AnalysisDb {
         ]);
     }
 
-    #[allow(dead_code, reason = "Retained for AnalysisDb until dual accessors are removed.")]
+    #[allow(
+        dead_code,
+        reason = "Retained for AnalysisDb until dual accessors are removed."
+    )]
     fn refresh_evidence_metadata(&mut self, interner: &crate::core::StableKeyInterner) {
         for family in [
             FactFamily::EvidenceNode,
@@ -1919,7 +1958,10 @@ impl AnalysisDb {
         self.finish_fact_meta_insertions(&[FactFamily::AdaptationModel]);
     }
 
-    #[allow(dead_code, reason = "Retained for AnalysisDb until dual accessors are removed.")]
+    #[allow(
+        dead_code,
+        reason = "Retained for AnalysisDb until dual accessors are removed."
+    )]
     fn refresh_entrypoint_metadata(&mut self, interner: &crate::core::StableKeyInterner) {
         self.fact_meta.remove_family(FactFamily::Entrypoint);
         self.fact_meta.remove_family(FactFamily::TrustBoundary);
@@ -2210,7 +2252,10 @@ impl AnalysisDb {
         )
     }
 
-    #[allow(dead_code, reason = "Retained for AnalysisDb until dual accessors are removed.")]
+    #[allow(
+        dead_code,
+        reason = "Retained for AnalysisDb until dual accessors are removed."
+    )]
     fn entrypoint_fact_metadata(
         &self,
         interner: &crate::core::StableKeyInterner,
@@ -2244,7 +2289,10 @@ impl AnalysisDb {
         )
     }
 
-    #[allow(dead_code, reason = "Retained for AnalysisDb until dual accessors are removed.")]
+    #[allow(
+        dead_code,
+        reason = "Retained for AnalysisDb until dual accessors are removed."
+    )]
     fn trust_boundary_metadata(
         &self,
         interner: &crate::core::StableKeyInterner,
@@ -2271,7 +2319,10 @@ impl AnalysisDb {
         )
     }
 
-    #[allow(dead_code, reason = "Retained for AnalysisDb until dual accessors are removed.")]
+    #[allow(
+        dead_code,
+        reason = "Retained for AnalysisDb until dual accessors are removed."
+    )]
     fn dispatch_edge_metadata(
         &self,
         interner: &crate::core::StableKeyInterner,
@@ -2295,7 +2346,10 @@ impl AnalysisDb {
         )
     }
 
-    #[allow(dead_code, reason = "Retained for AnalysisDb until dual accessors are removed.")]
+    #[allow(
+        dead_code,
+        reason = "Retained for AnalysisDb until dual accessors are removed."
+    )]
     fn unresolved_framework_metadata(
         &self,
         interner: &crate::core::StableKeyInterner,
@@ -3330,7 +3384,10 @@ impl AnalysisDb {
         self.semantic_mir_store_inner().places()
     }
 
-    #[allow(dead_code, reason = "Retained for AnalysisDb until dual accessors are removed.")]
+    #[allow(
+        dead_code,
+        reason = "Retained for AnalysisDb until dual accessors are removed."
+    )]
     pub(crate) fn mir_place_types(&self) -> &[crate::analysis::places::PlaceTypeFact] {
         self.semantic_mir_store_inner().place_types()
     }
@@ -4432,7 +4489,10 @@ impl AnalysisDb {
         )
     }
 
-    #[allow(dead_code, reason = "Retained for AnalysisDb until dual accessors are removed.")]
+    #[allow(
+        dead_code,
+        reason = "Retained for AnalysisDb until dual accessors are removed."
+    )]
     fn data_flow_node_metadata(
         &self,
         interner: &crate::core::StableKeyInterner,
@@ -4524,7 +4584,10 @@ impl AnalysisDb {
         )
     }
 
-    #[allow(dead_code, reason = "Retained for AnalysisDb until dual accessors are removed.")]
+    #[allow(
+        dead_code,
+        reason = "Retained for AnalysisDb until dual accessors are removed."
+    )]
     fn data_flow_edge_metadata(
         &self,
         interner: &crate::core::StableKeyInterner,
@@ -4584,7 +4647,10 @@ impl AnalysisDb {
         )
     }
 
-    #[allow(dead_code, reason = "Retained for AnalysisDb until dual accessors are removed.")]
+    #[allow(
+        dead_code,
+        reason = "Retained for AnalysisDb until dual accessors are removed."
+    )]
     fn data_flow_model_metadata(
         &self,
         interner: &crate::core::StableKeyInterner,
@@ -4615,7 +4681,10 @@ impl AnalysisDb {
         )
     }
 
-    #[allow(dead_code, reason = "Retained for AnalysisDb until dual accessors are removed.")]
+    #[allow(
+        dead_code,
+        reason = "Retained for AnalysisDb until dual accessors are removed."
+    )]
     fn data_flow_budget_metadata(
         &self,
         interner: &crate::core::StableKeyInterner,
@@ -4636,7 +4705,10 @@ impl AnalysisDb {
         )
     }
 
-    #[allow(dead_code, reason = "Retained for AnalysisDb until dual accessors are removed.")]
+    #[allow(
+        dead_code,
+        reason = "Retained for AnalysisDb until dual accessors are removed."
+    )]
     fn evidence_node_metadata(
         &self,
         interner: &crate::core::StableKeyInterner,
@@ -4700,7 +4772,10 @@ impl AnalysisDb {
         )
     }
 
-    #[allow(dead_code, reason = "Retained for AnalysisDb until dual accessors are removed.")]
+    #[allow(
+        dead_code,
+        reason = "Retained for AnalysisDb until dual accessors are removed."
+    )]
     fn evidence_edge_metadata(
         &self,
         interner: &crate::core::StableKeyInterner,
@@ -4755,7 +4830,10 @@ impl AnalysisDb {
         )
     }
 
-    #[allow(dead_code, reason = "Retained for AnalysisDb until dual accessors are removed.")]
+    #[allow(
+        dead_code,
+        reason = "Retained for AnalysisDb until dual accessors are removed."
+    )]
     fn evidence_bundle_metadata(
         &self,
         interner: &crate::core::StableKeyInterner,
@@ -4792,7 +4870,10 @@ impl AnalysisDb {
         )
     }
 
-    #[allow(dead_code, reason = "Retained for AnalysisDb until dual accessors are removed.")]
+    #[allow(
+        dead_code,
+        reason = "Retained for AnalysisDb until dual accessors are removed."
+    )]
     fn evidence_path_metadata(
         &self,
         interner: &crate::core::StableKeyInterner,
@@ -4817,7 +4898,10 @@ impl AnalysisDb {
         )
     }
 
-    #[allow(dead_code, reason = "Retained for AnalysisDb until dual accessors are removed.")]
+    #[allow(
+        dead_code,
+        reason = "Retained for AnalysisDb until dual accessors are removed."
+    )]
     fn evidence_slice_metadata(
         &self,
         interner: &crate::core::StableKeyInterner,
@@ -4841,7 +4925,10 @@ impl AnalysisDb {
         )
     }
 
-    #[allow(dead_code, reason = "Retained for AnalysisDb until dual accessors are removed.")]
+    #[allow(
+        dead_code,
+        reason = "Retained for AnalysisDb until dual accessors are removed."
+    )]
     fn evidence_unknown_metadata(
         &self,
         interner: &crate::core::StableKeyInterner,
@@ -4861,7 +4948,10 @@ impl AnalysisDb {
         )
     }
 
-    #[allow(dead_code, reason = "Retained for AnalysisDb until dual accessors are removed.")]
+    #[allow(
+        dead_code,
+        reason = "Retained for AnalysisDb until dual accessors are removed."
+    )]
     fn evidence_omitted_region_metadata(
         &self,
         interner: &crate::core::StableKeyInterner,
@@ -4885,7 +4975,10 @@ impl AnalysisDb {
         )
     }
 
-    #[allow(dead_code, reason = "Retained for AnalysisDb until dual accessors are removed.")]
+    #[allow(
+        dead_code,
+        reason = "Retained for AnalysisDb until dual accessors are removed."
+    )]
     fn evidence_replay_key_metadata(
         &self,
         interner: &crate::core::StableKeyInterner,

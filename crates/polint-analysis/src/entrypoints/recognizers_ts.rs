@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::AnalysisHost;
 use crate::calls::facts::{CallCallee, CallSiteFact, CallSyntaxKind};
 use crate::entrypoints::facts::{
     EntrypointConfidence, EntrypointFact, EntrypointKind, EntrypointPrecision,
@@ -9,10 +10,9 @@ use crate::entrypoints::facts::{
 use crate::entrypoints::provider::ENTRYPOINTS_PROVIDER_ID;
 use crate::ids::{EntrypointId, UnresolvedFrameworkId};
 use crate::places::PlaceRoot;
+use polint_analysis_api::FunctionFact;
 use polint_analysis_api::{FactFamily, FactRef, stable_key_from_parts};
-use crate::AnalysisHost;
 use polint_core::{FileId, FunctionId, Language, Span, span_from_byte_range};
-use polint_analysis_api::{FunctionFact};
 
 // ---------------------------------------------------------------------------
 // Public output
@@ -1673,15 +1673,15 @@ fn language_label_for_stable_key(language: Language) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::AnalysisHost;
+    use crate::LocalAnalysisDb;
     use crate::calls::facts::{
         CallCallee, CallPrecision, CallSiteFact, CallSyntaxKind, CallTargetStatus,
     };
     use crate::calls::store::CallOutput;
     use crate::ids::{CallSiteId, MirBodyId, MirOpId, PlaceId};
-    use crate::AnalysisHost;
-use crate::LocalAnalysisDb;
-use polint_core::{FileId, FunctionId, ImportId, Language, Span};
-use polint_analysis_api::{FunctionFact, ImportFact};
+    use polint_analysis_api::{FunctionFact, ImportFact};
+    use polint_core::{FileId, FunctionId, ImportId, Language, Span};
     use std::path::PathBuf;
 
     fn span(file: FileId, line: u32, start_byte: u32) -> Span {

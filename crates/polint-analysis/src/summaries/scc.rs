@@ -5,8 +5,8 @@ use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
 use serde::Serialize;
 
-use crate::calls::facts::CallTargetStatus;
 use crate::AnalysisHost;
+use crate::calls::facts::CallTargetStatus;
 use polint_core::{FunctionId, StableKeyId, StableKeyInterner};
 
 // ---------------------------------------------------------------------------
@@ -90,10 +90,7 @@ impl SccSchedule {
     }
 }
 
-pub fn resolved_member_keys(
-    interner: &StableKeyInterner,
-    keys: &[StableKeyId],
-) -> Vec<String> {
+pub fn resolved_member_keys(interner: &StableKeyInterner, keys: &[StableKeyId]) -> Vec<String> {
     keys.iter()
         .map(|key| interner.resolve(*key).to_string())
         .collect()
@@ -147,7 +144,8 @@ pub fn compute_scc_schedule(db: &impl AnalysisHost) -> SccSchedule {
     let mut has_self_edge: BTreeSet<FunctionId> = BTreeSet::new();
 
     // Add edges from CallStore outgoing targets.
-    { let call_store = db.calls_store();
+    {
+        let call_store = db.calls_store();
         for &caller_id in &summary_function_set {
             let targets = call_store.outgoing_by_function(caller_id);
             for target in targets {
@@ -292,8 +290,8 @@ fn sorted_sccs_by_rank_and_stable_key(
 
 #[cfg(test)]
 mod tests {
-    use crate::LocalAnalysisDb;
     use super::*;
+    use crate::LocalAnalysisDb;
     use crate::calls::facts::{
         CallAlgorithm, CallCallee, CallEdgeKind, CallPrecision, CallProvenance, CallSiteFact,
         CallSyntaxKind, CallTargetFact, CallTargetStatus,
@@ -316,10 +314,7 @@ mod tests {
     }
 
     /// Create a minimal SummaryFact for a function.
-    fn summary_fact(
-        function_id: u64,
-        callable_key: &str,
-    ) -> crate::summaries::facts::SummaryFact {
+    fn summary_fact(function_id: u64, callable_key: &str) -> crate::summaries::facts::SummaryFact {
         crate::summaries::facts::SummaryFact {
             id: SummaryId(0),
             callable_stable_key: stable_key_for_test(callable_key),

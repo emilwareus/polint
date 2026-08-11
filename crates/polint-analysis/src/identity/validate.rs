@@ -1,9 +1,9 @@
 use std::collections::BTreeSet;
 
+use crate::AnalysisHost;
 use crate::identity::facts::SignatureDigest;
 use crate::ids::{CallSiteId, CallTargetId};
-use crate::AnalysisHost;
-use polint_core::{FileId};
+use polint_core::FileId;
 use polint_core::{Diagnostic, DiagnosticRange};
 
 /// Validates identity records, pushing one diagnostic per malformed row
@@ -110,15 +110,15 @@ fn push_diagnostic(
 
 #[cfg(test)]
 mod tests {
-    use crate::LocalAnalysisDb;
     use super::*;
+    use crate::LocalAnalysisDb;
     use crate::identity::facts::{
         IdentityKind, IdentityRecord, IdentityRecordId, LanguageTag, compute_identity_stable_key,
         compute_signature_digest,
     };
     use crate::identity::store::IdentityProviderOutput;
+    use polint_analysis_api::FunctionFact;
     use polint_core::{FunctionId, Language, Span};
-use polint_analysis_api::{FunctionFact};
     use std::path::PathBuf;
     use std::sync::Arc;
 

@@ -11,12 +11,12 @@ use super::facts::{
 use super::store::{
     DataFlowOutput, next_data_flow_edge_id, next_data_flow_model_id, next_data_flow_node_id,
 };
+use crate::AnalysisHost;
 use crate::entrypoints::facts::TrustBoundaryFact;
 use crate::ids::{DataFlowModelId, DataFlowNodeId};
 use crate::places::{PlaceFact, PlaceRoot};
 use polint_analysis_api::{CacheStats, Digest, DigestKind, InputComponent, InputSnapshot};
 use polint_analysis_api::{FactFamily, ProviderManifest, stable_key_from_parts};
-use crate::AnalysisHost;
 use polint_core::Diagnostic;
 
 pub const DATA_FLOW_PROVIDER_ID: &str = "polint.data_flow";
@@ -329,15 +329,11 @@ fn extension_precision(
     precision: crate::extensions::sinks::ExtensionFactPrecision,
 ) -> DataFlowPrecision {
     match precision {
-        crate::extensions::sinks::ExtensionFactPrecision::Exact => {
-            DataFlowPrecision::Exact
-        }
+        crate::extensions::sinks::ExtensionFactPrecision::Exact => DataFlowPrecision::Exact,
         crate::extensions::sinks::ExtensionFactPrecision::SetupAware => {
             DataFlowPrecision::SetupAware
         }
-        crate::extensions::sinks::ExtensionFactPrecision::Heuristic => {
-            DataFlowPrecision::Heuristic
-        }
+        crate::extensions::sinks::ExtensionFactPrecision::Heuristic => DataFlowPrecision::Heuristic,
         crate::extensions::sinks::ExtensionFactPrecision::GeneratedUnvalidated => {
             DataFlowPrecision::Heuristic
         }
@@ -348,12 +344,8 @@ fn extension_confidence(
     confidence: crate::extensions::sinks::ExtensionFactConfidence,
 ) -> DataFlowConfidence {
     match confidence {
-        crate::extensions::sinks::ExtensionFactConfidence::High => {
-            DataFlowConfidence::High
-        }
-        crate::extensions::sinks::ExtensionFactConfidence::Medium => {
-            DataFlowConfidence::Medium
-        }
+        crate::extensions::sinks::ExtensionFactConfidence::High => DataFlowConfidence::High,
+        crate::extensions::sinks::ExtensionFactConfidence::Medium => DataFlowConfidence::Medium,
         crate::extensions::sinks::ExtensionFactConfidence::Low => DataFlowConfidence::Low,
     }
 }
@@ -507,8 +499,8 @@ fn provider_error_diagnostic(message: String) -> Diagnostic {
 
 #[cfg(test)]
 mod tests {
-    use crate::LocalAnalysisDb;
     use super::*;
+    use crate::LocalAnalysisDb;
     use crate::entrypoints::facts::{
         EntrypointConfidence, EntrypointFact, EntrypointKind, EntrypointPrecision,
         EntrypointProvenance, EntrypointStatus, TriggerMetadata, TrustBoundarySourceKind,
@@ -517,8 +509,8 @@ mod tests {
     use crate::ids::{EntrypointId, MirBodyId, PlaceId, TrustBoundaryId};
     use crate::mir_body::{MirBody, MirOutput, MirStatus};
     use crate::places::{PlaceProjection, PlaceStatus};
+    use polint_analysis_api::FunctionFact;
     use polint_core::{FileId, FunctionId, Language, Span};
-use polint_analysis_api::{FunctionFact};
     use std::path::PathBuf;
 
     #[test]

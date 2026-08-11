@@ -3,12 +3,12 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::AnalysisHost;
 use crate::aliases::facts::AliasStatus;
 use crate::points_to::facts::PointsToBudgetStatus;
 use crate::types::facts::TypeShape;
 use crate::values::facts::ValueKind;
-use crate::AnalysisHost;
-use polint_core::{Language};
+use polint_core::Language;
 
 pub fn type_value_alias_debug_json_for_test(db: &impl AnalysisHost) -> Value {
     serde_json::to_value(TypeValueAliasDebugReport {
@@ -223,13 +223,11 @@ fn budget_label(status: PointsToBudgetStatus) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use crate::LocalAnalysisDb;
     use super::*;
+    use crate::LocalAnalysisDb;
     use crate::access_paths::facts::{AccessPathFact, AccessPathStatus};
     use crate::access_paths::store::AccessPathOutput;
-    use crate::aliases::facts::{
-        AliasAnswerFact, AliasOperand, AliasPrecision, AliasReason,
-    };
+    use crate::aliases::facts::{AliasAnswerFact, AliasOperand, AliasPrecision, AliasReason};
     use crate::aliases::store::AliasOutput;
     use crate::ids::{
         AccessPathId, AliasAnswerId, AllocationTokenId, ObjectTokenId, PlaceId, PointsToSetId,

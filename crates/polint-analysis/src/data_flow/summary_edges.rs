@@ -5,14 +5,14 @@ use super::facts::{
 };
 use super::local::budget_fact;
 use super::store::{DataFlowOutput, next_data_flow_edge_id, next_data_flow_node_id};
+use crate::AnalysisHost;
 use crate::ids::DataFlowNodeId;
 use crate::summaries::facts::{
     FlowKind, FlowRoot, SummaryDomainKind, SummaryEventFact, SummaryFact, SummaryFlowEdge,
     SummaryPrecision, SummaryStatus,
 };
 use polint_analysis_api::{FactFamily, stable_key_from_parts};
-use crate::AnalysisHost;
-use polint_core::{Language};
+use polint_core::Language;
 
 pub fn derive_summary_projected_edges(db: &impl AnalysisHost, output: &mut DataFlowOutput) {
     let interner_handle = db.stable_key_interner();
@@ -408,8 +408,8 @@ fn flow_evidence(flow: &SummaryFlowEdge) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::LocalAnalysisDb;
     use super::*;
+    use crate::LocalAnalysisDb;
     use crate::ids::{SummaryEventId, SummaryId};
     use crate::summaries::facts::SummaryProvenance;
     use polint_core::FunctionId;

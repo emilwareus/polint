@@ -1,9 +1,9 @@
+use crate::AnalysisHost;
 use crate::entrypoints::cache_key::entrypoints_provider_parameter_digest;
 use crate::entrypoints::extract::extract_entrypoints;
 use crate::entrypoints::store::EntrypointOutput;
 use polint_analysis_api::ProviderManifest;
 use polint_analysis_api::{CacheStats, Digest, DigestKind, InputComponent, InputSnapshot};
-use crate::AnalysisHost;
 use polint_core::{Diagnostic, DiagnosticRange};
 use std::fmt::Debug;
 

@@ -1,8 +1,7 @@
 use std::collections::BTreeMap;
 
-use crate::access_paths::facts::{
-    AccessPathFact, AccessPathProjection, AccessPathStatus,
-};
+use crate::AnalysisHost;
+use crate::access_paths::facts::{AccessPathFact, AccessPathProjection, AccessPathStatus};
 use crate::access_paths::store::AccessPathOutput;
 use crate::ids::{
     AbstractValueId, AccessPathId, AllocationTokenId, PlaceId, TypeFactId, TypeSetId, ValueFactId,
@@ -22,7 +21,6 @@ use crate::values::facts::{
 };
 use crate::values::store::ValueOutput;
 use polint_analysis_api::{FactFamily, stable_key_from_parts};
-use crate::AnalysisHost;
 use polint_core::{FileId, FunctionId, Language};
 
 type RootPlaceKey = (PlaceRoot, Option<FileId>, Option<FunctionId>);
@@ -278,7 +276,10 @@ fn access_path_for_place(
     }
 }
 
-fn root_place_by_key(db: &impl AnalysisHost, language: Language) -> BTreeMap<RootPlaceKey, PlaceId> {
+fn root_place_by_key(
+    db: &impl AnalysisHost,
+    language: Language,
+) -> BTreeMap<RootPlaceKey, PlaceId> {
     db.mir_places()
         .iter()
         .filter(|place| place.language == language && place.projections.is_empty())
@@ -699,14 +700,14 @@ impl PlaceRootBody for PlaceRoot {
 
 #[cfg(test)]
 mod tests {
-    use crate::LocalAnalysisDb;
     use super::*;
+    use crate::LocalAnalysisDb;
     use crate::ids::{CallSiteId, MirBodyId, MirOpId, PlaceId};
     use crate::mir_body::{MirBody, MirOutput, MirStatus};
     use crate::mir_op::{AssignMode, ConservativeAction, UnsupportedDomain};
     use crate::places::PlaceProjection;
+    use polint_analysis_api::FunctionFact;
     use polint_core::{FileId, FunctionId, Span};
-use polint_analysis_api::{FunctionFact};
 
     #[test]
     fn go_receiver_selector_index_and_nil_seed_rows_are_emitted() {

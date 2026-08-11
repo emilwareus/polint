@@ -1,8 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::access_paths::facts::{
-    AccessPathFact, AccessPathProjection, AccessPathStatus,
-};
+use crate::AnalysisHost;
+use crate::access_paths::facts::{AccessPathFact, AccessPathProjection, AccessPathStatus};
 use crate::access_paths::store::AccessPathOutput;
 use crate::ids::{
     AbstractValueId, AccessPathId, AllocationTokenId, NarrowedTypeId, PlaceId, TypeFactId,
@@ -23,11 +22,10 @@ use crate::values::facts::{
     ValueStatus, ValueSubject,
 };
 use crate::values::store::ValueOutput;
-use polint_analysis_api::{FactFamily, stable_key_from_parts};
-use crate::AnalysisHost;
-use polint_core::{FileId, FunctionId, Language, Span};
-use polint_analysis_api::{SourceFile};
 use polint_analysis_api::SemanticImportKind;
+use polint_analysis_api::SourceFile;
+use polint_analysis_api::{FactFamily, stable_key_from_parts};
+use polint_core::{FileId, FunctionId, Language, Span};
 
 type RootPlaceKey = (PlaceRoot, Option<FileId>, Option<FunctionId>);
 
@@ -1142,14 +1140,14 @@ impl PlaceRootBody for PlaceRoot {
 
 #[cfg(test)]
 mod tests {
-    use crate::LocalAnalysisDb;
     use super::*;
+    use crate::LocalAnalysisDb;
     use crate::ids::{MirBodyId, MirOpId, UnsupportedId};
     use crate::mir_body::{MirOutput, MirStatus};
     use crate::mir_op::{AssignMode, ConservativeAction, UnsupportedDomain};
     use crate::places::PlaceProjection;
-    use polint_core::{FunctionId};
-use polint_analysis_api::{FunctionFact};
+    use polint_analysis_api::FunctionFact;
+    use polint_core::FunctionId;
     use std::path::PathBuf;
 
     #[test]

@@ -148,7 +148,9 @@ pub fn type_value_alias_provider_parameter_digest_for_test(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use polint_analysis_api::{GoLifecycleSnapshot, InputComponentStatus, ProviderSchemaSnapshot, TsJsLifecycleSnapshot};
+    use polint_analysis_api::{
+        GoLifecycleSnapshot, InputComponentStatus, ProviderSchemaSnapshot, TsJsLifecycleSnapshot,
+    };
 
     #[test]
     fn provider_parameter_digest_changes_for_behavior_inputs() {

@@ -1,3 +1,4 @@
+use crate::AnalysisHost;
 use crate::ids::ReachabilityRootId;
 use crate::reachability::cache_key::reachability_provider_parameter_digest;
 use crate::reachability::discover::discover_reachability_roots;
@@ -5,8 +6,7 @@ use crate::reachability::facts::ReachabilityRootFact;
 use crate::reachability::store::{REACHABILITY_PROVIDER_ID, ReachabilityProviderOutput};
 use polint_analysis_api::ProviderManifest;
 use polint_analysis_api::{CacheStats, Digest, DigestKind, InputComponent, InputSnapshot};
-use crate::AnalysisHost;
-use polint_core::{StableKeyInterner};
+use polint_core::StableKeyInterner;
 use polint_core::{Diagnostic, DiagnosticRange};
 use serde::Serialize;
 
