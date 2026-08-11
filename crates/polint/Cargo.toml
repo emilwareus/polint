@@ -29,6 +29,7 @@ petgraph.workspace = true
 polint-core.workspace = true
 polint-ir.workspace = true
 polint-analysis-api.workspace = true
+polint-analysis.workspace = true
 polint-frontend-api.workspace = true
 polint-go.workspace = true
 polint-ts.workspace = true

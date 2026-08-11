@@ -1,10 +1,9 @@
-pub(crate) mod builder;
+pub(crate) use polint_analysis::cfg::builder;
+pub(crate) use polint_analysis::cfg::derived;
+pub(crate) use polint_analysis::cfg::facts;
+pub(crate) use polint_analysis::cfg::ids;
+pub(crate) use polint_analysis::cfg::store;
 pub(crate) mod cache_key;
-pub(crate) mod derived;
-pub(crate) mod facts;
-pub(crate) mod graph;
-pub(crate) mod ids;
 pub(crate) mod lower;
 pub(crate) mod provider;
-pub(crate) mod store;
 pub(crate) mod validate;

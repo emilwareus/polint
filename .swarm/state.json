@@ -899,7 +899,7 @@
         "T-INTERN-C"
       ],
       "created_at": "2026-08-10T10:04:15+02:00",
-      "note": "CLAIMED exclusive; polint-go+polint-ts compiler-green; remaining Q4: polint-analysis; facade still holds analyses",
+      "note": "CLAIMED exclusive; polint-go+polint-ts compiler-green; polint-analysis CP1 foundations+AnalysisHost+LocalAnalysisDb committed; providers/lang edges still in facade; remaining Q4 CP2/CP3",
       "dispatched_at": "2026-08-11T00:26:45+0200",
       "claimed_at": "2026-08-11T00:26:45+0200",
       "attempts": 1,
@@ -907,7 +907,7 @@
       "source_commit": "6e95a33c302d6d135dd3724b5b669f457cfe7a10",
       "worker": "T-SPLIT-exclusive-writer",
       "exclusive_lock": true,
-      "updated_at": "2026-08-11T01:58:51+0200"
+      "updated_at": "2026-08-11T02:17:07+0200"
     },
     "T-ARCH-DOC": {
       "state": "BLOCKED",
@@ -1037,7 +1037,8 @@
     {
       "at": "2026-08-08T20:27:05+02:00",
       "text": "M3+M4 authorized; W3.1 READY"
-    }
+    },
+    "2026-08-11T02:17:07+0200: T-SPLIT polint-analysis CP1 foundations committed; still IN_FLIGHT/exclusive"
   ],
   "m1_gate": {
     "status": "PASS",
@@ -1098,7 +1099,8 @@
     "2026-08-11T00:26:45+0200: T-SPLIT CLAIMED exclusive lock @ 6e95a33c; dispatch_allowed=false",
     "2026-08-11T01:21:30+0200: integration_head set to T-INTERN-C feat 932cfd0b (bookkeeping tip 1bb67299)",
     "2026-08-11T01:45:00+0200: T-SPLIT polint-go extraction compiler-green (follow-up to ce702a96); still IN_FLIGHT/exclusive; next polint-ts then polint-analysis",
-    "2026-08-11T01:58:51+0200: T-SPLIT polint-ts extraction compiler-green; still IN_FLIGHT/exclusive; next polint-analysis"
+    "2026-08-11T01:58:51+0200: T-SPLIT polint-ts extraction compiler-green; still IN_FLIGHT/exclusive; next polint-analysis",
+    "2026-08-11T02:11:25+0200: T-SPLIT polint-analysis CP1 foundations compiler-green; still IN_FLIGHT/exclusive"
   ],
   "events": [
     "2026-08-08T15:10:20+02:00: W2.2d+e landed FF @271ccd15; core/mod.rs 8739 LOC; capability+rule extracted; main untouched",
@@ -1193,7 +1195,9 @@
       "event": "T-SPLIT CLAIMED",
       "commit": "6e95a33c"
     },
-    "2026-08-11T01:58:51+0200: T-SPLIT polint-ts extraction compiler-green; still IN_FLIGHT/exclusive; next polint-analysis"
+    "2026-08-11T01:58:51+0200: T-SPLIT polint-ts extraction compiler-green; still IN_FLIGHT/exclusive; next polint-analysis",
+    "2026-08-11T02:11:25+0200: T-SPLIT polint-analysis CP1 foundations compiler-green; still IN_FLIGHT/exclusive",
+    "2026-08-11T02:17:07+0200: T-SPLIT polint-analysis CP1 foundations committed; still IN_FLIGHT/exclusive"
   ],
   "ready": [],
   "BLOCKED": [],

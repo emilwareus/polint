@@ -1,11 +1,11 @@
+pub(crate) use polint_analysis::refined_calls::facts;
+pub(crate) use polint_analysis::refined_calls::store;
 pub(crate) mod cache_key;
 pub(crate) mod debug;
 pub(crate) mod extensions;
-pub(crate) mod facts;
 pub(crate) mod framework;
 pub(crate) mod go;
 pub(crate) mod provider;
-pub(crate) mod store;
 pub(crate) mod summaries;
 pub(crate) mod ts_js;
 pub(crate) mod validate;

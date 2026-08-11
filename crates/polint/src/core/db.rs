@@ -1399,7 +1399,8 @@ impl AnalysisDb {
         output: TsObjectModelOutput,
     ) -> Result<(), AnalysisError> {
         let interner = self.stable_key_interner();
-        let store = TsObjectModelStore::try_from_output(output, &interner)?;
+        let store = TsObjectModelStore::try_from_output(output, &interner)
+            .map_err(crate::analysis::error_convert::from_ts)?;
         *self.ts_object_model_store_mut() = store;
         Ok(())
     }
@@ -1475,7 +1476,8 @@ impl AnalysisDb {
         output: GoSemanticFactsOutput,
     ) -> Result<GoSemanticStoreReport, AnalysisError> {
         let interner = self.stable_key_interner();
-        let store = GoSemanticStore::from_output(output, &interner)?;
+        let store = GoSemanticStore::from_output(output, &interner)
+            .map_err(crate::analysis::error_convert::from_go)?;
         let report = store.report();
         *self.go_semantic_store_mut() = store;
         Ok(report)

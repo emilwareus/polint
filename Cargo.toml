@@ -6,6 +6,7 @@ members = [
     "crates/polint-frontend-api",
     "crates/polint-go",
     "crates/polint-ts",
+    "crates/polint-analysis",
     "crates/polint",
     "crates/polint-bench",
     "crates/polint-eval",

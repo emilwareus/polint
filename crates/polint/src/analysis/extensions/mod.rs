@@ -1,9 +1,9 @@
+pub(crate) use polint_analysis::extensions::manifest;
+pub(crate) use polint_analysis::extensions::protocol;
+pub(crate) use polint_analysis::extensions::sinks;
+pub(crate) use polint_analysis::extensions::store;
 pub(crate) mod cache_key;
 pub(crate) mod discovery;
 pub(crate) mod host;
-pub(crate) mod manifest;
-pub(crate) mod protocol;
 pub(crate) mod provider;
-pub(crate) mod sinks;
-pub(crate) mod store;
 pub(crate) mod validate;

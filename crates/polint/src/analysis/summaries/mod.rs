@@ -1,10 +1,10 @@
+pub(crate) use polint_analysis::summaries::core;
+pub(crate) use polint_analysis::summaries::domain;
+pub(crate) use polint_analysis::summaries::facts;
+pub(crate) use polint_analysis::summaries::store;
 pub(crate) mod builder;
 pub(crate) mod cache_key;
 pub(crate) mod closure;
-pub(crate) mod core;
-pub(crate) mod domain;
-pub(crate) mod facts;
 pub(crate) mod provider;
 pub(crate) mod scc;
-pub(crate) mod store;
 pub(crate) mod validate;

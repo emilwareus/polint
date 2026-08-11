@@ -1,7 +1,5 @@
 use std::collections::BTreeSet;
 
-use serde::{Deserialize, Serialize};
-
 use super::sinks::{
     ExtensionFactCandidate, ExtensionFactPrecision, REFINED_CALL_EDGE_FAMILY,
     TYPE_VALUE_ALIAS_ACCESS_PATH_FAMILY, TYPE_VALUE_ALIAS_ALIAS_ANSWER_FAMILY,
@@ -13,21 +11,7 @@ use super::store::{AcceptedExtensionFact, ExtensionOutput, RejectedExtensionFact
 use crate::analysis::calls::facts::CallCallee;
 use crate::core::AnalysisDb;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum ExtensionRejectionReason {
-    UndeclaredOutput,
-    MissingBinding,
-    InvalidSpan,
-    MissingPrecision,
-    MissingProvenance,
-    SyntheticIdMissingEvidence,
-    DuplicateStableKey,
-    NativeConflict,
-    FrameworkPrecisionCeiling,
-    TypeValueAliasPrecisionCeiling,
-    MalformedPayload,
-}
+pub(crate) use super::store::ExtensionRejectionReason;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ExtensionValidationInput {

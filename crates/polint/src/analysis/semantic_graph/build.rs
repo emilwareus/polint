@@ -530,7 +530,11 @@ impl GraphBuilder {
         for scope in db.scopes() {
             let key =
                 node_key_from_identity(interner, "scope", &interner.resolve(scope.stable_key));
-            self.intern_node(interner, NodeKind::Scope(scope.id), key);
+            self.intern_node(
+                interner,
+                NodeKind::Scope(crate::analysis::ids::ScopeId(scope.id.0)),
+                key,
+            );
         }
         for site in db.call_sites() {
             let key =
