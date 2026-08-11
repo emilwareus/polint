@@ -26,7 +26,7 @@
       "state": "MERGED-NOOP",
       "merged_at": "2026-08-08T10:58:00+02:00",
       "commit": "13faad28",
-      "note": "Deferred: no Rust frontend; see docs/architecture-review/W0.3-MERGED-NOOP.md and HANDOFF \u00a75"
+      "note": "Deferred: no Rust frontend; see docs/architecture-review/W0.3-MERGED-NOOP.md and HANDOFF §5"
     },
     "W0.A1": {
       "state": "MERGED",
@@ -39,7 +39,7 @@
       "worktree": "/Users/emilwareus/conductor/workspaces/exlint/swarm-W0.A2",
       "commit": "cc93090daa6684920fe4927c9db270ea4db21afd",
       "merged_at": "2026-08-08T10:48:00+02:00",
-      "note": "Example self-pairs \u00d7 json only; eval-fixtures out; scale optional loud-skip",
+      "note": "Example self-pairs × json only; eval-fixtures out; scale optional loud-skip",
       "gates": {
         "R1-R6": "PASS",
         "G1": "PASS",
@@ -114,7 +114,7 @@
     "W1.2": {
       "state": "MERGED",
       "deps": [],
-      "note": "MERGED FF onto integration after rebase onto acdcb1ad (post W1.1/W1.3); resolved telemetry\u00d7evidence conflict in diagnostics_and_rule_execution_from_public_json_report; R1-R6 PASS; R7 mutation FAIL\u2192wired; G1/G2/G4(116)/G5/UNIT PASS; G7 cost flake under load (tip same); cost sidecars refreshed in follow-up 0873e17f",
+      "note": "MERGED FF onto integration after rebase onto acdcb1ad (post W1.1/W1.3); resolved telemetry×evidence conflict in diagnostics_and_rule_execution_from_public_json_report; R1-R6 PASS; R7 mutation FAIL→wired; G1/G2/G4(116)/G5/UNIT PASS; G7 cost flake under load (tip same); cost sidecars refreshed in follow-up 0873e17f",
       "attempts": 1,
       "branch": "swarm/W1.2",
       "worktree": "/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.2",
@@ -176,7 +176,7 @@
       "deps": [
         "W0.A4"
       ],
-      "note": "MERGED-NOOP: escalate not-worth-doing; parse ~6.23% of run (max ~10.51%), ~1 parse/file; measurement docs only \u2014 instrumentation on swarm/W1.5 abandoned; see docs/architecture-review/W1.5-STEP1-MEASUREMENT.md",
+      "note": "MERGED-NOOP: escalate not-worth-doing; parse ~6.23% of run (max ~10.51%), ~1 parse/file; measurement docs only — instrumentation on swarm/W1.5 abandoned; see docs/architecture-review/W1.5-STEP1-MEASUREMENT.md",
       "attempts": 1,
       "branch": "swarm/W1.5",
       "worktree": "/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.5",
@@ -217,7 +217,7 @@
       "dispatched_at": "2026-08-08T11:52:30+02:00",
       "attempts": 1,
       "worker": "8c85d207-0613-4bbe-ab7e-1209f626921f",
-      "note": "MERGED FF onto integration after W1.6; bound source reads via repo_fs 16MiB \u2192 polint/capability; G1/G2/G7/G4/G5 PASS",
+      "note": "MERGED FF onto integration after W1.6; bound source reads via repo_fs 16MiB → polint/capability; G1/G2/G7/G4/G5 PASS",
       "commit": "ed760c5563e3661f852794fb16da31f4223a1496",
       "merged_at": "2026-08-08T12:30:05+02:00",
       "done_at": "2026-08-08T12:30:05+02:00",
@@ -285,7 +285,7 @@
       "merged_at": "2026-08-08T15:17:50+02:00",
       "done_at": "2026-08-08T15:17:50+02:00",
       "gates": {
-        "R1-R6": "PASS (4 batched lands \u226425 files each)",
+        "R1-R6": "PASS (4 batched lands ≤25 files each)",
         "G1": "PASS",
         "G2": "PASS",
         "G4": "PASS",
@@ -568,8 +568,8 @@
       "dispatched_at": "2026-08-08T16:02:09+02:00",
       "held_at": "2026-08-08T16:18:17+02:00",
       "attempts": 1,
-      "note": "MERGED-NOOP/ESCALATE: Go RTA dense+bitset ~1.8\u00d7 slower on chain/wide synthetics; measurement landed; no StableKeyId migration; W2.5 must not assume interning. See docs/architecture-review/W2.3-STEP1-MEASUREMENT.md",
-      "escalate_reason": "not-worth-doing \u2014 no measurable win; wall-clock regresses ~1.8\u00d7",
+      "note": "MERGED-NOOP/ESCALATE: Go RTA dense+bitset ~1.8× slower on chain/wide synthetics; measurement landed; no StableKeyId migration; W2.5 must not assume interning. See docs/architecture-review/W2.3-STEP1-MEASUREMENT.md",
+      "escalate_reason": "not-worth-doing — no measurable win; wall-clock regresses ~1.8×",
       "measurement": "docs/architecture-review/W2.3-STEP1-MEASUREMENT.md",
       "gates": {
         "step1_measure": "ESCALATE_no_win"
@@ -623,7 +623,7 @@
       "tip": "acde3818e93deb605e8611552bff1973a623fd04",
       "analysis_db_fields": 5,
       "target_fields": 30,
-      "note": "MERGED FF: AnalysisDb fields 57\u21925 (files, fact_meta, fact_stores, path_contexts, changeset). All provider stores registry-backed. No StableKeyId. G4/G7/R1 PASS. main untouched.",
+      "note": "MERGED FF: AnalysisDb fields 57→5 (files, fact_meta, fact_stores, path_contexts, changeset). All provider stores registry-backed. No StableKeyId. G4/G7/R1 PASS. main untouched.",
       "landed_slices": [
         "FactStore+GoSyntax",
         "TsSyntax",
@@ -870,7 +870,7 @@
         "T-INTERN-B"
       ],
       "created_at": "2026-08-10T10:04:15+02:00",
-      "note": "FactMeta/stable_key_owners StableKeyId; stable_key:String 6\u21920; gates green; lock released",
+      "note": "FactMeta/stable_key_owners StableKeyId; stable_key:String 6→0; gates green; lock released",
       "dispatched_at": "2026-08-11T00:05:40+0200",
       "attempts": 1,
       "branch": "static-analysis-architecture-review",
@@ -941,13 +941,22 @@
       "done_at": "2026-08-11T21:24:11+0200"
     },
     "T-SHIP-PREP": {
-      "state": "READY",
+      "state": "MERGED",
       "depends_on": [
         "T-ARCH-DOC"
       ],
       "created_at": "2026-08-10T10:04:15+02:00",
-      "note": "Unblocked by T-ARCH-DOC MERGED; final tip gate and .swarm/READY-TO-SHIP.md remain",
-      "updated_at": "2026-08-11T21:24:11+0200"
+      "note": "MERGED/complete locally as evidence-only ship preparation; final Q6 is green on the product+architecture tip; ready for human review; no push, PR, remote merge, or main operation",
+      "updated_at": "2026-08-11T21:44:47+02:00",
+      "branch": "static-analysis-architecture-review",
+      "tested_sha": "4e563aabc7d01bc605c39d676938603ad96766ea",
+      "immediate_tested_parent": "4e563aabc7d01bc605c39d676938603ad96766ea",
+      "gate_log": ".swarm/gate-logs/FINAL-TIP-4e563aabc7d01bc605c39d676938603ad96766ea.log",
+      "ready_path": ".swarm/READY-TO-SHIP.md",
+      "complete": true,
+      "ready_for_human_review": true,
+      "evidence_only": true,
+      "remote_actions": "none"
     }
   },
   "locks": {
@@ -956,9 +965,7 @@
     "t_split_exclusive": null
   },
   "milestone": "PRE-SHIP",
-  "READY": [
-    "T-SHIP-PREP"
-  ],
+  "READY": [],
   "IN_FLIGHT": [],
   "IN_REVIEW": [],
   "MERGED": [
@@ -995,16 +1002,17 @@
     "W4.4",
     "T-INTERN-C",
     "T-SPLIT",
-    "T-ARCH-DOC"
+    "T-ARCH-DOC",
+    "T-SHIP-PREP"
   ],
   "HELD": [
     "W2.3"
   ],
   "hold_count": 1,
-  "dispatch_allowed": true,
+  "dispatch_allowed": false,
   "halt": {
-    "active": false,
-    "reason": "T-VERIFY in progress"
+    "active": true,
+    "reason": "T-SHIP-PREP complete; evidence committed locally; ready for human review; no push/PR/main operation"
   },
   "integration_branch": "static-analysis-architecture-review",
   "never_merge_to_main": true,
@@ -1016,10 +1024,10 @@
     "g3_real_s": 674.63
   },
   "notes": [
-    "M0 \u00a75 PASS on db0dd36d; G3 real 674.63s",
+    "M0 §5 PASS on db0dd36d; G3 real 674.63s",
     "First G3 on 6b093f0e failed eval_harness_stays_internal; fixed by moving golden_cost off runner",
     "M1 opened; first wave CLAIMED: W1.4 W1.6 W1.7 W1.8 (mechanical)",
-    "Follow-up 11:56: all four workers have real uncommitted WIP + targeted cargo tests running \u2014 not empty CLAIMED stubs",
+    "Follow-up 11:56: all four workers have real uncommitted WIP + targeted cargo tests running — not empty CLAIMED stubs",
     "2026-08-08T12:04: W1.8 MERGED at 9506c58d (FF); G1/G2/G4 re-verified",
     "W1.1/W1.2/W1.3 deferred pending golden-lock serialization note; W1.5 READY with measure-first checkpoint",
     "Never merge to main",
@@ -1037,26 +1045,26 @@
     "2026-08-08T13:05: W1.3 G7 FAIL expected (summary.rules additive); golden lock granted; FF-landing impl then regen",
     "2026-08-08T13:09:00+02:00: W1.5 MERGED-NOOP (not-worth-doing); measurement landed; no parse cache; hold_count unchanged",
     "2026-08-08T13:18:34+02:00: W1.3 MERGED at f22f312b (impl+regen+cost restore); golden lock released",
-    "2026-08-08T13:19:10+02:00: W1.3 MERGED \u2014 impl 82040a3c + regen ff704506 (summary.rules) + cost restore f22f312b; golden lock released; tip f22f312b",
-    "2026-08-08T13:21:32+02:00: W1.1 MERGED at acdcb1ad (FF from swarm/W1.1; worker SOT f0752c6e rebased\u2192acdcb1ad); R1-R6/G1/G2/G4/G5/acceptance/R7 PASS; G7 diagnostic set unchanged; cost budget fail matches tip; main untouched",
+    "2026-08-08T13:19:10+02:00: W1.3 MERGED — impl 82040a3c + regen ff704506 (summary.rules) + cost restore f22f312b; golden lock released; tip f22f312b",
+    "2026-08-08T13:21:32+02:00: W1.1 MERGED at acdcb1ad (FF from swarm/W1.1; worker SOT f0752c6e rebased→acdcb1ad); R1-R6/G1/G2/G4/G5/acceptance/R7 PASS; G7 diagnostic set unchanged; cost budget fail matches tip; main untouched",
     "2026-08-08T13:24:16+02:00: W1.2 MERGED at 3891f90a; golden lock claimed for cost sidecar refresh",
     "2026-08-08T13:38:00+02:00: golden cost sidecars refreshed; tip 0873e17f; golden lock released; M1-GATE.md opened",
     "2026-08-08T13:38:04+02:00: golden cost sidecars refreshed; tip 0873e17f; golden lock released; M1-GATE.md opened",
     "2026-08-08T13:38:22+02:00: W1.2 MERGED at 3891f90a (FF); tip advanced to 0873e17f; rebased through W1.3 telemetry + W1.1; main untouched; IN_FLIGHT cleared of W1.2",
-    "2026-08-08T13:40:05+02:00: quiet golden-cost refresh done; tip d86e6712; lock released; starting M1 \u00a75 if G7 green",
+    "2026-08-08T13:40:05+02:00: quiet golden-cost refresh done; tip d86e6712; lock released; starting M1 §5 if G7 green",
     "2026-08-08T13:44:49+02:00: multi-pass golden cost maxima @ 222838a4; lock released",
     "2026-08-08T14:24:12+02:00: M1 cost floor pad + gate close prep @ b5734a90",
-    "2026-08-08T14:24:29+02:00: M1 \u00a75 PASS; G3 778.55s on 726a2e05; tip b5734a90 after cost floor; M1-COMPLETE written; milestone\u2192M2 READY W2.1 W2.2; M2 NOT yet dispatched",
+    "2026-08-08T14:24:29+02:00: M1 §5 PASS; G3 778.55s on 726a2e05; tip b5734a90 after cost floor; M1-COMPLETE written; milestone→M2 READY W2.1 W2.2; M2 NOT yet dispatched",
     "M1 COMPLETE; dispatched W2.1+W2.2 from tip b5734a90",
     "2026-08-08T14:25:22+02:00: G3-contention cost stabilize; lock released",
     "W2.2a PARTIAL reported; resume for W2.2b+",
-    "2026-08-08T14:39:35+02:00: M1 \u00a75 PASS on 70dda34c; M1-COMPLETE written; M2 opened; CLAIMED W2.1+W2.2 worktrees from tip",
+    "2026-08-08T14:39:35+02:00: M1 §5 PASS on 70dda34c; M1-COMPLETE written; M2 opened; CLAIMED W2.1+W2.2 worktrees from tip",
     "2026-08-08T14:51:00+02:00: W2.2a+b+c landed FF @ 92be8bbf; core/mod.rs 9424 LOC; W2.1 mid-flight with oversize eval move WIP; main untouched",
     "2026-08-08T14:57:39+02:00: follow-up after W2.1 land @ 8d6b7fa1; integration_head synced; W2.2 still CLAIMED (worker stalled with uncommitted core split)",
     "2026-08-08T15:17:50+02:00: W2.1 MERGED @ 8d6b7fa1; W2.2d+e+f-review landed FF @ d7c28ebc; core/mod.rs ~8703; main untouched; W2.3/W2.4 blocked until W2.2 complete",
     "2026-08-08T16:18:17+02:00: W2.3 step1 ESCALATE @ 7f988fc5 (dense RTA no measurable win; measurement doc landed FF; product go_rta unchanged; main untouched; W2.5 must not assume interning)",
     "2026-08-08T16:28:48+02:00: W2.3 MERGED-NOOP (ESCALATE no RTA win); W2.4 steps1-4 landed @ 8fd7c456; tip advanced; W2.5 blocked (interning model wrong); main untouched",
-    "2026-08-08T18:54:16+02:00: W2.5 progress tip 8a42a69d; AnalysisDb fields 102\u219259; no ts_/go_semantic_ flats; main untouched",
+    "2026-08-08T18:54:16+02:00: W2.5 progress tip 8a42a69d; AnalysisDb fields 102→59; no ts_/go_semantic_ flats; main untouched",
     "2026-08-08T18:57:24+02:00: W2.5 IdentityStore landed @ 85a316fb; AnalysisDb fields=57; main untouched",
     {
       "at": "2026-08-08T20:27:05+02:00",
@@ -1066,7 +1074,8 @@
     "2026-08-11T02:25:02+0200: T-SPLIT polint-analysis CP2 cycle-break API committed; still IN_FLIGHT/exclusive; lang/algorithm moves remain",
     "2026-08-11T02:29:09+0200: T-SPLIT AnalysisHost expanded for algorithm move; still IN_FLIGHT/exclusive",
     "2026-08-11T21:02:18+0200: T-SPLIT MERGED/complete at code 92b4b021; eight-crate graph landed; exclusive lock released; T-ARCH-DOC READY",
-    "2026-08-11T21:24:11+0200: T-ARCH-DOC MERGED/complete; docs parent ce99bde5; T-SHIP-PREP READY; integration_head remains code parent 92b4b021"
+    "2026-08-11T21:24:11+0200: T-ARCH-DOC MERGED/complete; docs parent ce99bde5; T-SHIP-PREP READY; integration_head remains code parent 92b4b021",
+    "2026-08-11T21:44:47+02:00: T-SHIP-PREP complete locally; tested tip 4e563aab; final evidence tranche awaits human review; no remote action"
   ],
   "m1_gate": {
     "status": "PASS",
@@ -1076,8 +1085,8 @@
     "g3_real_s": 546.25
   },
   "log": [
-    "2026-08-08T14:56:34+02:00: W2.1 MERGED FF @ 8d6b7fa1 (eval \u2192 polint-eval harness + cfg(test) path)",
-    "2026-08-08T14:56:34+02:00: W2.1 MERGED FF @ 8d6b7fa1 (eval \u2192 polint-eval harness + cfg(test) path)",
+    "2026-08-08T14:56:34+02:00: W2.1 MERGED FF @ 8d6b7fa1 (eval → polint-eval harness + cfg(test) path)",
+    "2026-08-08T14:56:34+02:00: W2.1 MERGED FF @ 8d6b7fa1 (eval → polint-eval harness + cfg(test) path)",
     "2026-08-08T14:59:18+02:00: W2.1 finish-worker confirmed MERGED+pushed @ 8d6b7fa1; 4 budget batches; release skips eval; G1/G2/G4/G5/G7 PASS; main untouched",
     "2026-08-08T15:08:59+02:00: W2.2d+e MERGED FF @ 271ccd15 (capability+rule); core/mod.rs still large; main untouched",
     "2026-08-08T15:19:31+02:00: W2.2f-helpers MERGED FF @ d7c28ebc; core/mod.rs still holds AnalysisDb; main untouched",
@@ -1105,7 +1114,7 @@
     },
     "2026-08-08T16:19:49+02:00: W2.3 ESCALATE confirmed HELD (no-measurable-win); measurement @ 7f988fc5 on tip; FF integration to fae8e614; W2.5 must not assume interning; W2.4 continues; main untouched",
     "2026-08-08T16:28:48+02:00: W2.3 MERGED-NOOP (ESCALATE no RTA win); W2.4 steps1-4 landed @ 8fd7c456; tip advanced; W2.5 blocked (interning model wrong); main untouched",
-    "2026-08-08T18:54:16+02:00: W2.5 progress tip 8a42a69d; AnalysisDb fields 102\u219259; no ts_/go_semantic_ flats; main untouched",
+    "2026-08-08T18:54:16+02:00: W2.5 progress tip 8a42a69d; AnalysisDb fields 102→59; no ts_/go_semantic_ flats; main untouched",
     "2026-08-08T18:57:24+02:00: W2.5 IdentityStore landed @ 85a316fb; AnalysisDb fields=57; main untouched",
     "2026-08-10T23:16:28+02:00: T-INTERN-B claimed fact_family:solver_summaries_slicing for rest-solver-summaries slice",
     "2026-08-10T23:37:59+02:00: T-INTERN-B rest-solver-summaries slice complete; released fact_family:solver_summaries_slicing; T-INTERN-B remains open",
@@ -1136,7 +1145,17 @@
     "2026-08-08T15:10:20+02:00: W2.2d+e landed FF @271ccd15; core/mod.rs 8739 LOC; capability+rule extracted; main untouched",
     "2026-08-08T15:24:08+02:00: W2.2 finish-worker pushed swarm/W2.2 @ 167e901e; G1/G2/G4/G5/G7 PASS; R1 FAIL mechanical; not FF (prefer orchestrator)",
     "2026-08-08T15:29:31+02:00: W2.2 pushed swarm/W2.2 @47b41aab; G1/G2/G4/G5/G7 PASS; not landed (R1)",
-    "2026-08-08T15:36:24+02:00: pushed swarm/W2.2 @800554c9 completing AnalysisDb move; main untouched"
+    "2026-08-08T15:36:24+02:00: pushed swarm/W2.2 @800554c9 completing AnalysisDb move; main untouched",
+    {
+      "at": "2026-08-11T21:44:47+02:00",
+      "event": "T-SHIP-PREP MERGED/complete",
+      "tested_sha": "4e563aabc7d01bc605c39d676938603ad96766ea",
+      "gate_log": ".swarm/gate-logs/FINAL-TIP-4e563aabc7d01bc605c39d676938603ad96766ea.log",
+      "ready_path": ".swarm/READY-TO-SHIP.md",
+      "evidence_only": true,
+      "ready_for_human_review": true,
+      "remote_actions": "none"
+    }
   ],
   "timeline": [
     "2026-08-08T15:40:52+02:00: follow-up after empty lander 93c66199; tip advanced to a7d496f6 via parallel W2.2 method chunks; abandoned overlapping a0d94699 (diverged); main untouched",
@@ -1148,7 +1167,7 @@
     "2026-08-08T16:01:12+02:00: W2.2o-methods-final MERGED FF @d43b371f; methods done; tests remain in mod (3425); main untouched",
     "2026-08-08T16:01:26+02:00: W2.2 MERGED @d43b371f; AnalysisDb extracted; mod barrel+tests; READY W2.3+W2.4; main untouched",
     "2026-08-08T16:28:48+02:00: W2.3 MERGED-NOOP (ESCALATE no RTA win); W2.4 steps1-4 landed @ 8fd7c456; tip advanced; W2.5 blocked (interning model wrong); main untouched",
-    "2026-08-08T18:54:16+02:00: W2.5 progress tip 8a42a69d; AnalysisDb fields 102\u219259; no ts_/go_semantic_ flats; main untouched",
+    "2026-08-08T18:54:16+02:00: W2.5 progress tip 8a42a69d; AnalysisDb fields 102→59; no ts_/go_semantic_ flats; main untouched",
     "2026-08-08T19:11:03+02:00: W2.5 MERGED FF @acde3818; AnalysisDb fields=5; fact_family locks cleared; main untouched",
     {
       "at": "2026-08-10T13:46:49+02:00",
@@ -1273,6 +1292,7 @@
   "progress": [
     "2026-08-11T02:45:01+0200: T-SPLIT physical algorithm moves (ifds/slicing/domains-solver/demand) + InputSnapshot vocab; still IN_FLIGHT/exclusive",
     "2026-08-11T21:02:18+0200: T-SPLIT complete at code 92b4b021; T-ARCH-DOC READY; T-SHIP-PREP remains BLOCKED",
-    "2026-08-11T21:24:11+0200: T-ARCH-DOC complete at documentation parent ce99bde5; T-SHIP-PREP READY; final tip gate and READY-TO-SHIP remain"
+    "2026-08-11T21:24:11+0200: T-ARCH-DOC complete at documentation parent ce99bde5; T-SHIP-PREP READY; final tip gate and READY-TO-SHIP remain",
+    "2026-08-11T21:44:47+02:00: T-SHIP-PREP MERGED/complete locally; final Q6 green on 4e563aab; evidence-only tranche ready for human review"
   ]
 }
