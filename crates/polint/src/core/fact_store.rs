@@ -175,10 +175,7 @@ pub(crate) struct SymbolStore {
     pub(crate) references: Vec<ReferenceFact>,
     pub(crate) symbols_by_id: BTreeMap<SymbolId, usize>,
     pub(crate) definitions_by_symbol: BTreeMap<SymbolId, Vec<usize>>,
-    pub(crate) references_by_target: BTreeMap<SymbolId, Vec<usize>>,
-    pub(crate) symbols_by_file: BTreeMap<FileId, Vec<usize>>,
     pub(crate) references_by_file: BTreeMap<FileId, Vec<usize>>,
-    pub(crate) symbols_by_name: BTreeMap<String, Vec<usize>>,
 }
 
 impl SymbolStore {
@@ -212,20 +209,6 @@ impl SymbolStore {
             .and_then(|index| self.symbols.get(*index))
     }
 
-    pub(crate) fn symbols_for_file(&self, file: FileId) -> impl Iterator<Item = &SymbolFact> + '_ {
-        self.symbols_by_file
-            .get(&file)
-            .into_iter()
-            .flat_map(|indexes| indexes.iter().filter_map(|index| self.symbols.get(*index)))
-    }
-
-    pub(crate) fn symbols_by_name(&self, name: &str) -> impl Iterator<Item = &SymbolFact> + '_ {
-        self.symbols_by_name
-            .get(name)
-            .into_iter()
-            .flat_map(|indexes| indexes.iter().filter_map(|index| self.symbols.get(*index)))
-    }
-
     pub(crate) fn definitions_for_symbol(
         &self,
         symbol: SymbolId,
@@ -237,20 +220,6 @@ impl SymbolStore {
                 indexes
                     .iter()
                     .filter_map(|index| self.definitions.get(*index))
-            })
-    }
-
-    pub(crate) fn references_to_symbol(
-        &self,
-        symbol: SymbolId,
-    ) -> impl Iterator<Item = &ReferenceFact> + '_ {
-        self.references_by_target
-            .get(&symbol)
-            .into_iter()
-            .flat_map(|indexes| {
-                indexes
-                    .iter()
-                    .filter_map(|index| self.references.get(*index))
             })
     }
 
@@ -271,20 +240,10 @@ impl SymbolStore {
     fn rebuild_indexes(&mut self) {
         self.symbols_by_id.clear();
         self.definitions_by_symbol.clear();
-        self.references_by_target.clear();
-        self.symbols_by_file.clear();
         self.references_by_file.clear();
-        self.symbols_by_name.clear();
 
         for (index, symbol) in self.symbols.iter().enumerate() {
             self.symbols_by_id.insert(symbol.id, index);
-            if let Some(file) = symbol.file {
-                self.symbols_by_file.entry(file).or_default().push(index);
-            }
-            self.symbols_by_name
-                .entry(symbol.name.clone())
-                .or_default()
-                .push(index);
         }
 
         for (index, definition) in self.definitions.iter().enumerate() {
@@ -295,23 +254,9 @@ impl SymbolStore {
         }
 
         for (index, reference) in self.references.iter().enumerate() {
-            if let Some(target) = reference.target {
-                self.references_by_target
-                    .entry(target)
-                    .or_default()
-                    .push(index);
-            }
             if let Some(file) = reference.file {
                 self.references_by_file.entry(file).or_default().push(index);
             }
-        }
-
-        let symbols = &self.symbols;
-        for indexes in self.symbols_by_file.values_mut() {
-            indexes.sort_by_key(|index| symbols[*index].id);
-        }
-        for indexes in self.symbols_by_name.values_mut() {
-            indexes.sort_by_key(|index| symbols[*index].id);
         }
 
         let definitions = &self.definitions;
@@ -320,9 +265,6 @@ impl SymbolStore {
         }
 
         let references = &self.references;
-        for indexes in self.references_by_target.values_mut() {
-            indexes.sort_by_key(|index| references[*index].id);
-        }
         for indexes in self.references_by_file.values_mut() {
             indexes.sort_by_key(|index| references[*index].id);
         }

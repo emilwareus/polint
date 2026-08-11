@@ -3455,14 +3455,6 @@ impl AnalysisDb {
         self.symbol_store().symbol_by_id(id)
     }
 
-    pub(crate) fn symbols_for_file(&self, file: FileId) -> impl Iterator<Item = &SymbolFact> + '_ {
-        self.symbol_store().symbols_for_file(file)
-    }
-
-    pub(crate) fn symbols_by_name(&self, name: &str) -> impl Iterator<Item = &SymbolFact> + '_ {
-        self.symbol_store().symbols_by_name(name)
-    }
-
     pub(crate) fn definition_for_symbol(&self, symbol: SymbolId) -> Option<&DefinitionFact> {
         let mut definitions = self.definitions_for_symbol(symbol);
         let first = definitions.next();
@@ -3477,13 +3469,6 @@ impl AnalysisDb {
         symbol: SymbolId,
     ) -> impl Iterator<Item = &DefinitionFact> + '_ {
         self.symbol_store().definitions_for_symbol(symbol)
-    }
-
-    pub(crate) fn references_to_symbol(
-        &self,
-        symbol: SymbolId,
-    ) -> impl Iterator<Item = &ReferenceFact> + '_ {
-        self.symbol_store().references_to_symbol(symbol)
     }
 
     pub(crate) fn references_for_file(

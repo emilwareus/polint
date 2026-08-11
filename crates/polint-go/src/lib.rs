@@ -16,6 +16,7 @@ pub use mir::lower_go_mir;
 mod repo_fs;
 pub mod semantic;
 mod stable_key;
+pub mod symbol_graph;
 mod syntax_store;
 
 #[cfg(test)]

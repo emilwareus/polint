@@ -1,25 +1,4 @@
-use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
-use crate::analysis_plan::AnalysisPlan;
-use crate::config::LoadedConfig;
-use crate::core::{
-    AnalysisDb, CapabilitySupport, CapabilitySupportStatus, DefinitionKind, FileId, Language,
-    ModuleNodeId, ReferenceKind, ResolutionStatus, ResolvedImportFact, SourceFile, Span,
-    StableKeyId, SymbolId as PolintSymbolId, SymbolKind, SymbolNamespace, SymbolPrecision,
-    span_from_byte_range,
-};
-use crate::diagnostics::{Diagnostic, TextRange};
-use crate::symbol_graph::LanguageSymbolOutput;
-use crate::symbol_graph::model::{
-    DefinitionDraft, ReferenceDraft, SymbolDraft, SymbolGraphBuilder,
-};
-use crate::symbol_graph::semantic::{
-    AliasFact, AliasId, AliasKind, ExportFact, ExportId, ExportKind, ResolutionFact, ResolutionId,
-    ResolutionStepKind, ScopeFact, ScopeId, ScopeKind, SemanticImportFact, SemanticImportId,
-    SemanticImportKind, SemanticIndexBuilder, SemanticIndexOutput, SemanticStatus, StableExportId,
-    StableExportIdentity,
-};
-use crate::symbol_graph::stable_id::{StableReferenceKey, StableSymbolKey};
-use crate::ts::parse::parse_ts_file;
+use crate::parse::parse_ts_file;
 use oxc_allocator::Allocator;
 use oxc_ast::AstKind;
 use oxc_ast::ast::{
@@ -32,11 +11,37 @@ use oxc_semantic::{
     SymbolFlags, SymbolId as OxcSymbolId,
 };
 use oxc_span::GetSpan;
+use polint_analysis::symbol_graph::{
+    LanguageCapabilitySupport, LanguageSymbolOutput, SymbolCapabilityStatus, SymbolGraphRequest,
+    model::{DefinitionDraft, ReferenceDraft, SymbolDraft, SymbolGraphBuilder},
+    semantic::{
+        AliasFact, AliasId, AliasKind, ExportFact, ExportId, ExportKind, ResolutionFact,
+        ResolutionId, ResolutionStepKind, ScopeFact, ScopeId, ScopeKind, SemanticImportFact,
+        SemanticImportId, SemanticImportKind, SemanticIndexBuilder, SemanticIndexOutput,
+        SemanticStatus, StableExportId, StableExportIdentity,
+    },
+    stable_id::{StableReferenceKey, StableSymbolKey},
+};
+use polint_analysis_api::{
+    DefinitionKind, FactDatabase, FactFamily, ModuleNode, ReferenceKind, ResolutionStatus,
+    ResolvedImportFact, SourceFile, SymbolKind, SymbolNamespace, SymbolPrecision,
+    stable_key_from_parts,
+};
+use polint_core::{
+    Diagnostic, DiagnosticRange as TextRange, FileId, Language, ModuleNodeId, Span, StableKeyId,
+    SymbolId as PolintSymbolId, span_from_byte_range,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
-const TS_SYMBOL_GRAPH_CAPABILITIES: &[&str] = &["symbols", "references"];
-const SYMBOL_FACTS_DOCS_PATH: &str = "docs/facts/symbols-and-references.md";
+/// Request passed by the composition root to the TypeScript/JavaScript symbol adapter.
+#[derive(Debug, Clone)]
+pub struct TsSymbolOptions {
+    pub request: SymbolGraphRequest,
+    pub resolved_imports: Vec<ResolvedImportFact>,
+    pub module_nodes: Vec<ModuleNode>,
+}
 
+const TS_SYMBOL_GRAPH_CAPABILITIES: &[&str] = &["symbols", "references"];
 #[derive(Debug, Clone)]
 struct TsFileSymbolSummary {
     file: FileId,
@@ -74,11 +79,10 @@ enum ImportAliasTarget {
     Namespace,
 }
 
-pub(crate) fn derive_ts_symbols(
+pub fn derive_ts_symbols(
     builder: &mut SymbolGraphBuilder,
-    db: &AnalysisDb,
-    _loaded: &LoadedConfig,
-    plan: &AnalysisPlan,
+    db: &dyn FactDatabase,
+    options: TsSymbolOptions,
 ) -> LanguageSymbolOutput {
     let interner_handle = db.stable_key_interner();
     let interner = &interner_handle;
@@ -88,8 +92,8 @@ pub(crate) fn derive_ts_symbols(
     }
 
     let mut output = LanguageSymbolOutput::default();
-    let requests_symbols = plan.requests_capability("symbols");
-    let requests_references = plan.requests_capability("references");
+    let requests_symbols = options.request.symbols;
+    let requests_references = options.request.references;
     let languages = files
         .iter()
         .map(|file| file.language)
@@ -97,7 +101,7 @@ pub(crate) fn derive_ts_symbols(
     for language in languages {
         output
             .capability_support
-            .extend(supported_language_support(plan, language));
+            .extend(supported_language_support(options.request, language));
     }
 
     if !requests_symbols && !requests_references {
@@ -115,13 +119,19 @@ pub(crate) fn derive_ts_symbols(
         ));
     }
     if requests_references {
-        add_import_alias_references(builder, db, &summaries);
+        add_import_alias_references(
+            builder,
+            db,
+            &options.resolved_imports,
+            &options.module_nodes,
+            &summaries,
+        );
     }
 
     output
 }
 
-fn ts_files(db: &AnalysisDb) -> Vec<&SourceFile> {
+fn ts_files(db: &dyn FactDatabase) -> Vec<&SourceFile> {
     let mut files = db
         .files()
         .iter()
@@ -131,31 +141,28 @@ fn ts_files(db: &AnalysisDb) -> Vec<&SourceFile> {
     files
 }
 
-fn supported_language_support(plan: &AnalysisPlan, language: Language) -> Vec<CapabilitySupport> {
+fn supported_language_support(
+    request: SymbolGraphRequest,
+    language: Language,
+) -> Vec<LanguageCapabilitySupport> {
     TS_SYMBOL_GRAPH_CAPABILITIES
         .iter()
-        .filter(|capability| plan.requests_capability(capability))
-        .filter_map(|capability| {
-            let base = plan
-                .support_view()
-                .entries()
-                .iter()
-                .find(|entry| entry.capability == *capability)?;
-            Some(CapabilitySupport {
-                capability: (*capability).to_string(),
-                language: Some(language),
-                status: CapabilitySupportStatus::Supported,
-                rules: base.rules.clone(),
-                reason: None,
-                hint: None,
-                docs_path: Some(SYMBOL_FACTS_DOCS_PATH.to_string()),
-            })
+        .filter(|capability| {
+            (**capability == "symbols" && request.symbols)
+                || (**capability == "references" && request.references)
+        })
+        .map(|capability| LanguageCapabilitySupport {
+            capability: (*capability).to_string(),
+            language,
+            status: SymbolCapabilityStatus::Supported,
+            reason: None,
+            hint: None,
         })
         .collect()
 }
 
 fn derive_ts_file_symbols(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     builder: &mut SymbolGraphBuilder,
     output: &mut LanguageSymbolOutput,
     file: &SourceFile,
@@ -284,7 +291,7 @@ fn derive_ts_file_symbols(
 }
 
 fn derive_ts_semantic_index(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     file: &SourceFile,
     source: &str,
     program: &Program<'_>,
@@ -459,7 +466,7 @@ fn ts_symbol_stable_key_input(
 }
 
 fn add_ts_semantic_import_export_rows(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     builder: &mut SemanticIndexBuilder,
     file: &SourceFile,
     source: &str,
@@ -555,7 +562,7 @@ fn add_ts_semantic_import_export_rows(
 }
 
 fn add_import_declaration_rows(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     builder: &mut SemanticIndexBuilder,
     file: &SourceFile,
     module_scope: Option<ScopeId>,
@@ -657,7 +664,7 @@ fn add_import_declaration_rows(
 }
 
 fn add_export_named_rows(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     builder: &mut SemanticIndexBuilder,
     file: &SourceFile,
     module_scope: Option<ScopeId>,
@@ -732,7 +739,7 @@ fn add_export_named_rows(
     reason = "semantic import rows mirror the normalized internal fact fields"
 )]
 fn add_import_row(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     builder: &mut SemanticIndexBuilder,
     file: &SourceFile,
     scope: Option<ScopeId>,
@@ -777,7 +784,7 @@ fn add_import_row(
     reason = "semantic export rows mirror the normalized internal fact fields"
 )]
 fn add_export_row(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     builder: &mut SemanticIndexBuilder,
     file: &SourceFile,
     scope: Option<ScopeId>,
@@ -826,7 +833,7 @@ fn add_export_row(
 }
 
 fn add_alias_row(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     builder: &mut SemanticIndexBuilder,
     file: &SourceFile,
     source_symbol_stable_key_text: String,
@@ -863,7 +870,7 @@ fn add_alias_row(
 }
 
 fn add_resolution_row(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     builder: &mut SemanticIndexBuilder,
     file: &SourceFile,
     source_stable_key_text: String,
@@ -900,7 +907,7 @@ fn add_resolution_row(
 }
 
 fn add_import_lookup_rows(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     builder: &mut SemanticIndexBuilder,
     file: &SourceFile,
     local_name: &str,
@@ -929,7 +936,7 @@ fn add_import_lookup_rows(
 }
 
 fn add_stable_export_identity(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     builder: &mut SemanticIndexBuilder,
     file: &SourceFile,
     export: ExportId,
@@ -957,7 +964,7 @@ fn add_stable_export_identity(
 }
 
 fn ts_semantic_import_stable_key(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     file: &SourceFile,
     import_path: &str,
     local_name: Option<&str>,
@@ -986,7 +993,7 @@ fn ts_semantic_import_stable_key(
 }
 
 fn ts_export_stable_key(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     file: &SourceFile,
     export_name: &str,
     namespace: SymbolNamespace,
@@ -1008,7 +1015,7 @@ fn ts_export_stable_key(
 }
 
 fn ts_alias_stable_key(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     file: &SourceFile,
     source_symbol_stable_key: &str,
     target_symbol_stable_keys: &[String],
@@ -1033,7 +1040,7 @@ fn ts_alias_stable_key(
 }
 
 fn ts_resolution_stable_key(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     file: &SourceFile,
     source_stable_key: &str,
     target_stable_keys: &[String],
@@ -1058,7 +1065,7 @@ fn ts_resolution_stable_key(
 }
 
 fn collect_commonjs_from_export_default(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     builder: &mut SemanticIndexBuilder,
     file: &SourceFile,
     source: &str,
@@ -1071,7 +1078,7 @@ fn collect_commonjs_from_export_default(
 }
 
 fn collect_commonjs_from_expression(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     builder: &mut SemanticIndexBuilder,
     file: &SourceFile,
     source: &str,
@@ -1205,7 +1212,7 @@ fn collect_commonjs_from_expression(
 }
 
 fn collect_commonjs_from_call(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     builder: &mut SemanticIndexBuilder,
     file: &SourceFile,
     _source: &str,
@@ -1297,7 +1304,7 @@ fn expression_text(expression: &Expression<'_>) -> Option<String> {
 }
 
 fn scope_stable_key(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     file: &SourceFile,
     scoping: &Scoping,
     nodes: &AstNodes<'_>,
@@ -1315,28 +1322,8 @@ fn scope_stable_key(
     )
 }
 
-#[cfg(test)]
-fn reference_scope_stable_key(
-    file: &SourceFile,
-    scoping: &Scoping,
-    nodes: &AstNodes<'_>,
-    reference_id: OxcReferenceId,
-) -> String {
-    let reference = scoping.get_reference(reference_id);
-    let interner = crate::core::test_stable_key_interner();
-    interner
-        .resolve(scope_stable_key(
-            &interner,
-            file,
-            scoping,
-            nodes,
-            reference.scope_id(),
-        ))
-        .to_string()
-}
-
 fn add_ts_semantic_resolution_rows(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     builder: &mut SemanticIndexBuilder,
     file: &SourceFile,
     source: &str,
@@ -1461,7 +1448,7 @@ fn scope_path_for_node(
 }
 
 fn nearest_semantic_scope_parent(
-    interner: &crate::core::StableKeyInterner,
+    interner: &polint_core::StableKeyInterner,
     file: &SourceFile,
     nodes: &AstNodes<'_>,
     node_id: oxc_semantic::NodeId,
@@ -1571,7 +1558,9 @@ fn add_ts_references(
 
 fn add_import_alias_references(
     builder: &mut SymbolGraphBuilder,
-    db: &AnalysisDb,
+    db: &dyn FactDatabase,
+    resolved_imports: &[ResolvedImportFact],
+    module_nodes: &[ModuleNode],
     summaries: &[TsFileSymbolSummary],
 ) {
     let exports_by_file = summaries
@@ -1588,13 +1577,11 @@ fn add_import_alias_references(
             )
         })
         .collect::<BTreeMap<_, _>>();
-    let resolved_by_import = db
-        .resolved_imports()
+    let resolved_by_import = resolved_imports
         .iter()
         .map(|resolved| (resolved.import, resolved))
         .collect::<BTreeMap<_, _>>();
-    let file_by_node = db
-        .module_nodes()
+    let file_by_node = module_nodes
         .iter()
         .filter_map(|node| node.file.map(|file| (node.id, file)))
         .collect::<BTreeMap<ModuleNodeId, FileId>>();
@@ -2263,7 +2250,7 @@ fn module_export_name_text(name: &ModuleExportName<'_>) -> String {
     }
 }
 
-fn span_from_oxc(file: crate::core::FileId, source: &str, span: oxc_span::Span) -> Span {
+fn span_from_oxc(file: polint_core::FileId, source: &str, span: oxc_span::Span) -> Span {
     span_from_byte_range(file, source, span.start as usize, span.end as usize)
 }
 
@@ -2286,952 +2273,6 @@ fn oxc_diagnostics(
 }
 
 #[cfg(test)]
-mod symbol_graph_ts_local_symbols {
-    use super::derive_ts_symbols;
-    use crate::analysis_plan::AnalysisPlan;
-    use crate::config::load_config;
-    use crate::core::{
-        AnalysisDb, DefinitionFact, FileId, Language, SymbolFact, SymbolKind, SymbolNamespace,
-        SymbolPrecision,
-    };
-    use crate::symbol_graph::model::SymbolGraphBuilder;
-    use std::fs;
-    use std::path::Path;
-
-    fn add_file(db: &mut AnalysisDb, root: &Path, relative_path: &str, source: &str) -> FileId {
-        let path = root.join(relative_path);
-        fs::create_dir_all(path.parent().expect("test file has parent")).expect("create fixture");
-        fs::write(&path, source).expect("write fixture");
-        db.add_file(path, relative_path.to_string(), source.to_string())
-    }
-
-    fn derive_ts_symbol_facts(
-        source: &str,
-    ) -> (
-        crate::core::StableKeyInterner,
-        Vec<SymbolFact>,
-        Vec<DefinitionFact>,
-    ) {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let mut db = AnalysisDb::new();
-        add_file(&mut db, temp.path(), "src/component.ts", source);
-        let loaded = load_config(temp.path()).expect("default config loads");
-        let plan = AnalysisPlan::from_capability_names_for_test(&["symbols"]);
-        let interner = db.stable_key_interner();
-        let mut builder = SymbolGraphBuilder::new(interner.clone());
-
-        derive_ts_symbols(&mut builder, &db, &loaded, &plan);
-        let output = builder.finish();
-        (interner, output.symbols, output.definitions)
-    }
-
-    fn symbol<'a>(symbols: &'a [SymbolFact], name: &str) -> &'a SymbolFact {
-        symbols
-            .iter()
-            .find(|symbol| symbol.name == name)
-            .unwrap_or_else(|| panic!("missing symbol `{name}` in {symbols:#?}"))
-    }
-
-    #[test]
-    fn extracts_exported_and_local_symbols_from_oxc_semantic_data() {
-        let (_interner, symbols, _definitions) = derive_ts_symbol_facts(
-            r#"
-export function exportedFn(param: string) {
-    const localValue = param;
-    return localValue;
-}
-
-export class Widget {}
-"#,
-        );
-
-        let exported_fn = symbol(&symbols, "exportedFn");
-        assert_eq!(exported_fn.language, Language::TypeScript);
-        assert_eq!(exported_fn.kind, SymbolKind::Function);
-        assert_eq!(exported_fn.namespace, SymbolNamespace::Value);
-        assert!(exported_fn.is_exported);
-        assert_eq!(exported_fn.precision, SymbolPrecision::ExactLocal);
-
-        let widget = symbol(&symbols, "Widget");
-        assert_eq!(widget.kind, SymbolKind::Class);
-        assert!(widget.is_exported);
-
-        let local_value = symbol(&symbols, "localValue");
-        assert_eq!(local_value.kind, SymbolKind::Constant);
-        assert!(!local_value.is_exported);
-
-        let parameter = symbol(&symbols, "param");
-        assert_eq!(parameter.kind, SymbolKind::Parameter);
-    }
-
-    #[test]
-    fn declaration_merging_emits_one_symbol_with_multiple_definitions() {
-        let (_interner, symbols, definitions) = derive_ts_symbol_facts(
-            r#"
-export interface MergeMe {
-    one: string;
-}
-
-export interface MergeMe {
-    two: string;
-}
-"#,
-        );
-
-        let merged = symbol(&symbols, "MergeMe");
-        assert_eq!(merged.kind, SymbolKind::Interface);
-        assert_eq!(merged.namespace, SymbolNamespace::Type);
-        assert!(merged.is_exported);
-
-        let merged_definitions = definitions
-            .iter()
-            .filter(|definition| definition.symbol == merged.id)
-            .count();
-        assert_eq!(merged_definitions, 2);
-    }
-
-    #[test]
-    fn stable_symbol_ids_are_deterministic_across_repeated_extraction() {
-        let source = "export const answer = 42;\n";
-        let (first_interner, first_symbols, first_definitions) = derive_ts_symbol_facts(source);
-        let (second_interner, second_symbols, second_definitions) = derive_ts_symbol_facts(source);
-
-        let first = first_symbols
-            .iter()
-            .map(|symbol| {
-                (
-                    symbol.name.as_str(),
-                    symbol.id,
-                    first_interner.resolve(symbol.stable_key),
-                )
-            })
-            .collect::<Vec<_>>();
-        let second = second_symbols
-            .iter()
-            .map(|symbol| {
-                (
-                    symbol.name.as_str(),
-                    symbol.id,
-                    second_interner.resolve(symbol.stable_key),
-                )
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(first, second);
-
-        let first = first_definitions
-            .iter()
-            .map(|definition| {
-                (
-                    definition.name.as_str(),
-                    definition.id,
-                    definition.symbol,
-                    first_interner.resolve(definition.stable_key),
-                )
-            })
-            .collect::<Vec<_>>();
-        let second = second_definitions
-            .iter()
-            .map(|definition| {
-                (
-                    definition.name.as_str(),
-                    definition.id,
-                    definition.symbol,
-                    second_interner.resolve(definition.stable_key),
-                )
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(first, second);
-    }
-
-    #[test]
-    fn uses_repo_relative_file_keys_without_source_snippets() {
-        let (interner, symbols, _definitions) =
-            derive_ts_symbol_facts("export const answer = 42;\n");
-        let answer = symbol(&symbols, "answer");
-        let stable_key = interner.resolve(answer.stable_key);
-
-        assert!(stable_key.contains("src/component.ts"));
-        assert!(!stable_key.contains("export const answer"));
-    }
-}
-
+include!("symbol_graph_frontend_tests.rs");
 #[cfg(test)]
-mod symbol_graph_ts_references {
-    use super::derive_ts_symbols;
-    use crate::analysis_plan::AnalysisPlan;
-    use crate::config::load_config;
-    use crate::core::{
-        AnalysisDb, FileId, ReferenceFact, ReferenceKind, SymbolFact, SymbolPrecision,
-        SymbolResolutionStatus,
-    };
-    use crate::symbol_graph::model::SymbolGraphBuilder;
-    use std::fs;
-    use std::path::Path;
-
-    fn add_file(db: &mut AnalysisDb, root: &Path, relative_path: &str, source: &str) -> FileId {
-        let path = root.join(relative_path);
-        fs::create_dir_all(path.parent().expect("test file has parent")).expect("create fixture");
-        fs::write(&path, source).expect("write fixture");
-        db.add_file(path, relative_path.to_string(), source.to_string())
-    }
-
-    fn derive_ts_reference_facts(
-        source: &str,
-    ) -> (
-        crate::core::StableKeyInterner,
-        Vec<SymbolFact>,
-        Vec<ReferenceFact>,
-    ) {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let mut db = AnalysisDb::new();
-        add_file(&mut db, temp.path(), "src/component.ts", source);
-        let loaded = load_config(temp.path()).expect("default config loads");
-        let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
-        let interner = db.stable_key_interner();
-        let mut builder = SymbolGraphBuilder::new(interner.clone());
-
-        derive_ts_symbols(&mut builder, &db, &loaded, &plan);
-        let output = builder.finish();
-        (interner, output.symbols, output.references)
-    }
-
-    fn symbol<'a>(symbols: &'a [SymbolFact], name: &str) -> &'a SymbolFact {
-        symbols
-            .iter()
-            .find(|symbol| symbol.name == name)
-            .unwrap_or_else(|| panic!("missing symbol `{name}` in {symbols:#?}"))
-    }
-
-    fn references_to<'a>(
-        symbols: &[SymbolFact],
-        references: &'a [ReferenceFact],
-        name: &str,
-    ) -> Vec<&'a ReferenceFact> {
-        let target = symbol(symbols, name).id;
-        references
-            .iter()
-            .filter(|reference| reference.target == Some(target))
-            .collect()
-    }
-
-    #[test]
-    fn extracts_resolved_reference_kinds_from_oxc_semantic_data() {
-        let (_interner, symbols, references) = derive_ts_reference_facts(
-            r#"
-type Model = { value: number };
-
-function helper(input: Model) {
-    return input.value;
-}
-
-let count = 0;
-count = helper({ value: count });
-"#,
-        );
-
-        assert!(references_to(&symbols, &references, "helper").iter().any(
-            |reference| reference.kind == ReferenceKind::Call
-                && reference.status == SymbolResolutionStatus::Resolved
-                && reference.precision == SymbolPrecision::ExactLocal
-        ));
-        assert!(
-            references_to(&symbols, &references, "Model")
-                .iter()
-                .any(|reference| reference.kind == ReferenceKind::TypeUse)
-        );
-        assert!(
-            references_to(&symbols, &references, "input")
-                .iter()
-                .any(|reference| reference.kind == ReferenceKind::Read)
-        );
-        assert!(
-            references_to(&symbols, &references, "count")
-                .iter()
-                .any(|reference| reference.kind == ReferenceKind::Write)
-        );
-    }
-
-    #[test]
-    fn emits_visible_unresolved_references_from_root_unresolved_set() {
-        let (_interner, _symbols, references) = derive_ts_reference_facts(
-            r#"
-export function run() {
-    return missingValue + anotherMissing();
-}
-"#,
-        );
-
-        assert!(references.iter().any(|reference| {
-            reference.name == "missingValue"
-                && reference.target.is_none()
-                && reference.status == SymbolResolutionStatus::Unresolved
-                && reference.precision == SymbolPrecision::Unresolved
-        }));
-        assert!(references.iter().any(|reference| {
-            reference.name == "anotherMissing"
-                && reference.kind == ReferenceKind::Call
-                && reference.status == SymbolResolutionStatus::Unresolved
-        }));
-    }
-
-    #[test]
-    fn stable_reference_ids_are_deterministic_across_repeated_extraction() {
-        let source = "const value = 1;\nexport const doubled = value + value;\n";
-        let (first_interner, _first_symbols, first_references) = derive_ts_reference_facts(source);
-        let (second_interner, _second_symbols, second_references) =
-            derive_ts_reference_facts(source);
-
-        let first = first_references
-            .iter()
-            .map(|reference| {
-                (
-                    reference.name.as_str(),
-                    reference.id,
-                    reference.target,
-                    reference.status,
-                    first_interner.resolve(reference.stable_key),
-                )
-            })
-            .collect::<Vec<_>>();
-        let second = second_references
-            .iter()
-            .map(|reference| {
-                (
-                    reference.name.as_str(),
-                    reference.id,
-                    reference.target,
-                    reference.status,
-                    second_interner.resolve(reference.stable_key),
-                )
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(first, second);
-    }
-}
-
-#[cfg(test)]
-mod symbol_graph_ts_import_links {
-    use super::derive_ts_symbols;
-    use crate::analysis_plan::AnalysisPlan;
-    use crate::config::load_config;
-    use crate::core::{
-        AnalysisDb, FileId, ImportFact, ImportId, Language, ModuleNode, ModuleNodeId,
-        ModuleNodeKind, ReferenceFact, ReferenceKind, ResolutionPrecision, ResolutionStatus,
-        ResolvedImportFact, SymbolFact, SymbolPrecision, SymbolResolutionStatus, UnresolvedReason,
-        span_from_byte_range,
-    };
-    use crate::symbol_graph::model::SymbolGraphBuilder;
-    use std::fs;
-    use std::path::Path;
-
-    fn add_file(db: &mut AnalysisDb, root: &Path, relative_path: &str, source: &str) -> FileId {
-        let path = root.join(relative_path);
-        fs::create_dir_all(path.parent().expect("test file has parent")).expect("create fixture");
-        fs::write(&path, source).expect("write fixture");
-        db.add_file(path, relative_path.to_string(), source.to_string())
-    }
-
-    fn span_for(file: FileId, source: &str, needle: &str, occurrence: usize) -> crate::core::Span {
-        let start = source
-            .match_indices(needle)
-            .nth(occurrence)
-            .map(|(index, _)| index)
-            .unwrap_or_else(|| panic!("missing occurrence {occurrence} of {needle:?}"));
-        span_from_byte_range(file, source, start, start + needle.len())
-    }
-
-    fn push_import(
-        db: &mut AnalysisDb,
-        file: FileId,
-        source: &str,
-        path: &str,
-        occurrence: usize,
-    ) -> ImportId {
-        db.push_import(ImportFact {
-            id: ImportId(0),
-            file,
-            package: None,
-            path: path.to_string(),
-            span: span_for(file, source, &format!("{path:?}"), occurrence),
-            language: Language::TypeScript,
-        })
-    }
-
-    fn file_node(id: ModuleNodeId, label: &str, file: FileId) -> ModuleNode {
-        ModuleNode {
-            id,
-            kind: ModuleNodeKind::File,
-            label: label.to_string(),
-            file: Some(file),
-            package: None,
-            language: Some(Language::TypeScript),
-        }
-    }
-
-    fn derive_symbol_reference_facts(
-        db: &AnalysisDb,
-        root: &Path,
-    ) -> (Vec<SymbolFact>, Vec<ReferenceFact>) {
-        let loaded = load_config(root).expect("default config loads");
-        let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
-        let mut builder = SymbolGraphBuilder::new(crate::core::StableKeyInterner::default());
-
-        derive_ts_symbols(&mut builder, db, &loaded, &plan);
-        let output = builder.finish();
-        (output.symbols, output.references)
-    }
-
-    fn exported_symbol<'a>(symbols: &'a [SymbolFact], name: &str) -> &'a SymbolFact {
-        symbols
-            .iter()
-            .find(|symbol| symbol.name == name && symbol.is_exported)
-            .unwrap_or_else(|| panic!("missing exported symbol `{name}` in {symbols:#?}"))
-    }
-
-    #[test]
-    fn links_named_default_and_namespace_imports_through_module_graph_targets() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let mut db = AnalysisDb::new();
-        let source = r#"
-import defaultThing, { exportedValue as localValue } from "./target";
-import * as targetModule from "./target";
-
-export const used = localValue + defaultThing() + targetModule.exportedValue;
-"#;
-        let target = r#"
-export const exportedValue = 1;
-
-const defaultThing = function() {
-    return exportedValue;
-};
-export default defaultThing;
-"#;
-        let source_file = add_file(&mut db, temp.path(), "src/source.ts", source);
-        let target_file = add_file(&mut db, temp.path(), "src/target.ts", target);
-        let first_import = push_import(&mut db, source_file, source, "./target", 0);
-        let second_import = push_import(&mut db, source_file, source, "./target", 1);
-        let source_node = ModuleNodeId(0);
-        let target_node = ModuleNodeId(1);
-        db.replace_module_graph_facts(
-            vec![
-                ResolvedImportFact {
-                    id: crate::core::ResolvedImportId(0),
-                    import: first_import,
-                    from_file: source_file,
-                    target_node: Some(target_node),
-                    status: ResolutionStatus::Resolved,
-                    precision: ResolutionPrecision::ExactFile,
-                    reason: None,
-                },
-                ResolvedImportFact {
-                    id: crate::core::ResolvedImportId(0),
-                    import: second_import,
-                    from_file: source_file,
-                    target_node: Some(target_node),
-                    status: ResolutionStatus::Resolved,
-                    precision: ResolutionPrecision::ExactFile,
-                    reason: None,
-                },
-            ],
-            vec![
-                file_node(source_node, "src/source.ts", source_file),
-                file_node(target_node, "src/target.ts", target_file),
-            ],
-            vec![],
-        );
-
-        let (symbols, references) = derive_symbol_reference_facts(&db, temp.path());
-        let exported_value = exported_symbol(&symbols, "exportedValue");
-        let default_thing = exported_symbol(&symbols, "defaultThing");
-
-        assert!(references.iter().any(|reference| {
-            reference.name == "localValue"
-                && reference.kind == ReferenceKind::Import
-                && reference.target == Some(exported_value.id)
-                && reference.status == SymbolResolutionStatus::Resolved
-                && reference.precision == SymbolPrecision::ModuleLinked
-        }));
-        assert!(references.iter().any(|reference| {
-            reference.name == "defaultThing"
-                && reference.kind == ReferenceKind::Import
-                && reference.target == Some(default_thing.id)
-                && reference.status == SymbolResolutionStatus::Resolved
-                && reference.precision == SymbolPrecision::ModuleLinked
-        }));
-        assert!(references.iter().any(|reference| {
-            reference.name == "targetModule"
-                && reference.kind == ReferenceKind::Import
-                && reference.status == SymbolResolutionStatus::Ambiguous
-                && reference.candidates.contains(&exported_value.id)
-                && reference.candidates.contains(&default_thing.id)
-        }));
-    }
-
-    #[test]
-    fn emits_visible_unresolved_import_alias_references() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let mut db = AnalysisDb::new();
-        let source = r#"
-import { missing } from "./missing";
-
-export const used = missing;
-"#;
-        let source_file = add_file(&mut db, temp.path(), "src/source.ts", source);
-        let import = push_import(&mut db, source_file, source, "./missing", 0);
-        let source_node = ModuleNodeId(0);
-        db.replace_module_graph_facts(
-            vec![ResolvedImportFact {
-                id: crate::core::ResolvedImportId(0),
-                import,
-                from_file: source_file,
-                target_node: None,
-                status: ResolutionStatus::Unresolved,
-                precision: ResolutionPrecision::None,
-                reason: Some(UnresolvedReason::NotFound),
-            }],
-            vec![file_node(source_node, "src/source.ts", source_file)],
-            vec![],
-        );
-
-        let (_symbols, references) = derive_symbol_reference_facts(&db, temp.path());
-
-        assert!(references.iter().any(|reference| {
-            reference.name == "missing"
-                && reference.kind == ReferenceKind::Import
-                && reference.target.is_none()
-                && reference.status == SymbolResolutionStatus::Unresolved
-                && reference.precision == SymbolPrecision::Unresolved
-        }));
-    }
-}
-
-#[cfg(test)]
-mod semantic_scopes {
-    use super::{derive_ts_semantic_index, reference_scope_stable_key};
-    use crate::core::{FileId, Language, SourceFile};
-    use crate::symbol_graph::semantic::ScopeKind;
-    use crate::ts::parse_ts_file;
-    use oxc_allocator::Allocator;
-    use oxc_ast::AstKind;
-    use oxc_semantic::SemanticBuilder;
-    use std::path::PathBuf;
-
-    fn source_file(source: &str) -> SourceFile {
-        SourceFile {
-            id: FileId(0),
-            path: PathBuf::from("src/scopes.ts"),
-            relative_path: "src/scopes.ts".to_string(),
-            language: Language::TypeScript,
-            source: source.to_string().into(),
-            content_hash: "test-hash".to_string(),
-        }
-    }
-
-    #[test]
-    fn emits_module_function_block_class_catch_loop_switch_type_and_namespace_scopes() {
-        let source = r#"
-namespace App {
-    export interface Model { value: string }
-    export type Alias = Model;
-    export enum Choice { One }
-}
-
-class Widget {
-    render() {
-        for (const item of [1]) {
-            switch (item) {
-                case 1: break;
-            }
-        }
-        try {
-            throw new Error();
-        } catch (err) {
-            const local = err;
-        }
-    }
-}
-
-"#;
-        let file = source_file(source);
-        let allocator = Allocator::default();
-        let parsed = parse_ts_file(&allocator, &file);
-        let semantic = SemanticBuilder::new().build(parsed.program()).semantic;
-
-        let output = derive_ts_semantic_index(
-            &crate::core::test_stable_key_interner(),
-            &file,
-            source,
-            parsed.program(),
-            semantic.scoping(),
-            semantic.nodes(),
-            false,
-        );
-        let kinds = output
-            .scopes
-            .iter()
-            .map(|scope| scope.kind)
-            .collect::<Vec<_>>();
-
-        assert!(kinds.contains(&ScopeKind::Module));
-        assert!(kinds.contains(&ScopeKind::Function));
-        assert!(kinds.contains(&ScopeKind::Block));
-        assert!(kinds.contains(&ScopeKind::Class));
-        assert!(kinds.contains(&ScopeKind::Catch));
-        assert!(kinds.contains(&ScopeKind::Loop));
-        assert!(kinds.contains(&ScopeKind::Switch));
-        assert!(kinds.contains(&ScopeKind::Type));
-        assert!(kinds.contains(&ScopeKind::Namespace));
-    }
-
-    #[test]
-    fn reference_scope_stable_key_uses_the_enclosing_oxc_scope_path() {
-        let source = r#"
-function outer(value: number) {
-    {
-        const value = 1;
-        return value;
-    }
-}
-"#;
-        let file = source_file(source);
-        let allocator = Allocator::default();
-        let parsed = parse_ts_file(&allocator, &file);
-        let semantic = SemanticBuilder::new().build(parsed.program()).semantic;
-        let reference = semantic
-            .nodes()
-            .iter()
-            .find_map(|node| {
-                let AstKind::IdentifierReference(identifier) = node.kind() else {
-                    return None;
-                };
-                (identifier.name == "value")
-                    .then(|| identifier.reference_id.get())
-                    .flatten()
-            })
-            .expect("fixture has a value reference");
-
-        let stable_key =
-            reference_scope_stable_key(&file, semantic.scoping(), semantic.nodes(), reference);
-
-        assert!(stable_key.contains("src/scopes.ts"));
-        assert!(stable_key.contains("block"));
-    }
-}
-
-#[cfg(test)]
-mod semantic_imports_exports {
-    use super::derive_ts_semantic_index;
-    use crate::core::{FileId, Language, SourceFile};
-    use crate::symbol_graph::semantic::{ExportKind, SemanticImportKind, SemanticStatus};
-    use crate::ts::parse_ts_file;
-    use oxc_allocator::Allocator;
-    use oxc_semantic::SemanticBuilder;
-    use std::collections::BTreeSet;
-    use std::path::PathBuf;
-
-    fn derive(source: &str) -> crate::symbol_graph::semantic::SemanticIndexOutput {
-        let file = SourceFile {
-            id: FileId(0),
-            path: PathBuf::from("src/imports.ts"),
-            relative_path: "src/imports.ts".to_string(),
-            language: Language::TypeScript,
-            source: source.to_string().into(),
-            content_hash: "test-hash".to_string(),
-        };
-        let allocator = Allocator::default();
-        let parsed = parse_ts_file(&allocator, &file);
-        let semantic = SemanticBuilder::new().build(parsed.program()).semantic;
-
-        derive_ts_semantic_index(
-            &crate::core::test_stable_key_interner(),
-            &file,
-            source,
-            parsed.program(),
-            semantic.scoping(),
-            semantic.nodes(),
-            false,
-        )
-    }
-
-    #[test]
-    fn emits_static_import_rows_for_named_default_namespace_side_effect_and_type_only_forms() {
-        let output = derive(
-            r#"
-import defaultThing from "pkg";
-import { named as local, type TypeName } from "./mod";
-import * as ns from "./ns";
-import "./side-effect";
-"#,
-        );
-        let kinds = output
-            .semantic_imports
-            .iter()
-            .map(|fact| fact.kind)
-            .collect::<Vec<_>>();
-
-        assert!(kinds.contains(&SemanticImportKind::StaticDefault));
-        assert!(kinds.contains(&SemanticImportKind::StaticNamed));
-        assert!(kinds.contains(&SemanticImportKind::StaticNamespace));
-        assert!(kinds.contains(&SemanticImportKind::SideEffect));
-        assert!(kinds.contains(&SemanticImportKind::TypeOnly));
-    }
-
-    #[test]
-    fn side_effect_import_stable_keys_include_import_path() {
-        let output = derive(
-            r#"
-import "./setup-a";
-import "./setup-b";
-"#,
-        );
-        let side_effect_keys = output
-            .semantic_imports
-            .iter()
-            .filter(|fact| fact.kind == SemanticImportKind::SideEffect)
-            .map(|fact| {
-                crate::core::test_stable_key_interner()
-                    .resolve(fact.stable_key)
-                    .to_string()
-            })
-            .collect::<BTreeSet<_>>();
-
-        assert_eq!(side_effect_keys.len(), 2);
-    }
-
-    #[test]
-    fn emits_export_rows_for_named_default_star_reexport_and_reexport_specifiers() {
-        let output = derive(
-            r#"
-const local = 1;
-export { local as renamed };
-export default function main() {}
-export * from "./star";
-export { named as reexported } from "./mod";
-"#,
-        );
-        let kinds = output
-            .exports
-            .iter()
-            .map(|fact| fact.kind)
-            .collect::<Vec<_>>();
-
-        assert!(kinds.contains(&ExportKind::Named));
-        assert!(kinds.contains(&ExportKind::Default));
-        assert!(kinds.contains(&ExportKind::StarReexport));
-        assert!(kinds.contains(&ExportKind::Namespace));
-        assert!(
-            output
-                .aliases
-                .iter()
-                .any(|alias| alias.status == SemanticStatus::Unresolved)
-        );
-    }
-
-    #[test]
-    fn star_reexport_alias_stable_keys_include_reexport_target() {
-        let output = derive(
-            r#"
-export * from "./a";
-export * from "./b";
-"#,
-        );
-        let reexport_keys = output
-            .aliases
-            .iter()
-            .filter(|alias| {
-                crate::core::test_stable_key_interner()
-                    .resolve(alias.source_symbol_stable_key)
-                    .as_ref()
-                    == "export:*"
-            })
-            .map(|alias| {
-                crate::core::test_stable_key_interner()
-                    .resolve(alias.stable_key)
-                    .to_string()
-            })
-            .collect::<BTreeSet<_>>();
-
-        assert_eq!(reexport_keys.len(), 2);
-    }
-
-    #[test]
-    fn emits_conservative_rows_for_commonjs_and_dynamic_import_forms() {
-        let output = derive(
-            r#"
-const req = require(moduleName);
-module.exports = req;
-exports.named = req;
-const lazy = import(moduleName);
-"#,
-        );
-
-        assert!(output.semantic_imports.iter().any(|fact| {
-            fact.kind == SemanticImportKind::CommonJsRequire
-                && fact.status == SemanticStatus::Dynamic
-        }));
-        assert!(output.semantic_imports.iter().any(|fact| {
-            fact.kind == SemanticImportKind::DynamicImport && fact.status == SemanticStatus::Dynamic
-        }));
-        assert!(output.exports.iter().any(|fact| {
-            fact.kind == ExportKind::CommonJsModuleExports
-                && fact.status == SemanticStatus::Unsupported
-        }));
-        assert!(output.exports.iter().any(|fact| {
-            fact.kind == ExportKind::CommonJsExportsProperty
-                && fact.status == SemanticStatus::Unsupported
-        }));
-    }
-}
-
-#[cfg(test)]
-mod semantic_resolution {
-    use super::{derive_ts_file_symbols, derive_ts_semantic_index};
-    use crate::core::{FileId, Language, SourceFile, SymbolFact};
-    use crate::symbol_graph::semantic::{ResolutionStepKind, SemanticIndexOutput, SemanticStatus};
-    use crate::symbol_graph::{LanguageSymbolOutput, model::SymbolGraphBuilder};
-    use crate::ts::parse_ts_file;
-    use oxc_allocator::Allocator;
-    use oxc_semantic::SemanticBuilder;
-    use std::path::PathBuf;
-
-    fn derive(source: &str) -> crate::symbol_graph::semantic::SemanticIndexOutput {
-        let file = SourceFile {
-            id: FileId(0),
-            path: PathBuf::from("src/resolution.ts"),
-            relative_path: "src/resolution.ts".to_string(),
-            language: Language::TypeScript,
-            source: source.to_string().into(),
-            content_hash: "test-hash".to_string(),
-        };
-        let allocator = Allocator::default();
-        let parsed = parse_ts_file(&allocator, &file);
-        let semantic = SemanticBuilder::new().build(parsed.program()).semantic;
-
-        derive_ts_semantic_index(
-            &crate::core::test_stable_key_interner(),
-            &file,
-            source,
-            parsed.program(),
-            semantic.scoping(),
-            semantic.nodes(),
-            true,
-        )
-    }
-
-    fn derive_symbols_and_semantic(
-        source: &str,
-    ) -> (
-        crate::core::StableKeyInterner,
-        Vec<SymbolFact>,
-        SemanticIndexOutput,
-    ) {
-        let file = SourceFile {
-            id: FileId(0),
-            path: PathBuf::from("src/resolution.ts"),
-            relative_path: "src/resolution.ts".to_string(),
-            language: Language::TypeScript,
-            source: source.to_string().into(),
-            content_hash: "test-hash".to_string(),
-        };
-        let interner = crate::core::StableKeyInterner::default();
-        let mut builder = SymbolGraphBuilder::new(interner.clone());
-        let mut output = LanguageSymbolOutput::default();
-
-        derive_ts_file_symbols(&interner, &mut builder, &mut output, &file, false);
-        let symbol_output = builder.finish();
-
-        (interner, symbol_output.symbols, output.semantic)
-    }
-
-    #[test]
-    fn local_lexical_references_record_resolved_lookup_steps() {
-        let output = derive(
-            r#"
-const value = 1;
-export const doubled = value + value;
-"#,
-        );
-
-        assert!(output.resolutions.iter().any(|resolution| {
-            resolution.step == ResolutionStepKind::LexicalLookup
-                && resolution.status == SemanticStatus::Resolved
-                && crate::core::test_stable_key_interner()
-                    .resolve(resolution.source_stable_key)
-                    .contains("value")
-        }));
-    }
-
-    #[test]
-    fn import_alias_references_record_alias_and_module_lookup_steps() {
-        let output = derive(
-            r#"
-import { thing as localThing } from "./thing";
-export const used = localThing;
-"#,
-        );
-
-        assert!(
-            output
-                .resolutions
-                .iter()
-                .any(|resolution| resolution.step == ResolutionStepKind::ImportAliasLookup)
-        );
-        assert!(
-            output
-                .resolutions
-                .iter()
-                .any(|resolution| resolution.step == ResolutionStepKind::ModuleLookup)
-        );
-    }
-
-    #[test]
-    fn unresolved_references_record_unknown_fallback_steps() {
-        let output = derive("export const value = missingGlobal;\n");
-
-        assert!(output.resolutions.iter().any(|resolution| {
-            resolution.step == ResolutionStepKind::UnknownFallback
-                && resolution.status == SemanticStatus::Unresolved
-                && crate::core::test_stable_key_interner()
-                    .resolve(resolution.source_stable_key)
-                    .contains("missingGlobal")
-        }));
-    }
-
-    #[test]
-    fn stable_export_identities_use_native_discriminator() {
-        let output = derive("export const value = 1;\n");
-
-        assert!(output.stable_exports.iter().any(|identity| {
-            identity.export_name == "value"
-                && identity.generated_discriminator.as_deref() == Some("native")
-                && crate::core::test_stable_key_interner()
-                    .resolve(identity.symbol_stable_key)
-                    .contains("value")
-        }));
-    }
-
-    #[test]
-    fn stable_export_symbol_key_matches_exported_symbol_fact_key() {
-        let (_interner, symbols, semantic) =
-            derive_symbols_and_semantic("export const value = 1;\n");
-        let exported_symbol = symbols
-            .iter()
-            .find(|symbol| symbol.name == "value" && symbol.is_exported)
-            .expect("exported symbol exists");
-        let stable_export = semantic
-            .stable_exports
-            .iter()
-            .find(|identity| identity.export_name == "value")
-            .expect("stable export exists");
-
-        assert_eq!(stable_export.symbol_stable_key, exported_symbol.stable_key);
-    }
-
-    #[test]
-    fn symbols_only_semantic_derivation_does_not_emit_reference_keyed_resolutions() {
-        let (_interner, _symbols, semantic) =
-            derive_symbols_and_semantic("const value = 1;\nexport const doubled = value;\n");
-
-        assert!(semantic.resolutions.is_empty());
-    }
-}
+include!("symbol_graph_tests.rs");

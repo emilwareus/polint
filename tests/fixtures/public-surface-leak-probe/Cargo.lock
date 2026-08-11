@@ -1057,9 +1057,11 @@ name = "polint-ts"
 version = "0.1.17"
 dependencies = [
  "anyhow",
+ "json-strip-comments",
  "oxc_allocator",
  "oxc_ast",
  "oxc_parser",
+ "oxc_resolver",
  "oxc_semantic",
  "oxc_span",
  "polint-analysis",
@@ -1069,6 +1071,7 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
+ "serde_norway",
  "tempfile",
  "thiserror",
 ]

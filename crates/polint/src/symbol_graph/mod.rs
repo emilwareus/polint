@@ -1,9 +1,8 @@
-pub(crate) mod go;
+pub(crate) use polint_go::symbol_graph as go;
 pub(crate) mod model;
 pub(crate) mod query;
 pub(crate) mod semantic;
-pub(crate) mod stable_id;
-pub(crate) mod ts;
+pub(crate) use polint_ts::symbol_graph as ts;
 
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
@@ -56,13 +55,6 @@ impl SymbolGraphDerivation {
         }
         CapabilitySupportView::new(entries)
     }
-}
-
-#[derive(Debug, Clone, Default)]
-pub(crate) struct LanguageSymbolOutput {
-    pub(crate) diagnostics: Vec<Diagnostic>,
-    pub(crate) capability_support: Vec<CapabilitySupport>,
-    pub(crate) semantic: SemanticIndexOutput,
 }
 
 #[cfg_attr(
@@ -229,15 +221,51 @@ fn derive_requested_symbols_uncached_with_payload(
     let mut derivation = SymbolGraphDerivation::default();
     let mut semantic_output = SemanticIndexOutput::default();
 
-    merge_language_output(
-        &mut derivation,
-        &mut semantic_output,
-        ts::derive_ts_symbols(&mut builder, db, loaded, plan),
+    let request = polint_analysis::symbol_graph::SymbolGraphRequest::new(
+        plan.requests_capability("symbols"),
+        plan.requests_capability("references"),
     );
     merge_language_output(
         &mut derivation,
         &mut semantic_output,
-        go::derive_go_symbols(&mut builder, db, loaded, plan),
+        ts::derive_ts_symbols(
+            &mut builder,
+            db,
+            polint_ts::symbol_graph::TsSymbolOptions {
+                request,
+                resolved_imports: db.resolved_imports().to_vec(),
+                module_nodes: db.module_nodes().to_vec(),
+            },
+        ),
+        db,
+        plan,
+    );
+    let go_reference_files = db
+        .files()
+        .iter()
+        .filter(|file| file.language == Language::Go)
+        .filter(|file| {
+            !plan
+                .rules_for_capability_matching_files("references", std::slice::from_ref(file))
+                .is_empty()
+        })
+        .map(|file| file.relative_path.clone())
+        .collect();
+    merge_language_output(
+        &mut derivation,
+        &mut semantic_output,
+        go::derive_go_symbols(
+            &mut builder,
+            db,
+            &polint_go::symbol_graph::GoSymbolOptions {
+                root: loaded.root.clone(),
+                settings: loaded.config.languages.go.clone(),
+                request,
+                reference_files: Some(go_reference_files),
+            },
+        ),
+        db,
+        plan,
     );
 
     let output = builder.finish();
@@ -1077,12 +1105,45 @@ fn fact_order_key<'a>(
 fn merge_language_output(
     derivation: &mut SymbolGraphDerivation,
     semantic: &mut SemanticIndexOutput,
-    output: LanguageSymbolOutput,
+    output: polint_analysis::symbol_graph::LanguageSymbolOutput,
+    db: &AnalysisDb,
+    plan: &AnalysisPlan,
 ) {
     derivation.diagnostics.extend(output.diagnostics);
-    derivation
-        .capability_support
-        .extend(output.capability_support);
+    for support in output.capability_support {
+        let files = db
+            .files()
+            .iter()
+            .filter(|file| {
+                file.language == support.language
+                    || (support.language.is_ts_family() && file.language.is_ts_family())
+            })
+            .collect::<Vec<_>>();
+        let rules = plan.rules_for_capability_matching_files(&support.capability, &files);
+        if rules.is_empty() {
+            continue;
+        }
+        let status = match support.status {
+            polint_analysis::symbol_graph::SymbolCapabilityStatus::Supported => {
+                CapabilitySupportStatus::Supported
+            }
+            polint_analysis::symbol_graph::SymbolCapabilityStatus::SetupMissing => {
+                CapabilitySupportStatus::SetupMissing
+            }
+            polint_analysis::symbol_graph::SymbolCapabilityStatus::Unsupported => {
+                CapabilitySupportStatus::Unsupported
+            }
+        };
+        derivation.capability_support.push(CapabilitySupport {
+            capability: support.capability,
+            language: Some(support.language),
+            status,
+            rules,
+            reason: support.reason,
+            hint: support.hint,
+            docs_path: Some(SYMBOL_FACTS_DOCS_PATH.to_string()),
+        });
+    }
     semantic.extend(output.semantic);
 }
 
@@ -2367,5 +2428,314 @@ mod semantic_cache_restore {
         } else {
             assert_eq!(cold_keys, warm_keys);
         }
+    }
+}
+
+#[cfg(test)]
+mod symbol_graph_go_facade_tests {
+    use super::*;
+    use crate::analysis_plan::AnalysisPlan;
+    use crate::config::{LoadedConfig, load_config};
+    use crate::core::{
+        AnalysisDb, Capabilities, Rule, RuleKind, RuleMeta, RuleOptions, SymbolResolutionStatus,
+    };
+    use crate::diagnostics::Severity;
+    use std::collections::BTreeMap;
+    use std::path::Path;
+
+    fn add_file(db: &mut AnalysisDb, root: &Path, relative_path: &str, source: &str) {
+        let path = root.join(relative_path);
+        std::fs::create_dir_all(path.parent().expect("fixture has parent")).expect("mkdirs");
+        std::fs::write(&path, source).expect("write fixture");
+        db.add_file(path, relative_path.to_string(), source.to_string());
+    }
+
+    fn add_go_file(db: &mut AnalysisDb, root: &Path, relative_path: &str, source: &str) {
+        add_file(db, root, relative_path, source);
+    }
+
+    fn loaded_config_for(root: &Path) -> LoadedConfig {
+        load_config(root).expect("config loads")
+    }
+
+    fn requested_plan_with_files(files: &[&str]) -> AnalysisPlan {
+        let rule = Rule::from_parts(
+            || RuleMeta {
+                id: "local/needs-symbols".to_string(),
+                description: "Needs symbols".to_string(),
+                severity: Severity::Warn,
+                kind: RuleKind::Check,
+            },
+            || Capabilities::new().references(),
+            |_db, _ctx| Ok(()),
+        );
+        let mut options = BTreeMap::new();
+        options.insert(
+            "local/needs-symbols".to_string(),
+            RuleOptions {
+                files: files.iter().map(|file| (*file).to_string()).collect(),
+                ..RuleOptions::default()
+            },
+        );
+        AnalysisPlan::from_rules(&[rule], None, &options)
+    }
+
+    #[test]
+    fn missing_go_mod_does_not_block_ts_only_symbol_rules() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut db = AnalysisDb::new();
+        add_go_file(&mut db, temp.path(), "main.go", "package main\n");
+        add_file(
+            &mut db,
+            temp.path(),
+            "src/app.ts",
+            "export function run() { return 1; }\n",
+        );
+        let derivation = derive_requested_symbols(
+            &mut db,
+            &loaded_config_for(temp.path()),
+            &requested_plan_with_files(&["src/**/*.ts"]),
+        );
+
+        assert!(
+            derivation
+                .capability_support
+                .iter()
+                .all(|entry| entry.language != Some(crate::core::Language::Go)),
+            "{:#?}",
+            derivation.capability_support
+        );
+        assert!(
+            db.references()
+                .iter()
+                .filter(|reference| reference.language == crate::core::Language::Go)
+                .all(|reference| reference.status != SymbolResolutionStatus::SetupMissing),
+            "TS-only rules should not receive Go setup-missing reference placeholders: {:#?}",
+            db.references()
+        );
+    }
+
+    #[test]
+    fn go_setup_missing_derivation_emits_capability_diagnostics() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut db = AnalysisDb::new();
+        add_go_file(&mut db, temp.path(), "main.go", "package main\n");
+
+        let derivation = derive_requested_symbols(
+            &mut db,
+            &loaded_config_for(temp.path()),
+            &AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]),
+        );
+
+        assert!(
+            derivation.diagnostics.iter().any(|diagnostic| {
+                diagnostic.rule_id == "polint/capability"
+                    && diagnostic.evidence.iter().any(|evidence| {
+                        evidence.label == "status" && evidence.value == "setup_missing"
+                    })
+            }),
+            "{:#?}",
+            derivation.diagnostics
+        );
+    }
+}
+
+#[cfg(test)]
+mod symbol_graph_ts_import_links {
+    use super::ts;
+    use crate::core::{
+        AnalysisDb, FileId, ImportFact, ImportId, Language, ModuleNode, ModuleNodeId,
+        ModuleNodeKind, ReferenceFact, ReferenceKind, ResolutionPrecision, ResolutionStatus,
+        ResolvedImportFact, SymbolFact, SymbolPrecision, SymbolResolutionStatus, UnresolvedReason,
+        span_from_byte_range,
+    };
+    use crate::symbol_graph::model::SymbolGraphBuilder;
+    use std::fs;
+    use std::path::Path;
+
+    fn add_file(db: &mut AnalysisDb, root: &Path, relative_path: &str, source: &str) -> FileId {
+        let path = root.join(relative_path);
+        fs::create_dir_all(path.parent().expect("test file has parent")).expect("create fixture");
+        fs::write(&path, source).expect("write fixture");
+        db.add_file(path, relative_path.to_string(), source.to_string())
+    }
+
+    fn span_for(file: FileId, source: &str, needle: &str, occurrence: usize) -> crate::core::Span {
+        let start = source
+            .match_indices(needle)
+            .nth(occurrence)
+            .map(|(index, _)| index)
+            .unwrap_or_else(|| panic!("missing occurrence {occurrence} of {needle:?}"));
+        span_from_byte_range(file, source, start, start + needle.len())
+    }
+
+    fn push_import(
+        db: &mut AnalysisDb,
+        file: FileId,
+        source: &str,
+        path: &str,
+        occurrence: usize,
+    ) -> ImportId {
+        db.push_import(ImportFact {
+            id: ImportId(0),
+            file,
+            package: None,
+            path: path.to_string(),
+            span: span_for(file, source, &format!("{path:?}"), occurrence),
+            language: Language::TypeScript,
+        })
+    }
+
+    fn file_node(id: ModuleNodeId, label: &str, file: FileId) -> ModuleNode {
+        ModuleNode {
+            id,
+            kind: ModuleNodeKind::File,
+            label: label.to_string(),
+            file: Some(file),
+            package: None,
+            language: Some(Language::TypeScript),
+        }
+    }
+
+    fn derive_symbol_reference_facts(
+        db: &AnalysisDb,
+        _root: &Path,
+    ) -> (Vec<SymbolFact>, Vec<ReferenceFact>) {
+        let mut builder = SymbolGraphBuilder::new(crate::core::StableKeyInterner::default());
+
+        ts::derive_ts_symbols(
+            &mut builder,
+            db,
+            polint_ts::symbol_graph::TsSymbolOptions {
+                request: polint_analysis::symbol_graph::SymbolGraphRequest::new(true, true),
+                resolved_imports: db.resolved_imports().to_vec(),
+                module_nodes: db.module_nodes().to_vec(),
+            },
+        );
+        let output = builder.finish();
+        (output.symbols, output.references)
+    }
+
+    fn exported_symbol<'a>(symbols: &'a [SymbolFact], name: &str) -> &'a SymbolFact {
+        symbols
+            .iter()
+            .find(|symbol| symbol.name == name && symbol.is_exported)
+            .unwrap_or_else(|| panic!("missing exported symbol `{name}` in {symbols:#?}"))
+    }
+
+    #[test]
+    fn links_named_default_and_namespace_imports_through_module_graph_targets() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut db = AnalysisDb::new();
+        let source = r#"
+import defaultThing, { exportedValue as localValue } from "./target";
+import * as targetModule from "./target";
+
+export const used = localValue + defaultThing() + targetModule.exportedValue;
+"#;
+        let target = r#"
+export const exportedValue = 1;
+
+const defaultThing = function() {
+    return exportedValue;
+};
+export default defaultThing;
+"#;
+        let source_file = add_file(&mut db, temp.path(), "src/source.ts", source);
+        let target_file = add_file(&mut db, temp.path(), "src/target.ts", target);
+        let first_import = push_import(&mut db, source_file, source, "./target", 0);
+        let second_import = push_import(&mut db, source_file, source, "./target", 1);
+        let source_node = ModuleNodeId(0);
+        let target_node = ModuleNodeId(1);
+        db.replace_module_graph_facts(
+            vec![
+                ResolvedImportFact {
+                    id: crate::core::ResolvedImportId(0),
+                    import: first_import,
+                    from_file: source_file,
+                    target_node: Some(target_node),
+                    status: ResolutionStatus::Resolved,
+                    precision: ResolutionPrecision::ExactFile,
+                    reason: None,
+                },
+                ResolvedImportFact {
+                    id: crate::core::ResolvedImportId(0),
+                    import: second_import,
+                    from_file: source_file,
+                    target_node: Some(target_node),
+                    status: ResolutionStatus::Resolved,
+                    precision: ResolutionPrecision::ExactFile,
+                    reason: None,
+                },
+            ],
+            vec![
+                file_node(source_node, "src/source.ts", source_file),
+                file_node(target_node, "src/target.ts", target_file),
+            ],
+            vec![],
+        );
+
+        let (symbols, references) = derive_symbol_reference_facts(&db, temp.path());
+        let exported_value = exported_symbol(&symbols, "exportedValue");
+        let default_thing = exported_symbol(&symbols, "defaultThing");
+
+        assert!(references.iter().any(|reference| {
+            reference.name == "localValue"
+                && reference.kind == ReferenceKind::Import
+                && reference.target == Some(exported_value.id)
+                && reference.status == SymbolResolutionStatus::Resolved
+                && reference.precision == SymbolPrecision::ModuleLinked
+        }));
+        assert!(references.iter().any(|reference| {
+            reference.name == "defaultThing"
+                && reference.kind == ReferenceKind::Import
+                && reference.target == Some(default_thing.id)
+                && reference.status == SymbolResolutionStatus::Resolved
+                && reference.precision == SymbolPrecision::ModuleLinked
+        }));
+        assert!(references.iter().any(|reference| {
+            reference.name == "targetModule"
+                && reference.kind == ReferenceKind::Import
+                && reference.status == SymbolResolutionStatus::Ambiguous
+                && reference.candidates.contains(&exported_value.id)
+                && reference.candidates.contains(&default_thing.id)
+        }));
+    }
+
+    #[test]
+    fn emits_visible_unresolved_import_alias_references() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut db = AnalysisDb::new();
+        let source = r#"
+import { missing } from "./missing";
+
+export const used = missing;
+"#;
+        let source_file = add_file(&mut db, temp.path(), "src/source.ts", source);
+        let import = push_import(&mut db, source_file, source, "./missing", 0);
+        let source_node = ModuleNodeId(0);
+        db.replace_module_graph_facts(
+            vec![ResolvedImportFact {
+                id: crate::core::ResolvedImportId(0),
+                import,
+                from_file: source_file,
+                target_node: None,
+                status: ResolutionStatus::Unresolved,
+                precision: ResolutionPrecision::None,
+                reason: Some(UnresolvedReason::NotFound),
+            }],
+            vec![file_node(source_node, "src/source.ts", source_file)],
+            vec![],
+        );
+
+        let (_symbols, references) = derive_symbol_reference_facts(&db, temp.path());
+
+        assert!(references.iter().any(|reference| {
+            reference.name == "missing"
+                && reference.kind == ReferenceKind::Import
+                && reference.target.is_none()
+                && reference.status == SymbolResolutionStatus::Unresolved
+                && reference.precision == SymbolPrecision::Unresolved
+        }));
     }
 }

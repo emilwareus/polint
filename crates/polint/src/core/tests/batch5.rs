@@ -302,13 +302,13 @@
             Some("theme")
         );
         assert_eq!(
-            db.symbols_for_file(app_file)
+            crate::symbol_graph::query::symbols_for_file(&db, app_file)
                 .map(|symbol| symbol.id)
                 .collect::<Vec<_>>(),
             vec![SymbolId(0xfeed_beef)]
         );
         assert_eq!(
-            db.symbols_by_name("Button")
+            crate::symbol_graph::query::symbols_by_name(&db, "Button")
                 .map(|symbol| symbol.id)
                 .collect::<Vec<_>>(),
             vec![SymbolId(0xfeed_beef)]
@@ -325,7 +325,7 @@
             Some(DefinitionId(0x1010_2020))
         );
         assert_eq!(
-            db.references_to_symbol(SymbolId(0xabc0_1234))
+            crate::symbol_graph::query::references_to_symbol(&db, SymbolId(0xabc0_1234))
                 .map(|reference| reference.id)
                 .collect::<Vec<_>>(),
             vec![ReferenceId(0x3030_4040)]

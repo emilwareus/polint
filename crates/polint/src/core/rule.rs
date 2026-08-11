@@ -387,6 +387,7 @@ pub(crate) fn rule_id_matches(pattern: &str, rule_id: &str) -> bool {
     pattern == rule_id
 }
 
+#[cfg(test)]
 pub(crate) fn span_from_byte_range(
     file: FileId,
     source: &str,
@@ -408,6 +409,7 @@ pub(crate) fn span_from_byte_range(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn line_col(source: &str, byte_offset: usize) -> (u32, u32) {
     let mut line = 1_u32;
     let mut col = 1_u32;

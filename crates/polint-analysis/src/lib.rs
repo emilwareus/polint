@@ -39,6 +39,7 @@ pub mod solver;
 pub mod stable_key;
 pub mod store;
 pub mod summaries;
+pub mod symbol_graph;
 pub mod types;
 pub mod unknown_taxonomy;
 pub mod values;

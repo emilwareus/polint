@@ -21,6 +21,7 @@ pub mod parse;
 mod repo_fs;
 pub mod scope;
 pub mod spans;
+pub mod symbol_graph;
 pub mod syntax_store;
 
 use std::cell::RefCell;

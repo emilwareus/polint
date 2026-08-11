@@ -1,10 +1,21 @@
-use crate::cache::stable_hash;
-use crate::core::{
-    DefinitionId, Language, ReferenceId, Span, SymbolId, SymbolKind, SymbolNamespace,
-};
+fn stable_id_hash(parts: &[&str]) -> String {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for part in parts {
+        for byte in part.as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        hash ^= 0xfe;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
+}
+
+use polint_analysis_api::{SymbolKind, SymbolNamespace};
+use polint_core::{DefinitionId, Language, ReferenceId, Span, SymbolId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct StableSymbolKey {
+pub struct StableSymbolKey {
     language: Language,
     module_key: Option<String>,
     package_key: Option<String>,
@@ -17,14 +28,14 @@ pub(crate) struct StableSymbolKey {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct StableDefinitionKey {
+pub struct StableDefinitionKey {
     symbol: StableSymbolKey,
     file_key: String,
     span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct StableReferenceKey {
+pub struct StableReferenceKey {
     target: Option<StableSymbolKey>,
     language: Language,
     file_key: String,
@@ -37,7 +48,7 @@ impl StableSymbolKey {
         clippy::too_many_arguments,
         reason = "stable symbol keys are constructed from the normalized identity tuple"
     )]
-    pub(crate) fn new(
+    pub fn new(
         language: Language,
         module_key: Option<String>,
         package_key: Option<String>,
@@ -62,16 +73,16 @@ impl StableSymbolKey {
     }
 
     #[cfg(test)]
-    pub(crate) fn set_namespace(&mut self, namespace: SymbolNamespace) {
+    pub fn set_namespace(&mut self, namespace: SymbolNamespace) {
         self.namespace = namespace;
     }
 
     #[cfg(test)]
-    pub(crate) fn set_kind(&mut self, kind: SymbolKind) {
+    pub fn set_kind(&mut self, kind: SymbolKind) {
         self.kind = kind;
     }
 
-    pub(crate) fn stable_key(&self) -> String {
+    pub fn stable_key(&self) -> String {
         encode_tagged_parts(
             "symbol",
             [
@@ -90,7 +101,7 @@ impl StableSymbolKey {
 }
 
 impl StableDefinitionKey {
-    pub(crate) fn new(symbol: StableSymbolKey, file_key: impl Into<String>, span: Span) -> Self {
+    pub fn new(symbol: StableSymbolKey, file_key: impl Into<String>, span: Span) -> Self {
         Self {
             symbol,
             file_key: file_key.into(),
@@ -98,7 +109,7 @@ impl StableDefinitionKey {
         }
     }
 
-    pub(crate) fn stable_key(&self) -> String {
+    pub fn stable_key(&self) -> String {
         encode_tagged_parts(
             "definition",
             [
@@ -111,11 +122,7 @@ impl StableDefinitionKey {
 }
 
 impl StableReferenceKey {
-    pub(crate) fn resolved(
-        target: StableSymbolKey,
-        file_key: impl Into<String>,
-        span: Span,
-    ) -> Self {
+    pub fn resolved(target: StableSymbolKey, file_key: impl Into<String>, span: Span) -> Self {
         let language = target.language;
         let name = target.name.clone();
         Self {
@@ -127,7 +134,7 @@ impl StableReferenceKey {
         }
     }
 
-    pub(crate) fn unresolved(
+    pub fn unresolved(
         language: Language,
         file_key: impl Into<String>,
         name: impl Into<String>,
@@ -142,7 +149,7 @@ impl StableReferenceKey {
         }
     }
 
-    pub(crate) fn stable_key(&self) -> String {
+    pub fn stable_key(&self) -> String {
         encode_tagged_parts(
             "reference",
             [
@@ -160,39 +167,39 @@ impl StableReferenceKey {
     }
 }
 
-pub(crate) type StableKeyHash = fn(&str) -> String;
+pub type StableKeyHash = fn(&str) -> String;
 
-pub(crate) fn default_stable_key_hash(stable_key: &str) -> String {
-    stable_hash(&[stable_key])
+pub fn default_stable_key_hash(stable_key: &str) -> String {
+    stable_id_hash(&[stable_key])
 }
 
 #[cfg(test)]
-pub(crate) fn symbol_id_from_key(key: &StableSymbolKey) -> SymbolId {
+pub fn symbol_id_from_key(key: &StableSymbolKey) -> SymbolId {
     symbol_id_from_key_with_hash(key, default_stable_key_hash)
 }
 
 #[cfg(test)]
-pub(crate) fn definition_id_from_key(key: &StableDefinitionKey) -> DefinitionId {
+pub fn definition_id_from_key(key: &StableDefinitionKey) -> DefinitionId {
     definition_id_from_key_with_hash(key, default_stable_key_hash)
 }
 
 #[cfg(test)]
-pub(crate) fn reference_id_from_key(key: &StableReferenceKey) -> ReferenceId {
+pub fn reference_id_from_key(key: &StableReferenceKey) -> ReferenceId {
     reference_id_from_key_with_hash(key, default_stable_key_hash)
 }
 
-pub(crate) fn symbol_id_from_key_with_hash(key: &StableSymbolKey, hash: StableKeyHash) -> SymbolId {
+pub fn symbol_id_from_key_with_hash(key: &StableSymbolKey, hash: StableKeyHash) -> SymbolId {
     SymbolId(id_from_stable_key_with_hash(&key.stable_key(), hash))
 }
 
-pub(crate) fn definition_id_from_key_with_hash(
+pub fn definition_id_from_key_with_hash(
     key: &StableDefinitionKey,
     hash: StableKeyHash,
 ) -> DefinitionId {
     DefinitionId(id_from_stable_key_with_hash(&key.stable_key(), hash))
 }
 
-pub(crate) fn reference_id_from_key_with_hash(
+pub fn reference_id_from_key_with_hash(
     key: &StableReferenceKey,
     hash: StableKeyHash,
 ) -> ReferenceId {
@@ -208,7 +215,7 @@ fn digest_to_u64(digest: &str) -> u64 {
     match u64::from_str_radix(prefix, 16) {
         Ok(value) => value,
         Err(_) => {
-            let fallback = stable_hash(&[digest]);
+            let fallback = stable_id_hash(&[digest]);
             let fallback_prefix = fallback.get(..16).unwrap_or(fallback.as_str());
             u64::from_str_radix(fallback_prefix, 16)
                 .unwrap_or_else(|_| deterministic_bytes_to_u64(fallback.as_bytes()))
@@ -324,17 +331,16 @@ fn kind_key(kind: SymbolKind) -> &'static str {
 
 #[cfg(test)]
 mod symbol_graph_stable_ids {
-    use crate::core::{
-        DefinitionId, Language, ReferenceId, Span, SymbolId, SymbolKind, SymbolNamespace,
-    };
-    use crate::symbol_graph::stable_id::{
+    use super::{
         StableDefinitionKey, StableReferenceKey, StableSymbolKey, definition_id_from_key,
         reference_id_from_key, symbol_id_from_key,
     };
+    use polint_analysis_api::{SymbolKind, SymbolNamespace};
+    use polint_core::{DefinitionId, Language, ReferenceId, Span, SymbolId};
 
     fn span(start_byte: u32, end_byte: u32) -> Span {
         Span {
-            file: crate::core::FileId(7),
+            file: polint_core::FileId(7),
             start_byte,
             end_byte,
             start_line: 3,
@@ -415,11 +421,11 @@ mod symbol_graph_stable_ids {
     #[test]
     fn stable_ids_do_not_include_transient_file_ids() {
         let first = Span {
-            file: crate::core::FileId(1),
+            file: polint_core::FileId(1),
             ..span(10, 16)
         };
         let second = Span {
-            file: crate::core::FileId(99),
+            file: polint_core::FileId(99),
             ..span(10, 16)
         };
         let left = StableSymbolKey::new(
