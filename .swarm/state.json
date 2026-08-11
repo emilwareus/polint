@@ -894,27 +894,46 @@
       "tip": "1bb67299"
     },
     "T-SPLIT": {
-      "state": "IN_FLIGHT",
+      "state": "MERGED",
       "depends_on": [
         "T-INTERN-C"
       ],
       "created_at": "2026-08-10T10:04:15+02:00",
-      "note": "CLAIMED exclusive; polint-analysis owns ifds/slicing/domains-solver/demand + InputSnapshot/QueryKey vocab; facade analysis algorithms/lang still remain; still IN_FLIGHT",
+      "note": "MERGED/complete; targeted eight-crate split landed; facade retains the host composition root and product surfaces",
       "dispatched_at": "2026-08-11T00:26:45+0200",
       "claimed_at": "2026-08-11T00:26:45+0200",
       "attempts": 1,
       "branch": "static-analysis-architecture-review",
+      "commit": "92b4b021",
       "source_commit": "6e95a33c302d6d135dd3724b5b669f457cfe7a10",
       "worker": "T-SPLIT-exclusive-writer",
-      "exclusive_lock": true,
-      "updated_at": "2026-08-11T02:45:01+0200"
+      "exclusive_lock": false,
+      "merged_at": "2026-08-11T21:02:18+0200",
+      "done_at": "2026-08-11T21:02:18+0200",
+      "updated_at": "2026-08-11T21:02:18+0200",
+      "gates": {
+        "workspace_check": "PASS",
+        "fmt": "PASS",
+        "clippy": "PASS",
+        "workspace_tests": "PASS",
+        "public_surface": "PASS_8_of_8",
+        "golden": "PASS_8",
+        "determinism": "PASS_12",
+        "polyglot": "PASS_2",
+        "rustdoc": "PASS",
+        "cargo_deny": "PASS",
+        "structural": "PASS",
+        "gate_log": ".swarm/gate-logs/T-SPLIT-acceptance-92b4b021.log"
+      }
     },
     "T-ARCH-DOC": {
-      "state": "BLOCKED",
+      "state": "READY",
       "depends_on": [
         "T-SPLIT"
       ],
-      "created_at": "2026-08-10T10:04:15+02:00"
+      "created_at": "2026-08-10T10:04:15+02:00",
+      "note": "Unblocked by T-SPLIT MERGED; write root ARCHITECTURE.md and update AGENTS.md architecture pointer",
+      "updated_at": "2026-08-11T21:02:18+0200"
     },
     "T-SHIP-PREP": {
       "state": "BLOCKED",
@@ -927,17 +946,13 @@
   "locks": {
     "golden": null,
     "fact_family": {},
-    "t_split_exclusive": {
-      "holder": "T-SPLIT",
-      "claimed_at": "2026-08-11T00:26:45+0200",
-      "source_commit": "6e95a33c302d6d135dd3724b5b669f457cfe7a10"
-    }
+    "t_split_exclusive": null
   },
   "milestone": "PRE-SHIP",
-  "READY": [],
-  "IN_FLIGHT": [
-    "T-SPLIT"
+  "READY": [
+    "T-ARCH-DOC"
   ],
+  "IN_FLIGHT": [],
   "IN_REVIEW": [],
   "MERGED": [
     "W2.2",
@@ -971,20 +986,21 @@
     "W4.3",
     "W4.5",
     "W4.4",
-    "T-INTERN-C"
+    "T-INTERN-C",
+    "T-SPLIT"
   ],
   "HELD": [
     "W2.3"
   ],
   "hold_count": 1,
-  "dispatch_allowed": false,
+  "dispatch_allowed": true,
   "halt": {
     "active": false,
     "reason": "T-VERIFY in progress"
   },
   "integration_branch": "static-analysis-architecture-review",
   "never_merge_to_main": true,
-  "integration_head": "932cfd0b",
+  "integration_head": "92b4b021",
   "m0_gate": {
     "status": "PASS",
     "completed_at": "2026-08-08T11:52:00+02:00",
@@ -1040,7 +1056,8 @@
     },
     "2026-08-11T02:17:07+0200: T-SPLIT polint-analysis CP1 foundations committed; still IN_FLIGHT/exclusive",
     "2026-08-11T02:25:02+0200: T-SPLIT polint-analysis CP2 cycle-break API committed; still IN_FLIGHT/exclusive; lang/algorithm moves remain",
-    "2026-08-11T02:29:09+0200: T-SPLIT AnalysisHost expanded for algorithm move; still IN_FLIGHT/exclusive"
+    "2026-08-11T02:29:09+0200: T-SPLIT AnalysisHost expanded for algorithm move; still IN_FLIGHT/exclusive",
+    "2026-08-11T21:02:18+0200: T-SPLIT MERGED/complete at code 92b4b021; eight-crate graph landed; exclusive lock released; T-ARCH-DOC READY"
   ],
   "m1_gate": {
     "status": "PASS",
@@ -1102,7 +1119,8 @@
     "2026-08-11T01:21:30+0200: integration_head set to T-INTERN-C feat 932cfd0b (bookkeeping tip 1bb67299)",
     "2026-08-11T01:45:00+0200: T-SPLIT polint-go extraction compiler-green (follow-up to ce702a96); still IN_FLIGHT/exclusive; next polint-ts then polint-analysis",
     "2026-08-11T01:58:51+0200: T-SPLIT polint-ts extraction compiler-green; still IN_FLIGHT/exclusive; next polint-analysis",
-    "2026-08-11T02:11:25+0200: T-SPLIT polint-analysis CP1 foundations compiler-green; still IN_FLIGHT/exclusive"
+    "2026-08-11T02:11:25+0200: T-SPLIT polint-analysis CP1 foundations compiler-green; still IN_FLIGHT/exclusive",
+    "2026-08-11T21:02:18+0200: T-SPLIT MERGED @92b4b021; released t_split_exclusive; T-ARCH-DOC READY"
   ],
   "events": [
     "2026-08-08T15:10:20+02:00: W2.2d+e landed FF @271ccd15; core/mod.rs 8739 LOC; capability+rule extracted; main untouched",
@@ -1202,7 +1220,17 @@
     "2026-08-11T02:17:07+0200: T-SPLIT polint-analysis CP1 foundations committed; still IN_FLIGHT/exclusive",
     "2026-08-11T02:25:02+0200: T-SPLIT polint-analysis CP2 cycle-break API committed; still IN_FLIGHT/exclusive; lang/algorithm moves remain",
     "2026-08-11T02:29:09+0200: T-SPLIT AnalysisHost expanded for algorithm move; still IN_FLIGHT/exclusive",
-    "2026-08-11T02:45:01+0200: T-SPLIT physical algorithm moves (ifds/slicing/domains-solver/demand) + InputSnapshot vocab; still IN_FLIGHT/exclusive"
+    "2026-08-11T02:45:01+0200: T-SPLIT physical algorithm moves (ifds/slicing/domains-solver/demand) + InputSnapshot vocab; still IN_FLIGHT/exclusive",
+    {
+      "at": "2026-08-11T21:02:18+0200",
+      "event": "T-SPLIT MERGED",
+      "commit": "92b4b021"
+    },
+    {
+      "at": "2026-08-11T21:02:18+0200",
+      "event": "T-ARCH-DOC READY",
+      "depends_on": "T-SPLIT"
+    }
   ],
   "ready": [],
   "BLOCKED": [],
@@ -1222,6 +1250,7 @@
   },
   "binding": ".swarm/DECISION-2026-08-10-PRE-SHIP.md",
   "progress": [
-    "2026-08-11T02:45:01+0200: T-SPLIT physical algorithm moves (ifds/slicing/domains-solver/demand) + InputSnapshot vocab; still IN_FLIGHT/exclusive"
+    "2026-08-11T02:45:01+0200: T-SPLIT physical algorithm moves (ifds/slicing/domains-solver/demand) + InputSnapshot vocab; still IN_FLIGHT/exclusive",
+    "2026-08-11T21:02:18+0200: T-SPLIT complete at code 92b4b021; T-ARCH-DOC READY; T-SHIP-PREP remains BLOCKED"
   ]
 }
