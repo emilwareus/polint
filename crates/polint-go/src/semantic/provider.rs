@@ -1,7 +1,10 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use polint_analysis_api::{CacheStats, Digest, DigestKind, FactDatabase, ProviderManifest};
+use polint_analysis_api::{
+    CacheStats, Digest, DigestKind, FactDatabase, ProviderExecution, ProviderFailureReason,
+    ProviderFailureStage, ProviderManifest,
+};
 use polint_core::{Diagnostic, DiagnosticRange as TextRange, Span};
 use toml::Value;
 
@@ -25,6 +28,7 @@ pub struct GoSemanticProviderRunOutput {
     pub diagnostics: Vec<Diagnostic>,
     pub cache_stats: CacheStats,
     pub output_digest: Option<Digest>,
+    pub execution: ProviderExecution,
 }
 
 pub fn derive_go_semantic_with_cache_stats(
@@ -72,6 +76,7 @@ fn derive_go_semantic_with_runner(
                 digest_inputs: EmptyDigestInputs::default().into(),
                 cache_stats,
                 diagnostics: Vec::new(),
+                execution: ProviderExecution::Succeeded,
             },
         );
     }
@@ -90,6 +95,10 @@ fn derive_go_semantic_with_runner(
                     digest_inputs: EmptyDigestInputs::from_lifecycle_error(error.reason()).into(),
                     cache_stats,
                     diagnostics: vec![setup_missing_diagnostic(error.reason())],
+                    execution: ProviderExecution::Failed {
+                        stage: ProviderFailureStage::Setup,
+                        reason: ProviderFailureReason::SetupMissing,
+                    },
                 },
             );
         }
@@ -117,6 +126,14 @@ fn derive_go_semantic_with_runner(
                 .into(),
                 cache_stats,
                 diagnostics,
+                execution: if go_module_roots_configured(go_settings) {
+                    ProviderExecution::Failed {
+                        stage: ProviderFailureStage::Setup,
+                        reason: ProviderFailureReason::SetupMissing,
+                    }
+                } else {
+                    ProviderExecution::Succeeded
+                },
             },
         );
     }
@@ -138,6 +155,10 @@ fn derive_go_semantic_with_runner(
                     "configured Go module roots are missing go.mod: {}.",
                     missing_roots.join(", ")
                 ))],
+                execution: ProviderExecution::Failed {
+                    stage: ProviderFailureStage::Setup,
+                    reason: ProviderFailureReason::SetupMissing,
+                },
             },
         );
     }
@@ -156,6 +177,10 @@ fn derive_go_semantic_with_runner(
                     digest_inputs: EmptyDigestInputs::from_client_error(&error).into(),
                     cache_stats,
                     diagnostics: vec![client_error_diagnostic(error)],
+                    execution: ProviderExecution::Failed {
+                        stage: ProviderFailureStage::Execution,
+                        reason: ProviderFailureReason::ExecutionFailed,
+                    },
                 },
             );
         }
@@ -168,6 +193,10 @@ fn derive_go_semantic_with_runner(
                 diagnostics: vec![provider_error_diagnostic(error.to_string())],
                 cache_stats,
                 output_digest: None,
+                execution: ProviderExecution::Failed {
+                    stage: ProviderFailureStage::Execution,
+                    reason: ProviderFailureReason::ExecutionFailed,
+                },
             };
         }
     };
@@ -188,6 +217,7 @@ fn derive_go_semantic_with_runner(
             digest_inputs,
             cache_stats,
             diagnostics,
+            execution: ProviderExecution::Succeeded,
         },
     )
 }
@@ -235,6 +265,7 @@ struct StoreOutputParts {
     cache_stats: CacheStats,
     diagnostics: Vec<Diagnostic>,
     digest_inputs: DigestInputs,
+    execution: ProviderExecution,
 }
 
 fn store_output(
@@ -245,19 +276,12 @@ fn store_output(
 ) -> GoSemanticProviderRunOutput {
     let interner = db.stable_key_interner();
     let output = parts.output.normalized(&interner);
+    let execution = parts.execution;
     match replace_go_semantic_facts(db, output) {
-        // `replace_go_semantic_facts` returns the resilience report: the count of malformed
-        // RTA-signal harvest rows it dropped (FIX 3) and the duplicate STRUCTURAL rows it
-        // collapsed keep-first (FIX-08). Surface a counted diagnostic for each so a systematic
-        // frontend regression (e.g. every method_set losing its stable_key, or an emitter
-        // double-emitting one structural key) is OBSERVABLE rather than silently
-        // under-resolving — or, in the structural case, no longer catastrophically zeroing all
-        // Go RTA repo-wide.
-        Ok(report) => {
-            // Compute the digest after store-time resilience has run, over the rows that were
-            // actually persisted. This keeps the output digest aligned with the certified DB
-            // state even when invalid harvest rows are dropped or duplicate structural rows are
-            // collapsed keep-first.
+        // The digest is issued only for an explicitly successful execution. Setup
+        // and execution failures install an empty, setup-aware store but do not
+        // certify it as a usable provider output.
+        Ok(report) if execution == ProviderExecution::Succeeded => {
             let stored_output = go_semantic_facts_output(db);
             let output_digest = go_semantic_output_digest(
                 manifest,
@@ -279,12 +303,23 @@ fn store_output(
                 diagnostics,
                 cache_stats: parts.cache_stats,
                 output_digest: Some(output_digest),
+                execution,
             }
         }
+        Ok(_report) => GoSemanticProviderRunOutput {
+            diagnostics: parts.diagnostics,
+            cache_stats: parts.cache_stats,
+            output_digest: None,
+            execution,
+        },
         Err(error) => GoSemanticProviderRunOutput {
             diagnostics: vec![provider_error_diagnostic(error.to_string())],
             cache_stats: parts.cache_stats,
             output_digest: None,
+            execution: ProviderExecution::Failed {
+                stage: ProviderFailureStage::Validation,
+                reason: ProviderFailureReason::ValidationRejected,
+            },
         },
     }
 }

@@ -7,6 +7,7 @@ use crate::config::LoadedConfig;
 use crate::core::{AnalysisDb, CapabilitySupportView};
 use crate::diagnostics::{Diagnostic, TextRange};
 use crate::frontend::{LanguageIdRegistryExt, LanguageRegistryExt};
+use polint_analysis_api::ProviderExecution;
 use std::collections::BTreeMap;
 
 pub(crate) use polint_analysis_api::{
@@ -106,6 +107,7 @@ impl Provider for SourceProvider {
             diagnostics: Vec::new(),
             cache_stats: CacheStats::default(),
             output_digest: None,
+            execution: Default::default(),
         }
     }
 }
@@ -208,6 +210,7 @@ impl Provider for ModuleGraphProvider {
             diagnostics: derivation.diagnostics,
             cache_stats: derivation.cache_stats,
             output_digest: derivation.output_digest,
+            execution: ProviderExecution::Succeeded,
         }
     }
 }
@@ -240,6 +243,7 @@ impl Provider for SymbolGraphProvider {
             diagnostics: derivation.diagnostics,
             cache_stats: derivation.cache_stats,
             output_digest: derivation.output_digest,
+            execution: ProviderExecution::Succeeded,
         }
     }
 }
@@ -265,6 +269,7 @@ impl Provider for ModuleTopologyProvider {
             diagnostics: derivation.diagnostics,
             cache_stats: derivation.cache_stats,
             output_digest: derivation.output_digest,
+            execution: ProviderExecution::Succeeded,
         }
     }
 }
@@ -293,6 +298,7 @@ impl Provider for SemanticMirProvider {
             diagnostics: derivation.diagnostics,
             cache_stats: derivation.cache_stats,
             output_digest: derivation.output_digest,
+            execution: derivation.execution,
         }
     }
 }
@@ -320,6 +326,7 @@ impl Provider for CfgProvider {
             diagnostics: derivation.diagnostics,
             cache_stats: derivation.cache_stats,
             output_digest: derivation.output_digest,
+            execution: derivation.execution,
         }
     }
 }
@@ -352,6 +359,7 @@ impl Provider for CallsProvider {
             diagnostics: derivation.diagnostics,
             cache_stats: derivation.cache_stats,
             output_digest: derivation.output_digest,
+            execution: derivation.execution,
         }
     }
 }
@@ -381,6 +389,7 @@ impl Provider for GoSemanticProvider {
             diagnostics: derivation.diagnostics,
             cache_stats: derivation.cache_stats,
             output_digest: derivation.output_digest,
+            execution: derivation.execution,
         }
     }
 }
@@ -405,6 +414,7 @@ impl Provider for IdentityProvider {
             diagnostics: derivation.diagnostics,
             cache_stats: derivation.cache_stats,
             output_digest: derivation.output_digest,
+            execution: derivation.execution,
         }
     }
 }
@@ -461,6 +471,7 @@ impl Provider for AbstractDomainsProvider {
             diagnostics: derivation.diagnostics,
             cache_stats: derivation.cache_stats,
             output_digest: derivation.output_digest,
+            execution: ProviderExecution::Succeeded,
         }
     }
 }
@@ -531,6 +542,7 @@ impl Provider for DirectSummariesProvider {
             diagnostics,
             cache_stats,
             output_digest: Some(output_digest),
+            execution: derivation.execution,
         }
     }
 }
@@ -563,6 +575,7 @@ impl Provider for EntrypointsProvider {
             diagnostics: derivation.diagnostics,
             cache_stats: derivation.cache_stats,
             output_digest: derivation.output_digest,
+            execution: derivation.execution,
         }
     }
 }
@@ -592,6 +605,7 @@ impl Provider for ReachabilityProvider {
             diagnostics: derivation.diagnostics,
             cache_stats: derivation.cache_stats,
             output_digest: derivation.output_digest,
+            execution: derivation.execution,
         }
     }
 }
@@ -615,6 +629,7 @@ impl Provider for ExtensionsProvider {
             diagnostics: derivation.diagnostics,
             cache_stats: derivation.cache_stats,
             output_digest: derivation.output_digest,
+            execution: derivation.execution,
         }
     }
 }
@@ -659,6 +674,7 @@ impl Provider for TypeValueAliasProvider {
             diagnostics: derivation.diagnostics,
             cache_stats: derivation.cache_stats,
             output_digest: derivation.output_digest,
+            execution: derivation.execution,
         }
     }
 }
@@ -697,6 +713,7 @@ impl Provider for SemanticGraphProvider {
             diagnostics: derivation.diagnostics,
             cache_stats: derivation.cache_stats,
             output_digest: derivation.output_digest,
+            execution: derivation.execution,
         }
     }
 }
@@ -723,6 +740,7 @@ impl Provider for SolverProvider {
             diagnostics: derivation.diagnostics,
             cache_stats: derivation.cache_stats,
             output_digest: derivation.output_digest,
+            execution: derivation.execution,
         }
     }
 }
@@ -752,6 +770,7 @@ impl Provider for RefinedCallsProvider {
             diagnostics: derivation.diagnostics,
             cache_stats: derivation.cache_stats,
             output_digest: derivation.output_digest,
+            execution: derivation.execution,
         }
     }
 }
@@ -782,6 +801,7 @@ impl Provider for DataFlowProvider {
             diagnostics: derivation.diagnostics,
             cache_stats: derivation.cache_stats,
             output_digest: derivation.output_digest,
+            execution: derivation.execution,
         }
     }
 }
@@ -813,6 +833,7 @@ impl Provider for EvidenceProvider {
             diagnostics: derivation.diagnostics,
             cache_stats: derivation.cache_stats,
             output_digest: derivation.output_digest,
+            execution: derivation.execution,
         }
     }
 }
@@ -843,6 +864,10 @@ impl Provider for MetricsProvider {
                     )],
                     cache_stats: CacheStats::default(),
                     output_digest: None,
+                    execution: polint_analysis_api::ProviderExecution::Failed {
+                        stage: polint_analysis_api::ProviderFailureStage::Execution,
+                        reason: polint_analysis_api::ProviderFailureReason::ExecutionFailed,
+                    },
                 };
             }
         };
@@ -850,6 +875,7 @@ impl Provider for MetricsProvider {
             diagnostics: derivation.diagnostics,
             cache_stats: derivation.cache_stats,
             output_digest: derivation.output_digest,
+            execution: derivation.execution,
         }
     }
 }

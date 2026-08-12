@@ -38,8 +38,9 @@ pub use module_facts::{
 };
 pub use provider::{
     CachePolicy, CaptureEnrichment, FactDatabase, HostAttachment, NullCaptureEnrichment,
-    NullHostAttachment, PrecisionCeiling, Provider, ProviderCtx, ProviderHostServices,
-    ProviderKind, ProviderManifest, ProviderRunResult, SchemaVersion,
+    NullHostAttachment, PrecisionCeiling, Provider, ProviderCtx, ProviderExecution,
+    ProviderFailureReason, ProviderFailureStage, ProviderHostServices, ProviderKind,
+    ProviderManifest, ProviderRunResult, SchemaVersion,
 };
 pub use source_file::SourceFile;
 pub use symbol_facts::{

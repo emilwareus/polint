@@ -370,6 +370,29 @@ impl ProviderOutcomeTracker {
             AttemptState::ProvisionalSuccess(output_identity),
         )
     }
+    /// Record a provider execution failure before later providers are considered.
+    ///
+    /// Keeping this transition in the tracker makes failed output identities
+    /// unavailable to dependents in the same scheduling pass; sealing remains a
+    /// final consistency check rather than the first point at which failure is
+    /// observed.
+    pub(crate) fn record_failure(
+        &mut self,
+        provider_id: &str,
+        status: ProviderOutcomeStatus,
+        failure_stage: ProviderFailureStage,
+        failure_reason: ProviderFailureReason,
+    ) -> Result<(), ProviderOutcomeError> {
+        let outcome = ProviderOutcome::non_success(
+            provider_id.to_string(),
+            status,
+            failure_stage,
+            failure_reason,
+            Vec::new(),
+        )?;
+        self.replace_pending(provider_id, AttemptState::Final(outcome))
+    }
+
     #[cfg(test)]
     pub(crate) fn record_non_success(
         &mut self,
@@ -787,6 +810,33 @@ mod tests {
             .record_dependency_blocked("C", vec!["B".to_string(), "A".to_string()])
             .unwrap();
     }
+    #[test]
+    fn execution_failure_is_recorded_immediately_and_blocks_hard_dependents() {
+        let mut tracker = ProviderOutcomeTracker::for_test(
+            &["upstream", "dependent"],
+            &["upstream", "dependent"],
+            &[("dependent", &["upstream"])],
+        );
+        tracker
+            .record_failure(
+                "upstream",
+                ProviderOutcomeStatus::Failed,
+                ProviderFailureStage::Execution,
+                ProviderFailureReason::ExecutionFailed,
+            )
+            .unwrap();
+
+        assert_eq!(tracker.can_run("dependent").unwrap(), ["upstream"]);
+        tracker
+            .record_dependency_blocked("dependent", vec!["upstream".to_string()])
+            .unwrap();
+        let outcomes = tracker.seal(&ValidationDowngrades::default()).unwrap();
+        assert_eq!(outcomes[0].status, ProviderOutcomeStatus::Failed);
+        assert!(outcomes[0].output_identity.is_none());
+        assert_eq!(outcomes[1].status, ProviderOutcomeStatus::DependencyBlocked);
+        assert!(outcomes[1].output_identity.is_none());
+    }
+
     #[test]
     fn validation_failure_closes_transitively_and_preserves_independent_success() {
         let mut tracker = ProviderOutcomeTracker::for_test(

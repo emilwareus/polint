@@ -14,12 +14,14 @@ use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{CacheStats, Digest, DigestKind, InputSnapshot};
 use crate::core::AnalysisDb;
 use crate::diagnostics::{Diagnostic, Severity, TextRange};
+use polint_analysis_api::ProviderExecution;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ExtensionProviderOutput {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) cache_stats: CacheStats,
     pub(crate) output_digest: Option<Digest>,
+    pub(crate) execution: ProviderExecution,
 }
 
 pub(crate) fn derive_extension_provider_outputs_with_cache_stats(
@@ -37,6 +39,7 @@ pub(crate) fn derive_extension_provider_outputs_with_cache_stats(
             diagnostics: Vec::new(),
             cache_stats,
             output_digest: Some(extension_output_digest(manifest, input_snapshot, db)),
+            execution: Default::default(),
         };
     }
 
@@ -188,6 +191,7 @@ pub(crate) fn derive_extension_provider_outputs_with_cache_stats(
         diagnostics,
         cache_stats,
         output_digest: Some(extension_output_digest(manifest, input_snapshot, db)),
+        execution: Default::default(),
     }
 }
 

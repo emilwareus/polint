@@ -10,7 +10,9 @@ use crate::aliases::facts::AliasAnswerFact;
 use crate::points_to::facts::{PointsToConstraintFact, PointsToSetFact};
 use crate::values::facts::{AllocationTokenFact, ValueFact};
 use polint_analysis_api::ProviderManifest;
-use polint_analysis_api::{CacheStats, Digest, DigestKind, InputComponent, InputSnapshot};
+use polint_analysis_api::{
+    CacheStats, Digest, DigestKind, InputComponent, InputSnapshot, ProviderExecution,
+};
 use polint_core::Diagnostic;
 use polint_core::StableKeyInterner;
 use serde::Serialize;
@@ -22,6 +24,7 @@ pub struct TypeValueAliasProviderOutput {
     pub diagnostics: Vec<Diagnostic>,
     pub cache_stats: CacheStats,
     pub output_digest: Option<Digest>,
+    pub execution: ProviderExecution,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -115,6 +118,7 @@ pub fn derive_type_value_alias_with_cache_stats(
         diagnostics,
         cache_stats,
         output_digest: Some(output_digest),
+        execution: Default::default(),
     }
 }
 

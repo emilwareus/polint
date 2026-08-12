@@ -132,6 +132,7 @@ fn skipped_direct_summaries_result(
         diagnostics: Vec::new(),
         cache_stats: incremental::CacheStats::default(),
         output_digest: Some(output_digest),
+        execution: Default::default(),
     }
 }
 
@@ -206,15 +207,25 @@ fn run_scheduled_providers<'a>(
                 diagnostics: Vec::new(),
                 cache_stats: incremental::CacheStats::default(),
                 output_digest: None,
+                execution: Default::default(),
             }
         };
+        // A provider owns the truth of whether its output is usable. Never let
+        // a failed result's digest enter the dependency map or the identity
+        // report; downstream blockers must observe the failure immediately.
+        let execution = result.execution;
+        let output_digest =
+            if matches!(execution, polint_analysis_api::ProviderExecution::Succeeded) {
+                result.output_digest
+            } else {
+                None
+            };
         if provider_id == "polint.go.syntax" {
             tracing::info!(target: "polint::kernel", "phase: go.syntax done");
         } else if provider_id == "polint.ts.syntax" {
             tracing::info!(target: "polint::kernel", "phase: ts.syntax done");
         }
         diagnostics.extend(result.diagnostics);
-        let output_digest = result.output_digest;
         let cache_stats = result.cache_stats;
         if let Some(digest) = output_digest.clone() {
             upstream_digests.insert(provider_id, digest);
@@ -228,10 +239,17 @@ fn run_scheduled_providers<'a>(
             db,
             cache_stats,
             output_digest.clone(),
+            ready && matches!(execution, polint_analysis_api::ProviderExecution::Succeeded),
         ));
         if ready {
             let manifest = AnalysisKernel::provider_manifest(provider_id);
-            let digest = match provider_id {
+            if let polint_analysis_api::ProviderExecution::Failed { stage, reason } = execution {
+                let (status, stage, reason) = provider_failure_outcome(stage, reason);
+                tracker
+                    .record_failure(provider_id, status, stage, reason)
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            } else {
+                let digest = match provider_id {
                 "polint.go.syntax" => {
                     let parser_diagnostics = diagnostics
                         .iter()
@@ -259,12 +277,13 @@ fn run_scheduled_providers<'a>(
                 ))
             })
             .expect("provider output digest fallback is always available");
-            let identity =
-                incremental::provider_output_identity_from_manifest(manifest, digest.clone());
-            tracker
-                .record_success(provider_id, identity)
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-            upstream_digests.insert(provider_id, digest);
+                let identity =
+                    incremental::provider_output_identity_from_manifest(manifest, digest.clone());
+                tracker
+                    .record_success(provider_id, identity)
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                upstream_digests.insert(provider_id, digest);
+            }
         }
     }
 
@@ -275,6 +294,58 @@ fn run_scheduled_providers<'a>(
         tracker,
         provider_telemetry,
     ))
+}
+
+fn provider_failure_outcome(
+    stage: polint_analysis_api::ProviderFailureStage,
+    reason: polint_analysis_api::ProviderFailureReason,
+) -> (
+    ProviderOutcomeStatus,
+    ProviderFailureStage,
+    ProviderFailureReason,
+) {
+    match (stage, reason) {
+        (
+            polint_analysis_api::ProviderFailureStage::Setup,
+            polint_analysis_api::ProviderFailureReason::Unsupported,
+        ) => (
+            ProviderOutcomeStatus::Unsupported,
+            ProviderFailureStage::Setup,
+            ProviderFailureReason::Unsupported,
+        ),
+        (
+            polint_analysis_api::ProviderFailureStage::Setup,
+            polint_analysis_api::ProviderFailureReason::SetupMissing,
+        ) => (
+            ProviderOutcomeStatus::SetupMissing,
+            ProviderFailureStage::Setup,
+            ProviderFailureReason::SetupMissing,
+        ),
+        (
+            polint_analysis_api::ProviderFailureStage::Execution,
+            polint_analysis_api::ProviderFailureReason::ExecutionFailed,
+        ) => (
+            ProviderOutcomeStatus::Failed,
+            ProviderFailureStage::Execution,
+            ProviderFailureReason::ExecutionFailed,
+        ),
+        (
+            polint_analysis_api::ProviderFailureStage::Validation,
+            polint_analysis_api::ProviderFailureReason::ValidationRejected,
+        ) => (
+            ProviderOutcomeStatus::Failed,
+            ProviderFailureStage::Validation,
+            ProviderFailureReason::ValidationRejected,
+        ),
+        // ProviderExecution is a public data carrier, so keep malformed pairs
+        // from entering the sealed tracker state. Treat them as execution
+        // failures without certifying an output.
+        _ => (
+            ProviderOutcomeStatus::Failed,
+            ProviderFailureStage::Execution,
+            ProviderFailureReason::ExecutionFailed,
+        ),
+    }
 }
 
 pub(crate) struct AnalysisKernel;
@@ -472,21 +543,25 @@ impl AnalysisKernel {
         db: &AnalysisDb,
         cache_stats: incremental::CacheStats,
         output_digest: Option<incremental::Digest>,
+        publish_identity: bool,
     ) -> incremental::ProviderOutputMeta {
         let manifest = Self::provider_manifest(provider_id);
-        let (output_digest, validation) = match output_digest {
-            Some(output_digest) => (output_digest, "native_trusted"),
-            None if provider_id == "polint.data_flow" || provider_id == "polint.evidence" => (
+        let (output_digest, validation) = if !publish_identity {
+            (
                 incremental::Digest::absent(incremental::DigestKind::ProviderOutput, provider_id),
                 "provider_failed",
-            ),
-            None => (
-                incremental::provider_output_digest_from_manifest(
-                    manifest,
-                    &provider_output_summary_parts(db, manifest),
+            )
+        } else {
+            match output_digest {
+                Some(output_digest) => (output_digest, "native_trusted"),
+                None => (
+                    incremental::provider_output_digest_from_manifest(
+                        manifest,
+                        &provider_output_summary_parts(db, manifest),
+                    ),
+                    "native_trusted",
                 ),
-                "native_trusted",
-            ),
+            }
         };
         let mut meta =
             incremental::provider_output_from_manifest(manifest, output_digest, cache_stats);
@@ -1234,6 +1309,7 @@ mod tests {
             &AnalysisDb::default(),
             incremental::CacheStats::default(),
             None,
+            false,
         );
 
         assert_eq!(row.validation, "provider_failed");

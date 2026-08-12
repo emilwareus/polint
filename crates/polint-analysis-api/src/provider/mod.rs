@@ -177,11 +177,43 @@ pub struct ProviderManifest {
     pub precision_ceiling: PrecisionCeiling,
 }
 
+/// Typed execution status for a provider stage.
+///
+/// Diagnostics are ordinary analysis output and do not by themselves change this
+/// status. Providers set a failure only when they could not certify the output
+/// state they expose (for example, a validated store replacement was rejected or
+/// required setup was unavailable).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProviderExecution {
+    #[default]
+    Succeeded,
+    Failed {
+        stage: ProviderFailureStage,
+        reason: ProviderFailureReason,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderFailureStage {
+    Setup,
+    Execution,
+    Validation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderFailureReason {
+    Unsupported,
+    SetupMissing,
+    ExecutionFailed,
+    ValidationRejected,
+}
+
 /// Result of running a single analysis provider stage.
 pub struct ProviderRunResult {
     pub diagnostics: Vec<Diagnostic>,
     pub cache_stats: CacheStats,
     pub output_digest: Option<Digest>,
+    pub execution: ProviderExecution,
 }
 
 pub trait Provider: Send + Sync {

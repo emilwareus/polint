@@ -31,12 +31,14 @@ use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{CacheStats, Digest, InputSnapshot};
 use crate::core::AnalysisDb;
 use crate::diagnostics::{Diagnostic, TextRange};
+use polint_analysis_api::{ProviderExecution, ProviderFailureReason, ProviderFailureStage};
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SolverProviderRunOutput {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) cache_stats: CacheStats,
     pub(crate) output_digest: Option<Digest>,
+    pub(crate) execution: ProviderExecution,
 }
 
 /// `polint.solver` provider entry point (D-13).
@@ -115,6 +117,7 @@ pub(crate) fn derive_solver_with_cache_stats(
             diagnostics,
             cache_stats,
             output_digest: Some(output_digest),
+            execution: Default::default(),
         },
         Err(error) => {
             diagnostics.push(provider_error_diagnostic(error.to_string()));
@@ -122,6 +125,10 @@ pub(crate) fn derive_solver_with_cache_stats(
                 diagnostics,
                 cache_stats,
                 output_digest: None,
+                execution: ProviderExecution::Failed {
+                    stage: ProviderFailureStage::Validation,
+                    reason: ProviderFailureReason::ValidationRejected,
+                },
             }
         }
     }

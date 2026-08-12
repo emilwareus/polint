@@ -24,6 +24,7 @@ use crate::repo_fs::read_repo_file_to_string_with_limit;
 use crate::ts::binding::store::{
     ts_direct_binding_output_digest, ts_direct_binding_provider_parameter_digest,
 };
+use polint_analysis_api::{ProviderExecution, ProviderFailureReason, ProviderFailureStage};
 
 const ADAPTATION_MODEL_DIR: &str = ".polint/models";
 const ADAPTATION_MODEL_MAX_BYTES: u64 = 1_048_576;
@@ -33,6 +34,7 @@ pub(crate) struct SemanticGraphProviderRunOutput {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) cache_stats: CacheStats,
     pub(crate) output_digest: Option<Digest>,
+    pub(crate) execution: ProviderExecution,
 }
 
 /// `polint.semantic_graph` provider entry point (D-16/D-17).
@@ -95,6 +97,10 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
             diagnostics: vec![provider_error_diagnostic(error.to_string())],
             cache_stats,
             output_digest: None,
+            execution: ProviderExecution::Failed {
+                stage: ProviderFailureStage::Validation,
+                reason: ProviderFailureReason::ValidationRejected,
+            },
         };
     }
 
@@ -154,6 +160,7 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
                 diagnostics: adaptation_models.diagnostics,
                 cache_stats,
                 output_digest: Some(output_digest),
+                execution: Default::default(),
             }
         }
         Err(error) => SemanticGraphProviderRunOutput {
@@ -164,6 +171,10 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
             },
             cache_stats,
             output_digest: None,
+            execution: ProviderExecution::Failed {
+                stage: ProviderFailureStage::Validation,
+                reason: ProviderFailureReason::ValidationRejected,
+            },
         },
     }
 }

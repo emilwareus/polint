@@ -12,12 +12,14 @@ use crate::cache::Cache;
 use crate::core::AnalysisDb;
 use crate::diagnostics::{Diagnostic, TextRange};
 use polint_analysis::metrics::{METRIC_CAPABILITIES, METRICS_LAYER_SCHEMA, MetricsLayerPayload};
+use polint_analysis_api::ProviderExecution;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct MetricsDerivation {
     pub(crate) cache_stats: CacheStats,
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) output_digest: Option<Digest>,
+    pub(crate) execution: ProviderExecution,
 }
 
 #[cfg(test)]
@@ -56,6 +58,7 @@ pub(crate) fn derive_requested_metrics_with_cache_stats(
                 cache_stats,
                 diagnostics: Vec::new(),
                 output_digest: read.output_digest,
+                execution: ProviderExecution::Succeeded,
             }
         }
         LayerCacheReadStatus::BypassedDisabled => {
@@ -126,6 +129,7 @@ fn derive_requested_metrics_uncached(
         cache_stats: CacheStats::default(),
         diagnostics: Vec::new(),
         output_digest: Some(CanonicalMetricsOutput::from_db(db)?.digest()),
+        execution: Default::default(),
     })
 }
 fn metrics_layer_dependency_edges(

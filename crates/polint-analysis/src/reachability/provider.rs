@@ -5,7 +5,10 @@ use crate::reachability::discover::discover_reachability_roots;
 use crate::reachability::facts::ReachabilityRootFact;
 use crate::reachability::store::{REACHABILITY_PROVIDER_ID, ReachabilityProviderOutput};
 use polint_analysis_api::ProviderManifest;
-use polint_analysis_api::{CacheStats, Digest, DigestKind, InputComponent, InputSnapshot};
+use polint_analysis_api::{
+    CacheStats, Digest, DigestKind, InputComponent, InputSnapshot, ProviderExecution,
+    ProviderFailureReason, ProviderFailureStage,
+};
 use polint_core::StableKeyInterner;
 use polint_core::{Diagnostic, DiagnosticRange};
 use serde::Serialize;
@@ -15,6 +18,7 @@ pub struct ReachabilityProviderRunOutput {
     pub diagnostics: Vec<Diagnostic>,
     pub cache_stats: CacheStats,
     pub output_digest: Option<Digest>,
+    pub execution: ProviderExecution,
 }
 
 /// `polint.reachability` provider entry point.
@@ -106,6 +110,7 @@ pub fn derive_reachability_with_cache_stats(
             diagnostics,
             cache_stats,
             output_digest: Some(output_digest),
+            execution: Default::default(),
         },
         Err(error) => {
             // A store failure means the db retains its prior state — the facts the
@@ -118,6 +123,10 @@ pub fn derive_reachability_with_cache_stats(
                 diagnostics,
                 cache_stats,
                 output_digest: None,
+                execution: ProviderExecution::Failed {
+                    stage: ProviderFailureStage::Validation,
+                    reason: ProviderFailureReason::ValidationRejected,
+                },
             }
         }
     }

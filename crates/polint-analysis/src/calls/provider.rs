@@ -8,7 +8,10 @@ use crate::calls::extract::extract_call_sites;
 use crate::calls::store::CallOutput;
 use crate::calls::unresolved::derive_unresolved_calls;
 use crate::ids::CallSiteId;
-use polint_analysis_api::{CacheStats, Digest, DigestKind, InputComponent, InputSnapshot};
+use polint_analysis_api::{
+    CacheStats, Digest, DigestKind, InputComponent, InputSnapshot, ProviderExecution,
+    ProviderFailureReason, ProviderFailureStage,
+};
 use polint_analysis_api::{FactFamily, FactRef, ProviderManifest};
 use polint_analysis_api::{FunctionFact, SymbolFact};
 use polint_core::{Diagnostic, DiagnosticRange};
@@ -19,6 +22,7 @@ pub struct CallsProviderOutput {
     pub diagnostics: Vec<Diagnostic>,
     pub cache_stats: CacheStats,
     pub output_digest: Option<Digest>,
+    pub execution: ProviderExecution,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -74,11 +78,16 @@ pub fn derive_calls_with_cache_stats(
             diagnostics: Vec::new(),
             cache_stats,
             output_digest: Some(output_digest),
+            execution: Default::default(),
         },
         Err(error) => CallsProviderOutput {
             diagnostics: vec![provider_error_diagnostic(error.to_string())],
             cache_stats,
-            output_digest: Some(output_digest),
+            output_digest: None,
+            execution: ProviderExecution::Failed {
+                stage: ProviderFailureStage::Validation,
+                reason: ProviderFailureReason::ValidationRejected,
+            },
         },
     }
 }

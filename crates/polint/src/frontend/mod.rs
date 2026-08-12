@@ -104,6 +104,7 @@ mod tests {
                 diagnostics: Vec::<Diagnostic>::new(),
                 cache_stats: CacheStats::default(),
                 output_digest: None,
+                execution: Default::default(),
             }
         }
     }

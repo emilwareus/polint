@@ -78,3 +78,12 @@ _Not started._
 ## Final verdict
 
 _In progress._
+
+
+### Iteration 1 H-2 typed provider execution follow-up
+
+- Added sealed `ProviderExecution` with setup/execution/validation failure reasons to every provider result contract and audited producers, including Go semantic setup/lifecycle/client/store paths.
+- Kernel now gates upstream digests and Phase65 identity fallback on explicit typed success, records typed failures immediately, and blocks hard dependents in the same scheduling loop.
+- Validation store rejection returns no digest and typed validation failure; failed outcomes carry no provider identity.
+- Focused evidence: `cargo fmt --all`; `cargo check --workspace`; `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`; `cargo test -p polint --lib analysis_kernel::outcome -- --nocapture` (8 passed); `cargo test -p polint-analysis --lib data_flow::store::tests::store_rejects -- --nocapture` (6 passed); `cargo test -p polint-analysis --lib -- --nocapture` (791 passed, 1 ignored).
+- H-3 lifecycle metadata work intentionally deferred/reverted after review; no lifecycle hook or placeholder metadata remains in this iteration.

@@ -140,6 +140,7 @@ pub fn analyze_files_with_plan_options_and_cache_stats(
             diagnostics: Vec::new(),
             cache_stats,
             output_digest: None,
+            execution: Default::default(),
         };
     }
 
@@ -166,6 +167,7 @@ pub fn analyze_files_with_plan_options_and_cache_stats(
                 diagnostics: restore_syntax_layer_payload(db, payload),
                 cache_stats,
                 output_digest: read.output_digest,
+                execution: Default::default(),
             }
         }
         LayerCacheReadStatus::BypassedDisabled => {
@@ -183,6 +185,7 @@ pub fn analyze_files_with_plan_options_and_cache_stats(
                 diagnostics: restore_syntax_layer_payload(db, payload),
                 cache_stats,
                 output_digest: None,
+                execution: Default::default(),
             }
         }
         LayerCacheReadStatus::Miss | LayerCacheReadStatus::InvalidEvicted => {
@@ -214,6 +217,7 @@ pub fn analyze_files_with_plan_options_and_cache_stats(
                 diagnostics,
                 cache_stats,
                 output_digest,
+                execution: Default::default(),
             }
         }
     }

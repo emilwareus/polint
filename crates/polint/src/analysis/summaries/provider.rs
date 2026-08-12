@@ -22,12 +22,14 @@ use crate::diagnostics::Diagnostic;
 pub(crate) use polint_analysis::summaries::provider::{
     callable_stable_key_map, direct_summaries_output_digest,
 };
+use polint_analysis_api::{ProviderExecution, ProviderFailureReason, ProviderFailureStage};
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct DirectSummariesProviderOutput {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) cache_stats: CacheStats,
     pub(crate) output_digest: Option<Digest>,
+    pub(crate) execution: ProviderExecution,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -69,6 +71,7 @@ pub(crate) fn derive_direct_summaries_with_cache_stats(
         diagnostics: Vec::new(),
         cache_stats,
         output_digest: Some(output_digest),
+        execution: Default::default(),
     }
 }
 

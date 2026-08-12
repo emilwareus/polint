@@ -12,7 +12,7 @@ use crate::cfg::store::CfgOutput;
 use polint_analysis_api::ProviderManifest;
 use polint_analysis_api::{
     CacheStats, Digest, DigestBuilder, DigestKind, InputComponent, InputComponentStatus,
-    InputSnapshot,
+    InputSnapshot, ProviderExecution, ProviderFailureReason, ProviderFailureStage,
 };
 use polint_core::{Diagnostic, DiagnosticRange};
 
@@ -21,6 +21,7 @@ pub struct CfgProviderOutput {
     pub diagnostics: Vec<Diagnostic>,
     pub cache_stats: CacheStats,
     pub output_digest: Option<Digest>,
+    pub execution: ProviderExecution,
 }
 
 pub fn derive_cfg_with_cache_stats(
@@ -51,11 +52,16 @@ pub fn derive_cfg_with_cache_stats(
             diagnostics: Vec::new(),
             cache_stats,
             output_digest: Some(output_digest),
+            execution: Default::default(),
         },
         Err(error) => CfgProviderOutput {
             diagnostics: vec![provider_error_diagnostic(error.to_string())],
             cache_stats,
-            output_digest: Some(output_digest),
+            output_digest: None,
+            execution: ProviderExecution::Failed {
+                stage: ProviderFailureStage::Validation,
+                reason: ProviderFailureReason::ValidationRejected,
+            },
         },
     }
 }

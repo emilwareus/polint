@@ -9,6 +9,7 @@ use crate::core::AnalysisDb;
 use crate::diagnostics::{Diagnostic, TextRange};
 #[cfg(test)]
 use polint_analysis::mir_body_compose::merge_language_outputs;
+use polint_analysis_api::{ProviderExecution, ProviderFailureReason, ProviderFailureStage};
 use polint_go::lower_go_mir;
 use polint_ts::lower_ts_mir;
 
@@ -17,6 +18,7 @@ pub(crate) struct SemanticMirProviderOutput {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) cache_stats: CacheStats,
     pub(crate) output_digest: Option<Digest>,
+    pub(crate) execution: ProviderExecution,
 }
 
 pub(crate) fn derive_semantic_mir_with_cache_stats(
@@ -50,11 +52,16 @@ pub(crate) fn derive_semantic_mir_with_cache_stats(
             diagnostics: Vec::new(),
             cache_stats,
             output_digest: Some(output_digest),
+            execution: Default::default(),
         },
         Err(error) => SemanticMirProviderOutput {
             diagnostics: vec![provider_error_diagnostic(error.to_string())],
             cache_stats,
-            output_digest: Some(output_digest),
+            output_digest: None,
+            execution: ProviderExecution::Failed {
+                stage: ProviderFailureStage::Validation,
+                reason: ProviderFailureReason::ValidationRejected,
+            },
         },
     }
 }

@@ -15,7 +15,10 @@ use crate::AnalysisHost;
 use crate::entrypoints::facts::TrustBoundaryFact;
 use crate::ids::{DataFlowModelId, DataFlowNodeId};
 use crate::places::{PlaceFact, PlaceRoot};
-use polint_analysis_api::{CacheStats, Digest, DigestKind, InputComponent, InputSnapshot};
+use polint_analysis_api::{
+    CacheStats, Digest, DigestKind, InputComponent, InputSnapshot, ProviderExecution,
+    ProviderFailureReason, ProviderFailureStage,
+};
 use polint_analysis_api::{FactFamily, ProviderManifest, stable_key_from_parts};
 use polint_core::Diagnostic;
 
@@ -26,6 +29,7 @@ pub struct DataFlowProviderOutput {
     pub diagnostics: Vec<Diagnostic>,
     pub cache_stats: CacheStats,
     pub output_digest: Option<Digest>,
+    pub execution: ProviderExecution,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -75,11 +79,16 @@ pub fn derive_data_flow_with_cache_stats(
             diagnostics: Vec::new(),
             cache_stats,
             output_digest: Some(output_digest),
+            execution: Default::default(),
         },
         Err(error) => DataFlowProviderOutput {
             diagnostics: vec![provider_error_diagnostic(error.to_string())],
             cache_stats,
             output_digest: None,
+            execution: ProviderExecution::Failed {
+                stage: ProviderFailureStage::Validation,
+                reason: ProviderFailureReason::ValidationRejected,
+            },
         },
     }
 }

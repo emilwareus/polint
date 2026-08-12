@@ -15,7 +15,10 @@ use crate::refined_calls::store::RefinedCallOutput;
 use crate::semantic_graph::constraints::ConstraintKind;
 use crate::semantic_graph::facts::NodeKind;
 use crate::solver::facts::DerivedEdgeFact;
-use polint_analysis_api::{CacheStats, Digest, DigestKind, InputComponent, InputSnapshot};
+use polint_analysis_api::{
+    CacheStats, Digest, DigestKind, InputComponent, InputSnapshot, ProviderExecution,
+    ProviderFailureReason, ProviderFailureStage,
+};
 use polint_analysis_api::{FactFamily, FactRef, ProviderManifest, stable_key_from_parts};
 use polint_core::{
     Diagnostic, DiagnosticRange, FileId, FunctionId, Language, Span, StableKeyId,
@@ -49,6 +52,7 @@ pub struct RefinedCallsProviderOutput {
     pub diagnostics: Vec<Diagnostic>,
     pub cache_stats: CacheStats,
     pub output_digest: Option<Digest>,
+    pub execution: ProviderExecution,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -132,11 +136,16 @@ pub fn derive_refined_calls_with_cache_stats(
             diagnostics: Vec::new(),
             cache_stats,
             output_digest: Some(output_digest),
+            execution: Default::default(),
         },
         Err(error) => RefinedCallsProviderOutput {
             diagnostics: vec![provider_error_diagnostic(error.to_string())],
             cache_stats,
-            output_digest: Some(output_digest),
+            output_digest: None,
+            execution: ProviderExecution::Failed {
+                stage: ProviderFailureStage::Validation,
+                reason: ProviderFailureReason::ValidationRejected,
+            },
         },
     }
 }
