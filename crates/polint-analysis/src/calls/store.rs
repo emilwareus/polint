@@ -72,7 +72,16 @@ impl CallStore {
         let mut site_owner_by_id = BTreeMap::new();
 
         for site in &output.sites {
-            site_ids.insert(site.id);
+            if !site_ids.insert(site.id) {
+                return Err(AnalysisError::InvalidFact {
+                    provider: "polint.calls",
+                    reason: format!(
+                        "duplicate call site {:?} for `{}`",
+                        site.id,
+                        interner.resolve(site.stable_key)
+                    ),
+                });
+            }
             if let Some(owner_symbol) = site.owner_symbol {
                 site_owner_by_id.insert(site.id, owner_symbol);
             }
@@ -464,6 +473,30 @@ mod tests {
             error
                 .to_string()
                 .contains("dangling call site CallSiteId(99)")
+        );
+    }
+
+    #[test]
+    fn from_output_rejects_duplicate_site_ids() {
+        let db = LocalAnalysisDb::new();
+        let interner = db.stable_key_interner();
+        let error = CallStore::from_output(
+            CallOutput {
+                sites: vec![
+                    site(&interner, 7, 1, "site-first"),
+                    site(&interner, 7, 2, "site-second"),
+                ],
+                targets: Vec::new(),
+                unresolved: Vec::new(),
+            },
+            &interner,
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate call site CallSiteId(7)")
         );
     }
 

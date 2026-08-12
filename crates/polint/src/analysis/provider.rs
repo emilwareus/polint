@@ -320,7 +320,7 @@ fn provider_error_diagnostic(reason: String) -> Diagnostic {
 
 #[cfg(test)]
 mod semantic_mir_provider {
-    use crate::analysis::ids::{MirBodyId, MirOpId, MirPredicateId, PlaceId};
+    use crate::analysis::ids::{CallSiteId, MirBodyId, MirOpId, MirPredicateId, PlaceId};
     use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
     use crate::analysis::mir::op::{MirOperation, MirOperationKind};
     use crate::analysis::places::{PlaceFact, PlaceRoot, PlaceStatus};
@@ -333,6 +333,46 @@ mod semantic_mir_provider {
 
     fn span() -> Span {
         Span::new(FileId::from_raw(1), 1, 2, 1, 1, 1, 2)
+    }
+
+    fn call_sites_from_real_provider(
+        files: &[(&str, &str)],
+    ) -> Vec<(String, Language, CallSiteId, Span)> {
+        let temp = tempfile::tempdir().expect("tempdir");
+        for (relative_path, source) in files {
+            let path = temp.path().join(relative_path);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).expect("create source parent");
+            }
+            std::fs::write(path, source).expect("write source");
+        }
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let cache = Cache::new("", false);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["calls"]);
+        let output = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("kernel should run");
+        let mut sites = output
+            .db
+            .call_sites()
+            .iter()
+            .map(|site| {
+                (
+                    output.db.path_for(site.file),
+                    site.language,
+                    site.id,
+                    site.span.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        sites.sort_by(|left, right| left.0.cmp(&right.0));
+        sites
     }
 
     fn body(
@@ -528,5 +568,86 @@ mod semantic_mir_provider {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn real_go_provider_assigns_distinct_call_site_ids_per_file() {
+        let sites = call_sites_from_real_provider(&[
+            (
+                "a.go",
+                "package p\n\nfunc caller() { helper() }\nfunc helper() {}\n",
+            ),
+            (
+                "b.go",
+                "package p\n\nfunc caller() { helper() }\nfunc helper() {}\n",
+            ),
+        ]);
+        let reversed = call_sites_from_real_provider(&[
+            (
+                "b.go",
+                "package p\n\nfunc caller() { helper() }\nfunc helper() {}\n",
+            ),
+            (
+                "a.go",
+                "package p\n\nfunc caller() { helper() }\nfunc helper() {}\n",
+            ),
+        ]);
+
+        assert_eq!(sites.len(), 2);
+        assert_eq!(reversed.len(), 2);
+        let stable_ids = sites
+            .iter()
+            .map(|site| (site.0.clone(), site.2))
+            .collect::<Vec<_>>();
+        let reversed_stable_ids = reversed
+            .iter()
+            .map(|site| (site.0.clone(), site.2))
+            .collect::<Vec<_>>();
+        assert_eq!(stable_ids, reversed_stable_ids);
+        assert_eq!(sites[0].1, Language::Go);
+        assert_eq!(sites[1].1, Language::Go);
+        assert_eq!(sites[0].3.start_byte, sites[1].3.start_byte);
+        assert_ne!(sites[0].2, sites[1].2);
+    }
+
+    #[test]
+    fn real_ts_provider_assigns_distinct_call_site_ids_per_file() {
+        let sites = call_sites_from_real_provider(&[
+            (
+                "a.ts",
+                "export function caller() { helper(); }\nfunction helper() {}\n",
+            ),
+            (
+                "b.ts",
+                "export function caller() { helper(); }\nfunction helper() {}\n",
+            ),
+        ]);
+
+        assert_eq!(sites.len(), 2);
+        assert!(sites.iter().all(|site| site.1 == Language::TypeScript));
+        assert_eq!(sites[0].3.start_byte, sites[1].3.start_byte);
+        assert_ne!(sites[0].2, sites[1].2);
+    }
+
+    #[test]
+    fn real_polyglot_provider_separates_equal_legacy_call_site_coordinates() {
+        let sites = call_sites_from_real_provider(&[
+            ("caller.go", "package p\n\nfunc caller() { f() }\n"),
+            ("caller.ts", "aaaaaaaaaaaaaaaaaaaaaaaaa();\n"),
+        ]);
+
+        assert_eq!(sites.len(), 2);
+        let go = sites
+            .iter()
+            .find(|site| site.1 == Language::Go)
+            .expect("Go call site");
+        let ts = sites
+            .iter()
+            .find(|site| site.1 == Language::TypeScript)
+            .expect("TS call site");
+        let legacy_go = u64::from(go.3.start_byte);
+        let legacy_ts = (u64::from(ts.3.start_byte) << 32) | u64::from(ts.3.end_byte);
+        assert_eq!(legacy_go, legacy_ts);
+        assert_ne!(go.2, ts.2);
     }
 }

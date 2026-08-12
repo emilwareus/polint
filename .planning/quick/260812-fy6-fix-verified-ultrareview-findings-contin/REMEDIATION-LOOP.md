@@ -60,7 +60,12 @@
 
 ### Review results and follow-up fixes
 
-_Not started._
+- H-1 implementation is limited to the split-crate owners: `crates/polint-analysis/src/mir_body_compose.rs`, `crates/polint-analysis/src/calls/store.rs`, and real provider-path regressions in `crates/polint/src/analysis/provider.rs`.
+- Composition now collects call operations across all language outputs, orders them by stable body/operation/span inputs, assigns dense global `CallSiteId`s, and remaps operation calls, terminator calls, nested `MirValue::CallReturn`s, and call-return place roots/projections. Body-context lookup is primary; a unique language/file/site fallback handles values whose owner is represented only by a file. Ambiguous file-local duplicate coordinates remain unresolved rather than being attached to an arbitrary call.
+- `CallStore::from_output` now rejects duplicate site IDs before constructing owner indexes; the regression uses distinct stable keys (`site-first` / `site-second`) with the same ID.
+- Real `AnalysisKernel` provider-path tests cover two Go files, two TS files, and a polyglot pair whose legacy Go start-byte ID equals the legacy TS `(start << 32) | end` ID. The Go regression also reverses source discovery input and asserts stable path-to-ID mapping.
+- Focused validation: `cargo fmt --all` — PASS; `cargo test -p polint-analysis mir_body_compose --locked` — PASS (1 test); `cargo test -p polint-analysis calls::store --locked` — PASS (7 tests); `cargo test -p polint analysis::provider::semantic_mir_provider::real_ --locked` — PASS (3 tests); `cargo test -p polint-analysis --locked` — PASS (790 passed, 1 ignored).
+- Final focused validation after the deterministic-ordering test edit: `cargo fmt --all -- --check` — PASS; `cargo clippy -p polint-analysis -p polint --all-targets --locked -- -D warnings` — PASS; `cargo test -p polint-analysis mir_body_compose --locked` — PASS (1 test); `cargo test -p polint-analysis calls::store --locked` — PASS (7 tests); `cargo test -p polint analysis::provider::semantic_mir_provider::real_ --locked` — PASS (3 tests); nearest determinism gate `cargo test -p polint determinism --locked` — PASS (29 + 2 tests across matching targets).
 
 ## Iteration 2 — security, stable payloads, and ownership
 

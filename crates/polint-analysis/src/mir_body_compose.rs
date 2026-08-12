@@ -1,10 +1,14 @@
 //! Language-neutral MIR output composition.
 
-use crate::ids::{MirBodyId, MirOpId, MirStatementId, MirTerminatorId, PlaceId, UnsupportedId};
+use std::collections::BTreeMap;
+
+use crate::ids::{
+    CallSiteId, MirBodyId, MirOpId, MirStatementId, MirTerminatorId, PlaceId, UnsupportedId,
+};
 use crate::mir_body::{MirBlockId, MirOutput, MirTerminatorKind};
 use crate::mir_op::{MirOperationKind, MirValue};
-use crate::places::PlaceRoot;
-use polint_core::StableKeyInterner;
+use crate::places::{PlaceProjection, PlaceRoot};
+use polint_core::{FileId, Language, StableKeyInterner};
 
 pub fn merge_language_outputs(
     outputs: impl IntoIterator<Item = MirOutput>,
@@ -20,6 +24,7 @@ pub fn merge_language_outputs(
     for output in outputs {
         append_language_output(&mut merged, output);
     }
+    remap_call_site_ids(&mut merged, interner);
     merged.normalized(interner)
 }
 
@@ -102,6 +107,288 @@ fn append_language_output(merged: &mut MirOutput, mut output: MirOutput) {
     merged.place_types.extend(output.place_types);
     merged.operations.extend(output.operations);
     merged.unsupported.extend(output.unsupported);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct CallSiteContext {
+    language: Language,
+    file: FileId,
+    body: MirBodyId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct CallSiteSource {
+    context: CallSiteContext,
+    local_id: CallSiteId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct CallSiteOrderKey {
+    body_stable_key: String,
+    operation_stable_key: String,
+    language: Language,
+    file: FileId,
+    start_byte: u32,
+    end_byte: u32,
+    ordinal: u32,
+    local_id: CallSiteId,
+}
+
+#[derive(Debug, Clone)]
+struct CallSiteDescriptor {
+    source: CallSiteSource,
+    operation: MirOpId,
+    order: CallSiteOrderKey,
+}
+
+fn remap_call_site_ids(output: &mut MirOutput, interner: &StableKeyInterner) {
+    let body_contexts = output
+        .bodies
+        .iter()
+        .map(|body| {
+            (
+                body.id,
+                CallSiteContext {
+                    language: body.language,
+                    file: body.file,
+                    body: body.id,
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let body_stable_keys = output
+        .bodies
+        .iter()
+        .map(|body| (body.id, body.stable_key))
+        .collect::<BTreeMap<_, _>>();
+
+    let mut descriptors = output
+        .operations
+        .iter()
+        .filter_map(|operation| {
+            let MirOperationKind::Call { site, .. } = &operation.kind else {
+                return None;
+            };
+            let context = body_contexts.get(&operation.body).copied()?;
+            let body_stable_key = body_stable_keys.get(&operation.body).copied()?;
+            Some(CallSiteDescriptor {
+                source: CallSiteSource {
+                    context,
+                    local_id: *site,
+                },
+                operation: operation.id,
+                order: CallSiteOrderKey {
+                    body_stable_key: interner.resolve(body_stable_key).to_string(),
+                    operation_stable_key: interner.resolve(operation.stable_key).to_string(),
+                    language: context.language,
+                    file: context.file,
+                    start_byte: operation.span.start_byte,
+                    end_byte: operation.span.end_byte,
+                    ordinal: operation.ordinal,
+                    local_id: *site,
+                },
+            })
+        })
+        .collect::<Vec<_>>();
+    descriptors.sort_by(|left, right| left.order.cmp(&right.order));
+
+    let mut by_operation = BTreeMap::new();
+    let mut by_context = BTreeMap::<CallSiteSource, Option<CallSiteId>>::new();
+    let mut by_file_site = BTreeMap::<(Language, FileId, CallSiteId), Option<CallSiteId>>::new();
+    for (index, descriptor) in descriptors.into_iter().enumerate() {
+        let remapped = CallSiteId(index as u64);
+        by_operation.insert(
+            (descriptor.source.context.body, descriptor.operation),
+            remapped,
+        );
+        match by_context.entry(descriptor.source) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(Some(remapped));
+            }
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                *entry.get_mut() = None;
+            }
+        }
+        match by_file_site.entry((
+            descriptor.source.context.language,
+            descriptor.source.context.file,
+            descriptor.source.local_id,
+        )) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(Some(remapped));
+            }
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                // A file-local duplicate cannot be associated with a place by
+                // coordinate alone. Keep that place reference unresolved instead
+                // of attaching it to an arbitrary call.
+                *entry.get_mut() = None;
+            }
+        }
+    }
+
+    for operation in &mut output.operations {
+        let Some(context) = body_contexts.get(&operation.body).copied() else {
+            continue;
+        };
+        remap_operation_call_sites(
+            operation,
+            context,
+            &by_operation,
+            &by_context,
+            &by_file_site,
+        );
+    }
+
+    for terminator in &mut output.terminators {
+        let Some(context) = body_contexts.get(&terminator.body).copied() else {
+            continue;
+        };
+        remap_terminator_call_sites(&mut terminator.kind, context, &by_context, &by_file_site);
+    }
+
+    for place in &mut output.places {
+        let Some(file) = place.file else {
+            continue;
+        };
+        remap_place_call_sites(place, place.language, file, &by_file_site);
+    }
+}
+
+fn remap_operation_call_sites(
+    operation: &mut crate::mir_op::MirOperation,
+    context: CallSiteContext,
+    by_operation: &BTreeMap<(MirBodyId, MirOpId), CallSiteId>,
+    by_context: &BTreeMap<CallSiteSource, Option<CallSiteId>>,
+    by_file_site: &BTreeMap<(Language, FileId, CallSiteId), Option<CallSiteId>>,
+) {
+    match &mut operation.kind {
+        MirOperationKind::StorageLive { .. } | MirOperationKind::Read { .. } => {}
+        MirOperationKind::Bind { value, .. }
+        | MirOperationKind::Assign { value, .. }
+        | MirOperationKind::Write { value, .. }
+        | MirOperationKind::Return { value: Some(value) } => {
+            remap_value_call_sites(value, context, by_context, by_file_site);
+        }
+        MirOperationKind::Return { value: None } => {}
+        MirOperationKind::Branch { .. } => {}
+        MirOperationKind::Call { site, callee, .. } => {
+            if let Some(remapped) = by_operation.get(&(operation.body, operation.id)) {
+                *site = *remapped;
+            }
+            remap_value_call_sites(callee, context, by_context, by_file_site);
+        }
+        MirOperationKind::Unsupported { .. } => {}
+    }
+}
+
+fn remap_terminator_call_sites(
+    kind: &mut MirTerminatorKind,
+    context: CallSiteContext,
+    by_context: &BTreeMap<CallSiteSource, Option<CallSiteId>>,
+    by_file_site: &BTreeMap<(Language, FileId, CallSiteId), Option<CallSiteId>>,
+) {
+    match kind {
+        MirTerminatorKind::Goto { .. }
+        | MirTerminatorKind::Branch { .. }
+        | MirTerminatorKind::Unreachable
+        | MirTerminatorKind::Unsupported { .. } => {}
+        MirTerminatorKind::Switch {
+            discriminant,
+            cases,
+            ..
+        } => {
+            remap_value_call_sites(discriminant, context, by_context, by_file_site);
+            for (value, _) in cases {
+                remap_value_call_sites(value, context, by_context, by_file_site);
+            }
+        }
+        MirTerminatorKind::Return { value } | MirTerminatorKind::Throw { value, .. } => {
+            if let Some(value) = value {
+                remap_value_call_sites(value, context, by_context, by_file_site);
+            }
+        }
+        MirTerminatorKind::Call { site, callee, .. } => {
+            *site = remap_call_site(*site, context, by_context, by_file_site);
+            remap_value_call_sites(callee, context, by_context, by_file_site);
+        }
+        MirTerminatorKind::Suspend { value, .. } => {
+            if let Some(value) = value {
+                remap_value_call_sites(value, context, by_context, by_file_site);
+            }
+        }
+    }
+}
+
+fn remap_value_call_sites(
+    value: &mut MirValue,
+    context: CallSiteContext,
+    by_context: &BTreeMap<CallSiteSource, Option<CallSiteId>>,
+    by_file_site: &BTreeMap<(Language, FileId, CallSiteId), Option<CallSiteId>>,
+) {
+    match value {
+        MirValue::CallReturn(site) => {
+            *site = remap_call_site(*site, context, by_context, by_file_site)
+        }
+        MirValue::BinOp { lhs, rhs, .. } => {
+            remap_value_call_sites(lhs, context, by_context, by_file_site);
+            remap_value_call_sites(rhs, context, by_context, by_file_site);
+        }
+        MirValue::Aggregate { fields, .. } => {
+            for field in fields {
+                remap_value_call_sites(&mut field.value, context, by_context, by_file_site);
+            }
+        }
+        MirValue::Literal { .. }
+        | MirValue::Place(_)
+        | MirValue::Temporary(_)
+        | MirValue::Closure { .. }
+        | MirValue::Unknown { .. } => {}
+    }
+}
+
+fn remap_call_site(
+    local_id: CallSiteId,
+    context: CallSiteContext,
+    by_context: &BTreeMap<CallSiteSource, Option<CallSiteId>>,
+    by_file_site: &BTreeMap<(Language, FileId, CallSiteId), Option<CallSiteId>>,
+) -> CallSiteId {
+    by_context
+        .get(&CallSiteSource { context, local_id })
+        .copied()
+        .flatten()
+        .or_else(|| {
+            by_file_site
+                .get(&(context.language, context.file, local_id))
+                .copied()
+                .flatten()
+        })
+        .unwrap_or(local_id)
+}
+
+fn remap_place_call_sites(
+    place: &mut crate::places::PlaceFact,
+    language: Language,
+    file: FileId,
+    by_file_site: &BTreeMap<(Language, FileId, CallSiteId), Option<CallSiteId>>,
+) {
+    let remap = |site: &mut CallSiteId| {
+        if let Some(Some(remapped)) = by_file_site.get(&(language, file, *site)) {
+            *site = *remapped;
+        }
+    };
+    match &mut place.root {
+        PlaceRoot::CallReturn { call } => remap(call),
+        PlaceRoot::Local { .. }
+        | PlaceRoot::Parameter { .. }
+        | PlaceRoot::Global { .. }
+        | PlaceRoot::Temporary { .. }
+        | PlaceRoot::Unknown { .. } => {}
+    }
+    for projection in &mut place.projections {
+        if let PlaceProjection::CallReturn(call) = projection {
+            remap(call);
+        }
+    }
 }
 
 fn offset_terminator_kind_refs(
@@ -278,4 +565,173 @@ fn offset_operation_id(id: MirOpId, offset: u64) -> MirOpId {
 
 fn offset_unsupported_id(id: UnsupportedId, offset: u64) -> UnsupportedId {
     UnsupportedId(id.0 + offset)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mir_body::{MirBody, MirStatus, MirTerminator};
+    use crate::mir_op::{MirAggregateField, MirAggregateKind, MirOperation};
+    use crate::places::{PlaceFact, PlaceStatus};
+    use polint_core::{FunctionId, Span};
+
+    fn body(
+        interner: &StableKeyInterner,
+        language: Language,
+        file: FileId,
+        function: u64,
+        stable_key: &str,
+    ) -> MirBody {
+        MirBody {
+            id: MirBodyId(0),
+            language,
+            file,
+            function: FunctionId::from_raw(function),
+            package: None,
+            module: None,
+            owner_stable_key: interner.intern(format!("{stable_key}:owner")),
+            span: Span::new(file, 0, 20, 1, 1, 1, 21),
+            stable_key: interner.intern(stable_key.to_string()),
+            status: MirStatus::Resolved,
+        }
+    }
+
+    fn output(
+        interner: &StableKeyInterner,
+        language: Language,
+        file: FileId,
+        function: u64,
+        stable_key: &str,
+    ) -> MirOutput {
+        let operation = MirOperation {
+            id: MirOpId(0),
+            body: MirBodyId(0),
+            ordinal: 4,
+            span: Span::new(file, 4, 7, 1, 5, 1, 8),
+            kind: MirOperationKind::Call {
+                site: CallSiteId(0),
+                callee: MirValue::Aggregate {
+                    kind: MirAggregateKind::Array,
+                    fields: vec![MirAggregateField {
+                        name: None,
+                        value: MirValue::CallReturn(CallSiteId(0)),
+                    }],
+                },
+                arguments: Vec::new(),
+                return_place: PlaceId(0),
+            },
+            stable_key: interner.intern(format!("{stable_key}:operation")),
+            status: MirStatus::Resolved,
+        };
+        MirOutput {
+            bodies: vec![body(interner, language, file, function, stable_key)],
+            places: vec![PlaceFact {
+                id: PlaceId(0),
+                language,
+                file: Some(file),
+                function: Some(FunctionId::from_raw(function)),
+                root: PlaceRoot::CallReturn {
+                    call: CallSiteId(0),
+                },
+                projections: vec![PlaceProjection::CallReturn(CallSiteId(0))],
+                stable_key: interner.intern(format!("{stable_key}:place")),
+                status: PlaceStatus::Resolved,
+            }],
+            operations: vec![operation],
+            terminators: vec![MirTerminator {
+                id: MirTerminatorId(0),
+                body: MirBodyId(0),
+                ordinal: 4,
+                kind: MirTerminatorKind::Call {
+                    site: CallSiteId(0),
+                    callee: MirValue::CallReturn(CallSiteId(0)),
+                    arguments: Vec::new(),
+                    return_place: PlaceId(0),
+                    normal: MirBlockId(0),
+                    unwind: None,
+                },
+                stable_key: interner.intern(format!("{stable_key}:terminator")),
+                status: MirStatus::Resolved,
+            }],
+            ..MirOutput::default()
+        }
+    }
+
+    fn operation_sites(
+        output: &MirOutput,
+        interner: &StableKeyInterner,
+    ) -> Vec<(String, CallSiteId, MirValue)> {
+        let mut sites = output
+            .operations
+            .iter()
+            .filter_map(|operation| {
+                let MirOperationKind::Call { site, callee, .. } = &operation.kind else {
+                    return None;
+                };
+                let body = output
+                    .bodies
+                    .iter()
+                    .find(|body| body.id == operation.body)?;
+                Some((
+                    interner.resolve(body.stable_key).to_string(),
+                    *site,
+                    callee.clone(),
+                ))
+            })
+            .collect::<Vec<_>>();
+        sites.sort_by(|left, right| left.0.cmp(&right.0));
+        sites
+    }
+
+    #[test]
+    fn merge_language_outputs_assigns_global_ids_and_remaps_call_returns() {
+        let interner = StableKeyInterner::default();
+        let go = output(&interner, Language::Go, FileId::from_raw(1), 1, "body:go");
+        let ts = output(
+            &interner,
+            Language::TypeScript,
+            FileId::from_raw(2),
+            2,
+            "body:ts",
+        );
+        let merged = merge_language_outputs([go.clone(), ts.clone()], &interner);
+        let reversed = merge_language_outputs([ts, go], &interner);
+
+        let merged_sites = operation_sites(&merged, &interner);
+        assert_eq!(
+            merged_sites
+                .iter()
+                .map(|(body, site, _)| (body.as_str(), *site))
+                .collect::<Vec<_>>(),
+            vec![("body:go", CallSiteId(0)), ("body:ts", CallSiteId(1))]
+        );
+        assert_eq!(merged_sites, operation_sites(&reversed, &interner));
+
+        for operation in &merged.operations {
+            let MirOperationKind::Call { site, callee, .. } = &operation.kind else {
+                continue;
+            };
+            let expected = *site;
+            assert!(matches!(
+                callee,
+                MirValue::Aggregate { fields, .. }
+                    if matches!(fields[0].value, MirValue::CallReturn(call) if call == expected)
+            ));
+        }
+        for terminator in &merged.terminators {
+            let MirTerminatorKind::Call { site, callee, .. } = &terminator.kind else {
+                continue;
+            };
+            assert!(matches!(callee, MirValue::CallReturn(call) if call == site));
+        }
+        for place in &merged.places {
+            let PlaceRoot::CallReturn { call } = place.root else {
+                panic!("expected call-return place root")
+            };
+            assert!(matches!(
+                place.projections.as_slice(),
+                [PlaceProjection::CallReturn(projection)] if *projection == call
+            ));
+        }
+    }
 }
