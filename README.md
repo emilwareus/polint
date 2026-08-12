@@ -197,6 +197,23 @@ directory. Repo-local rule hosts run with Cargo's `release` profile by default;
 set `POLINT_RULES_PROFILE=dev` for faster unoptimized local rule development, or
 to another Cargo profile name to use `cargo run --profile <name>`.
 
+### Contributor build cache
+
+The repository disables Cargo incremental compilation because its artifacts are
+stored separately in every worktree and can grow much larger than the final
+build outputs. For shared compile reuse across worktrees, install
+[`sccache`](https://github.com/mozilla/sccache) and configure it once in
+`~/.cargo/config.toml`:
+
+```toml
+[build]
+rustc-wrapper = "sccache"
+```
+
+The repository caps sccache's shared local cache at 10 GiB. Each worktree keeps
+its own `target` directory, avoiding Cargo lock contention and collisions
+between concurrently developed branches.
+
 ## Comment Ignores
 
 Use comment ignores for intentional, local suppressions:

@@ -240,7 +240,28 @@ pub(crate) fn ensure_repo_dir(
             Ok(metadata) if metadata.is_dir() => {}
             Ok(_) => return Err(RepoFileReadError::NotDirectory),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                fs::create_dir(&current).map_err(|_| RepoFileReadError::CreateDir)?;
+                // The probe above and this create are not atomic, so a
+                // concurrent writer building the same managed directory wins
+                // the race and this call sees `AlreadyExists`. That is the
+                // other writer succeeding, not a failure: treating it as one
+                // fails the whole write and emits a spurious `internal/cache`
+                // warning on cold parallel runs. Re-stat the entry the winner
+                // left so the symlink-escape and is-a-directory guarantees
+                // still hold for what we are about to write into.
+                match fs::create_dir(&current) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                        let metadata = fs::symlink_metadata(&current)
+                            .map_err(|_| RepoFileReadError::Metadata)?;
+                        if metadata.file_type().is_symlink() {
+                            return Err(RepoFileReadError::EscapesRepo);
+                        }
+                        if !metadata.is_dir() {
+                            return Err(RepoFileReadError::NotDirectory);
+                        }
+                    }
+                    Err(_) => return Err(RepoFileReadError::CreateDir),
+                }
             }
             Err(_) => return Err(RepoFileReadError::Metadata),
         }
@@ -516,6 +537,64 @@ mod tests {
 
         assert!(matches!(error, RepoFileReadError::EscapesRepo));
         assert!(!outside.path().join("output/latest.json").exists());
+    }
+
+    /// Every per-file cache write goes through `ensure_repo_dir`, and the
+    /// analysis pipeline writes them from a rayon pool. Losing the race to
+    /// create a shared managed directory must not fail the write: before this
+    /// was tolerated, a cold parallel run emitted one spurious
+    /// `internal/cache` "cache write failed: create directory failed" warning
+    /// per thread that lost.
+    #[test]
+    fn ensure_repo_dir_tolerates_concurrent_creation_of_the_same_directory() {
+        let repo = tempfile::tempdir().expect("repo");
+        // Several rounds over distinct fresh paths: the race only exists while
+        // a component is still missing, so one round is one chance to hit it.
+        for round in 0..8 {
+            let relative = format!(".polint/cache/round_{round}/analysis");
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(16));
+            let failures = std::thread::scope(|scope| {
+                // Every thread is spawned before any is joined, so they are all
+                // parked on the barrier and race the same missing component.
+                let mut handles = Vec::new();
+                for _ in 0..16 {
+                    let barrier = std::sync::Arc::clone(&barrier);
+                    let relative = relative.clone();
+                    let root = repo.path();
+                    handles.push(scope.spawn(move || {
+                        barrier.wait();
+                        ensure_repo_dir(root, &relative)
+                    }));
+                }
+                handles
+                    .into_iter()
+                    .filter_map(|handle| handle.join().expect("thread").err())
+                    .collect::<Vec<_>>()
+            });
+            assert!(
+                failures.is_empty(),
+                "round {round}: concurrent writers must all succeed, got {failures:?}"
+            );
+            assert!(repo.path().join(&relative).is_dir());
+        }
+    }
+
+    /// The race tolerance must not weaken the escape guarantee: a component
+    /// that already exists as a symlink is still rejected rather than written
+    /// through.
+    #[cfg(unix)]
+    #[test]
+    fn ensure_repo_dir_still_rejects_an_existing_symlink_component() {
+        let repo = tempfile::tempdir().expect("repo");
+        let outside = tempfile::tempdir().expect("outside");
+        std::os::unix::fs::symlink(outside.path(), repo.path().join(".polint"))
+            .expect("symlink .polint");
+
+        let error = ensure_repo_dir(repo.path(), ".polint/cache/analysis")
+            .expect_err("symlink component should be rejected");
+
+        assert!(matches!(error, RepoFileReadError::EscapesRepo));
+        assert!(!outside.path().join("cache/analysis").exists());
     }
 
     #[test]

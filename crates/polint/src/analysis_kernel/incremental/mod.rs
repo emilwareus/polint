@@ -6,6 +6,7 @@ mod invalidation;
 mod keys;
 mod layer_cache;
 mod quarantine;
+mod run_manifest;
 mod run_report;
 mod stats;
 
@@ -41,7 +42,7 @@ pub(crate) use change_set::{ChangeKind, ChangeSet, ChangeSetRow};
 pub(crate) use dependency_index::{
     CacheNode, DEPENDENCY_INDEX_SCHEMA, DependencyEdge, DependencyIndex, DependencyKind, ShapeKind,
 };
-pub(crate) use digest::{Digest, DigestKind};
+pub(crate) use digest::{Digest, DigestBuilder, DigestKind};
 #[cfg_attr(
     test,
     allow(
@@ -136,7 +137,11 @@ pub(crate) use polint_analysis::demand::{
     expect(unused_imports, reason = "kept for private internal consumers")
 )]
 pub(crate) use quarantine::{QuarantineEntry, QuarantinePolicy, QuarantineStore};
+pub(crate) use run_manifest::{
+    EncodedRunManifest, EncodedRunManifestSource, RunManifest, RunManifestError, RunManifestInputs,
+};
 pub(crate) use run_report::{
     KernelRunReport, provider_output_digest_from_manifest, provider_output_from_manifest,
+    provider_output_identity_from_manifest,
 };
-pub(crate) use stats::{CacheStats, ProviderOutputMeta};
+pub(crate) use stats::{CacheStats, ProviderOutputMeta, ProviderTelemetry};

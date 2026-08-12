@@ -309,6 +309,12 @@ impl LayerCacheStore {
             evict_file(&manifest_path);
             return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::InvalidEvicted);
         };
+        let mut canonical_dependencies = manifest.dependencies.clone();
+        sort_and_dedup_manifest_dependencies(&mut canonical_dependencies);
+        if canonical_dependencies != manifest.dependencies {
+            evict_file(&manifest_path);
+            return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::InvalidEvicted);
+        }
         manifest.canonicalize_dependency_sources();
         if !self.manifest_metadata_is_supported(&manifest, key) {
             evict_file(&manifest_path);
@@ -675,7 +681,7 @@ fn is_supported_validation_label(value: &str) -> bool {
 fn dependencies_match_layer_key(manifest: &LayerCacheManifest) -> bool {
     let requires_dependencies = matches!(
         manifest.key.layer_kind,
-        LayerKind::ModuleGraph | LayerKind::SymbolGraph | LayerKind::Metrics
+        LayerKind::GoSyntax | LayerKind::ModuleGraph | LayerKind::SymbolGraph | LayerKind::Metrics
     );
     if requires_dependencies && manifest.dependencies.is_empty() {
         return false;
@@ -1087,6 +1093,26 @@ mod tests {
                 .exists()
         );
         assert!(store.manifest_path_for_test(&layer_key).exists());
+    }
+
+    #[test]
+    fn go_syntax_raw_duplicate_dependencies_are_rejected_before_repair() {
+        let scratch = scratch_dir();
+        let store = LayerCacheStore::new(scratch.path().join("layers"), true);
+        let payload = Payload {
+            items: vec!["go".into()],
+        };
+        let key = derived_key();
+        let manifest = manifest_for_payload(key.clone(), &payload);
+        store.write_json(&manifest, &payload).unwrap();
+        let path = store.manifest_path_for_test(&key);
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let rows = json["dependencies"].as_array_mut().unwrap();
+        rows.push(rows[0].clone());
+        std::fs::write(path, serde_json::to_vec(&json).unwrap()).unwrap();
+        let read: LayerCacheReadOutcome<Payload> = store.read_json(&key);
+        assert_eq!(read.status, LayerCacheReadStatus::InvalidEvicted);
     }
 
     #[test]

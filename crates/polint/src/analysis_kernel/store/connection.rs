@@ -3,12 +3,15 @@
 use std::path::Path;
 use std::time::Duration;
 
-use rusqlite::{Connection, ErrorCode, OpenFlags, TransactionBehavior};
+#[cfg(test)]
+use rusqlite::OptionalExtension;
+use rusqlite::{Connection, ErrorCode, OpenFlags, Transaction, TransactionBehavior};
 
 #[cfg(test)]
-use rusqlite::Transaction;
-
-use super::migrations::{MigrationError, apply_migrations_in_transaction, preflight_schema};
+use super::generation::{GenerationHandle, GenerationStatus};
+use super::migrations::{
+    MigrationError, apply_migrations_in_transaction, preflight_schema, validate_current_schema,
+};
 
 const BUSY_TIMEOUT: Duration = Duration::from_millis(250);
 const SYNCHRONOUS_NORMAL: i64 = 1;
@@ -17,10 +20,6 @@ pub(super) struct WriterConnection {
     connection: Connection,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "kept for private internal consumers")
-)]
 pub(super) struct ReadOnlyConnection {
     connection: Connection,
 }
@@ -86,20 +85,72 @@ pub(super) fn validate_journal_mode(journal_mode: &str) -> Result<(), Connection
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "kept for private internal consumers")
-)]
 pub(super) fn open_read_only(path: &Path) -> Result<ReadOnlyConnection, ConnectionError> {
     let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(classify_sqlite_error)?;
     connection
         .busy_timeout(BUSY_TIMEOUT)
         .map_err(classify_sqlite_error)?;
+    preflight_schema(&connection).map_err(classify_migration_error)?;
     connection
         .pragma_update(None, "foreign_keys", true)
         .map_err(classify_sqlite_error)?;
     Ok(ReadOnlyConnection { connection })
+}
+
+pub(super) fn open_current_read_only(path: &Path) -> Result<ReadOnlyConnection, ConnectionError> {
+    let writer = open_writer(path)?;
+    drop(writer);
+    open_read_only(path)
+}
+
+pub(super) fn with_immediate_transaction<T, E>(
+    writer: &mut WriterConnection,
+    operation: impl FnOnce(&Transaction<'_>) -> Result<T, E>,
+) -> Result<T, E>
+where
+    E: From<ConnectionError>,
+{
+    let transaction = writer
+        .connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(classify_sqlite_error)
+        .map_err(E::from)?;
+    validate_current_schema(&transaction)
+        .map_err(classify_migration_error)
+        .map_err(E::from)?;
+    let result = operation(&transaction)?;
+    validate_current_schema(&transaction)
+        .map_err(classify_migration_error)
+        .map_err(E::from)?;
+    transaction
+        .commit()
+        .map_err(classify_sqlite_error)
+        .map_err(E::from)?;
+    Ok(result)
+}
+
+pub(super) fn with_read_transaction<T, E>(
+    reader: &ReadOnlyConnection,
+    operation: impl FnOnce(&Transaction<'_>) -> Result<T, E>,
+) -> Result<T, E>
+where
+    E: From<ConnectionError>,
+{
+    let transaction = reader
+        .connection
+        .unchecked_transaction()
+        .map_err(classify_sqlite_error)
+        .map_err(E::from)?;
+    validate_current_schema(&transaction)
+        .map_err(classify_migration_error)
+        .map_err(E::from)?;
+    let result = operation(&transaction)?;
+    transaction
+        .commit()
+        .map_err(classify_sqlite_error)
+        .map_err(E::from)?;
+    Ok(result)
 }
 
 pub(super) fn try_writer_lease(
@@ -141,7 +192,7 @@ fn classify_migration_error(error: MigrationError) -> ConnectionError {
     }
 }
 
-fn classify_sqlite_error(error: rusqlite::Error) -> ConnectionError {
+pub(super) fn classify_sqlite_error(error: rusqlite::Error) -> ConnectionError {
     match error.sqlite_error_code() {
         Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked) => ConnectionError::Busy,
         Some(ErrorCode::DatabaseCorrupt | ErrorCode::NotADatabase) => ConnectionError::Corrupt,
@@ -317,13 +368,26 @@ impl Drop for HeldWriterConnection {
 }
 
 #[cfg(test)]
+pub(super) fn install_version_one_fixture_for_test(path: &Path) -> Result<(), ConnectionError> {
+    let connection = Connection::open(path).map_err(classify_sqlite_error)?;
+    super::migrations::install_version_one_fixture_for_test(&connection)
+        .map_err(classify_sqlite_error)
+}
+
+#[cfg(test)]
 pub(super) fn install_future_fixture_for_test(path: &Path) -> Result<(), ConnectionError> {
     let connection = Connection::open(path).map_err(classify_sqlite_error)?;
     connection
         .execute_batch(
             "CREATE TABLE sentinel (value TEXT NOT NULL);\
-             INSERT INTO sentinel (value) VALUES ('future-data');\
-             PRAGMA user_version = 2;",
+             INSERT INTO sentinel (value) VALUES ('future-data');",
+        )
+        .map_err(classify_sqlite_error)?;
+    connection
+        .pragma_update(
+            None,
+            "user_version",
+            super::migrations::CURRENT_SCHEMA_VERSION + 1,
         )
         .map_err(classify_sqlite_error)
 }
@@ -343,9 +407,13 @@ pub(super) fn install_invalid_fixture_for_test(path: &Path) -> Result<(), Connec
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct StoreFixtureSnapshot {
-    version: i32,
+    pub(super) version: i32,
     bootstrap_markers: Option<i64>,
-    sentinel: Option<String>,
+    pub(super) sentinel: Option<String>,
+    pub(super) generations: Vec<(GenerationHandle, GenerationStatus)>,
+    pub(super) selected_generation: Option<GenerationHandle>,
+    pub(super) manifested_generations: Vec<GenerationHandle>,
+    pub(super) manifest_sources: Vec<(GenerationHandle, String)>,
 }
 
 #[cfg(test)]
@@ -394,11 +462,110 @@ pub(super) fn fixture_snapshot_for_test(
     } else {
         None
     };
+    let generations = if fixture_table_exists(&connection, "generations")? {
+        let mut statement = connection
+            .prepare("SELECT generation_id, status FROM generations ORDER BY generation_id")
+            .map_err(classify_sqlite_error)?;
+        let stored = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(classify_sqlite_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(classify_sqlite_error)?;
+        stored
+            .into_iter()
+            .map(|(scalar, status)| {
+                let handle = GenerationHandle::from_scalar(scalar)
+                    .map_err(|_| ConnectionError::InvalidSchema)?;
+                let status =
+                    GenerationStatus::from_stored(&status).ok_or(ConnectionError::InvalidSchema)?;
+                Ok((handle, status))
+            })
+            .collect::<Result<Vec<_>, ConnectionError>>()?
+    } else {
+        Vec::new()
+    };
+    let selected_generation = if fixture_table_exists(&connection, "active_generation")? {
+        let scalar = connection
+            .query_row(
+                "SELECT generation_id FROM active_generation \
+                 WHERE singleton = 1 AND required_status = 'complete'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(classify_sqlite_error)?;
+        scalar
+            .map(GenerationHandle::from_scalar)
+            .transpose()
+            .map_err(|_| ConnectionError::InvalidSchema)?
+    } else {
+        None
+    };
+    let manifested_generations = if fixture_table_exists(&connection, "run_manifests")? {
+        let mut statement = connection
+            .prepare("SELECT generation_id FROM run_manifests ORDER BY generation_id")
+            .map_err(classify_sqlite_error)?;
+        statement
+            .query_map([], |row| row.get::<_, i64>(0))
+            .map_err(classify_sqlite_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(classify_sqlite_error)?
+            .into_iter()
+            .map(GenerationHandle::from_scalar)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| ConnectionError::InvalidSchema)?
+    } else {
+        Vec::new()
+    };
+    let manifest_sources = if fixture_table_exists(&connection, "run_manifest_sources")? {
+        let mut statement = connection
+            .prepare(
+                "SELECT generation_id, relative_path FROM run_manifest_sources \
+                 ORDER BY generation_id, relative_path COLLATE BINARY",
+            )
+            .map_err(classify_sqlite_error)?;
+        statement
+            .query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(classify_sqlite_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(classify_sqlite_error)?
+            .into_iter()
+            .map(|(scalar, path)| {
+                GenerationHandle::from_scalar(scalar)
+                    .map(|handle| (handle, path))
+                    .map_err(|_| ConnectionError::InvalidSchema)
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        Vec::new()
+    };
     Ok(StoreFixtureSnapshot {
         version,
         bootstrap_markers,
         sentinel,
+        generations,
+        selected_generation,
+        manifested_generations,
+        manifest_sources,
     })
+}
+
+#[cfg(test)]
+fn fixture_table_exists(
+    connection: &Connection,
+    table_name: &str,
+) -> Result<bool, ConnectionError> {
+    connection
+        .query_row(
+            "SELECT count(*) = 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            [table_name],
+            |row| row.get(0),
+        )
+        .map_err(classify_sqlite_error)
 }
 
 #[cfg(test)]

@@ -444,6 +444,14 @@ impl FactMetaStore {
                 .map(move |(run_id, metadata)| (FactRef::new(*family, run_id), metadata))
         })
     }
+
+    /// Iterates metadata rows for one fact family without scanning unrelated families.
+    pub fn family_rows(&self, family: FactFamily) -> impl Iterator<Item = &FactMeta> {
+        self.rows
+            .get(&family)
+            .into_iter()
+            .flat_map(|rows| rows.rows().map(|(_, metadata)| metadata))
+    }
 }
 
 pub fn stable_key_from_parts(

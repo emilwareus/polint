@@ -9,8 +9,9 @@ use polint_analysis_api::{
 };
 
 use crate::analysis_kernel::incremental::{
-    LayerCacheManifest, LayerCacheReadStatus as FacadeLayerReadStatus,
-    LayerCacheWriteStatus as FacadeLayerWriteStatus, LayerKey, LayerKind, PrecisionTier,
+    CacheNode, DependencyEdge, DependencyKind, LayerCacheManifest,
+    LayerCacheReadStatus as FacadeLayerReadStatus, LayerCacheWriteStatus as FacadeLayerWriteStatus,
+    LayerKey, LayerKind, PrecisionTier, ShapeKind,
 };
 use crate::cache::{Cache, CacheKey, CacheReadStatus};
 
@@ -106,11 +107,21 @@ impl AnalysisCache for CacheAnalysisCache {
             LayerCachePrecision::SetupAware => PrecisionTier::SetupAware,
             LayerCachePrecision::Exact => PrecisionTier::Exact,
         };
+        let dependencies = layer_key
+            .input_digests
+            .iter()
+            .map(|digest| DependencyEdge {
+                from: CacheNode::Input("syntax-layer".to_string()),
+                to: CacheNode::Input(format!("syntax-input:{digest}")),
+                kind: DependencyKind::SourceText,
+                required_shape: ShapeKind::Content,
+            })
+            .collect();
         let manifest = LayerCacheManifest::new(
             layer_key,
             output_digest.clone(),
             payload_digest.clone(),
-            Vec::new(),
+            dependencies,
             precision,
             validation,
             Vec::new(),

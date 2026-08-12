@@ -1,6 +1,9 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
-use crate::analysis_kernel::incremental::{CacheStats, KernelRunReport, ProviderOutputMeta};
+use crate::analysis_kernel::incremental::{CacheStats, KernelRunReport};
+use crate::analysis_kernel::{ProviderOutcome, hard_dependencies};
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
@@ -15,10 +18,23 @@ pub(crate) struct EvalPerformanceReport {
 
 impl EvalPerformanceReport {
     pub(crate) fn from_kernel_report(report: &KernelRunReport) -> Self {
-        let mut providers = report
-            .provider_outputs
+        let telemetry = report
+            .provider_telemetry
             .iter()
-            .map(ProviderStatsRow::from_provider_output)
+            .map(|row| (row.provider_id.as_str(), &row.cache_stats))
+            .collect::<BTreeMap<_, _>>();
+        let mut providers = report
+            .provider_outcomes
+            .iter()
+            .map(|outcome| {
+                ProviderStatsRow::from_provider_outcome(
+                    outcome,
+                    telemetry
+                        .get(outcome.provider_id.as_str())
+                        .copied()
+                        .expect("run report requires matching provider telemetry"),
+                )
+            })
             .collect::<Vec<_>>();
         providers.sort();
 
@@ -84,19 +100,28 @@ pub(crate) struct ProviderStatsRow {
 }
 
 impl ProviderStatsRow {
-    fn from_provider_output(output: &ProviderOutputMeta) -> Self {
+    fn from_provider_outcome(outcome: &ProviderOutcome, cache_stats: &CacheStats) -> Self {
+        let identity = outcome.output_identity.as_ref();
         Self {
-            provider_id: output.provider_id.clone(),
-            provider_version: output.provider_version.clone(),
-            schema_version: output.schema_version.clone(),
-            output_digest: output.output_digest.value.clone(),
-            precision: format!("{:?}", output.precision).to_ascii_lowercase(),
-            validation: output.validation.clone(),
-            dependency_input_count: output.dependency_inputs.len(),
+            provider_id: outcome.provider_id.clone(),
+            provider_version: identity
+                .map(|identity| identity.provider_version.clone())
+                .unwrap_or_default(),
+            schema_version: identity
+                .map(|identity| identity.schema_version.clone())
+                .unwrap_or_default(),
+            output_digest: identity
+                .map(|identity| identity.output_digest.value.clone())
+                .unwrap_or_default(),
+            precision: identity
+                .map(|identity| format!("{:?}", identity.precision).to_ascii_lowercase())
+                .unwrap_or_default(),
+            validation: outcome.validation_display(),
+            dependency_input_count: hard_dependencies(&outcome.provider_id).len(),
             facts_emitted: None,
             diagnostics_emitted: None,
             validation_rejections: None,
-            cache: CacheStatsSummary::from_cache_stats(&output.cache_stats),
+            cache: CacheStatsSummary::from_cache_stats(cache_stats),
             observed_runtime_ms: None,
         }
     }
@@ -196,9 +221,11 @@ mod tests {
     use crate::analysis_kernel::incremental::{
         CacheStats, DemandQueryTrace, DemandQueryTraceEntry, Digest, DigestKind,
         GoLifecycleSnapshot, InputComponent, InputComponentStatus, InputSnapshot, KernelRunReport,
-        ProviderOutputMeta, TsJsLifecycleSnapshot, provider_output_digest_from_manifest,
-        provider_output_from_manifest,
+        ProviderTelemetry, TsJsLifecycleSnapshot, provider_output_digest_from_manifest,
+        provider_output_identity_from_manifest,
     };
+    use crate::analysis_kernel::{ProviderOutcomeTracker, ValidationDowngrades};
+    use std::collections::BTreeSet;
 
     #[test]
     fn eval_performance_projects_provider_and_cache_rows() {
@@ -212,13 +239,19 @@ mod tests {
         let report = kernel_report_with_stats(stats);
         let performance = EvalPerformanceReport::from_kernel_report(&report);
 
-        assert_eq!(performance.providers.len(), 2);
+        assert_eq!(
+            performance.providers.len(),
+            AnalysisKernel::provider_manifests().len()
+        );
         assert_eq!(performance.cache.hits, 2);
         assert_eq!(performance.cache.misses, 2);
         assert_eq!(performance.cache.recomputes, 3);
         assert_eq!(performance.cache.writes, 2);
         assert_eq!(performance.cache.quarantines, 2);
-        assert_eq!(performance.cache_by_provider().len(), 2);
+        assert_eq!(
+            performance.cache_by_provider().len(),
+            AnalysisKernel::provider_manifests().len()
+        );
     }
 
     #[test]
@@ -321,19 +354,100 @@ mod tests {
         assert_eq!(performance.rss.peak_rss_observed_mb, Some(99));
     }
 
+    #[test]
+    fn performance_projection_keeps_failure_identity_separate_from_telemetry() {
+        let manifests = AnalysisKernel::provider_manifests();
+        let selected = manifests
+            .iter()
+            .map(|manifest| manifest.id)
+            .collect::<BTreeSet<_>>();
+        let mut tracker = ProviderOutcomeTracker::from_manifests(manifests, &selected).unwrap();
+        for manifest in manifests {
+            tracker
+                .record_success(
+                    manifest.id,
+                    provider_output_identity_from_manifest(
+                        manifest,
+                        provider_output_digest_from_manifest(manifest, &[manifest.id.to_string()]),
+                    ),
+                )
+                .unwrap();
+        }
+        let outcomes = tracker
+            .seal(&ValidationDowngrades::for_providers([
+                "polint.go.syntax".to_string()
+            ]))
+            .unwrap();
+        let telemetry = manifests
+            .iter()
+            .map(|manifest| {
+                let mut stats = CacheStats::default();
+                if manifest.id == "polint.go.syntax" {
+                    stats.record_hit();
+                }
+                ProviderTelemetry::new(manifest.id, stats)
+            })
+            .collect();
+        let report = KernelRunReport::new(
+            empty_input_snapshot(),
+            outcomes,
+            telemetry,
+            DemandQueryTrace::default(),
+            crate::analysis_kernel::StoreStatus::Disabled,
+        );
+
+        let performance = EvalPerformanceReport::from_kernel_report(&report);
+        let failed = performance
+            .providers
+            .iter()
+            .find(|row| row.provider_id == "polint.go.syntax")
+            .unwrap();
+        assert_eq!(failed.validation, "failed:validation:validation_rejected");
+        assert!(failed.output_digest.is_empty());
+        assert_eq!(failed.cache.hits, 1);
+        let succeeded = performance
+            .providers
+            .iter()
+            .find(|row| row.provider_id == "polint.source")
+            .unwrap();
+        assert_eq!(succeeded.validation, "succeeded");
+        assert!(!succeeded.output_digest.is_empty());
+    }
+
     fn kernel_report_with_stats(stats: CacheStats) -> KernelRunReport {
         let manifests = AnalysisKernel::provider_manifests();
-        let provider_outputs = manifests
+        let selected = manifests
             .iter()
-            .take(2)
-            .map(|manifest| {
-                let output_digest = provider_output_digest_from_manifest(
-                    manifest,
-                    &[format!("provider={}", manifest.id)],
-                );
-                provider_output_from_manifest(manifest, output_digest, stats.clone())
+            .map(|manifest| manifest.id)
+            .collect::<BTreeSet<_>>();
+        let mut tracker = ProviderOutcomeTracker::from_manifests(manifests, &selected).unwrap();
+        for manifest in manifests {
+            let output_digest = provider_output_digest_from_manifest(
+                manifest,
+                &[format!("provider={}", manifest.id)],
+            );
+            tracker
+                .record_success(
+                    manifest.id,
+                    provider_output_identity_from_manifest(manifest, output_digest),
+                )
+                .unwrap();
+        }
+        let provider_outcomes = tracker.seal(&ValidationDowngrades::default()).unwrap();
+        let provider_telemetry = manifests
+            .iter()
+            .enumerate()
+            .map(|(index, manifest)| {
+                ProviderTelemetry::new(
+                    manifest.id,
+                    if index < 2 {
+                        stats.clone()
+                    } else {
+                        CacheStats::default()
+                    },
+                )
             })
-            .collect::<Vec<ProviderOutputMeta>>();
+            .collect();
 
         let mut trace = DemandQueryTrace::default();
         trace.record_entry(DemandQueryTraceEntry {
@@ -350,26 +464,31 @@ mod tests {
         });
 
         KernelRunReport::new(
-            InputSnapshot {
-                schema_version: "test".to_string(),
-                files: Vec::new(),
-                config: input_component("config"),
-                go_lifecycle: GoLifecycleSnapshot {
-                    components: Vec::new(),
-                },
-                ts_js_lifecycle: TsJsLifecycleSnapshot {
-                    components: Vec::new(),
-                },
-                rules: Vec::new(),
-                models: Vec::new(),
-                extensions: Vec::new(),
-                tool_invocations: Vec::new(),
-                provider_schemas: Vec::new(),
-            },
-            provider_outputs,
+            empty_input_snapshot(),
+            provider_outcomes,
+            provider_telemetry,
             trace,
             crate::analysis_kernel::StoreStatus::Disabled,
         )
+    }
+
+    fn empty_input_snapshot() -> InputSnapshot {
+        InputSnapshot {
+            schema_version: "test".to_string(),
+            files: Vec::new(),
+            config: input_component("config"),
+            go_lifecycle: GoLifecycleSnapshot {
+                components: Vec::new(),
+            },
+            ts_js_lifecycle: TsJsLifecycleSnapshot {
+                components: Vec::new(),
+            },
+            rules: Vec::new(),
+            models: Vec::new(),
+            extensions: Vec::new(),
+            tool_invocations: Vec::new(),
+            provider_schemas: Vec::new(),
+        }
     }
 
     fn input_component(name: &str) -> InputComponent {

@@ -2,13 +2,19 @@ use crate::analysis_plan::AnalysisPlan;
 use crate::cache::Cache;
 use crate::config::LoadedConfig;
 use crate::core::{AnalysisDb, CapabilitySupportView};
-use crate::diagnostics::Diagnostic;
+use crate::diagnostics::{Diagnostic, TextRange};
+use std::collections::{BTreeMap, BTreeSet};
 
 #[rustfmt::skip]
 #[cfg(test)] mod debug;
+#[cfg(test)]
+mod dispatch_tests;
+pub(crate) mod go_syntax_projection;
 pub(crate) mod host;
 pub(crate) mod incremental;
 mod metadata;
+pub(crate) mod metrics_projection;
+mod outcome;
 mod provider;
 mod store;
 pub(crate) mod validation;
@@ -17,6 +23,12 @@ pub(crate) use metadata::{
     FactConfidence, FactFamily, FactMeta, FactMetaStore, FactPrecision, FactRef, MissingFactMeta,
     ValidationStatus, resolution_metadata, resolution_status_metadata, stable_key_from_parts,
     stable_key_text_from_parts, symbol_metadata,
+};
+#[cfg(test)]
+pub(crate) use outcome::hard_dependencies;
+pub(crate) use outcome::{
+    ProviderFailureReason, ProviderFailureStage, ProviderOutcome, ProviderOutcomeStatus,
+    ProviderOutcomeTracker, ProviderOutputIdentity, ValidationDowngrades,
 };
 #[cfg(test)]
 pub(crate) use provider::ProviderKind;
@@ -130,10 +142,12 @@ fn run_scheduled_providers<'a>(
     enabled_providers: &std::collections::BTreeSet<&'static str>,
     diagnostics: &mut Vec<Diagnostic>,
     provider_outputs: &mut Vec<incremental::ProviderOutputMeta>,
-) -> (
+) -> anyhow::Result<(
     CapabilitySupportView,
     Option<crate::analysis::summaries::provider::SccClosureProviderOutput>,
-) {
+    ProviderOutcomeTracker,
+    Vec<incremental::ProviderTelemetry>,
+)> {
     let mut upstream_digests = std::collections::BTreeMap::new();
     let capability_support = input.plan.support_view().clone();
     let host_scope = crate::analysis_kernel::host::ProviderHostSessionScope::install(
@@ -151,10 +165,30 @@ fn run_scheduled_providers<'a>(
         analysis_cache: Some(crate::cache::CacheAnalysisCache::new(input.cache.clone())),
     };
     let mut host_attachment = crate::analysis_kernel::host::FacadeHostAttachment::default();
+    let mut tracker = ProviderOutcomeTracker::from_manifests(
+        AnalysisKernel::provider_manifests(),
+        enabled_providers,
+    )
+    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let mut provider_telemetry = Vec::with_capacity(AnalysisKernel::provider_manifests().len());
     // Emit a provider_outputs row for every manifest entry (historical identity),
     // but only execute providers selected by capability closure.
     for provider_id in scheduled_order() {
-        let result = if enabled_providers.contains(provider_id) {
+        let selected = enabled_providers.contains(provider_id);
+        let blockers = if selected {
+            tracker
+                .can_run(provider_id)
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?
+        } else {
+            Vec::new()
+        };
+        let ready = selected && blockers.is_empty();
+        if selected && !ready {
+            tracker
+                .record_dependency_blocked(provider_id, blockers)
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        }
+        let result = if ready {
             let mut ctx = ProviderCtx {
                 facts: &mut *db,
                 host: &mut host_services,
@@ -181,18 +215,66 @@ fn run_scheduled_providers<'a>(
         }
         diagnostics.extend(result.diagnostics);
         let output_digest = result.output_digest;
+        let cache_stats = result.cache_stats;
         if let Some(digest) = output_digest.clone() {
             upstream_digests.insert(provider_id, digest);
         }
+        provider_telemetry.push(incremental::ProviderTelemetry::new(
+            provider_id,
+            cache_stats.clone(),
+        ));
         provider_outputs.push(AnalysisKernel::provider_output_for_with_optional_digest(
             provider_id,
             db,
-            result.cache_stats,
-            output_digest,
+            cache_stats,
+            output_digest.clone(),
         ));
+        if ready {
+            let manifest = AnalysisKernel::provider_manifest(provider_id);
+            let digest = match provider_id {
+                "polint.go.syntax" => {
+                    let parser_diagnostics = diagnostics
+                        .iter()
+                        .filter(|diagnostic| diagnostic.rule_id == "parser/go")
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    crate::analysis_kernel::go_syntax_projection::CanonicalGoSyntaxOutput::from_db(
+                        db,
+                        &parser_diagnostics,
+                    )
+                    .ok()
+                    .map(|output| output.digest())
+                }
+                "polint.metrics" => {
+                    crate::analysis_kernel::metrics_projection::CanonicalMetricsOutput::from_db(db)
+                        .ok()
+                        .map(|output| output.digest())
+                }
+                _ => output_digest,
+            }
+            .or_else(|| {
+                Some(incremental::provider_output_digest_from_manifest(
+                    manifest,
+                    &provider_output_summary_parts(db, manifest),
+                ))
+            })
+            .expect("provider output digest fallback is always available");
+            let identity =
+                incremental::provider_output_identity_from_manifest(manifest, digest.clone());
+            tracker
+                .record_success(provider_id, identity)
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            upstream_digests.insert(provider_id, digest);
+        }
     }
+
     let session = host_scope.take();
-    (session.capability_support, session.scc_closure)
+    Ok((
+        session.capability_support,
+        session.scc_closure,
+        tracker,
+        provider_telemetry,
+    ))
 }
 
 pub(crate) struct AnalysisKernel;
@@ -218,6 +300,7 @@ pub(crate) struct KernelOutput {
         )
     )]
     pub(crate) run_report: incremental::KernelRunReport,
+    pub(crate) runtime_blocked_rules: BTreeSet<String>,
 }
 
 impl AnalysisKernel {
@@ -287,21 +370,31 @@ impl AnalysisKernel {
                 .collect::<Vec<_>>(),
         );
 
-        let (capability_support, scc_closure) = run_scheduled_providers(
-            &mut db,
-            &input,
-            &input_snapshot,
-            &enabled_providers,
-            &mut diagnostics,
-            &mut provider_outputs,
-        );
+        let (capability_support, scc_closure, provider_tracker, provider_telemetry) =
+            run_scheduled_providers(
+                &mut db,
+                &input,
+                &input_snapshot,
+                &enabled_providers,
+                &mut diagnostics,
+                &mut provider_outputs,
+            )?;
         tracing::info!(target: "polint::kernel", "phase: metrics + derived done");
 
-        if validation::fact_metadata_validation_enabled() {
-            let validation_diagnostics =
+        let validation_downgrades = if validation::fact_metadata_validation_enabled() {
+            let validation_report =
                 validation::validate_fact_metadata(&db, Self::provider_manifests());
-            diagnostics.extend(validation_diagnostics);
-        }
+            diagnostics.extend(validation_report.iter().cloned());
+            validation_report.downgrades()
+        } else {
+            ValidationDowngrades::default()
+        };
+        let provider_outcomes = provider_tracker
+            .seal(&validation_downgrades)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        let (runtime_blocked_rules, capability_diagnostics) =
+            Self::runtime_capability_blockers(input.plan, &db, &provider_outcomes);
+        diagnostics.extend(capability_diagnostics);
         db.finish_all_fact_meta_insertions();
         let store_config = store::StoreConfig::new(
             input.cache.semantic_store_path(),
@@ -315,12 +408,14 @@ impl AnalysisKernel {
         let demand_query_trace = scc_closure
             .map(|output| output.demand_query_trace)
             .unwrap_or_default();
-        let run_report = incremental::KernelRunReport::new(
+        let mut run_report = incremental::KernelRunReport::new(
             input_snapshot,
-            provider_outputs,
+            provider_outcomes,
+            provider_telemetry,
             demand_query_trace,
             store_status,
         );
+        run_report.provider_outputs = provider_outputs;
         #[cfg(test)]
         let run_report = run_report.with_scc_closure_debug(scc_closure_debug);
 
@@ -329,6 +424,7 @@ impl AnalysisKernel {
             diagnostics,
             capability_support,
             run_report,
+            runtime_blocked_rules,
         })
     }
 
@@ -422,6 +518,107 @@ impl AnalysisKernel {
             .iter()
             .find(|manifest| manifest.id == provider_id)
             .unwrap_or_else(|| panic!("missing provider manifest {provider_id}"))
+    }
+
+    pub(crate) fn runtime_capability_blockers(
+        plan: &AnalysisPlan,
+        db: &AnalysisDb,
+        outcomes: &[ProviderOutcome],
+    ) -> (BTreeSet<String>, Vec<Diagnostic>) {
+        let by_id = outcomes
+            .iter()
+            .map(|outcome| (outcome.provider_id.as_str(), outcome))
+            .collect::<BTreeMap<_, _>>();
+        let mut blocked_rules = BTreeSet::new();
+        let mut diagnostics = Vec::new();
+        for rule in plan.rules() {
+            for capability in &rule.requested_capabilities {
+                if plan.support_view().status_for(capability)
+                    != Some(crate::core::CapabilitySupportStatus::Supported)
+                {
+                    continue;
+                }
+                let mut providers = Self::capability_providers(capability, db);
+                if capability == "events" {
+                    for (provider_id, has_rows) in [
+                        ("polint.calls", !db.call_sites().is_empty()),
+                        ("polint.refined_calls", !db.refined_call_edges().is_empty()),
+                    ] {
+                        if has_rows
+                            && by_id.get(provider_id).is_some_and(|outcome| {
+                                outcome.status != ProviderOutcomeStatus::PlannedAbsent
+                            })
+                        {
+                            providers.push(provider_id);
+                        }
+                    }
+                }
+                let failed = providers
+                    .into_iter()
+                    .filter_map(|provider_id| by_id.get(provider_id).copied())
+                    .filter(|outcome| outcome.status != ProviderOutcomeStatus::Succeeded)
+                    .collect::<Vec<_>>();
+                if failed.is_empty() {
+                    continue;
+                }
+                blocked_rules.insert(rule.id.clone());
+                let blockers = failed
+                    .iter()
+                    .flat_map(|outcome| match outcome.blockers.as_slice() {
+                        [] => std::slice::from_ref(&outcome.provider_id),
+                        blockers => blockers,
+                    })
+                    .cloned()
+                    .collect::<BTreeSet<_>>();
+                diagnostics.push(
+                    Diagnostic::error(
+                        "polint/capability",
+                        "<workspace>",
+                        TextRange::point(1, 1),
+                        format!(
+                            "Rule `{}` requested capability `{capability}`, but provider closure did not succeed.",
+                            rule.id
+                        ),
+                    )
+                    .with_evidence("rule", rule.id.clone())
+                    .with_evidence("capability", capability.clone())
+                    .with_evidence("status", failed[0].status.label())
+                    .with_evidence("blockers", blockers.into_iter().collect::<Vec<_>>().join(",")),
+                );
+            }
+        }
+        (blocked_rules, diagnostics)
+    }
+
+    fn capability_providers(capability: &str, db: &AnalysisDb) -> Vec<&'static str> {
+        let providers: &[&str] = match capability {
+            "source_files" => &["polint.source"],
+            "syntax" | "packages" | "functions" | "imports" => {
+                &["polint.go.syntax", "polint.ts.syntax"]
+            }
+            "go_tests" | "branch_obligations" | "coverage_facts" => &["polint.go.syntax"],
+            "string_literals" => &["polint.go.syntax", "polint.ts.syntax"],
+            "ts_components" | "ts_classes" | "jsx_attributes" => &["polint.ts.syntax"],
+            "events" => &["polint.go.syntax", "polint.ts.syntax"],
+            "resolved_imports" | "module_graph" => &["polint.module_graph"],
+            "symbols" | "references" => &["polint.symbol_graph"],
+            "calls" | "control_flow" | "cfg" | "call_graph" => &["polint.refined_calls"],
+            "dataflow" => &["polint.evidence"],
+            "file_metrics" | "function_metrics" | "complexity_metrics" => &["polint.metrics"],
+            _ => &[],
+        };
+        providers
+            .iter()
+            .copied()
+            .filter(|provider| {
+                !matches!(capability, "events" | "string_literals")
+                    || db.files().iter().any(|file| match *provider {
+                        "polint.go.syntax" => file.language == crate::core::Language::Go,
+                        "polint.ts.syntax" => file.language.is_ts_family(),
+                        _ => false,
+                    })
+            })
+            .collect()
     }
 }
 

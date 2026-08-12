@@ -633,10 +633,10 @@ fn snapshot_invariants(run_report: &KernelRunReport) -> Vec<ObservedItem> {
 
 #[cfg(test)]
 fn layer_key_invariants(run_report: &KernelRunReport) -> Vec<ObservedItem> {
-    let has_ts_output = run_report
-        .provider_outputs
-        .iter()
-        .any(|output| output.provider_id == "polint.ts.syntax");
+    let has_ts_output = run_report.provider_outcomes.iter().any(|outcome| {
+        outcome.provider_id == "polint.ts.syntax"
+            && outcome.status == crate::analysis_kernel::ProviderOutcomeStatus::Succeeded
+    });
     vec![observed_invariant(
         "layer_key.polint.ts.syntax.has_config_digest",
         bool_string(has_ts_output && component_present(&run_report.input_snapshot.config)),
@@ -768,67 +768,73 @@ fn identity_render_invariants(db: &crate::core::AnalysisDb) -> Vec<ObservedItem>
 #[cfg(test)]
 fn provider_output_invariants(run_report: &KernelRunReport) -> Vec<ObservedItem> {
     let mut invariants = Vec::new();
-    let source_present = run_report
-        .provider_outputs
-        .iter()
-        .any(|output| output.provider_id == "polint.source");
+    let source_present = run_report.provider_outcomes.iter().any(|outcome| {
+        outcome.provider_id == "polint.source"
+            && outcome.status == crate::analysis_kernel::ProviderOutcomeStatus::Succeeded
+    });
     invariants.push(observed_invariant(
         "provider_output.polint.source.present",
         bool_string(source_present),
-        "kernel.run_report.provider_outputs",
+        "kernel.run_report.provider_outcomes",
     ));
 
-    for output in &run_report.provider_outputs {
-        if output.provider_id == "polint.abstract_domains" {
+    for outcome in &run_report.provider_outcomes {
+        if outcome.provider_id == "polint.abstract_domains" {
             let prefix = "provider_output.polint.abstract_domains";
             invariants.push(observed_invariant(
                 format!("{prefix}.present"),
                 "true",
-                "kernel.run_report.provider_outputs",
+                "kernel.run_report.provider_outcomes",
             ));
             invariants.push(observed_invariant(
                 format!("{prefix}.schema_version"),
-                output.schema_version.as_str(),
-                "kernel.run_report.provider_outputs",
+                outcome
+                    .output_identity
+                    .as_ref()
+                    .map(|identity| identity.schema_version.as_str())
+                    .unwrap_or(""),
+                "kernel.run_report.provider_outcomes",
             ));
             invariants.push(observed_invariant(
-                format!("{prefix}.validation"),
-                output.validation.as_str(),
-                "kernel.run_report.provider_outputs",
+                format!("{prefix}.status"),
+                outcome.status.label(),
+                "kernel.run_report.provider_outcomes",
             ));
             invariants.push(observed_invariant(
-                format!("{prefix}.dependency_inputs.count"),
-                output.dependency_inputs.len().to_string(),
-                "kernel.run_report.provider_outputs",
+                format!("{prefix}.blockers.count"),
+                outcome.blockers.len().to_string(),
+                "kernel.run_report.provider_outcomes",
             ));
         }
-        if output.provider_id == "polint.extensions" {
+        if outcome.provider_id == "polint.extensions" {
             invariants.push(observed_invariant(
                 "provider_output.polint.extensions.present",
                 "true",
-                "kernel.run_report.provider_outputs",
+                "kernel.run_report.provider_outcomes",
             ));
         }
-        if output.provider_id == "polint.refined_calls" {
+        if outcome.provider_id == "polint.refined_calls" {
             invariants.push(observed_invariant(
                 "provider_output.polint.refined_calls.present",
                 "true",
-                "kernel.run_report.provider_outputs",
+                "kernel.run_report.provider_outcomes",
             ));
         }
+    }
+    for telemetry in &run_report.provider_telemetry {
         if !matches!(
-            output.provider_id.as_str(),
+            telemetry.provider_id.as_str(),
             "polint.go.syntax" | "polint.ts.syntax"
         ) {
             continue;
         }
-        let prefix = format!("provider_output.{}", output.provider_id);
+        let prefix = format!("provider_output.{}", telemetry.provider_id);
         invariants.push(observed_invariant(
             format!("{prefix}.cache_stats.recorded"),
             "true",
-            "kernel.run_report.provider_outputs",
+            "kernel.run_report.provider_telemetry",
         ));
-        invariants.extend(cache_stat_invariants(&prefix, &output.cache_stats));
+        invariants.extend(cache_stat_invariants(&prefix, &telemetry.cache_stats));
     }
 
     invariants
@@ -1246,15 +1252,15 @@ fn extension_rejection_reason_label(
 #[cfg(test)]
 fn layer_cache_invariants(run_report: &KernelRunReport) -> Vec<ObservedItem> {
     let mut invariants = Vec::new();
-    for output in &run_report.provider_outputs {
-        if !is_layer_cache_provider(&output.provider_id) {
+    for telemetry in &run_report.provider_telemetry {
+        if !is_layer_cache_provider(&telemetry.provider_id) {
             continue;
         }
-        let prefix = format!("layer_cache.provider.{}", output.provider_id);
+        let prefix = format!("layer_cache.provider.{}", telemetry.provider_id);
         invariants.extend(layer_cache_stat_invariants(
             &prefix,
-            &output.cache_stats,
-            "kernel.run_report.layer_cache.provider_outputs",
+            &telemetry.cache_stats,
+            "kernel.run_report.layer_cache.provider_telemetry",
         ));
     }
     invariants.extend(layer_cache_stat_invariants(
@@ -1321,7 +1327,7 @@ fn cache_stat_invariants(prefix: &str, stats: &CacheStats) -> Vec<ObservedItem> 
         observed_invariant(
             format!("{prefix}.{counter}"),
             value.to_string(),
-            "kernel.run_report.provider_outputs",
+            "kernel.run_report.provider_telemetry",
         )
     })
     .collect()

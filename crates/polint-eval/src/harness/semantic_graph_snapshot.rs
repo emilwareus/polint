@@ -58,12 +58,21 @@ fn run_fixture_kernel(name: &str) -> KernelOutput {
 }
 
 fn provider_output_digest(output: &KernelOutput, provider_id: &str) -> Digest {
-    output
+    let outcome = output
         .run_report
-        .provider_outputs
+        .provider_outcomes
         .iter()
         .find(|row| row.provider_id == provider_id)
-        .unwrap_or_else(|| panic!("provider output row {provider_id} exists"))
+        .unwrap_or_else(|| panic!("provider outcome row {provider_id} exists"));
+    assert_eq!(
+        outcome.status,
+        crate::analysis_kernel::ProviderOutcomeStatus::Succeeded,
+        "provider {provider_id} must succeed"
+    );
+    outcome
+        .output_identity
+        .as_ref()
+        .unwrap_or_else(|| panic!("succeeded provider {provider_id} has output identity"))
         .output_digest
         .clone()
 }

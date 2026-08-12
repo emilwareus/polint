@@ -293,6 +293,26 @@ pub(crate) fn run_rules_with_capability_support(
     parallel: bool,
     capability_support: &CapabilitySupportView,
 ) -> Vec<Diagnostic> {
+    run_rules_with_runtime_provider_blockers(
+        db,
+        rules,
+        options,
+        enabled,
+        parallel,
+        capability_support,
+        &BTreeSet::new(),
+    )
+}
+
+pub(crate) fn run_rules_with_runtime_provider_blockers(
+    db: &AnalysisDb,
+    rules: &[Rule],
+    options: &BTreeMap<String, RuleOptions>,
+    enabled: Option<&BTreeSet<String>>,
+    parallel: bool,
+    capability_support: &CapabilitySupportView,
+    runtime_blocked_rules: &BTreeSet<String>,
+) -> Vec<Diagnostic> {
     let run_one = |rule: &Rule| {
         let meta = match catch_unwind(AssertUnwindSafe(|| rule.meta())) {
             Ok(meta) => meta,
@@ -311,7 +331,9 @@ pub(crate) fn run_rules_with_capability_support(
         {
             return Vec::new();
         }
-        if has_blocking_capability(&meta.id, capability_support) {
+        if has_blocking_capability(&meta.id, capability_support)
+            || runtime_blocked_rules.contains(&meta.id)
+        {
             return Vec::new();
         }
         let rule_options = options.get(&meta.id).cloned().unwrap_or_default();

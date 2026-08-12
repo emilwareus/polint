@@ -5,6 +5,7 @@ use crate::analysis_plan::AnalysisPlan;
 use crate::cache::Cache;
 use crate::config::LoadedConfig;
 use crate::core::{AnalysisDb, CapabilitySupportView};
+use crate::diagnostics::{Diagnostic, TextRange};
 use crate::frontend::{LanguageIdRegistryExt, LanguageRegistryExt};
 use std::collections::BTreeMap;
 
@@ -825,17 +826,26 @@ impl Provider for MetricsProvider {
 
     fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
         let ctx = CtxHandle::from_ctx(ctx);
-        let derivation = crate::metrics::derive_requested_metrics_with_cache_stats(
+        let derivation = match crate::metrics::derive_requested_metrics_with_cache_stats(
             ctx.db,
             &ctx.plan,
             &ctx.cache,
-            &ctx.input_snapshot,
             self.manifest(),
-            vec![
-                ctx.dependency_digest("polint.go.syntax"),
-                ctx.dependency_digest("polint.ts.syntax"),
-            ],
-        );
+        ) {
+            Ok(derivation) => derivation,
+            Err(error) => {
+                return ProviderRunResult {
+                    diagnostics: vec![Diagnostic::error(
+                        "internal/metrics",
+                        "<workspace>",
+                        TextRange::point(1, 1),
+                        format!("metrics projection failed: {error}"),
+                    )],
+                    cache_stats: CacheStats::default(),
+                    output_digest: None,
+                };
+            }
+        };
         ProviderRunResult {
             diagnostics: derivation.diagnostics,
             cache_stats: derivation.cache_stats,
@@ -1254,6 +1264,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "imports",
             "go_tests",
             "branch_obligations",
+            "string_literals",
         ],
         language_ids: crate::frontend::LANGUAGE_IDS_GO,
         cache_policy: CachePolicy::ExistingFileFactCache {
@@ -1871,6 +1882,34 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     #[test]
+    fn go_syntax_manifest_declares_all_owned_outputs() {
+        let manifest = provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.go.syntax")
+            .unwrap();
+        assert_eq!(
+            manifest.outputs,
+            [
+                "packages",
+                "functions",
+                "imports",
+                "go_tests",
+                "branch_obligations",
+                "string_literals",
+            ]
+        );
+        assert_eq!(manifest.language_ids, &[polint_core::LanguageId::GO]);
+        assert_eq!(
+            manifest.cache_policy,
+            CachePolicy::ExistingFileFactCache {
+                schema: "go-facts-v2"
+            }
+        );
+        assert_eq!(manifest.schema_versions, GO_SYNTAX_SCHEMA);
+        assert_eq!(manifest.precision_ceiling, PrecisionCeiling::Syntax);
+    }
+
+    #[test]
     fn provider_manifests_have_required_metadata() {
         for manifest in provider_manifests() {
             assert!(!manifest.id.is_empty());
@@ -2144,6 +2183,7 @@ mod tests {
                         "imports",
                         "go_tests",
                         "branch_obligations",
+                        "string_literals",
                     ],
                 },
                 ProviderOrderRow {

@@ -1,12 +1,15 @@
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
-    CacheNode, CacheStats, DependencyEdge, DependencyKind, Digest, DigestKind, InputSnapshot,
-    LayerCacheManifest, LayerCacheReadStatus, LayerCacheStore, LayerCacheWriteStatus, LayerKey,
-    LayerKind, PrecisionTier, ShapeKind, dependency_layer_digest,
+    CacheNode, CacheStats, DependencyEdge, DependencyKind, Digest, LayerCacheManifest,
+    LayerCacheReadStatus, LayerCacheStore, LayerCacheWriteStatus, LayerKey, PrecisionTier,
+    ShapeKind,
+};
+use crate::analysis_kernel::metrics_projection::{
+    CanonicalMetricsInputs, CanonicalMetricsOutput, MetricsProjectionError,
 };
 use crate::analysis_plan::AnalysisPlan;
 use crate::cache::Cache;
-use crate::core::{AnalysisDb, FunctionFact, SourceFile};
+use crate::core::AnalysisDb;
 use crate::diagnostics::{Diagnostic, TextRange};
 use polint_analysis::metrics::{METRIC_CAPABILITIES, METRICS_LAYER_SCHEMA, MetricsLayerPayload};
 
@@ -26,29 +29,22 @@ pub(crate) fn derive_requested_metrics_with_cache_stats(
     db: &mut AnalysisDb,
     plan: &AnalysisPlan,
     cache: &Cache,
-    input_snapshot: &InputSnapshot,
     manifest: &ProviderManifest,
-    upstream_syntax_output_digests: Vec<Digest>,
-) -> MetricsDerivation {
+) -> Result<MetricsDerivation, MetricsProjectionError> {
     if !plan.requests_any_capability(METRIC_CAPABILITIES) {
-        return MetricsDerivation::default();
+        return Ok(MetricsDerivation::default());
     }
 
-    let config_digest = input_snapshot.config.digest.clone();
-    let layer_key = metrics_layer_key(
-        db,
-        manifest,
-        config_digest.clone(),
-        upstream_syntax_output_digests.clone(),
-    );
+    let inputs = CanonicalMetricsInputs::from_db(db)?;
+    let layer_key = metrics_layer_key(&inputs, manifest);
     let store = cache.layer_cache_store();
     let mut cache_stats = CacheStats::default();
     let read = store
         .read_json_validated::<MetricsLayerPayload, _>(&layer_key, |payload, manifest| {
-            validate_metrics_layer_payload(payload, manifest)
+            validate_metrics_layer_payload(db, payload, manifest)
         });
 
-    match read.status {
+    Ok(match read.status {
         LayerCacheReadStatus::Hit => {
             cache_stats.record_hit();
             cache_stats.record_verified_reuse();
@@ -65,7 +61,7 @@ pub(crate) fn derive_requested_metrics_with_cache_stats(
         LayerCacheReadStatus::BypassedDisabled => {
             cache_stats.record_disabled_bypass();
             cache_stats.record_recompute();
-            let mut derivation = derive_requested_metrics_uncached(db, plan);
+            let mut derivation = derive_requested_metrics_uncached(db, plan)?;
             derivation.cache_stats = cache_stats;
             derivation
         }
@@ -76,41 +72,36 @@ pub(crate) fn derive_requested_metrics_with_cache_stats(
                 cache_stats.record_invalid_evicted_read();
             }
             cache_stats.record_recompute();
-            let mut derivation = derive_requested_metrics_uncached(db, plan);
+            let mut derivation = derive_requested_metrics_uncached(db, plan)?;
             let payload = metrics_layer_payload(db);
-            let dependencies = metrics_layer_dependency_edges(
-                db,
-                &layer_key,
-                manifest,
-                &upstream_syntax_output_digests,
-                config_digest,
-            );
-            derivation.output_digest = write_metrics_layer_payload(
+            let dependencies = metrics_layer_dependency_edges(&inputs, &layer_key);
+            let output_digest = derivation
+                .output_digest
+                .clone()
+                .ok_or(MetricsProjectionError::Output)?;
+            write_metrics_layer_payload(
                 &store,
                 layer_key,
                 &payload,
                 dependencies,
+                output_digest,
                 &mut cache_stats,
                 &mut derivation.diagnostics,
             );
             derivation.cache_stats = cache_stats;
             derivation
         }
-    }
+    })
 }
 
 pub(crate) fn metrics_layer_key(
-    db: &AnalysisDb,
+    inputs: &CanonicalMetricsInputs,
     manifest: &ProviderManifest,
-    config_digest: Digest,
-    upstream_syntax_output_digests: Vec<Digest>,
 ) -> LayerKey {
     LayerKey::metrics_layer_key(
         manifest,
-        metrics_source_text_digests(db),
-        metrics_function_fact_digests(db),
-        config_digest,
-        upstream_syntax_output_digests,
+        inputs.source_digests(),
+        inputs.function_digests(),
         metrics_parameter_digest(),
     )
 }
@@ -118,10 +109,10 @@ pub(crate) fn metrics_layer_key(
 fn derive_requested_metrics_uncached(
     db: &mut AnalysisDb,
     plan: &AnalysisPlan,
-) -> MetricsDerivation {
+) -> Result<MetricsDerivation, MetricsProjectionError> {
     let requested = plan.requests_any_capability(METRIC_CAPABILITIES);
     if !requested {
-        return MetricsDerivation::default();
+        return Ok(MetricsDerivation::default());
     }
 
     if let Some(output) = polint_analysis::metrics::derive_requested_metrics(db, requested) {
@@ -131,140 +122,39 @@ fn derive_requested_metrics_uncached(
             output.complexity_metrics,
         );
     }
-    MetricsDerivation {
+    Ok(MetricsDerivation {
         cache_stats: CacheStats::default(),
         diagnostics: Vec::new(),
-        output_digest: Some(metrics_output_digest_for_payload(
-            &metrics_layer_payload(db),
-            None,
-        )),
-    }
+        output_digest: Some(CanonicalMetricsOutput::from_db(db)?.digest()),
+    })
 }
-
 fn metrics_layer_dependency_edges(
-    db: &AnalysisDb,
+    inputs: &CanonicalMetricsInputs,
     key: &LayerKey,
-    manifest: &ProviderManifest,
-    upstream_syntax_output_digests: &[Digest],
-    config_digest: Digest,
 ) -> Vec<DependencyEdge> {
     let from = CacheNode::Layer(key.clone());
     let mut edges = Vec::new();
 
-    for file in sorted_files(db) {
+    for (ordinal, digest) in inputs.source_digests().into_iter().enumerate() {
         edges.push(dependency_edge(
             &from,
-            CacheNode::Input(format!(
-                "source:{}:{}",
-                normalized_file_path(file),
-                file.content_hash
-            )),
+            CacheNode::Input(format!("metrics-source:{ordinal}:{digest}")),
             DependencyKind::SourceText,
             ShapeKind::Content,
         ));
     }
 
-    for function in sorted_functions(db) {
+    for (ordinal, digest) in inputs.function_digests().into_iter().enumerate() {
         edges.push(dependency_edge(
             &from,
-            CacheNode::Input(format!(
-                "function:{}:{}:{}:{}:{}",
-                db.path_for(function.file),
-                function.name,
-                function.span.start_byte,
-                function.span.end_byte,
-                language_cache_label(function.language)
-            )),
+            CacheNode::Input(format!("metrics-function:{ordinal}:{digest}")),
             DependencyKind::Input,
             ShapeKind::Syntax,
         ));
     }
 
-    edges.push(dependency_edge(
-        &from,
-        CacheNode::Input(format!("config:{}", config_digest)),
-        DependencyKind::Config,
-        ShapeKind::Unknown,
-    ));
-    edges.push(dependency_edge(
-        &from,
-        CacheNode::Input(format!(
-            "provider_schema:{}:{}",
-            manifest.id,
-            manifest.primary_schema_label()
-        )),
-        DependencyKind::ProviderSchema,
-        ShapeKind::ProviderVersion,
-    ));
-    edges.push(dependency_edge(
-        &from,
-        CacheNode::Input("toolchain:metrics:absent".to_string()),
-        DependencyKind::Toolchain,
-        ShapeKind::Toolchain,
-    ));
-
-    for (index, output_digest) in upstream_syntax_output_digests.iter().cloned().enumerate() {
-        let (layer_kind, provider_id) = match index {
-            0 => (LayerKind::GoSyntax, "polint.go.syntax"),
-            1 => (LayerKind::TsSyntax, "polint.ts.syntax"),
-            _ => (LayerKind::Extension, "polint.unknown_upstream"),
-        };
-        edges.push(dependency_edge(
-            &from,
-            CacheNode::Layer(upstream_layer_key(layer_kind, provider_id, output_digest)),
-            DependencyKind::UpstreamLayer,
-            ShapeKind::Output,
-        ));
-    }
-
     edges.sort();
-    edges.dedup();
     edges
-}
-
-fn metrics_source_text_digests(db: &AnalysisDb) -> Vec<Digest> {
-    sorted_files(db)
-        .into_iter()
-        .map(|file| {
-            let parts = [
-                normalized_file_path(file),
-                file.content_hash.clone(),
-                language_cache_label(file.language).to_string(),
-            ];
-            let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
-            Digest::from_parts(DigestKind::SourceText, "metrics_source_text", &refs)
-        })
-        .collect()
-}
-
-fn metrics_function_fact_digests(db: &AnalysisDb) -> Vec<Digest> {
-    sorted_functions(db)
-        .into_iter()
-        .map(|function| {
-            let mut calls = function.calls.clone();
-            calls.sort();
-            calls.dedup();
-            let parts = [
-                db.path_for(function.file),
-                function.name.clone(),
-                function.span.start_byte.to_string(),
-                function.span.end_byte.to_string(),
-                function.span.start_line.to_string(),
-                function.span.end_line.to_string(),
-                function.is_test.to_string(),
-                function.is_exported.to_string(),
-                function.cyclomatic_complexity.to_string(),
-                language_cache_label(function.language).to_string(),
-                calls.join("\n"),
-            ];
-            let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
-            Digest::from_parts(
-                DigestKind::ProviderParameters,
-                "metrics_function_fact",
-                &refs,
-            )
-        })
-        .collect()
 }
 
 fn metrics_parameter_digest() -> Digest {
@@ -285,11 +175,18 @@ fn restore_metrics_layer_payload(db: &mut AnalysisDb, payload: &MetricsLayerPayl
 }
 
 fn validate_metrics_layer_payload(
+    db: &AnalysisDb,
     payload: &MetricsLayerPayload,
     manifest: &LayerCacheManifest,
 ) -> bool {
     payload.schema == METRICS_LAYER_SCHEMA
-        && manifest.output_digest == metrics_output_digest_for_payload(payload, Some(&manifest.key))
+        && CanonicalMetricsOutput::from_metric_facts(
+            db,
+            &payload.file_metrics,
+            &payload.function_metrics,
+            &payload.complexity_metrics,
+        )
+        .is_ok_and(|output| manifest.output_digest == output.digest())
 }
 
 fn write_metrics_layer_payload(
@@ -297,20 +194,20 @@ fn write_metrics_layer_payload(
     layer_key: LayerKey,
     payload: &MetricsLayerPayload,
     dependencies: Vec<DependencyEdge>,
+    output_digest: Digest,
     stats: &mut CacheStats,
     diagnostics: &mut Vec<Diagnostic>,
-) -> Option<Digest> {
+) {
     let payload_digest = match LayerCacheStore::payload_digest_for_json(payload) {
         Ok(digest) => digest,
         Err(error) => {
             diagnostics.push(cache_write_diagnostic("metrics layer", error));
-            return None;
+            return;
         }
     };
-    let output_digest = metrics_output_digest(&layer_key, &payload_digest);
     let manifest = LayerCacheManifest::new(
         layer_key,
-        output_digest.clone(),
+        output_digest,
         payload_digest,
         dependencies,
         PrecisionTier::Syntax,
@@ -323,7 +220,6 @@ fn write_metrics_layer_payload(
         Ok(LayerCacheWriteStatus::BypassedDisabled) => stats.record_disabled_bypass(),
         Err(error) => diagnostics.push(cache_write_diagnostic("metrics layer", error)),
     }
-    Some(output_digest)
 }
 
 fn cache_write_diagnostic(path: &str, error: anyhow::Error) -> Diagnostic {
@@ -333,46 +229,6 @@ fn cache_write_diagnostic(path: &str, error: anyhow::Error) -> Diagnostic {
         TextRange::point(1, 1),
         format!("cache write failed: {error}"),
     )
-}
-
-fn metrics_output_digest_for_payload(
-    payload: &MetricsLayerPayload,
-    layer_key: Option<&LayerKey>,
-) -> Digest {
-    let payload_digest = LayerCacheStore::payload_digest_for_json(payload)
-        .unwrap_or_else(|_| Digest::unsupported(DigestKind::LayerOutput, "metrics", "json"));
-    if let Some(layer_key) = layer_key {
-        metrics_output_digest(layer_key, &payload_digest)
-    } else {
-        Digest::from_parts(
-            DigestKind::ProviderOutput,
-            "metrics_layer_output",
-            &[&payload_digest.to_string()],
-        )
-    }
-}
-
-fn metrics_output_digest(layer_key: &LayerKey, payload_digest: &Digest) -> Digest {
-    let layer_key_json =
-        serde_json::to_string(layer_key).unwrap_or_else(|_| "unserializable_layer_key".to_string());
-    Digest::from_parts(
-        DigestKind::ProviderOutput,
-        "metrics_layer_output",
-        &[&payload_digest.to_string(), &layer_key_json],
-    )
-}
-
-fn sorted_files(db: &AnalysisDb) -> Vec<&SourceFile> {
-    polint_analysis::metrics::sorted_files(db)
-}
-
-fn sorted_functions(db: &AnalysisDb) -> Vec<&FunctionFact> {
-    polint_analysis::metrics::sorted_functions(db)
-}
-
-fn normalized_file_path(file: &SourceFile) -> String {
-    crate::repo_fs::normalize_repo_relative(&file.relative_path)
-        .unwrap_or_else(|| file.relative_path.clone())
 }
 
 fn dependency_edge(
@@ -389,32 +245,9 @@ fn dependency_edge(
     }
 }
 
-fn upstream_layer_key(layer_kind: LayerKind, provider_id: &str, output_digest: Digest) -> LayerKey {
-    let output_dependency = dependency_layer_digest(output_digest);
-
-    LayerKey::new(
-        layer_kind,
-        provider_id,
-        "output-digest",
-        "output-digest",
-        output_dependency.clone(),
-        Digest::absent(DigestKind::DependencyLayer, "upstream_lifecycle_unknown"),
-        Digest::absent(DigestKind::Config, "upstream_config_unknown"),
-        Digest::absent(DigestKind::ToolInvocation, "upstream_toolchain_unknown"),
-        vec![output_dependency],
-        Vec::new(),
-        Vec::new(),
-    )
-}
-
-fn language_cache_label(language: crate::core::Language) -> &'static str {
-    polint_analysis::metrics::language_cache_label(language)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis_kernel::incremental::{Digest, DigestKind, InputSnapshot};
     use crate::analysis_kernel::{
         FactConfidence, FactFamily, FactPrecision, FactRef, ValidationStatus,
     };
@@ -442,22 +275,6 @@ mod tests {
         ])
     }
 
-    fn metrics_input_snapshot(
-        loaded: &crate::config::LoadedConfig,
-        db: &AnalysisDb,
-        plan: &AnalysisPlan,
-        config_digest: &str,
-    ) -> InputSnapshot {
-        crate::analysis_kernel::incremental::input_snapshot_from_run_inputs(
-            loaded,
-            db,
-            config_digest,
-            "rule-digest",
-            plan.digest(),
-            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
-        )
-    }
-
     fn derive_metrics_with_cache(
         db: &mut AnalysisDb,
         loaded: &crate::config::LoadedConfig,
@@ -466,18 +283,9 @@ mod tests {
         config_digest: &str,
         upstream_label: &str,
     ) -> MetricsDerivation {
-        let snapshot = metrics_input_snapshot(loaded, db, plan, config_digest);
-        derive_requested_metrics_with_cache_stats(
-            db,
-            plan,
-            cache,
-            &snapshot,
-            metrics_manifest(),
-            vec![
-                Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &[upstream_label]),
-                Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &[upstream_label]),
-            ],
-        )
+        let _excluded_inputs = (loaded, config_digest, upstream_label);
+        derive_requested_metrics_with_cache_stats(db, plan, cache, metrics_manifest())
+            .expect("canonical metrics derivation")
     }
 
     fn collect_files(root: &Path) -> Vec<PathBuf> {
@@ -608,7 +416,13 @@ mod tests {
         assert_eq!(db.complexity_metrics().len(), 1);
         assert_eq!(db.complexity_metrics()[0].function, function);
         assert_eq!(db.complexity_metrics()[0].cyclomatic_complexity, 2);
-        assert_eq!(metrics_function_fact_digests(&db).len(), 1);
+        assert_eq!(
+            CanonicalMetricsInputs::from_db(&db)
+                .unwrap()
+                .functions
+                .len(),
+            1
+        );
     }
 
     #[test]
