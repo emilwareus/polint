@@ -326,7 +326,7 @@ fn run_check_kernel_with_store_mode(
 fn budget_counters(db: &AnalysisDb) -> BudgetExhaustionCounters {
     use crate::analysis::calls::facts::CallTargetStatus;
     use crate::analysis::summaries::facts::SummaryStatus;
-    use polint_analysis::domains::facts::DomainStatus;
+    use crate::analysis_neutral::domains::facts::DomainStatus;
 
     let budget_exceeded = db
         .summary_facts()

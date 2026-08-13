@@ -1,6 +1,6 @@
-pub(crate) use polint_analysis::adaptation::budget;
-pub(crate) use polint_analysis::adaptation::cache_key;
-pub(crate) use polint_analysis::adaptation::facts;
-pub(crate) use polint_analysis::adaptation::loader;
-pub(crate) use polint_analysis::adaptation::store;
-pub(crate) use polint_analysis::adaptation::validate;
+pub(crate) use crate::analysis_neutral::adaptation::budget;
+pub(crate) use crate::analysis_neutral::adaptation::cache_key;
+pub(crate) use crate::analysis_neutral::adaptation::facts;
+pub(crate) use crate::analysis_neutral::adaptation::loader;
+pub(crate) use crate::analysis_neutral::adaptation::store;
+pub(crate) use crate::analysis_neutral::adaptation::validate;

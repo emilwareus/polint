@@ -3,11 +3,11 @@ use super::outcome::ProviderOutcomeError;
 use super::{
     ProviderManifest, ProviderOutcome, ProviderOutcomeStatus, ProviderOutputIdentity, provider,
 };
+use crate::analysis_api::is_synthetic_ts_js_module_function;
 use crate::core::{
     AnalysisDb, ComplexityMetricFact, FileId, FileMetricFact, FunctionFact, FunctionId,
     FunctionMetricFact, Language, Span,
 };
-use polint_analysis_api::is_synthetic_ts_js_module_function;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 const MAX_METRIC_ROWS: usize = 1_000_000;

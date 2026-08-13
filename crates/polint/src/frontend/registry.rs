@@ -1,10 +1,10 @@
 use super::{FAMILY_GO, FAMILY_TYPESCRIPT_JAVASCRIPT, GoFrontend, TsJsFrontend};
 use crate::core::Language;
 
-pub(crate) use polint_core::{
+pub(crate) use crate::frontend_api::FrontendRegistry;
+pub(crate) use crate::internal_core::{
     LANGUAGE_IDS_GO, LANGUAGE_IDS_GO_AND_TS, LANGUAGE_IDS_NONE, LANGUAGE_IDS_TS, LanguageId,
 };
-pub(crate) use polint_frontend_api::FrontendRegistry;
 
 /// Default host composition: Go then TypeScript/JavaScript.
 ///

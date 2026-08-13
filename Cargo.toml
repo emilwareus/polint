@@ -1,12 +1,5 @@
 [workspace]
 members = [
-    "crates/polint-core",
-    "crates/polint-ir",
-    "crates/polint-analysis-api",
-    "crates/polint-frontend-api",
-    "crates/polint-go",
-    "crates/polint-ts",
-    "crates/polint-analysis",
     "crates/polint",
     "crates/polint-bench",
     "crates/polint-eval",
@@ -79,14 +72,6 @@ tree-sitter = "0.26.8"
 tree-sitter-go = "0.25.0"
 
 
-# Internal workspace crates (path + version for publish graph).
-polint-core = { path = "crates/polint-core", version = "0.1.17" }
-polint-ir = { path = "crates/polint-ir", version = "0.1.17" }
-polint-analysis-api = { path = "crates/polint-analysis-api", version = "0.1.17" }
-polint-frontend-api = { path = "crates/polint-frontend-api", version = "0.1.17" }
-polint-go = { path = "crates/polint-go", version = "0.1.17" }
-polint-ts = { path = "crates/polint-ts", version = "0.1.17" }
-polint-analysis = { path = "crates/polint-analysis", version = "0.1.17" }
 
 # Rule packs and tooling depend on the unified `polint` crate (path + version for publish).
 polint = { path = "crates/polint", version = "0.1.17" }

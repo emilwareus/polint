@@ -13,7 +13,7 @@ use crate::repo_fs::{
 use std::collections::BTreeSet;
 use std::path::{Path as FsPath, PathBuf};
 
-pub(crate) use polint_analysis_api::{
+pub(crate) use crate::analysis_api::{
     FileSnapshot, GoLifecycleSnapshot, INPUT_SNAPSHOT_SCHEMA_VERSION, InputComponent,
     InputComponentStatus, InputSnapshot, ProviderSchemaSnapshot, TsJsLifecycleSnapshot,
 };

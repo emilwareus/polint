@@ -23,21 +23,38 @@ The architecture is organized around four rules:
    serialization make equivalent runs produce equivalent facts, diagnostics,
    and cache keys.
 
-## Crate graph and ownership
+## Package graph and internal ownership
 
-The binding product architecture has eight crates. In the table and diagram,
-an edge points from a consumer to a direct internal dependency.
+The product publishes two Cargo packages: `polint` and `polint-macros`. The
+procedural macro remains separate because Cargo requires proc-macro crates to be
+distinct. All runtime implementation lives inside `polint`; `polint-eval` and
+`polint-bench` are unpublished workspace tooling.
+
+The former product-crate seams are private modules so they can evolve atomically
+without creating seven additional crates.io contracts:
+
+| Private module | Owns | May depend on |
+| --- | --- | --- |
+| `internal_core` | IDs, spans, diagnostics, language tags, and stable-key interning | external libraries only |
+| `ir` | Language-neutral MIR, places, and type shapes | `internal_core` |
+| `analysis_api` | Provider/fact/store/cache contracts | `internal_core`, `ir` |
+| `frontend_api` | Language frontend contract and registry | `internal_core`, `analysis_api` |
+| `analysis_neutral` | Neutral stores, graphs, CFG, calls, data flow, domains, summaries, identity, and solvers | foundations and contracts |
+| `go` | Go parsing, lifecycle, sidecars, lowering, and graph adapters | neutral layers; never `ts` |
+| `ts` | TypeScript/JavaScript parsing, lifecycle, lowering, and graph adapters | neutral layers; never `go` |
+| remaining private facade modules | Host database, scheduling, repository services, CLI implementation, and composition | all internal modules |
 
 ```mermaid
 flowchart TD
-    core["polint-core\nfoundations"]
-    ir["polint-ir\nneutral MIR"]
-    api["polint-analysis-api\ncontracts"]
-    frontend_api["polint-frontend-api\nfrontend contract"]
-    analysis["polint-analysis\nneutral analysis"]
-    go["polint-go\nGo frontend"]
-    ts["polint-ts\nTS/JS frontend"]
-    facade["polint\nfacade + composition root"]
+    core["internal_core"]
+    ir["ir"]
+    api["analysis_api"]
+    frontend_api["frontend_api"]
+    analysis["analysis_neutral"]
+    go["go"]
+    ts["ts"]
+    facade["private facade modules"]
+    public["polint::sdk + polint::runner"]
 
     ir --> core
     api --> core
@@ -47,65 +64,21 @@ flowchart TD
     analysis --> core
     analysis --> ir
     analysis --> api
-    go --> core
-    go --> ir
-    go --> api
     go --> frontend_api
     go --> analysis
-    ts --> core
-    ts --> api
     ts --> frontend_api
     ts --> analysis
-    facade --> core
-    facade --> ir
-    facade --> api
-    facade --> frontend_api
-    facade --> analysis
     facade --> go
     facade --> ts
+    facade --> analysis
+    public --> facade
 ```
 
-| Crate | Owns | Direct internal dependencies |
-| --- | --- | --- |
-| `polint-core` | IDs, spans, diagnostics, language tags, `LanguageId`, `StableKeyId`, and the stable-key interner | — |
-| `polint-ir` | Language-neutral MIR blocks, operations, terminators, places, and type shapes | `polint-core` |
-| `polint-analysis-api` | `FactDatabase`, erased `FactStore`, provider manifests/context/results, fact metadata, source/fact schemas, digests, and cache contracts | `polint-core`, `polint-ir` |
-| `polint-frontend-api` | `LanguageFrontend`, frontend profiles, `AnalysisUnit`, and the frontend registry contract | `polint-core`, `polint-analysis-api` |
-| `polint-analysis` | Language-neutral stores, graph models, CFG/calls/data-flow/IFDS, domains, summaries, identity, solvers, metrics, and analysis providers | `polint-core`, `polint-ir`, `polint-analysis-api` |
-| `polint-go` | Go/tree-sitter parsing, Go lifecycle and sidecar integration, Go stores/lowering, and Go graph adapters | `polint-core`, `polint-ir`, `polint-analysis-api`, `polint-frontend-api`, `polint-analysis` |
-| `polint-ts` | Oxc TS/JS parsing, TS/JS stores/lowering, resolver/lifecycle integration, and TS/JS graph adapters | `polint-core`, `polint-analysis-api`, `polint-frontend-api`, `polint-analysis` |
-| `polint` | The user-facing facade, CLI/SDK/runner, host database, registry, provider kernel, config/filesystem integration, cache, and composition root | the seven crates above |
-
-The graph is intentionally a cut set, not a claim that every workspace crate is
-part of the product layering. `polint-macros` supplies the rule attribute,
-`polint-eval` supplies internal evaluation support, `polint-bench` consumes the
-bench-only surface, and the example rule packs are external-style consumers.
-Those tooling and example crates do not add another product layer.
-
-### Dependency boundaries
-
-The compiler enforces these directions:
-
-- `polint-core` has no dependency on another polint crate and must not know
-  concrete facts, parsers, providers, or analysis algorithms.
-- `polint-ir` depends only on the foundations. It is the shared representation
-  consumed by frontends and analyses, not a place for language-specific lowering.
-- `polint-analysis-api` contains contracts and neutral schemas only. It must not
-  import `polint-analysis`, `polint-go`, `polint-ts`, or `polint`.
-- `polint-frontend-api` describes a frontend without naming a concrete frontend.
-- `polint-analysis` targets `FactDatabase`, `FactStore`, `AnalysisHost`, and
-  other neutral contracts. It must not depend on a concrete frontend or on the
-  facade. Algorithms are reusable against a host, not coupled to the facade's
-  concrete database type.
-- `polint-go` and `polint-ts` may consume neutral analysis and contracts, but may
-  not depend on one another or on the facade. Each owns its parser, lifecycle,
-  language-specific lowering, and language-specific graph adaptation.
-- `polint` is the one composition root. It is the only product crate that
-  intentionally names both concrete frontends and assembles all provider
-  families with repository services.
-
-A new module should first be placed in the crate that owns its inputs and
-invariants. A public re-export is an API decision, not a convenience shortcut.
+`crates/polint/tests/internal_architecture.rs` enforces the package set and
+forbidden dependency directions. `public_surface_leak.rs` separately locks the
+supported prelude and prevents private implementation namespaces from becoming
+rule-author API. A public re-export is an API decision, not a convenience
+shortcut.
 
 ## Facade, host, and public API
 
@@ -123,7 +96,7 @@ run:
    run report to the rule runner.
 
 The facade's host implements the object-safe contracts from
-`polint-analysis-api`. Provider wrappers may downcast the contract at this one
+`analysis_api`. Provider wrappers may downcast the contract at this one
 composition boundary to the host's concrete database; neutral algorithms do
 not do that.
 
@@ -169,7 +142,7 @@ information needed to validate replacement and conflicts. This keeps the
 analysis graph inspectable without exposing the host's concrete stores to rule
 packs.
 
-`polint-ir` is the neutral MIR boundary. Go and TS/JS lower their syntax and
+`ir` is the neutral MIR boundary. Go and TS/JS lower their syntax and
 semantic information into MIR bodies, blocks, operations, terminators, places,
 and type shapes. Shared CFG, calls, domains, summaries, IFDS/data-flow, and
 solver code consume that MIR instead of reparsing source or maintaining
@@ -185,7 +158,7 @@ precision and limits.
 
 ### Frontend contract
 
-`polint-frontend-api` defines the language-neutral frontend boundary:
+`frontend_api` defines the language-neutral frontend boundary:
 
 - `FrontendProfile` declares a stable profile name, language family, produced
   fact labels, and a precision ceiling.
@@ -204,7 +177,7 @@ language crate.
 
 ### Provider contract and execution
 
-`polint-analysis-api` defines the provider vocabulary used by both frontends and
+`analysis_api` defines the provider vocabulary used by both frontends and
 whole-repository analyses:
 
 - `ProviderManifest` declares an ID, kind, input fact families, output families,
@@ -252,7 +225,7 @@ turns an unsupported capability into a supported one.
 
 ## Identity and interning
 
-`polint-core` owns `StableKeyId` and `StableKeyInterner`. In production the
+`internal_core` owns `StableKeyId` and `StableKeyInterner`. In production the
 interner is scoped to an `AnalysisDb`/analysis host. The process-wide helper is
 hidden and test-only; it is not a production identity service. Cloning a host
 preserves the known key table while allowing detached future allocations.
@@ -287,11 +260,11 @@ The language crates own the parts that are impossible to make neutral: parser
 invocation, project configuration, module/package discovery, import resolution,
 language semantic enrichment, and lowering from language syntax to neutral
 facts/MIR. Graph assembly and reusable graph algorithms stay in
-`polint-analysis`.
+`analysis_neutral`.
 
 ### Go
 
-`polint-go` uses tree-sitter for syntax extraction and owns the Go semantic
+`go` uses tree-sitter for syntax extraction and owns the Go semantic
 sidecar integration. The lifecycle is deliberately monorepo-safe:
 
 - Go files are associated with the nearest `go.mod`, unless
@@ -320,7 +293,7 @@ shape.
 
 ### TypeScript and JavaScript
 
-`polint-ts` uses Oxc for TypeScript, TSX, JavaScript, and JSX parsing and fact
+`ts` uses Oxc for TypeScript, TSX, JavaScript, and JSX parsing and fact
 extraction. Parser errors become file diagnostics while recoverable syntax facts
 retain their explicit precision. The adapter has file and syntax-layer cache
 paths and merges results in normalized repository path order.
@@ -334,15 +307,15 @@ corresponding precision/reason codes. A dynamic import expression is not
 silently treated as a statically resolved edge.
 
 The TS/JS adapter emits neutral module-graph drafts and language facts. The
-neutral module graph builder in `polint-analysis` owns node/edge normalization,
+neutral module graph builder in `analysis_neutral` owns node/edge normalization,
 relationship queries, topology projections, and deterministic assembly. The
-same split applies to symbol graphs: language crates extract language-specific
+same split applies to symbol graphs: language modules extract language-specific
 symbols and bindings, while neutral consumers use the common symbol/reference
 model.
 
 ### Module and symbol graph model
 
-`polint-analysis::module_graph` owns the neutral graph model, builders, topology
+`analysis_neutral::module_graph` owns the neutral graph model, builders, topology
 facts, resolution status/precision, and queries. Go and TS/JS provide seeds and
 resolvers; they do not duplicate the neutral graph algorithms. The module graph
 feeds package ownership and module topology, then the symbol graph and MIR
@@ -428,16 +401,15 @@ underlying provider has unresolved, unsupported, or budget-limited results.
 ### Adding a language frontend
 
 1. Put parser, language lifecycle, module/package resolution, language stores,
-   and language-to-MIR lowering in a new language crate. Depend on
-   `polint-frontend-api`, `polint-analysis-api`, `polint-analysis`, and the
-   foundational crates as needed; do not depend on another concrete frontend or
-   `polint`.
+   and language-to-MIR lowering in a private language module. Depend on
+   `frontend_api`, `analysis_api`, `analysis_neutral`, and the
+   foundational modules as needed; do not depend on another concrete frontend.
 2. Implement `LanguageFrontend` and a stable `FrontendProfile`. Emit neutral
    source/fact rows through `FactDatabase`, with explicit precision, status,
    metadata, stable-key recipes, and parser/setup diagnostics.
 3. Adapt language-specific imports, modules, packages, and symbols into the
    neutral graph builders. Keep reusable graph assembly/query logic in
-   `polint-analysis`.
+   `analysis_neutral`.
 4. Add the provider manifest and capability support needed by the new facts;
    register the frontend and provider in the facade's composition root. Do not
    expose a manifest or host store as the author API.
@@ -452,8 +424,8 @@ underlying provider has unresolved, unsupported, or budget-limited results.
 ### Adding an analysis family or provider
 
 1. Define neutral input/output schemas and ownership in
-   `polint-analysis-api`; implement the algorithm and stores in
-   `polint-analysis` against `FactDatabase`/`AnalysisHost`.
+   `analysis_api`; implement the algorithm and stores in
+   `analysis_neutral` against `FactDatabase`/`AnalysisHost`.
 2. Give the provider a manifest with honest inputs, outputs, language scope,
    schema, cache policy, precision ceiling, and deterministic output digest.
 3. Add capability planning and setup checks before allowing a rule to run. A
@@ -468,7 +440,7 @@ underlying provider has unresolved, unsupported, or budget-limited results.
 
 Do not add a manual capability declaration to compensate for a missing typed
 view, add a compatibility/dual identity field, sort by registry or interner
-allocation order, or make a neutral algorithm import a language crate. Those
+allocation order, or make a neutral algorithm import a language module. Those
 choices defeat the architecture's compiler and determinism guarantees.
 
 ## Validation and maintenance
@@ -490,8 +462,8 @@ cargo deny check all
 ```
 
 The structural checks should also confirm that `cargo metadata --no-deps`
-contains exactly the eight binding product crates, that no concrete frontend is
-a dependency of `polint-analysis`, that the supported facade paths remain
+contains exactly the two publishable product packages plus unpublished tooling, that no concrete frontend is
+a dependency of `analysis_neutral`, that the supported facade paths remain
 stable, and that all example rule packs compile through the public SDK. Golden
 diagnostic sets must remain byte-identical for architecture-only changes; do
 not regenerate them to mask a behavior change.
@@ -517,7 +489,7 @@ The following are deliberately outside this architecture's supported contract:
 - using a process-global interner, numeric allocation order, hidden generated
   lifecycle files, or cache contents as correctness dependencies;
 - promising a public ABI for dynamically loaded providers or allowing neutral
-  analysis to reach into a concrete language crate;
+  analysis to reach into a concrete language module;
 - treating full persistent fact storage or demand-driven/editor-latency
   execution as an author-facing guarantee. Those may be implemented behind the
   existing boundaries later, but they are not required for or implied by the
@@ -529,4 +501,4 @@ The following are deliberately outside this architecture's supported contract:
 When a future feature crosses one of these boundaries, it must first define a
 versioned contract, precision/error semantics, deterministic inputs, cache
 invalidation, public visibility, and external-consumer tests. The existing
-crate graph and supported facade should remain the default constraints.
+module graph and supported facade should remain the default constraints.

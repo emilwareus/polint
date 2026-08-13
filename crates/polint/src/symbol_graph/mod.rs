@@ -1,8 +1,8 @@
-pub(crate) use polint_go::symbol_graph as go;
+pub(crate) use crate::go::symbol_graph as go;
 pub(crate) mod model;
 pub(crate) mod query;
 pub(crate) mod semantic;
-pub(crate) use polint_ts::symbol_graph as ts;
+pub(crate) use crate::ts::symbol_graph as ts;
 
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
@@ -221,7 +221,7 @@ fn derive_requested_symbols_uncached_with_payload(
     let mut derivation = SymbolGraphDerivation::default();
     let mut semantic_output = SemanticIndexOutput::default();
 
-    let request = polint_analysis::symbol_graph::SymbolGraphRequest::new(
+    let request = crate::analysis_neutral::symbol_graph::SymbolGraphRequest::new(
         plan.requests_capability("symbols"),
         plan.requests_capability("references"),
     );
@@ -231,7 +231,7 @@ fn derive_requested_symbols_uncached_with_payload(
         ts::derive_ts_symbols(
             &mut builder,
             db,
-            polint_ts::symbol_graph::TsSymbolOptions {
+            crate::ts::symbol_graph::TsSymbolOptions {
                 request,
                 resolved_imports: db.resolved_imports().to_vec(),
                 module_nodes: db.module_nodes().to_vec(),
@@ -257,7 +257,7 @@ fn derive_requested_symbols_uncached_with_payload(
         go::derive_go_symbols(
             &mut builder,
             db,
-            &polint_go::symbol_graph::GoSymbolOptions {
+            &crate::go::symbol_graph::GoSymbolOptions {
                 root: loaded.root.clone(),
                 settings: loaded.config.languages.go.clone(),
                 request,
@@ -1105,7 +1105,7 @@ fn fact_order_key<'a>(
 fn merge_language_output(
     derivation: &mut SymbolGraphDerivation,
     semantic: &mut SemanticIndexOutput,
-    output: polint_analysis::symbol_graph::LanguageSymbolOutput,
+    output: crate::analysis_neutral::symbol_graph::LanguageSymbolOutput,
     db: &AnalysisDb,
     plan: &AnalysisPlan,
 ) {
@@ -1124,13 +1124,13 @@ fn merge_language_output(
             continue;
         }
         let status = match support.status {
-            polint_analysis::symbol_graph::SymbolCapabilityStatus::Supported => {
+            crate::analysis_neutral::symbol_graph::SymbolCapabilityStatus::Supported => {
                 CapabilitySupportStatus::Supported
             }
-            polint_analysis::symbol_graph::SymbolCapabilityStatus::SetupMissing => {
+            crate::analysis_neutral::symbol_graph::SymbolCapabilityStatus::SetupMissing => {
                 CapabilitySupportStatus::SetupMissing
             }
-            polint_analysis::symbol_graph::SymbolCapabilityStatus::Unsupported => {
+            crate::analysis_neutral::symbol_graph::SymbolCapabilityStatus::Unsupported => {
                 CapabilitySupportStatus::Unsupported
             }
         };
@@ -2621,8 +2621,8 @@ mod symbol_graph_ts_import_links {
         ts::derive_ts_symbols(
             &mut builder,
             db,
-            polint_ts::symbol_graph::TsSymbolOptions {
-                request: polint_analysis::symbol_graph::SymbolGraphRequest::new(true, true),
+            crate::ts::symbol_graph::TsSymbolOptions {
+                request: crate::analysis_neutral::symbol_graph::SymbolGraphRequest::new(true, true),
                 resolved_imports: db.resolved_imports().to_vec(),
                 module_nodes: db.module_nodes().to_vec(),
             },

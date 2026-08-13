@@ -1,10 +1,10 @@
 //! Facade composition for refined-call provider inputs.
 
-use polint_analysis_api::{Digest, InputSnapshot, ProviderManifest};
+use crate::analysis_api::{Digest, InputSnapshot, ProviderManifest};
 
 use crate::core::AnalysisDb;
 
-pub(crate) use polint_analysis::refined_calls::provider::RefinedCallsProviderOutput;
+pub(crate) use crate::analysis_neutral::refined_calls::provider::RefinedCallsProviderOutput;
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn derive_refined_calls_with_cache_stats(
@@ -22,7 +22,7 @@ pub(crate) fn derive_refined_calls_with_cache_stats(
         .go_semantic_functions()
         .iter()
         .map(
-            |function| polint_analysis::refined_calls::provider::GoSemanticFunctionInput {
+            |function| crate::analysis_neutral::refined_calls::provider::GoSemanticFunctionInput {
                 qualified: function.qualified.clone(),
                 name: function.name.clone(),
                 file: function.file,
@@ -34,7 +34,7 @@ pub(crate) fn derive_refined_calls_with_cache_stats(
         .go_semantic_callsites()
         .iter()
         .map(
-            |callsite| polint_analysis::refined_calls::provider::GoSemanticCallsiteInput {
+            |callsite| crate::analysis_neutral::refined_calls::provider::GoSemanticCallsiteInput {
                 stable_key: callsite.stable_key,
                 caller: callsite.caller.clone(),
                 file: callsite.file,
@@ -42,7 +42,7 @@ pub(crate) fn derive_refined_calls_with_cache_stats(
             },
         )
         .collect::<Vec<_>>();
-    polint_analysis::refined_calls::provider::derive_refined_calls_with_cache_stats(
+    crate::analysis_neutral::refined_calls::provider::derive_refined_calls_with_cache_stats(
         db,
         input_snapshot,
         manifest,
@@ -76,9 +76,9 @@ pub(crate) use crate::analysis::solver::facts::DerivedEdgeFact;
 #[cfg(test)]
 pub(crate) use crate::analysis_kernel::incremental::DigestKind;
 pub(crate) const REFINED_CALLS_PROVIDER_ID: &str =
-    polint_analysis::refined_calls::provider::REFINED_CALLS_PROVIDER_ID;
+    crate::analysis_neutral::refined_calls::provider::REFINED_CALLS_PROVIDER_ID;
 #[cfg(test)]
-use polint_core::StableKeyInterner;
+use crate::internal_core::StableKeyInterner;
 
 #[cfg(test)]
 fn derive_solver_refinements(
@@ -88,7 +88,7 @@ fn derive_solver_refinements(
         .go_semantic_functions()
         .iter()
         .map(
-            |function| polint_analysis::refined_calls::provider::GoSemanticFunctionInput {
+            |function| crate::analysis_neutral::refined_calls::provider::GoSemanticFunctionInput {
                 qualified: function.qualified.clone(),
                 name: function.name.clone(),
                 file: function.file,
@@ -100,7 +100,7 @@ fn derive_solver_refinements(
         .go_semantic_callsites()
         .iter()
         .map(
-            |callsite| polint_analysis::refined_calls::provider::GoSemanticCallsiteInput {
+            |callsite| crate::analysis_neutral::refined_calls::provider::GoSemanticCallsiteInput {
                 stable_key: callsite.stable_key,
                 caller: callsite.caller.clone(),
                 file: callsite.file,
@@ -108,7 +108,7 @@ fn derive_solver_refinements(
             },
         )
         .collect::<Vec<_>>();
-    polint_analysis::refined_calls::provider::derive_solver_refinements_with_inputs(
+    crate::analysis_neutral::refined_calls::provider::derive_solver_refinements_with_inputs(
         db,
         &go_semantic_functions,
         &go_semantic_callsites,
@@ -120,7 +120,7 @@ fn finalized_output(
     interner: &StableKeyInterner,
     output: crate::analysis::refined_calls::store::RefinedCallOutput,
 ) -> crate::analysis::refined_calls::store::RefinedCallOutput {
-    polint_analysis::refined_calls::provider::finalized_output(interner, output)
+    crate::analysis_neutral::refined_calls::provider::finalized_output(interner, output)
 }
 
 #[cfg(test)]
@@ -129,8 +129,8 @@ fn stable_refined_call_key(
     target: &crate::analysis::calls::facts::CallTargetFact,
     tier: crate::analysis::refined_calls::facts::RefinedCallTier,
     base_target_key: &str,
-) -> polint_core::StableKeyId {
-    polint_analysis::refined_calls::provider::stable_refined_call_key(
+) -> crate::internal_core::StableKeyId {
+    crate::analysis_neutral::refined_calls::provider::stable_refined_call_key(
         interner,
         target,
         tier,

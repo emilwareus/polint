@@ -23,13 +23,13 @@ use crate::analysis::summaries::facts::{SummaryEventFact, SummaryFact};
 use crate::analysis_kernel::{
     FactConfidence, FactFamily, FactMeta, FactPrecision, ValidationStatus, stable_key_from_parts,
 };
+use crate::analysis_neutral::domains::facts::{DomainPrecision, DomainStatus};
 use crate::core::StableKeyId;
 use crate::module_graph::topology::TopologyPrecision;
 use crate::symbol_graph::semantic::{
     AliasFact, ExportFact, GeneratedSymbolFact, ResolutionFact, ScopeFact, SemanticImportFact,
     SemanticStatus, StableExportIdentity,
 };
-use polint_analysis::domains::facts::{DomainPrecision, DomainStatus};
 use std::borrow::Cow;
 use std::cmp::Ordering;
 

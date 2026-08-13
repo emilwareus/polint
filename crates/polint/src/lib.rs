@@ -1,3 +1,5 @@
+#![allow(unreachable_patterns)]
+
 //! polint: multi-language, repo-local static-analysis rules.
 //!
 //! Rule authors primarily use [`sdk`] and [`runner`]. Other modules are internal to this crate.
@@ -15,7 +17,11 @@ pub fn run_main() -> anyhow::Result<u8> {
 }
 
 pub(crate) mod analysis;
+#[allow(dead_code, unreachable_pub, unused_imports)]
+pub(crate) mod analysis_api;
 pub(crate) mod analysis_kernel;
+#[allow(dead_code, unreachable_patterns, unreachable_pub, unused_imports)]
+pub(crate) mod analysis_neutral;
 pub(crate) mod analysis_plan;
 pub(crate) mod baseline;
 pub(crate) mod cache;
@@ -27,11 +33,18 @@ pub(crate) mod diagnostics;
 #[path = "../../polint-eval/src/harness/mod.rs"]
 pub(crate) mod eval;
 pub(crate) mod frontend;
+#[allow(dead_code, unreachable_pub, unused_imports)]
+pub(crate) mod frontend_api;
 pub(crate) mod fs;
 pub(crate) mod git;
-pub(crate) use polint_go as go;
+#[allow(dead_code, unreachable_pub, unused_imports)]
+pub(crate) mod go;
 pub(crate) mod golden_cost;
 pub(crate) mod ignores;
+#[allow(dead_code, unreachable_pub, unused_imports)]
+pub(crate) mod internal_core;
+#[allow(dead_code, unreachable_pub, unused_imports)]
+pub(crate) mod ir;
 pub(crate) mod measure;
 pub(crate) mod metrics;
 pub(crate) mod module_graph;
@@ -42,7 +55,8 @@ pub(crate) mod rule_error;
 pub(crate) mod rule_manifest;
 pub(crate) mod rule_test;
 pub(crate) mod symbol_graph;
-pub(crate) use polint_ts as ts;
+#[allow(dead_code, unreachable_pub, unused_imports)]
+pub(crate) mod ts;
 
 /// Internal surfaces for `polint-bench` (`feature = "bench"`). Not part of the supported API.
 #[cfg(feature = "bench")]

@@ -1,2 +1,2 @@
-pub(crate) use polint_analysis::domains::provider;
-pub(crate) use polint_analysis::domains::validate;
+pub(crate) use crate::analysis_neutral::domains::provider;
+pub(crate) use crate::analysis_neutral::domains::validate;

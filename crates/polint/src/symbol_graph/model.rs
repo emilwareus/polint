@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 pub(crate) const SYMBOL_GRAPH_LAYER_SCHEMA: &str = "symbol-graph-facts-2";
 
-pub(crate) use polint_analysis::symbol_graph::model::SymbolGraphBuilder;
+pub(crate) use crate::analysis_neutral::symbol_graph::model::SymbolGraphBuilder;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct SymbolGraphLayerPayload {

@@ -1,5 +1,5 @@
-pub(crate) use polint_analysis_api::CachedFileFacts;
-pub use polint_analysis_api::{
+pub(crate) use crate::analysis_api::CachedFileFacts;
+pub use crate::analysis_api::{
     BranchObligation, ComplexityMetricFact, CoverageFact, DefinitionFact, DefinitionKind,
     FileMetricFact, FunctionFact, FunctionMetricFact, ImportFact, JsxAttributeFact, ModuleEdge,
     ModuleEdgeKind, ModuleNode, ModuleNodeKind, PackageFact, ReferenceFact, ReferenceKind,
@@ -8,4 +8,4 @@ pub use polint_analysis_api::{
     TsClassFact, TsComponentFact, UnresolvedReason,
 };
 #[cfg(test)]
-pub(crate) use polint_analysis_api::{CachedFileAnalysis, TS_JS_MODULE_FUNCTION_NAME};
+pub(crate) use crate::analysis_api::{CachedFileAnalysis, TS_JS_MODULE_FUNCTION_NAME};

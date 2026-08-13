@@ -614,8 +614,8 @@ pub(crate) fn run_abstract_domains_core_fixture_for_test(
     observed.extend(abstract_domain_observed_with_policy(
         temp.path(),
         &plan,
-        polint_analysis::domains::solver::SolverPolicy::for_test(
-            polint_analysis::domains::solver::SolverBudget {
+        crate::analysis_neutral::domains::solver::SolverPolicy::for_test(
+            crate::analysis_neutral::domains::solver::SolverBudget {
                 max_iterations: 10_000,
                 widening_fuel: 0,
             },
@@ -624,8 +624,8 @@ pub(crate) fn run_abstract_domains_core_fixture_for_test(
     observed.extend(abstract_domain_observed_with_policy(
         temp.path(),
         &plan,
-        polint_analysis::domains::solver::SolverPolicy::for_test(
-            polint_analysis::domains::solver::SolverBudget {
+        crate::analysis_neutral::domains::solver::SolverPolicy::for_test(
+            crate::analysis_neutral::domains::solver::SolverBudget {
                 max_iterations: 0,
                 widening_fuel: 8,
             },
@@ -786,7 +786,7 @@ pub(crate) fn run_framework_entrypoints_core_fixture_for_test(
 fn abstract_domain_observed_with_policy(
     repo_root: &Path,
     plan: &crate::analysis_plan::AnalysisPlan,
-    policy: polint_analysis::domains::solver::SolverPolicy,
+    policy: crate::analysis_neutral::domains::solver::SolverPolicy,
 ) -> anyhow::Result<Vec<crate::eval::model::ObservedItem>> {
     let loaded = crate::config::load_config(repo_root)?;
     let config_digest = crate::cache::keys::config_hash(&loaded);
@@ -801,8 +801,8 @@ fn abstract_domain_observed_with_policy(
             plan,
             parallel: true,
         })?;
-    let solver = polint_analysis::domains::solver::IdeDomainSolver::new(policy);
-    let result = solver.solve(polint_analysis::domains::solver::SolverInput::from(
+    let solver = crate::analysis_neutral::domains::solver::IdeDomainSolver::new(policy);
+    let result = solver.solve(crate::analysis_neutral::domains::solver::SolverInput::from(
         &output.db,
     ));
     let mut db = output.db;
@@ -813,7 +813,7 @@ fn abstract_domain_observed_with_policy(
         .map(|place| (place.id, interner.resolve(place.stable_key).to_string()))
         .collect();
     db.replace_abstract_domain_facts(
-        polint_analysis::domains::store::DomainOutput::from_results_with_place_keys(
+        crate::analysis_neutral::domains::store::DomainOutput::from_results_with_place_keys(
             &db.stable_key_interner(),
             result.results(),
             &place_stable_keys,

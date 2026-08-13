@@ -1,3 +1,4 @@
+use crate::analysis_api::ProviderExecution;
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
     CacheNode, CacheStats, DependencyEdge, DependencyKind, Digest, LayerCacheManifest,
@@ -7,12 +8,13 @@ use crate::analysis_kernel::incremental::{
 use crate::analysis_kernel::metrics_projection::{
     CanonicalMetricsInputs, CanonicalMetricsOutput, MetricsProjectionError,
 };
+use crate::analysis_neutral::metrics::{
+    METRIC_CAPABILITIES, METRICS_LAYER_SCHEMA, MetricsLayerPayload,
+};
 use crate::analysis_plan::AnalysisPlan;
 use crate::cache::Cache;
 use crate::core::AnalysisDb;
 use crate::diagnostics::{Diagnostic, TextRange};
-use polint_analysis::metrics::{METRIC_CAPABILITIES, METRICS_LAYER_SCHEMA, MetricsLayerPayload};
-use polint_analysis_api::ProviderExecution;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct MetricsDerivation {
@@ -118,7 +120,8 @@ fn derive_requested_metrics_uncached(
         return Ok(MetricsDerivation::default());
     }
 
-    if let Some(output) = polint_analysis::metrics::derive_requested_metrics(db, requested) {
+    if let Some(output) = crate::analysis_neutral::metrics::derive_requested_metrics(db, requested)
+    {
         db.replace_metric_facts(
             output.file_metrics,
             output.function_metrics,
@@ -162,15 +165,15 @@ fn metrics_layer_dependency_edges(
 }
 
 fn metrics_parameter_digest() -> Digest {
-    polint_analysis::metrics::metrics_parameter_digest()
+    crate::analysis_neutral::metrics::metrics_parameter_digest()
 }
 
 fn metrics_layer_payload(db: &AnalysisDb) -> MetricsLayerPayload {
-    polint_analysis::metrics::metrics_layer_payload(db)
+    crate::analysis_neutral::metrics::metrics_layer_payload(db)
 }
 
 fn restore_metrics_layer_payload(db: &mut AnalysisDb, payload: &MetricsLayerPayload) {
-    let output = polint_analysis::metrics::restore_metrics_layer_payload(payload);
+    let output = crate::analysis_neutral::metrics::restore_metrics_layer_payload(payload);
     db.replace_metric_facts(
         output.file_metrics,
         output.function_metrics,

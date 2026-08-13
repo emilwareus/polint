@@ -22,7 +22,7 @@ use crate::go::semantic::diagnostics::{
     GO_PACKAGES_LOAD_FAILED, GO_SIDECAR_TIMEOUT, GO_VERSION_UNSUPPORTED,
 };
 
-pub(crate) use polint_analysis::unknown_taxonomy::labels::*;
+pub(crate) use crate::analysis_neutral::unknown_taxonomy::labels::*;
 
 pub(crate) const PUBLIC_UNKNOWN_CAPABILITIES: &[&str] = &[
     "resolved_imports",

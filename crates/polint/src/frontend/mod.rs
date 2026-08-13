@@ -11,16 +11,16 @@ use crate::core::Language;
 
 #[cfg(test)]
 use crate::analysis_kernel::PrecisionCeiling;
-pub(crate) use polint_frontend_api::AnalysisUnit;
+pub(crate) use crate::frontend_api::AnalysisUnit;
 #[cfg(test)]
-pub(crate) use polint_frontend_api::{FrontendProfile, LanguageFrontend};
+pub(crate) use crate::frontend_api::{FrontendProfile, LanguageFrontend};
 pub(crate) use registry::{
     FrontendRegistry, FrontendRegistryExt, LANGUAGE_IDS_GO, LANGUAGE_IDS_GO_AND_TS,
     LANGUAGE_IDS_NONE, LANGUAGE_IDS_TS, LanguageId, build_default_registry,
 };
 
-pub(crate) use polint_go::{FAMILY_GO, GoFrontend};
-pub(crate) use polint_ts::{FAMILY_TYPESCRIPT_JAVASCRIPT, TsJsFrontend};
+pub(crate) use crate::go::{FAMILY_GO, GoFrontend};
+pub(crate) use crate::ts::{FAMILY_TYPESCRIPT_JAVASCRIPT, TsJsFrontend};
 
 static DEFAULT_REGISTRY: OnceLock<FrontendRegistry> = OnceLock::new();
 

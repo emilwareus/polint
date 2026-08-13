@@ -344,7 +344,7 @@ fn collect_ts_direct_bindings_from_analyses<A: TsDirectBindingAnalysis>(
 /// dense IDs after the stable-key sort.
 #[derive(Default)]
 struct GraphBuilder {
-    inner: polint_analysis::semantic_graph::build::SemanticGraphBuilder,
+    inner: crate::analysis_neutral::semantic_graph::build::SemanticGraphBuilder,
 }
 
 impl GraphBuilder {

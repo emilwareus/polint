@@ -12,17 +12,17 @@ use super::scc::SccSchedule;
 use super::scc::compute_scc_schedule;
 use super::store::SummaryOutput;
 use crate::analysis::ids::MirBodyId;
+use crate::analysis_api::{ProviderExecution, ProviderFailureReason, ProviderFailureStage};
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
     CacheStats, DemandQueryEngine, DemandQueryTrace, Digest, DigestKind, InputSnapshot,
 };
+pub(crate) use crate::analysis_neutral::summaries::provider::{
+    callable_stable_key_map, direct_summaries_output_digest,
+};
 use crate::cache::{Cache, CacheKey};
 use crate::core::AnalysisDb;
 use crate::diagnostics::Diagnostic;
-pub(crate) use polint_analysis::summaries::provider::{
-    callable_stable_key_map, direct_summaries_output_digest,
-};
-use polint_analysis_api::{ProviderExecution, ProviderFailureReason, ProviderFailureStage};
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct DirectSummariesProviderOutput {

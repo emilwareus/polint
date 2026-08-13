@@ -1,1 +1,1 @@
-pub use polint_core::Language;
+pub use crate::internal_core::Language;

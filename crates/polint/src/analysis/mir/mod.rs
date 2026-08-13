@@ -1,2 +1,2 @@
-pub(crate) use polint_analysis::mir_body as body;
-pub(crate) use polint_analysis::mir_op as op;
+pub(crate) use crate::analysis_neutral::mir_body as body;
+pub(crate) use crate::analysis_neutral::mir_op as op;

@@ -5,8 +5,8 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use crate::analysis::cfg::facts::{BasicBlockKind, CfgEdgeKind};
+use crate::analysis_neutral::cfg::lower::lower_cfg;
 use crate::core::AnalysisDb;
-use polint_analysis::cfg::lower::lower_cfg;
 
 #[test]
 fn ts_cfg_lowers_edges_from_production_mir_terminators() {
@@ -20,14 +20,14 @@ fn ts_cfg_lowers_edges_from_production_mir_terminators() {
     assert!(
         crate::ts::analyze_with_options(
             &mut db,
-            &polint_analysis_api::DisabledAnalysisCache,
+            &crate::analysis_api::DisabledAnalysisCache,
             "",
             "",
             false
         )
         .is_empty()
     );
-    let mir = polint_ts::lower_ts_mir(&db);
+    let mir = crate::ts::lower_ts_mir(&db);
     db.replace_semantic_mir(mir)
         .expect("MIR output should store");
 
@@ -54,14 +54,14 @@ fn ts_cfg_throw_prevents_impossible_fallthrough() {
     assert!(
         crate::ts::analyze_with_options(
             &mut db,
-            &polint_analysis_api::DisabledAnalysisCache,
+            &crate::analysis_api::DisabledAnalysisCache,
             "",
             "",
             false
         )
         .is_empty()
     );
-    let mir = polint_ts::lower_ts_mir(&db);
+    let mir = crate::ts::lower_ts_mir(&db);
     db.replace_semantic_mir(mir)
         .expect("MIR output should store");
     let output = lower_cfg(&db);
@@ -115,14 +115,14 @@ export function* values(value) { yield value; }
     assert!(
         crate::ts::analyze_with_options(
             &mut db,
-            &polint_analysis_api::DisabledAnalysisCache,
+            &crate::analysis_api::DisabledAnalysisCache,
             "",
             "",
             false
         )
         .is_empty()
     );
-    let mir = polint_ts::lower_ts_mir(&db);
+    let mir = crate::ts::lower_ts_mir(&db);
     db.replace_semantic_mir(mir)
         .expect("MIR output should store");
     let output = lower_cfg(&db);
@@ -163,7 +163,7 @@ fn a_recoverable_syntax_error_is_recorded_as_unsupported_not_ignored() {
     );
     let diagnostics = crate::ts::analyze_with_options(
         &mut db,
-        &polint_analysis_api::DisabledAnalysisCache,
+        &crate::analysis_api::DisabledAnalysisCache,
         "",
         "",
         false,
@@ -181,7 +181,7 @@ fn a_recoverable_syntax_error_is_recorded_as_unsupported_not_ignored() {
         "valid file must stay free of parser/ts diagnostics"
     );
 
-    db.replace_semantic_mir(polint_ts::lower_ts_mir(&db))
+    db.replace_semantic_mir(crate::ts::lower_ts_mir(&db))
         .expect("store MIR unsupported rows");
 
     let rows = crate::analysis::unknown_taxonomy::collect::graph_engine_unknowns(&db);

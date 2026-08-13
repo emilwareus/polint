@@ -1,8 +1,8 @@
-//! [`polint_analysis_api::AnalysisCache`] adapter over the facade disk cache.
+//! [`crate::analysis_api::AnalysisCache`] adapter over the facade disk cache.
 
 use std::sync::Arc;
 
-use polint_analysis_api::{
+use crate::analysis_api::{
     AnalysisCache, Digest, FileCacheKeyParts, FileCacheReadOutcome, FileCacheReadStatus,
     LayerCacheKeyParts, LayerCacheKind, LayerCachePrecision, LayerCacheReadOutcome,
     LayerCacheReadStatus, LayerCacheWriteStatus,

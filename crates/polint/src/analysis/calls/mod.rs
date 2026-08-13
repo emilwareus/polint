@@ -1,4 +1,4 @@
-pub(crate) use polint_analysis::calls::facts;
-pub(crate) use polint_analysis::calls::provider;
-pub(crate) use polint_analysis::calls::store;
-pub(crate) use polint_analysis::calls::validate;
+pub(crate) use crate::analysis_neutral::calls::facts;
+pub(crate) use crate::analysis_neutral::calls::provider;
+pub(crate) use crate::analysis_neutral::calls::store;
+pub(crate) use crate::analysis_neutral::calls::validate;

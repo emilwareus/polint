@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub(crate) use polint_analysis_api::CacheStats;
+pub(crate) use crate::analysis_api::CacheStats;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ProviderOutputMeta {

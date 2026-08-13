@@ -1,6 +1,6 @@
 use crate::core::{ResolutionPrecision, ResolutionStatus, SymbolPrecision};
 
-pub(crate) use polint_analysis_api::{
+pub(crate) use crate::analysis_api::{
     FactConfidence, FactFamily, FactMeta, FactMetaStore, FactPrecision, FactRef, MissingFactMeta,
     ValidationStatus, stable_key_from_parts, stable_key_text_from_parts,
 };

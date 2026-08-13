@@ -1308,12 +1308,12 @@ mod abstract_domains {
         AnalysisKernel, FactConfidence, FactFamily, FactMeta, FactPrecision, FactRef,
         ValidationStatus,
     };
-    use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, Span};
-    use polint_analysis::domains::facts::{
+    use crate::analysis_neutral::domains::facts::{
         DomainEventFact, DomainLocation, DomainObservationFact, DomainPrecision, DomainSlot,
         DomainStatus, DomainValue,
     };
-    use polint_analysis::domains::store::DomainOutput;
+    use crate::analysis_neutral::domains::store::DomainOutput;
+    use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, Span};
     use std::path::PathBuf;
 
     #[test]

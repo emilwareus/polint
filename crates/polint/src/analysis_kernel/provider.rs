@@ -1,16 +1,16 @@
 use super::host;
 use super::incremental::{CacheStats, Digest, DigestKind, InputSnapshot};
 use crate::analysis::summaries::provider::SccClosureProviderOutput;
+use crate::analysis_api::ProviderExecution;
 use crate::analysis_plan::AnalysisPlan;
 use crate::cache::Cache;
 use crate::config::LoadedConfig;
 use crate::core::{AnalysisDb, CapabilitySupportView};
 use crate::diagnostics::{Diagnostic, TextRange};
 use crate::frontend::{LanguageIdRegistryExt, LanguageRegistryExt};
-use polint_analysis_api::ProviderExecution;
 use std::collections::BTreeMap;
 
-pub(crate) use polint_analysis_api::{
+pub(crate) use crate::analysis_api::{
     CachePolicy, PrecisionCeiling, Provider, ProviderCtx, ProviderKind, ProviderManifest,
     ProviderRunResult, SchemaVersion,
 };
@@ -37,7 +37,7 @@ impl<'a> CtxHandle<'a> {
         let rule_digest = ctx.rule_digest;
         let parallel = ctx.parallel;
         let upstream_digests = ctx.upstream_digests;
-        let db = polint_analysis_api::FactDatabase::as_any_mut(ctx.facts)
+        let db = crate::analysis_api::FactDatabase::as_any_mut(ctx.facts)
             .downcast_mut::<AnalysisDb>()
             .expect("facade AnalysisDb host");
         let (cache, loaded, input_snapshot, plan, capability_support, scc_closure) =
@@ -158,7 +158,7 @@ fn run_registered_frontend_syntax(
         frontend_id.to_public_language(),
     );
     // Clone matching files so AnalysisUnit does not borrow the fact DB across `analyze`.
-    let db = polint_analysis_api::FactDatabase::as_any_mut(ctx.facts)
+    let db = crate::analysis_api::FactDatabase::as_any_mut(ctx.facts)
         .downcast_mut::<AnalysisDb>()
         .expect("facade AnalysisDb host");
     let owned: Vec<crate::core::SourceFile> = db
@@ -864,9 +864,9 @@ impl Provider for MetricsProvider {
                     )],
                     cache_stats: CacheStats::default(),
                     output_digest: None,
-                    execution: polint_analysis_api::ProviderExecution::Failed {
-                        stage: polint_analysis_api::ProviderFailureStage::Execution,
-                        reason: polint_analysis_api::ProviderFailureReason::ExecutionFailed,
+                    execution: crate::analysis_api::ProviderExecution::Failed {
+                        stage: crate::analysis_api::ProviderFailureStage::Execution,
+                        reason: crate::analysis_api::ProviderFailureReason::ExecutionFailed,
                     },
                 };
             }
@@ -1924,7 +1924,10 @@ mod tests {
                 "string_literals",
             ]
         );
-        assert_eq!(manifest.language_ids, &[polint_core::LanguageId::GO]);
+        assert_eq!(
+            manifest.language_ids,
+            &[crate::internal_core::LanguageId::GO]
+        );
         assert_eq!(
             manifest.cache_policy,
             CachePolicy::ExistingFileFactCache {
@@ -1991,7 +1994,7 @@ mod tests {
 
     #[test]
     fn v13_cache_dependency_ledger_matches_provider_manifest_inputs() {
-        for dependency in polint_analysis::cache_key::v13_cache_dependency_ledger() {
+        for dependency in crate::analysis_neutral::cache_key::v13_cache_dependency_ledger() {
             let manifest = provider_manifests()
                 .iter()
                 .find(|manifest| manifest.id == dependency.provider_id)

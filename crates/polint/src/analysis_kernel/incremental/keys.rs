@@ -19,7 +19,7 @@ use crate::repo_fs::{
     normalize_repo_relative_input, read_repo_file_to_string_with_limit, read_repo_file_with_limit,
     repo_dir_path, repo_file_exists, repo_file_path, repo_relative_existing_path,
 };
-use polint_ts::module_graph::parse_pnpm_workspace_packages;
+use crate::ts::module_graph::parse_pnpm_workspace_packages;
 
 pub(crate) const MODULE_GRAPH_TOPOLOGY_INPUT_FILE_NAMES: &[&str] = &[
     "go.mod",
@@ -35,9 +35,9 @@ pub(crate) const MODULE_GRAPH_TOPOLOGY_INPUT_FILE_NAMES: &[&str] = &[
     "tsconfig.json",
 ];
 
-pub(crate) use polint_analysis_api::LayerKind;
+pub(crate) use crate::analysis_api::LayerKind;
 
-pub(crate) use polint_analysis_api::PrecisionTier;
+pub(crate) use crate::analysis_api::PrecisionTier;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) struct LayerKey {
@@ -54,7 +54,7 @@ pub(crate) struct LayerKey {
     pub(crate) extension_digests: Arc<Vec<Digest>>,
 }
 
-pub(crate) use polint_analysis_api::QueryKey;
+pub(crate) use crate::analysis_api::QueryKey;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) struct SummaryKey {
@@ -2058,7 +2058,7 @@ mod tests {
                 Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["base"]),
-                polint_analysis::cache_key::semantic_mir_provider_parameter_digest(),
+                crate::analysis_neutral::cache_key::semantic_mir_provider_parameter_digest(),
             );
 
             let changed_source = semantic_mir_key(
@@ -2073,7 +2073,7 @@ mod tests {
                 Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["base"]),
-                polint_analysis::cache_key::semantic_mir_provider_parameter_digest(),
+                crate::analysis_neutral::cache_key::semantic_mir_provider_parameter_digest(),
             );
             let changed_config = semantic_mir_key(
                 Digest::from_parts(
@@ -2087,7 +2087,7 @@ mod tests {
                 Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["base"]),
-                polint_analysis::cache_key::semantic_mir_provider_parameter_digest(),
+                crate::analysis_neutral::cache_key::semantic_mir_provider_parameter_digest(),
             );
             let changed_go_lifecycle = semantic_mir_key(
                 Digest::from_parts(
@@ -2101,7 +2101,7 @@ mod tests {
                 Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["base"]),
-                polint_analysis::cache_key::semantic_mir_provider_parameter_digest(),
+                crate::analysis_neutral::cache_key::semantic_mir_provider_parameter_digest(),
             );
             let changed_ts_lifecycle = semantic_mir_key(
                 Digest::from_parts(
@@ -2115,7 +2115,7 @@ mod tests {
                 Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["base"]),
-                polint_analysis::cache_key::semantic_mir_provider_parameter_digest(),
+                crate::analysis_neutral::cache_key::semantic_mir_provider_parameter_digest(),
             );
             let changed_syntax = semantic_mir_key(
                 Digest::from_parts(
@@ -2129,7 +2129,7 @@ mod tests {
                 Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["changed"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["base"]),
-                polint_analysis::cache_key::semantic_mir_provider_parameter_digest(),
+                crate::analysis_neutral::cache_key::semantic_mir_provider_parameter_digest(),
             );
             let changed_symbol = semantic_mir_key(
                 Digest::from_parts(
@@ -2143,7 +2143,7 @@ mod tests {
                 Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["changed"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["base"]),
-                polint_analysis::cache_key::semantic_mir_provider_parameter_digest(),
+                crate::analysis_neutral::cache_key::semantic_mir_provider_parameter_digest(),
             );
             let changed_topology = semantic_mir_key(
                 Digest::from_parts(
@@ -2157,7 +2157,7 @@ mod tests {
                 Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["changed"]),
-                polint_analysis::cache_key::semantic_mir_provider_parameter_digest(),
+                crate::analysis_neutral::cache_key::semantic_mir_provider_parameter_digest(),
             );
             let changed_parameters = semantic_mir_key(
                 Digest::from_parts(
@@ -2202,7 +2202,7 @@ mod tests {
                 Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["base"]),
-                polint_analysis::cache_key::semantic_mir_provider_parameter_digest(),
+                crate::analysis_neutral::cache_key::semantic_mir_provider_parameter_digest(),
             );
             let rule_code = Digest::from_parts(DigestKind::RuleCode, "rule", &["changed"]);
 
@@ -2695,7 +2695,7 @@ mod symbol_graph_semantic_layer_key {
 #[cfg(test)]
 mod cfg_layer_key {
     use super::*;
-    use polint_analysis::cfg::cache_key::cfg_provider_parameter_digest;
+    use crate::analysis_neutral::cfg::cache_key::cfg_provider_parameter_digest;
 
     fn manifest() -> &'static crate::analysis_kernel::ProviderManifest {
         crate::analysis_kernel::AnalysisKernel::provider_manifests()
@@ -2901,7 +2901,7 @@ mod cfg_layer_key {
 #[cfg(test)]
 mod calls_layer_key {
     use super::*;
-    use polint_analysis::calls::cache_key::calls_provider_parameter_digest;
+    use crate::analysis_neutral::calls::cache_key::calls_provider_parameter_digest;
 
     fn manifest() -> &'static crate::analysis_kernel::ProviderManifest {
         crate::analysis_kernel::AnalysisKernel::provider_manifests()

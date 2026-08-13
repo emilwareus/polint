@@ -36,6 +36,6 @@ pub(crate) struct ModuleTopologyLayerPayload {
 }
 
 // Neutral builder and draft contracts are owned by polint-analysis.
-pub(crate) use polint_analysis::module_graph::model::{
+pub(crate) use crate::analysis_neutral::module_graph::model::{
     ModuleGraphBuilder, ResolvedImportDraft, sort_packages,
 };

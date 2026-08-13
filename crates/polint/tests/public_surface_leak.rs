@@ -666,27 +666,27 @@ fn allowlist_has_no_duplicates_and_expected_count() {
     );
 }
 
-/// Production crates that intentionally own identifiers re-exported by the facade prelude.
+/// Internal source roots that intentionally own identifiers re-exported by the facade prelude.
 ///
-/// Walking each owner's `src` tree keeps this gate independent of the current module layout
+/// Walking each internal owner tree keeps this gate independent of the current module layout
 /// inside `polint` while excluding examples, benchmarks, and test fixtures from the definition
 /// scan.
-const PRELUDE_OWNER_CRATES: &[&str] = &[
-    "polint-core",
-    "polint-ir",
-    "polint-analysis-api",
-    "polint-frontend-api",
-    "polint-go",
-    "polint-ts",
-    "polint-analysis",
-    "polint",
+const PRELUDE_OWNER_SOURCE_ROOTS: &[&str] = &[
+    "crates/polint/src/internal_core",
+    "crates/polint/src/ir",
+    "crates/polint/src/analysis_api",
+    "crates/polint/src/frontend_api",
+    "crates/polint/src/go",
+    "crates/polint/src/ts",
+    "crates/polint/src/analysis_neutral",
+    "crates/polint/src",
 ];
 
 fn prelude_definition_sources() -> Vec<(PathBuf, String)> {
     let root = repo_root();
     let mut sources = Vec::new();
-    for crate_name in PRELUDE_OWNER_CRATES {
-        let source_root = root.join("crates").join(crate_name).join("src");
+    for relative_root in PRELUDE_OWNER_SOURCE_ROOTS {
+        let source_root = root.join(relative_root);
         assert!(
             source_root.is_dir(),
             "prelude owner source root missing: {}",

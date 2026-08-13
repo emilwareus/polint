@@ -1,17 +1,17 @@
 use crate::analysis::mir::body::MirOutput;
 use crate::analysis::mir::op::{MirOperationKind, MirValue};
 use crate::analysis::places::{PlaceProjection, PlaceRoot};
+use crate::analysis_api::{ProviderExecution, ProviderFailureReason, ProviderFailureStage};
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
     CacheStats, Digest, DigestKind, InputComponent, InputSnapshot,
 };
+#[cfg(test)]
+use crate::analysis_neutral::mir_body_compose::merge_language_outputs;
 use crate::core::AnalysisDb;
 use crate::diagnostics::{Diagnostic, TextRange};
-#[cfg(test)]
-use polint_analysis::mir_body_compose::merge_language_outputs;
-use polint_analysis_api::{ProviderExecution, ProviderFailureReason, ProviderFailureStage};
-use polint_go::lower_go_mir;
-use polint_ts::lower_ts_mir;
+use crate::go::lower_go_mir;
+use crate::ts::lower_ts_mir;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SemanticMirProviderOutput {
@@ -31,7 +31,7 @@ pub(crate) fn derive_semantic_mir_with_cache_stats(
 ) -> SemanticMirProviderOutput {
     let interner_handle = db.stable_key_interner();
     let interner = &interner_handle;
-    let output = polint_analysis::mir_body_compose::merge_language_outputs(
+    let output = crate::analysis_neutral::mir_body_compose::merge_language_outputs(
         [lower_go_mir(db), lower_ts_mir(db)],
         interner,
     );

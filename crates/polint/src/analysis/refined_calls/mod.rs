@@ -1,7 +1,7 @@
-pub(crate) use polint_analysis::refined_calls::cache_key;
-pub(crate) use polint_analysis::refined_calls::facts;
-pub(crate) use polint_analysis::refined_calls::store;
+pub(crate) use crate::analysis_neutral::refined_calls::cache_key;
+pub(crate) use crate::analysis_neutral::refined_calls::facts;
+pub(crate) use crate::analysis_neutral::refined_calls::store;
 pub(crate) mod provider;
 #[cfg(test)]
-pub(crate) use polint_analysis::refined_calls::debug;
-pub(crate) use polint_analysis::refined_calls::validate;
+pub(crate) use crate::analysis_neutral::refined_calls::debug;
+pub(crate) use crate::analysis_neutral::refined_calls::validate;

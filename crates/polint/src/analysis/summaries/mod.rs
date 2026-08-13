@@ -1,11 +1,11 @@
 #![allow(unused_imports)]
 pub(crate) mod provider;
-pub(crate) use polint_analysis::summaries::builder;
-pub(crate) use polint_analysis::summaries::cache_key;
-pub(crate) use polint_analysis::summaries::closure;
-pub(crate) use polint_analysis::summaries::core;
-pub(crate) use polint_analysis::summaries::domain;
-pub(crate) use polint_analysis::summaries::facts;
-pub(crate) use polint_analysis::summaries::scc;
-pub(crate) use polint_analysis::summaries::store;
-pub(crate) use polint_analysis::summaries::validate;
+pub(crate) use crate::analysis_neutral::summaries::builder;
+pub(crate) use crate::analysis_neutral::summaries::cache_key;
+pub(crate) use crate::analysis_neutral::summaries::closure;
+pub(crate) use crate::analysis_neutral::summaries::core;
+pub(crate) use crate::analysis_neutral::summaries::domain;
+pub(crate) use crate::analysis_neutral::summaries::facts;
+pub(crate) use crate::analysis_neutral::summaries::scc;
+pub(crate) use crate::analysis_neutral::summaries::store;
+pub(crate) use crate::analysis_neutral::summaries::validate;

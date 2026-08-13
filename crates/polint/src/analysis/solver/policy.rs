@@ -4,12 +4,12 @@
 //! `polint-analysis`. This module retains only policies that adapt the facade's
 //! concrete frontend snapshots: Go RTA and the TS/JS callsite projection.
 
-pub(crate) use polint_analysis::solver::policy::{PolicyOutcome, SolverPolicy};
+pub(crate) use crate::analysis_neutral::solver::policy::{PolicyOutcome, SolverPolicy};
 
 use super::budget::SolverBudget;
 use super::go_rta::{GoRtaInputs, solve_go_rta};
 
-pub(crate) use polint_ts::points_to::{TsPointsToInputs, budget_status, solve_ts_points_to};
+pub(crate) use crate::ts::points_to::{TsPointsToInputs, budget_status, solve_ts_points_to};
 
 pub(crate) fn ts_points_to_inputs_from_db(db: &crate::core::AnalysisDb) -> TsPointsToInputs {
     TsPointsToInputs::from_db(db)
@@ -96,7 +96,7 @@ mod tests {
     use crate::analysis::solver::budget::BudgetStatus;
     use crate::analysis::solver::engine::SolverEngine;
     use crate::analysis::solver::go_rta::inputs::{GoRtaCallsite, GoRtaMethod};
-    use polint_analysis::solver::policy::PointsToPolicy;
+    use crate::analysis_neutral::solver::policy::PointsToPolicy;
 
     #[test]
     fn ts_policy_id_is_stable() {

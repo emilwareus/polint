@@ -10,11 +10,11 @@ use super::sinks::{
 };
 use super::store::{AcceptedExtensionFact, ExtensionActivationRow, ExtensionOutput};
 use super::validate::{ExtensionValidationInput, validate_extension_output};
+use crate::analysis_api::ProviderExecution;
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{CacheStats, Digest, DigestKind, InputSnapshot};
 use crate::core::AnalysisDb;
 use crate::diagnostics::{Diagnostic, Severity, TextRange};
-use polint_analysis_api::ProviderExecution;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ExtensionProviderOutput {

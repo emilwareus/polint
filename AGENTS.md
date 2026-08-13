@@ -64,7 +64,7 @@ Bench-only and internal hooks should stay namespaced (**`_bench`**, **`#[doc(hid
 <!-- GSD:architecture-start source:ARCHITECTURE.md -->
 ## Architecture
 
-The landed crate graph, composition root, provider/fact/frontend contracts,
+The landed two-package graph, private module layering, composition root, provider/fact/frontend contracts,
 identity model, lifecycle adapters, determinism rules, and extension guidance
 are documented in [`ARCHITECTURE.md`](ARCHITECTURE.md). Keep public visibility
 narrow and follow [`docs/API-VISIBILITY-PLAN.md`](docs/API-VISIBILITY-PLAN.md)

@@ -1,4 +1,4 @@
-//! Facade-owned host session for [`polint_analysis_api::ProviderCtx`].
+//! Facade-owned host session for [`crate::analysis_api::ProviderCtx`].
 //!
 //! `ProviderCtx` only carries fact-db / digest contracts. Facade providers reach
 //! cache/config/plan state through a thread-local owned session installed by the
@@ -15,14 +15,14 @@ use crate::config::LoadedConfig;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::core::{AnalysisDb, CapabilitySupportView, StableKeyInterner};
-use polint_analysis_api::{
+use crate::analysis_api::{
     AnalysisCache, BranchObligation, CachedFileFacts, CoverageFact, FactDatabase, FactFamily,
     FactMetaStore, FactStore, FunctionFact, ImportFact, JsxAttributeFact, NullHostAttachment,
     PackageFact, ProviderHostServices, SourceFile, StringLiteralFact, TestFact, TsClassFact,
     TsComponentFact,
 };
-use polint_core::{BranchId, FileId, FunctionId, ImportId, Language, PackageId};
+use crate::core::{AnalysisDb, CapabilitySupportView, StableKeyInterner};
+use crate::internal_core::{BranchId, FileId, FunctionId, ImportId, Language, PackageId};
 
 thread_local! {
     static PROVIDER_HOST_SESSION: RefCell<Option<ProviderHostSession>> = const { RefCell::new(None) };
@@ -265,44 +265,44 @@ impl FactDatabase for AnalysisDb {
         AnalysisDb::jsx_attributes(self)
     }
 
-    fn module_nodes(&self) -> &[polint_analysis_api::ModuleNode] {
+    fn module_nodes(&self) -> &[crate::analysis_api::ModuleNode] {
         AnalysisDb::module_nodes(self)
     }
 
-    fn symbols(&self) -> &[polint_analysis_api::SymbolFact] {
+    fn symbols(&self) -> &[crate::analysis_api::SymbolFact] {
         AnalysisDb::symbols(self)
     }
 
-    fn definitions(&self) -> &[polint_analysis_api::DefinitionFact] {
+    fn definitions(&self) -> &[crate::analysis_api::DefinitionFact] {
         AnalysisDb::definitions(self)
     }
 
-    fn references(&self) -> &[polint_analysis_api::ReferenceFact] {
+    fn references(&self) -> &[crate::analysis_api::ReferenceFact] {
         AnalysisDb::references(self)
     }
 
     fn replace_symbol_facts(
         &mut self,
-        symbols: Vec<polint_analysis_api::SymbolFact>,
-        definitions: Vec<polint_analysis_api::DefinitionFact>,
-        references: Vec<polint_analysis_api::ReferenceFact>,
+        symbols: Vec<crate::analysis_api::SymbolFact>,
+        definitions: Vec<crate::analysis_api::DefinitionFact>,
+        references: Vec<crate::analysis_api::ReferenceFact>,
     ) {
         AnalysisDb::replace_symbol_graph_facts(self, symbols, definitions, references);
     }
 
-    fn semantic_imports(&self) -> &[polint_analysis_api::SemanticImportFact] {
+    fn semantic_imports(&self) -> &[crate::analysis_api::SemanticImportFact] {
         AnalysisDb::semantic_imports(self)
     }
 
-    fn file_metrics(&self) -> &[polint_analysis_api::FileMetricFact] {
+    fn file_metrics(&self) -> &[crate::analysis_api::FileMetricFact] {
         AnalysisDb::file_metrics(self)
     }
 
-    fn function_metrics(&self) -> &[polint_analysis_api::FunctionMetricFact] {
+    fn function_metrics(&self) -> &[crate::analysis_api::FunctionMetricFact] {
         AnalysisDb::function_metrics(self)
     }
 
-    fn complexity_metrics(&self) -> &[polint_analysis_api::ComplexityMetricFact] {
+    fn complexity_metrics(&self) -> &[crate::analysis_api::ComplexityMetricFact] {
         AnalysisDb::complexity_metrics(self)
     }
 
@@ -315,11 +315,11 @@ impl FactDatabase for AnalysisDb {
     }
 }
 
-impl polint_analysis_api::CaptureEnrichment for AnalysisDb {
+impl crate::analysis_api::CaptureEnrichment for AnalysisDb {
     fn primary_definition_outside_span(
         &self,
-        _file: polint_core::FileId,
-        symbol: polint_core::SymbolId,
+        _file: crate::internal_core::FileId,
+        symbol: crate::internal_core::SymbolId,
         span_start: u32,
         span_end: u32,
     ) -> Option<String> {
@@ -331,10 +331,10 @@ impl polint_analysis_api::CaptureEnrichment for AnalysisDb {
 
     fn reference_targets_in_span(
         &self,
-        file: polint_core::FileId,
+        file: crate::internal_core::FileId,
         span_start: u32,
         span_end: u32,
-    ) -> Vec<(String, Option<polint_core::SymbolId>)> {
+    ) -> Vec<(String, Option<crate::internal_core::SymbolId>)> {
         self.references_for_file(file)
             .filter(|reference| {
                 reference

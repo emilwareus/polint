@@ -13,6 +13,7 @@ use crate::analysis::semantic_graph::build::{
     collect_ts_direct_binding_collection,
 };
 use crate::analysis::semantic_graph::store::{SEMANTIC_GRAPH_PROVIDER_ID, SemanticGraphOutput};
+use crate::analysis_api::{ProviderExecution, ProviderFailureReason, ProviderFailureStage};
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
     CacheStats, Digest, DigestKind, InputComponent, InputSnapshot,
@@ -24,7 +25,6 @@ use crate::repo_fs::read_repo_file_to_string_with_limit;
 use crate::ts::binding::store::{
     ts_direct_binding_output_digest, ts_direct_binding_provider_parameter_digest,
 };
-use polint_analysis_api::{ProviderExecution, ProviderFailureReason, ProviderFailureStage};
 
 const ADAPTATION_MODEL_DIR: &str = ".polint/models";
 const ADAPTATION_MODEL_MAX_BYTES: u64 = 1_048_576;
@@ -514,7 +514,7 @@ fn semantic_graph_output_digest(
     extend_component_parts(&mut parts, "tool", &input_snapshot.tool_invocations);
     // The neutral helper folds the lifecycle components and graph rows, and adds
     // provider/schema/algorithm identity before sorting all digest parts.
-    polint_analysis::semantic_graph::digest::semantic_graph_output_digest(
+    crate::analysis_neutral::semantic_graph::digest::semantic_graph_output_digest(
         manifest,
         input_snapshot,
         parts,

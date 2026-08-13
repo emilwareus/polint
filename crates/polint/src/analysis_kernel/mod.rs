@@ -215,7 +215,7 @@ fn run_scheduled_providers<'a>(
         // report; downstream blockers must observe the failure immediately.
         let execution = result.execution;
         let output_digest =
-            if matches!(execution, polint_analysis_api::ProviderExecution::Succeeded) {
+            if matches!(execution, crate::analysis_api::ProviderExecution::Succeeded) {
                 result.output_digest
             } else {
                 None
@@ -239,11 +239,11 @@ fn run_scheduled_providers<'a>(
             db,
             cache_stats,
             output_digest.clone(),
-            ready && matches!(execution, polint_analysis_api::ProviderExecution::Succeeded),
+            ready && matches!(execution, crate::analysis_api::ProviderExecution::Succeeded),
         ));
         if ready {
             let manifest = AnalysisKernel::provider_manifest(provider_id);
-            if let polint_analysis_api::ProviderExecution::Failed { stage, reason } = execution {
+            if let crate::analysis_api::ProviderExecution::Failed { stage, reason } = execution {
                 let (status, stage, reason) = provider_failure_outcome(stage, reason);
                 tracker
                     .record_failure(provider_id, status, stage, reason)
@@ -297,8 +297,8 @@ fn run_scheduled_providers<'a>(
 }
 
 fn provider_failure_outcome(
-    stage: polint_analysis_api::ProviderFailureStage,
-    reason: polint_analysis_api::ProviderFailureReason,
+    stage: crate::analysis_api::ProviderFailureStage,
+    reason: crate::analysis_api::ProviderFailureReason,
 ) -> (
     ProviderOutcomeStatus,
     ProviderFailureStage,
@@ -306,32 +306,32 @@ fn provider_failure_outcome(
 ) {
     match (stage, reason) {
         (
-            polint_analysis_api::ProviderFailureStage::Setup,
-            polint_analysis_api::ProviderFailureReason::Unsupported,
+            crate::analysis_api::ProviderFailureStage::Setup,
+            crate::analysis_api::ProviderFailureReason::Unsupported,
         ) => (
             ProviderOutcomeStatus::Unsupported,
             ProviderFailureStage::Setup,
             ProviderFailureReason::Unsupported,
         ),
         (
-            polint_analysis_api::ProviderFailureStage::Setup,
-            polint_analysis_api::ProviderFailureReason::SetupMissing,
+            crate::analysis_api::ProviderFailureStage::Setup,
+            crate::analysis_api::ProviderFailureReason::SetupMissing,
         ) => (
             ProviderOutcomeStatus::SetupMissing,
             ProviderFailureStage::Setup,
             ProviderFailureReason::SetupMissing,
         ),
         (
-            polint_analysis_api::ProviderFailureStage::Execution,
-            polint_analysis_api::ProviderFailureReason::ExecutionFailed,
+            crate::analysis_api::ProviderFailureStage::Execution,
+            crate::analysis_api::ProviderFailureReason::ExecutionFailed,
         ) => (
             ProviderOutcomeStatus::Failed,
             ProviderFailureStage::Execution,
             ProviderFailureReason::ExecutionFailed,
         ),
         (
-            polint_analysis_api::ProviderFailureStage::Validation,
-            polint_analysis_api::ProviderFailureReason::ValidationRejected,
+            crate::analysis_api::ProviderFailureStage::Validation,
+            crate::analysis_api::ProviderFailureReason::ValidationRejected,
         ) => (
             ProviderOutcomeStatus::Failed,
             ProviderFailureStage::Validation,

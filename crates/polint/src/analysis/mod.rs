@@ -1,13 +1,13 @@
-pub(crate) use polint_analysis::access_paths;
-pub(crate) use polint_analysis::aliases;
-pub(crate) use polint_analysis::error;
+pub(crate) use crate::analysis_neutral::access_paths;
+pub(crate) use crate::analysis_neutral::aliases;
+pub(crate) use crate::analysis_neutral::error;
 pub(crate) mod error_convert;
-pub(crate) use polint_analysis::ids;
-pub(crate) use polint_analysis::places;
-pub(crate) use polint_analysis::points_to;
-pub(crate) use polint_analysis::stable_key;
-pub(crate) use polint_analysis::store;
-pub(crate) use polint_analysis::values;
+pub(crate) use crate::analysis_neutral::ids;
+pub(crate) use crate::analysis_neutral::places;
+pub(crate) use crate::analysis_neutral::points_to;
+pub(crate) use crate::analysis_neutral::stable_key;
+pub(crate) use crate::analysis_neutral::store;
+pub(crate) use crate::analysis_neutral::values;
 
 pub(crate) mod adaptation;
 pub(crate) mod calls;

@@ -2,12 +2,12 @@
 
 use std::collections::BTreeMap;
 
-use polint_analysis_api::{Digest, InputSnapshot, ProviderManifest};
+use crate::analysis_api::{Digest, InputSnapshot, ProviderManifest};
 
 use crate::analysis::identity::facts::IdentityRecord;
 use crate::core::{AnalysisDb, FileId};
 
-pub(crate) use polint_analysis::identity::provider::{
+pub(crate) use crate::analysis_neutral::identity::provider::{
     IdentityProviderRunOutput, valid_call_site_ids,
 };
 
@@ -33,7 +33,7 @@ pub(crate) fn derive_identity_with_cache_stats(
             })
         })
         .collect::<BTreeMap<FileId, String>>();
-    polint_analysis::identity::provider::derive_identity_with_cache_stats(
+    crate::analysis_neutral::identity::provider::derive_identity_with_cache_stats(
         db,
         input_snapshot,
         manifest,
@@ -61,7 +61,7 @@ fn function_identity_record(
             })
         })
         .collect::<BTreeMap<FileId, String>>();
-    polint_analysis::identity::provider::function_identity_record(
+    crate::analysis_neutral::identity::provider::function_identity_record(
         db,
         interner,
         function,
@@ -78,7 +78,7 @@ fn identity_output_digest(
     go_semantic_output_digest: &Digest,
     output: &crate::analysis::identity::store::IdentityProviderOutput,
 ) -> Digest {
-    polint_analysis::identity::provider::identity_output_digest(
+    crate::analysis_neutral::identity::provider::identity_output_digest(
         interner,
         manifest,
         input_snapshot,
@@ -91,7 +91,7 @@ fn identity_output_digest(
 #[cfg(test)]
 fn identity_output_digest_for_test(parts: &[&str]) -> Digest {
     Digest::from_parts(
-        polint_analysis_api::DigestKind::ProviderOutput,
+        crate::analysis_api::DigestKind::ProviderOutput,
         "identity_output",
         parts,
     )

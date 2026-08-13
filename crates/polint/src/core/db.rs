@@ -71,6 +71,9 @@ use crate::analysis_kernel::{
     ValidationStatus, resolution_metadata, resolution_status_metadata, stable_key_text_from_parts,
     symbol_metadata,
 };
+use crate::analysis_neutral::domains::facts::{DomainEventFact, DomainObservationFact};
+use crate::analysis_neutral::domains::store::DomainOutput;
+use crate::analysis_neutral::domains::store::DomainStore;
 use crate::core::StableKeyInterner;
 use crate::diagnostics::fingerprint;
 use crate::go::semantic::facts::{
@@ -96,9 +99,6 @@ use crate::ts::object_model::facts::{
     TsReceiverBindingFact,
 };
 use crate::ts::object_model::store::{TsObjectModelOutput, TsObjectModelStore};
-use polint_analysis::domains::facts::{DomainEventFact, DomainObservationFact};
-use polint_analysis::domains::store::DomainOutput;
-use polint_analysis::domains::store::DomainStore;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -5615,8 +5615,9 @@ impl AnalysisDb {
         let interner = self.stable_key_interner();
         let edges = self.solver_derived_edges().to_vec();
         for edge in &edges {
-            let precision =
-                polint_analysis::solver::facts::derived_edge_precision_ceiling(edge.precision);
+            let precision = crate::analysis_neutral::solver::facts::derived_edge_precision_ceiling(
+                edge.precision,
+            );
             let confidence = match edge.status {
                 PointsToStatus::Present => FactConfidence::High,
                 PointsToStatus::BudgetExceeded => FactConfidence::Medium,
@@ -5702,7 +5703,7 @@ impl AnalysisDb {
     }
 }
 
-impl polint_analysis::AnalysisHost for AnalysisDb {
+impl crate::analysis_neutral::AnalysisHost for AnalysisDb {
     fn replace_summary_facts(&mut self, output: SummaryOutput) {
         AnalysisDb::replace_summary_facts(self, output);
     }

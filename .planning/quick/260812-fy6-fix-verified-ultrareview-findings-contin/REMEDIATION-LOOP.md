@@ -93,3 +93,12 @@ _In progress._
 - A real `dataflow` capability plan over representative Go and TypeScript sources now schedules the deep provider closure and asserts both zero missing metadata and a clean full metadata-validation report.
 - The semantic-store future-schema parity assertion now derives `found` from the installed future fixture rather than preserving the stale literal `2`.
 - Stabilization evidence: formatting, workspace all-target/all-feature check and clippy, full capability matrix, semantic-store parity, `polint-analysis` all targets (790 passed, 1 ignored), `POLINT_VALIDATE_FACTS=1` Go/TS capability paths, public-surface leak, polyglot canary, and determinism gate all pass. The golden diagnostic outputs remain byte-stable, but the cost gate is currently 2–74 ms above the pre-existing `go-sensitive-writes/json` wall-clock budget across three local runs and remains open for performance triage.
+
+
+## Two-package consolidation tranche
+
+- Moved the seven internal package source trees into private `polint` modules: `internal_core`, `ir`, `analysis_api`, `frontend_api`, `analysis_neutral`, `go`, and `ts`; embedded Go sidecars now ship under `crates/polint/src/go-sidecar`.
+- Removed the seven internal workspace packages and path dependencies. `cargo metadata --no-deps --locked` now reports only publishable `polint` and `polint-macros`, plus unpublished `polint-bench` / `polint-eval`; `Cargo.lock` contains no removed package entries.
+- Added `crates/polint/tests/internal_architecture.rs` to lock the package set and dependency directions, and updated the public-surface owner scan for the private module layout.
+- Consolidation validation so far: workspace all-target/all-feature check, workspace all-target/all-feature clippy, `polint` library suite (2319 passed, 14 ignored), capability matrix, public-surface leak, polyglot canary, internal architecture gate, and package-content listing pass.
+- Updated `ARCHITECTURE.md` and `AGENTS.md` to describe the two-package/private-module architecture. Language feature isolation remains the next tranche.

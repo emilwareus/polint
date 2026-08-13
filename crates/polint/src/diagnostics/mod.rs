@@ -3,11 +3,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, IsTerminal};
 use std::sync::Arc;
 
-pub use polint_core::{
+pub use crate::internal_core::{
     Diagnostic, DiagnosticRange as TextRange, Evidence, Fix, Label, Severity, StructuredEvidenceV1,
     Suggestion,
 };
-pub(crate) use polint_core::{
+pub(crate) use crate::internal_core::{
     EvidenceBundleId, EvidenceBundleRef, diagnostic_fingerprint, fingerprint,
 };
 

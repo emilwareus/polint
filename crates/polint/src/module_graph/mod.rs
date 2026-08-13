@@ -1278,7 +1278,7 @@ fn derive_requested_module_graph_uncached(
             .or(owner_module)
             .unwrap_or_else(|| builder.ensure_module_node("."));
         let index = resolved_imports.len();
-        let input = polint_analysis::module_graph::model::ResolverInput {
+        let input = crate::analysis_neutral::module_graph::model::ResolverInput {
             root: loaded.root.as_path(),
             db,
             import,
@@ -3511,7 +3511,7 @@ mod tests {
         ];
 
         assert_eq!(
-            polint_analysis::module_graph::query::reachable_from(
+            crate::analysis_neutral::module_graph::query::reachable_from(
                 ModuleNodeId::from_raw(0),
                 tuple_edges
             ),
@@ -3522,7 +3522,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            polint_analysis::module_graph::query::outgoing(
+            crate::analysis_neutral::module_graph::query::outgoing(
                 &module_edges,
                 ModuleNodeId::from_raw(0)
             )
@@ -3531,7 +3531,7 @@ mod tests {
             vec![ModuleNodeId::from_raw(2)]
         );
         assert_eq!(
-            polint_analysis::module_graph::query::incoming(
+            crate::analysis_neutral::module_graph::query::incoming(
                 &module_edges,
                 ModuleNodeId::from_raw(0)
             )

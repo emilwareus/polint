@@ -3,7 +3,7 @@ use super::{CacheStats, Digest, DigestKind, InputSnapshot, PrecisionTier, Provid
 use crate::analysis::summaries::provider::SccClosureDebugSnapshot;
 use crate::analysis_kernel::{PrecisionCeiling, ProviderManifest};
 use crate::analysis_kernel::{ProviderOutcome, ProviderOutputIdentity, StoreStatus};
-use polint_analysis::demand::DemandQueryTrace;
+use crate::analysis_neutral::demand::DemandQueryTrace;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct KernelRunReport {
@@ -212,7 +212,7 @@ mod tests {
         CachePolicy, PrecisionCeiling, ProviderKind, ProviderManifest, ProviderOutcomeStatus,
         ProviderOutcomeTracker, SchemaVersion, ValidationDowngrades,
     };
-    use polint_core::LanguageId;
+    use crate::internal_core::LanguageId;
     use std::collections::BTreeSet;
 
     #[test]

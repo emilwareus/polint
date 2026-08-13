@@ -27,11 +27,11 @@ use crate::analysis::solver::go_rta::GoRtaInputs;
 use crate::analysis::solver::policy::{GoRtaPolicy, SolverPolicy, TsPointsToPolicy};
 use crate::analysis::solver::store::{SOLVER_PROVIDER_ID, SolverOutput};
 use crate::analysis::solver::validate::{detect_solver_summary_cycle, validate_derived_edges};
+use crate::analysis_api::{ProviderExecution, ProviderFailureReason, ProviderFailureStage};
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{CacheStats, Digest, InputSnapshot};
 use crate::core::AnalysisDb;
 use crate::diagnostics::{Diagnostic, TextRange};
-use polint_analysis_api::{ProviderExecution, ProviderFailureReason, ProviderFailureStage};
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SolverProviderRunOutput {
@@ -170,7 +170,7 @@ fn solver_output_digest(
     go_semantic_output_digest: &Digest,
     output: &SolverOutput,
 ) -> Digest {
-    polint_analysis::solver::digest::solver_output_digest(
+    crate::analysis_neutral::solver::digest::solver_output_digest(
         interner,
         manifest,
         budget,

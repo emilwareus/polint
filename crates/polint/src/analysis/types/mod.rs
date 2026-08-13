@@ -1,9 +1,9 @@
 #![allow(unused_imports)]
-pub(crate) use polint_analysis::types::cache_key;
-pub(crate) use polint_analysis::types::debug;
-pub(crate) use polint_analysis::types::facts;
-pub(crate) use polint_analysis::types::go;
-pub(crate) use polint_analysis::types::provider;
-pub(crate) use polint_analysis::types::store;
-pub(crate) use polint_analysis::types::ts_js;
-pub(crate) use polint_analysis::types::validate;
+pub(crate) use crate::analysis_neutral::types::cache_key;
+pub(crate) use crate::analysis_neutral::types::debug;
+pub(crate) use crate::analysis_neutral::types::facts;
+pub(crate) use crate::analysis_neutral::types::go;
+pub(crate) use crate::analysis_neutral::types::provider;
+pub(crate) use crate::analysis_neutral::types::store;
+pub(crate) use crate::analysis_neutral::types::ts_js;
+pub(crate) use crate::analysis_neutral::types::validate;

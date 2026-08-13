@@ -11,6 +11,8 @@ use crate::core::facts::{
     ModuleEdge, ModuleNode, ReferenceFact, ResolvedImportFact, SymbolFact,
 };
 use crate::core::ids::{FileId, SymbolId};
+pub(crate) use crate::go::semantic::store::GO_SEMANTIC_STORE_FAMILY;
+pub(crate) use crate::go::{GO_SYNTAX_STORE_FAMILY, GoSyntaxStore};
 use crate::module_graph::topology::{
     DependencyRequirementFact, ImportToPackageFact, RepoTopologyOverlayFact,
     ResolvedDependencyEdgeFact, SourceSetFact, TopologyOutput, TopologyPackageFact,
@@ -22,11 +24,11 @@ use crate::symbol_graph::semantic::{
     StableExportId, StableExportIdentity,
 };
 pub(crate) use crate::ts::object_model::store::TS_OBJECT_MODEL_STORE_FAMILY;
-pub(crate) use polint_go::semantic::store::GO_SEMANTIC_STORE_FAMILY;
-pub(crate) use polint_go::{GO_SYNTAX_STORE_FAMILY, GoSyntaxStore};
-pub(crate) use polint_ts::{TS_SYNTAX_STORE_FAMILY, TsSyntaxStore};
+pub(crate) use crate::ts::{TS_SYNTAX_STORE_FAMILY, TsSyntaxStore};
 
-pub(crate) use polint_analysis::fact_store::{
+use crate::analysis_api::FactFamily;
+pub(crate) use crate::analysis_api::{FactStore, FactStoreEntry};
+pub(crate) use crate::analysis_neutral::fact_store::{
     ACCESS_PATH_STORE_FAMILY, ADAPTATION_STORE_FAMILY, ALIAS_STORE_FAMILY, AdaptationFactStore,
     CALL_STORE_FAMILY, CFG_STORE_FAMILY, CfgFactStore, DATA_FLOW_STORE_FAMILY, DOMAIN_STORE_FAMILY,
     ENTRYPOINT_STORE_FAMILY, EVIDENCE_STORE_FAMILY, EXTENSION_STORE_FAMILY, ExtensionFactStore,
@@ -34,8 +36,6 @@ pub(crate) use polint_analysis::fact_store::{
     REFINED_CALL_STORE_FAMILY, SEMANTIC_GRAPH_STORE_FAMILY, SEMANTIC_MIR_STORE_FAMILY,
     SOLVER_STORE_FAMILY, SUMMARY_STORE_FAMILY, TYPE_STORE_FAMILY, VALUE_STORE_FAMILY,
 };
-use polint_analysis_api::FactFamily;
-pub(crate) use polint_analysis_api::{FactStore, FactStoreEntry};
 
 /// Module-graph facts produced by `polint.module_graph`.
 #[derive(Debug, Clone, Default)]
