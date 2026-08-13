@@ -23,7 +23,6 @@ use std::collections::BTreeSet;
 use crate::analysis::ids::SemanticNodeId;
 use crate::analysis::solver::budget::{BudgetStatus, SolverBudget};
 use crate::analysis::solver::engine::SolverEngine;
-use crate::analysis::solver::go_rta::GoRtaInputs;
 use crate::analysis::solver::policy::{GoRtaPolicy, SolverPolicy, TsPointsToPolicy};
 use crate::analysis::solver::store::{SOLVER_PROVIDER_ID, SolverOutput};
 use crate::analysis::solver::validate::{detect_solver_summary_cycle, validate_derived_edges};
@@ -32,6 +31,7 @@ use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{CacheStats, Digest, InputSnapshot};
 use crate::core::AnalysisDb;
 use crate::diagnostics::{Diagnostic, TextRange};
+use crate::go::rta::GoRtaInputs;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SolverProviderRunOutput {

@@ -40,7 +40,6 @@ use crate::analysis::ids::SemanticNodeId;
 use crate::analysis::semantic_graph::facts::NodeKind;
 use crate::analysis::solver::budget::{BudgetStatus, SolverBudget};
 use crate::analysis::solver::engine::SolverEngine;
-use crate::analysis::solver::go_rta::GoRtaInputs;
 use crate::analysis::solver::policy::{GoRtaPolicy, TsPointsToInputs, TsPointsToPolicy};
 use crate::analysis::solver::store::SolverOutput;
 use crate::analysis_kernel::KernelOutput;
@@ -48,6 +47,7 @@ use crate::config::load_config;
 use crate::core::AnalysisDb;
 use crate::eval::fixtures::load_native_fixture;
 use crate::eval::observed::{copy_fixture_repo_for_test, run_kernel_for_repo_for_test};
+use crate::go::rta::GoRtaInputs;
 
 fn go_rta_fixture_dir(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))

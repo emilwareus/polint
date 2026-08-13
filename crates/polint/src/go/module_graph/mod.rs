@@ -16,6 +16,7 @@ use crate::analysis_neutral::module_graph::topology::{
     WorkspaceRootKind,
 };
 use crate::go::lifecycle::{self, GoAnalysisConfig};
+use crate::go::process_runner::{GO_SUBPROCESS_TIMEOUT, run_bounded};
 use crate::go::repo_fs as paths;
 use crate::go::repo_fs::{
     TOPOLOGY_LOCKFILE_MAX_BYTES, TOPOLOGY_MANIFEST_MAX_BYTES, read_repo_file_to_string_with_limit,
@@ -27,7 +28,8 @@ use serde::Deserialize;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::process::ExitStatus;
+use std::process::{Command, ExitStatus};
+use std::time::Duration;
 
 const GO_TOPOLOGY_PROVIDER_ID: &str = "polint.module_graph";
 
@@ -924,14 +926,21 @@ fn run_go_list(root: &Path, config: &GoAnalysisConfig) -> GoCommandOutput {
         command.arg(format!("-tags={}", config.build_tags.join(",")));
     }
     lifecycle::apply_go_offline_env(&mut command, config.offline);
-    command
-        .args(config.rooted_package_patterns())
-        .output()
-        .map(Into::into)
+    command.args(config.rooted_package_patterns());
+    run_go_list_command(command, GO_SUBPROCESS_TIMEOUT)
+}
+
+fn run_go_list_command(command: Command, timeout: Duration) -> GoCommandOutput {
+    run_bounded(command, timeout, "go list")
+        .map(|output| GoCommandOutput {
+            status: output.status,
+            stdout: output.stdout,
+            stderr: output.stderr,
+        })
         .unwrap_or_else(|error| GoCommandOutput {
             status: failed_exit_status(),
             stdout: Vec::new(),
-            stderr: error.to_string().into_bytes(),
+            stderr: error.reason().as_bytes().to_vec(),
         })
 }
 
@@ -1053,4 +1062,25 @@ fn is_go_stdlib_import_path(import_path: &str) -> bool {
         .split('/')
         .next()
         .is_some_and(|first| !first.contains('.') && !first.is_empty())
+}
+
+#[cfg(test)]
+mod subprocess_timeout_tests {
+    use super::*;
+
+    #[test]
+    fn go_list_command_times_out_instead_of_hanging() {
+        let command = if cfg!(windows) {
+            let mut command = Command::new("cmd");
+            command.args(["/C", "ping -n 3 127.0.0.1 > nul"]);
+            command
+        } else {
+            let mut command = Command::new("sh");
+            command.args(["-c", "sleep 2"]);
+            command
+        };
+        let output = run_go_list_command(command, Duration::from_millis(1));
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("timeout"));
+    }
 }

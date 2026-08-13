@@ -13,7 +13,9 @@ use crate::analysis_neutral::symbol_graph::{
     },
     stable_id::{StableReferenceKey, StableSymbolKey},
 };
+use crate::go::embedded_cache::materialize_embedded_sources;
 use crate::go::lifecycle::{self, GoAnalysisConfig};
+use crate::go::process_runner::{GO_SUBPROCESS_TIMEOUT, GoProcessError, run_bounded};
 use crate::internal_core::{
     Diagnostic, DiagnosticRange as TextRange, FileId, Language, Span, SymbolId,
     span_from_byte_range,
@@ -23,6 +25,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 /// Inputs owned by the Go composition boundary for symbol/reference extraction.
 #[derive(Debug, Clone)]
@@ -62,6 +65,7 @@ const EMBEDDED_GO_SIDECAR_FILES: &[(&str, &str)] = &[
 enum GoSidecarFailure {
     CommandUnavailable(String),
     CommandFailed(String),
+    Timeout(String),
     InvalidJson(String),
     InvalidPath(String),
 }
@@ -327,6 +331,7 @@ impl GoSidecarFailure {
         match self {
             Self::CommandUnavailable(message) => message.clone(),
             Self::CommandFailed(message) => message.clone(),
+            Self::Timeout(message) => message.clone(),
             Self::InvalidJson(message) => message.clone(),
             Self::InvalidPath(message) => message.clone(),
         }
@@ -366,7 +371,7 @@ fn run_go_sidecar(root: &Path, config: &GoAnalysisConfig) -> Result<Vec<u8>, GoS
     };
 
     lifecycle::apply_go_offline_env(&mut command, config.offline);
-    let output = command
+    command
         .arg("symbols")
         .arg("--root")
         .arg(root.as_os_str())
@@ -379,14 +384,19 @@ fn run_go_sidecar(root: &Path, config: &GoAnalysisConfig) -> Result<Vec<u8>, GoS
         .arg("--build-tags")
         .arg(config.build_tags.join(","))
         .arg("--json")
-        .env_remove("GOFLAGS")
-        .output()
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                GoSidecarFailure::CommandUnavailable("go executable was not found.".to_string())
-            } else {
-                GoSidecarFailure::CommandFailed(format!("failed to start go sidecar: {error}"))
-            }
+        .env_remove("GOFLAGS");
+    run_go_sidecar_command(command, GO_SUBPROCESS_TIMEOUT)
+}
+
+fn run_go_sidecar_command(
+    command: Command,
+    timeout: Duration,
+) -> Result<Vec<u8>, GoSidecarFailure> {
+    let output =
+        run_bounded(command, timeout, "Go symbol sidecar").map_err(|error| match error {
+            GoProcessError::Unavailable(reason) => GoSidecarFailure::CommandUnavailable(reason),
+            GoProcessError::Failed(reason) => GoSidecarFailure::CommandFailed(reason),
+            GoProcessError::Timeout(reason) => GoSidecarFailure::Timeout(reason),
         })?;
 
     if !output.status.success() {
@@ -448,109 +458,17 @@ fn sidecar_binary_name() -> &'static str {
 }
 
 fn materialize_embedded_go_sidecar() -> Result<PathBuf, GoSidecarFailure> {
-    let hash = embedded_go_sidecar_hash();
-    let parent = std::env::temp_dir()
-        .join("polint-go-symbols")
-        .join(env!("CARGO_PKG_VERSION"));
-    let directory = parent.join(&hash);
-    let marker = directory.join(".complete");
-    if marker.is_file() {
-        return Ok(directory);
-    }
-    if directory.exists() && embedded_go_sidecar_files_match(&directory) {
-        fs::write(&marker, "").map_err(|error| {
-            GoSidecarFailure::CommandFailed(format!(
-                "failed to mark embedded Go sidecar directory `{}` complete: {error}",
-                directory.display()
-            ))
-        })?;
-        return Ok(directory);
-    }
-    if directory.exists() {
-        fs::remove_dir_all(&directory).map_err(|error| {
-            GoSidecarFailure::CommandFailed(format!(
-                "failed to replace incomplete embedded Go sidecar directory `{}`: {error}",
-                directory.display()
-            ))
-        })?;
-    }
-
-    fs::create_dir_all(&parent).map_err(|error| {
+    materialize_embedded_sources(
+        "symbols",
+        env!("CARGO_PKG_VERSION"),
+        &embedded_go_sidecar_hash(),
+        EMBEDDED_GO_SIDECAR_FILES,
+    )
+    .map_err(|reason| {
         GoSidecarFailure::CommandFailed(format!(
-            "failed to create embedded Go sidecar cache `{}`: {error}",
-            parent.display()
+            "failed to materialize embedded Go symbol sidecar: {reason}"
         ))
-    })?;
-    let staging = parent.join(format!(
-        ".{hash}-{}-{}",
-        std::process::id(),
-        unique_materialization_suffix()
-    ));
-    if staging.exists() {
-        fs::remove_dir_all(&staging).map_err(|error| {
-            GoSidecarFailure::CommandFailed(format!(
-                "failed to clear stale embedded Go sidecar staging directory `{}`: {error}",
-                staging.display()
-            ))
-        })?;
-    }
-
-    write_embedded_go_sidecar_files(&staging)?;
-    fs::write(staging.join(".complete"), "").map_err(|error| {
-        GoSidecarFailure::CommandFailed(format!(
-            "failed to write embedded Go sidecar completion marker `{}`: {error}",
-            staging.display()
-        ))
-    })?;
-    match fs::rename(&staging, &directory) {
-        Ok(()) => Ok(directory),
-        Err(_) if marker.is_file() => {
-            let _ = fs::remove_dir_all(&staging);
-            Ok(directory)
-        }
-        Err(error) => Err(GoSidecarFailure::CommandFailed(format!(
-            "failed to publish embedded Go sidecar directory `{}`: {error}",
-            directory.display()
-        ))),
-    }
-}
-
-fn embedded_go_sidecar_files_match(directory: &Path) -> bool {
-    EMBEDDED_GO_SIDECAR_FILES
-        .iter()
-        .all(|(relative_path, contents)| {
-            fs::read_to_string(directory.join(relative_path))
-                .as_deref()
-                .is_ok_and(|existing| existing == *contents)
-        })
-}
-
-fn write_embedded_go_sidecar_files(directory: &Path) -> Result<(), GoSidecarFailure> {
-    for (relative_path, contents) in EMBEDDED_GO_SIDECAR_FILES {
-        let path = directory.join(relative_path);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|error| {
-                GoSidecarFailure::CommandFailed(format!(
-                    "failed to create embedded Go sidecar directory `{}`: {error}",
-                    parent.display()
-                ))
-            })?;
-        }
-        fs::write(&path, contents).map_err(|error| {
-            GoSidecarFailure::CommandFailed(format!(
-                "failed to write embedded Go sidecar file `{}`: {error}",
-                path.display()
-            ))
-        })?;
-    }
-    Ok(())
-}
-
-fn unique_materialization_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default()
+    })
 }
 
 fn embedded_go_sidecar_hash() -> String {
@@ -1509,6 +1427,27 @@ fn package_error_diagnostics(errors: &[GoSidecarPackageError]) -> Vec<Diagnostic
             ))
     });
     diagnostics
+}
+
+#[cfg(test)]
+mod subprocess_timeout_tests {
+    use super::*;
+
+    #[test]
+    fn symbol_sidecar_command_times_out_instead_of_hanging() {
+        let command = if cfg!(windows) {
+            let mut command = Command::new("cmd");
+            command.args(["/C", "ping -n 3 127.0.0.1 > nul"]);
+            command
+        } else {
+            let mut command = Command::new("sh");
+            command.args(["-c", "sleep 2"]);
+            command
+        };
+        let error = run_go_sidecar_command(command, Duration::from_millis(1))
+            .expect_err("sidecar should time out");
+        assert!(matches!(error, GoSidecarFailure::Timeout(_)));
+    }
 }
 
 #[cfg(test)]

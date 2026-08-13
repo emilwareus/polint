@@ -132,9 +132,14 @@ pub fn derive_ts_js_type_value_alias(db: &impl AnalysisHost) -> TypeValueAliasOu
                 unsupported,
                 body,
                 None,
+                &unsupported.construct,
             ));
         } else {
             for place in &unsupported.affected_places {
+                let Some(place_fact) = place_by_id.get(place) else {
+                    continue;
+                };
+                let subject_identity = interner.resolve(place_fact.stable_key);
                 types.push(unsupported_type_fact(
                     interner,
                     types.len() as u64,
@@ -142,6 +147,7 @@ pub fn derive_ts_js_type_value_alias(db: &impl AnalysisHost) -> TypeValueAliasOu
                     unsupported,
                     body,
                     Some(*place),
+                    &subject_identity,
                 ));
                 values.push(unsupported_value_fact(
                     interner,
@@ -149,6 +155,7 @@ pub fn derive_ts_js_type_value_alias(db: &impl AnalysisHost) -> TypeValueAliasOu
                     ValueSubject::Place(*place),
                     unsupported,
                     body,
+                    &subject_identity,
                 ));
             }
         }
@@ -246,7 +253,7 @@ fn type_fact_for_place(
             [
                 ("language", language_label(place.language).to_string()),
                 ("place", interner.resolve(place.stable_key).to_string()),
-                ("phase", format!("{phase:?}")),
+                ("phase", type_phase_label(phase).to_string()),
             ],
         ),
     }
@@ -318,7 +325,6 @@ fn access_path_for_place(
             [
                 ("language", language_label(place.language).to_string()),
                 ("place", interner.resolve(place.stable_key).to_string()),
-                ("projection_count", place.projections.len().to_string()),
             ],
         ),
     }
@@ -550,7 +556,7 @@ fn push_value_for_mir_value(
                     "operation",
                     interner.resolve(operation.stable_key).to_string(),
                 ),
-                ("ordinal", values.len().to_string()),
+                ("role", "assigned_value".to_string()),
             ],
         ),
     });
@@ -854,9 +860,11 @@ fn collect_narrowing_for_operation(
         .filter(|place| place.language.is_ts_family())
         .filter(|place| place.function == Some(body.function))
         .filter(|place| evidence_mentions_place(evidence, place))
-        .map(|place| place.id)
+        .copied()
         .collect::<Vec<_>>();
-    for place in candidate_places {
+    for place_fact in candidate_places {
+        let place = place_fact.id;
+        let place_stable_key = interner.resolve(place_fact.stable_key).to_string();
         let type_set = TypeSetId(types.len() as u64);
         let type_stable_key = stable_key(
             interner,
@@ -867,7 +875,7 @@ fn collect_narrowing_for_operation(
                     "operation",
                     interner.resolve(operation.stable_key).to_string(),
                 ),
-                ("place", place.0.to_string()),
+                ("place", place_stable_key.clone()),
                 ("phase", "flow_narrowed".to_string()),
             ],
         );
@@ -913,7 +921,7 @@ fn collect_narrowing_for_operation(
                         "operation",
                         interner.resolve(operation.stable_key).to_string(),
                     ),
-                    ("place", place.0.to_string()),
+                    ("place", place_stable_key.clone()),
                     ("evidence", evidence.trim().to_string()),
                 ],
             ),
@@ -1017,6 +1025,7 @@ fn unsupported_type_fact(
     unsupported: &crate::analysis_neutral::mir_op::UnsupportedSemanticFact,
     body: Option<&MirBody>,
     place: Option<PlaceId>,
+    subject_identity: &str,
 ) -> TypeFact {
     let (status, phase, precision, shape) = match unsupported.precision {
         UnsupportedPrecision::Partial | UnsupportedPrecision::Unknown => (
@@ -1062,7 +1071,7 @@ fn unsupported_type_fact(
                     "unsupported",
                     interner.resolve(unsupported.stable_key).to_string(),
                 ),
-                ("ordinal", id.to_string()),
+                ("subject", subject_identity.to_string()),
             ],
         ),
     }
@@ -1074,6 +1083,7 @@ fn unsupported_value_fact(
     subject: ValueSubject,
     unsupported: &crate::analysis_neutral::mir_op::UnsupportedSemanticFact,
     body: Option<&MirBody>,
+    subject_identity: &str,
 ) -> ValueFact {
     ValueFact {
         id: ValueFactId(id),
@@ -1098,7 +1108,7 @@ fn unsupported_value_fact(
                     "unsupported",
                     interner.resolve(unsupported.stable_key).to_string(),
                 ),
-                ("ordinal", id.to_string()),
+                ("subject", subject_identity.to_string()),
             ],
         ),
     }
@@ -1106,6 +1116,19 @@ fn unsupported_value_fact(
 
 fn source_text<'source>(source: &'source str, span: &Span) -> Option<&'source str> {
     source.get(span.start_byte as usize..span.end_byte as usize)
+}
+
+fn type_phase_label(phase: TypePhase) -> &'static str {
+    match phase {
+        TypePhase::Declared => "declared",
+        TypePhase::Inferred => "inferred",
+        TypePhase::Resolved => "resolved",
+        TypePhase::FlowNarrowed => "flow_narrowed",
+        TypePhase::ExtensionProvided => "extension_provided",
+        TypePhase::Unknown => "unknown",
+        TypePhase::Unsupported => "unsupported",
+        TypePhase::SetupMissing => "setup_missing",
+    }
 }
 
 fn stable_key<const N: usize>(

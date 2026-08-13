@@ -488,6 +488,7 @@ dependencies = [
  "polint-macros",
  "rayon",
  "rusqlite",
+ "rustix",
  "serde",
  "serde_json",
  "serde_norway",
@@ -496,6 +497,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "windows-sys",
 ]
 
 [[package]]

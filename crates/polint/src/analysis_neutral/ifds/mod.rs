@@ -502,6 +502,7 @@ fn boundary(edge: &DataFlowEdgeFact, store: &DataFlowStore) -> Boundary {
 
 #[cfg(test)]
 mod tests {
+    use crate::analysis_api::FunctionFact;
     use crate::analysis_neutral::LocalAnalysisDb;
 
     use super::*;
@@ -703,6 +704,20 @@ mod tests {
 
     fn call_graph() -> LocalAnalysisDb {
         let mut db = LocalAnalysisDb::new();
+        let file = db.add_file("app.ts".into(), "app.ts".to_string(), String::new());
+        for index in 0..=2 {
+            db.push_function(FunctionFact::new(
+                FunctionId::from_raw(0),
+                file,
+                format!("function_{index}"),
+                Span::point(file, 1, 1),
+                Language::TypeScript,
+                false,
+                false,
+                1,
+                Vec::new(),
+            ));
+        }
         db.replace_call_facts(CallOutput {
             sites: vec![call_site(1), call_site(2)],
             targets: Vec::new(),
@@ -745,7 +760,7 @@ mod tests {
         RefinedCallEdgeFact {
             id: RefinedCallEdgeId(id),
             site: CallSiteId(id),
-            base_target: Some(CallTargetId(id)),
+            base_target: None,
             caller: FunctionId::from_raw(0),
             target_function: Some(FunctionId::from_raw(id)),
             target_symbol: None,

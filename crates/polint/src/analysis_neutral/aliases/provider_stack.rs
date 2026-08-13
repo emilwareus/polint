@@ -1,7 +1,6 @@
 use super::facts::{AliasAnswerFact, AliasOperand, AliasPrecision, AliasReason, AliasStatus};
 use super::query::AliasQueryIndex;
 use super::store::AliasOutput;
-use crate::analysis_api::{FactFamily, stable_key_from_parts};
 use crate::analysis_neutral::access_paths::facts::AccessPathFact;
 use crate::analysis_neutral::ids::AliasAnswerId;
 use crate::analysis_neutral::points_to::facts::PointsToSetFact;
@@ -23,7 +22,7 @@ pub fn derive_alias_answers(
             ]
         })
         .collect::<Vec<_>>();
-    operands.sort();
+    operands.sort_by_cached_key(|operand| index.operand_stable_identity(interner, *operand));
     operands.dedup();
 
     let mut answers = Vec::new();
@@ -32,7 +31,7 @@ pub fn derive_alias_answers(
         for right in operands.iter().skip(left_index) {
             if answers.len() >= MAX_PROVIDER_STACK_PAIRS {
                 if !budget_reported {
-                    answers.push(budget_exceeded_answer(interner, *left, *right));
+                    answers.push(budget_exceeded_answer(&index, interner, *left, *right));
                     budget_reported = true;
                 }
                 break;
@@ -44,6 +43,7 @@ pub fn derive_alias_answers(
 }
 
 fn budget_exceeded_answer(
+    index: &AliasQueryIndex<'_>,
     interner: &crate::internal_core::StableKeyInterner,
     left: AliasOperand,
     right: AliasOperand,
@@ -56,15 +56,12 @@ fn budget_exceeded_answer(
         reason: AliasReason::BudgetExceeded,
         evidence: vec!["provider-stack alias pair budget exceeded".to_string()],
         precision: AliasPrecision::Unknown,
-        stable_key: stable_key_from_parts(
+        stable_key: index.answer_stable_key(
             interner,
-            FactFamily::AliasAnswer,
-            &[
-                ("left", format!("{left:?}")),
-                ("right", format!("{right:?}")),
-                ("status", format!("{:?}", AliasStatus::Unknown)),
-                ("reason", format!("{:?}", AliasReason::BudgetExceeded)),
-            ],
+            left,
+            right,
+            AliasStatus::Unknown,
+            &AliasReason::BudgetExceeded,
         ),
     }
 }

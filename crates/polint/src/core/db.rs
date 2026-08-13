@@ -1117,8 +1117,23 @@ impl AnalysisDb {
         &mut self,
         output: RefinedCallOutput,
     ) -> Result<(), AnalysisError> {
+        let valid_call_sites = self.call_sites().iter().map(|site| site.id).collect();
+        let valid_call_targets = self.call_targets().iter().map(|target| target.id).collect();
+        let valid_functions = self
+            .functions()
+            .iter()
+            .map(|function| function.id)
+            .collect();
+        let valid_symbols = self.symbols().iter().map(|symbol| symbol.id).collect();
         let interner = self.stable_key_interner();
-        let store = RefinedCallStore::from_normalized_output(output, &interner)?;
+        let store = RefinedCallStore::from_normalized_output(
+            output,
+            &interner,
+            &valid_call_sites,
+            &valid_call_targets,
+            &valid_functions,
+            &valid_symbols,
+        )?;
         *self.refined_call_store_mut() = store;
         self.refresh_refined_call_metadata();
         Ok(())
@@ -5704,6 +5719,10 @@ impl AnalysisDb {
 }
 
 impl crate::analysis_neutral::AnalysisHost for AnalysisDb {
+    fn semantic_scopes(&self) -> &[ScopeFact] {
+        self.scopes()
+    }
+
     fn replace_summary_facts(&mut self, output: SummaryOutput) {
         AnalysisDb::replace_summary_facts(self, output);
     }

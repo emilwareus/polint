@@ -4,6 +4,7 @@
 
 #[cfg(feature = "lang-go")]
 mod adapter;
+mod embedded_cache;
 pub mod error;
 mod frontend;
 mod hash;
@@ -12,6 +13,8 @@ mod local_db;
 #[cfg(feature = "lang-go")]
 mod mir;
 pub mod module_graph;
+mod process_runner;
+pub(crate) mod rta;
 #[cfg(feature = "lang-go")]
 #[doc(hidden)]
 pub use mir::lower_go_mir;

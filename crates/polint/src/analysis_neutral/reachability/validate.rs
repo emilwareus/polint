@@ -223,7 +223,7 @@ mod tests {
                     RootKind::Main,
                     Language::Go,
                     "main.main",
-                    file,
+                    "cmd/app/main.go",
                     &span,
                 ),
             ),
@@ -351,7 +351,7 @@ mod tests {
                     RootKind::ConfiguredEntrypoint,
                     Language::Unknown,
                     "configured:does/not.Resolve",
-                    sentinel_file,
+                    "<unresolved>",
                     &sentinel_span,
                 ),
             ),
@@ -361,7 +361,7 @@ mod tests {
             RootKind::ConfiguredEntrypoint,
             Language::Unknown,
             "configured:does/not.Resolve",
-            sentinel_file,
+            "<unresolved>",
             &sentinel_span,
         );
 

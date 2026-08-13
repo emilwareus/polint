@@ -664,6 +664,7 @@ fn summary_precision(precision: SummaryPrecision) -> DataFlowPrecision {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis_api::FunctionFact;
     use crate::analysis_neutral::LocalAnalysisDb;
     use crate::analysis_neutral::calls::facts::{
         CallAlgorithm, CallCallee, CallEdgeKind, CallPrecision, CallProvenance, CallSiteFact,
@@ -672,8 +673,7 @@ mod tests {
     use crate::analysis_neutral::calls::store::CallOutput;
     use crate::analysis_neutral::data_flow::store::DataFlowStore;
     use crate::analysis_neutral::ids::{
-        CallSiteId, CallTargetId, DataFlowNodeId, MirBodyId, MirOpId, PlaceId, RefinedCallEdgeId,
-        SummaryId,
+        CallSiteId, DataFlowNodeId, MirBodyId, MirOpId, PlaceId, RefinedCallEdgeId, SummaryId,
     };
     use crate::analysis_neutral::ifds::{
         DataFlowPathStatus, DataFlowSearchBudget, find_taint_paths,
@@ -689,9 +689,29 @@ mod tests {
     use crate::analysis_neutral::summaries::store::SummaryOutput;
     use crate::internal_core::{FileId, FunctionId, Language, Span, stable_key_for_test};
 
+    fn test_db() -> LocalAnalysisDb {
+        let mut db = LocalAnalysisDb::new();
+        db.add_file("padding.ts".into(), "padding.ts".to_string(), String::new());
+        let file = db.add_file("app.ts".into(), "app.ts".to_string(), String::new());
+        for index in 0..=5 {
+            db.push_function(FunctionFact::new(
+                FunctionId::from_raw(0),
+                file,
+                format!("function_{index}"),
+                Span::point(file, 1, 1),
+                Language::TypeScript,
+                false,
+                false,
+                1,
+                Vec::new(),
+            ));
+        }
+        db
+    }
+
     #[test]
     fn resolved_refined_call_creates_role_specific_edges() {
-        let mut db = LocalAnalysisDb::default();
+        let mut db = test_db();
         db.replace_call_facts(CallOutput {
             sites: vec![call_site(Some(PlaceId(20)))],
             targets: Vec::new(),
@@ -752,7 +772,7 @@ mod tests {
 
     #[test]
     fn direct_call_edges_use_real_call_site_place_nodes_and_skip_missing_receiver() {
-        let mut db = LocalAnalysisDb::default();
+        let mut db = test_db();
         db.replace_call_facts(CallOutput {
             sites: vec![call_site(None)],
             targets: Vec::new(),
@@ -793,7 +813,7 @@ mod tests {
 
     #[test]
     fn direct_call_edges_emit_receiver_only_for_real_receiver_place() {
-        let mut db = LocalAnalysisDb::default();
+        let mut db = test_db();
         db.replace_call_facts(CallOutput {
             sites: vec![call_site(Some(PlaceId(20)))],
             targets: Vec::new(),
@@ -824,7 +844,7 @@ mod tests {
 
     #[test]
     fn resolved_refined_call_bridges_through_target_data_flow_summary() {
-        let mut db = LocalAnalysisDb::default();
+        let mut db = test_db();
         db.replace_call_facts(CallOutput {
             sites: vec![call_site(None)],
             targets: Vec::new(),
@@ -903,7 +923,7 @@ mod tests {
 
     #[test]
     fn target_data_flow_summary_only_bridges_matching_argument_root() {
-        let mut db = LocalAnalysisDb::default();
+        let mut db = test_db();
         db.replace_call_facts(CallOutput {
             sites: vec![call_site(None)],
             targets: Vec::new(),
@@ -963,7 +983,7 @@ mod tests {
 
     #[test]
     fn go_method_param_zero_summary_bridges_receiver_not_first_argument() {
-        let mut db = LocalAnalysisDb::default();
+        let mut db = test_db();
         db.replace_call_facts(CallOutput {
             sites: vec![go_method_call_site()],
             targets: Vec::new(),
@@ -1045,7 +1065,7 @@ mod tests {
 
     #[test]
     fn barrier_summary_flow_does_not_bridge_direct_call_path() {
-        let mut db = LocalAnalysisDb::default();
+        let mut db = test_db();
         db.replace_call_facts(CallOutput {
             sites: vec![call_site(None)],
             targets: Vec::new(),
@@ -1107,7 +1127,7 @@ mod tests {
 
     #[test]
     fn repeated_target_summary_paths_do_not_cross_between_call_sites() {
-        let mut db = LocalAnalysisDb::default();
+        let mut db = test_db();
         db.replace_call_facts(CallOutput {
             sites: vec![
                 call_site_with(CallSiteId(2), vec![PlaceId(10)], Some(PlaceId(30))),
@@ -1226,7 +1246,7 @@ mod tests {
         RefinedCallEdgeFact {
             id: RefinedCallEdgeId(1),
             site: CallSiteId(2),
-            base_target: Some(CallTargetId(3)),
+            base_target: None,
             caller: FunctionId::from_raw(4),
             target_function: Some(FunctionId::from_raw(5)),
             target_symbol: None,
@@ -1288,7 +1308,7 @@ mod tests {
             result: Some(PlaceId(30)),
             status: CallTargetStatus::Resolved,
             precision: CallPrecision::Exact,
-            stable_key: crate::internal_core::StableKeyId(2),
+            stable_key: stable_key_for_test("call-site:2"),
         }
     }
 
@@ -1302,7 +1322,7 @@ mod tests {
             operation: MirOpId(id.0),
             arguments,
             result,
-            stable_key: crate::internal_core::StableKeyId(id.0 as u32),
+            stable_key: stable_key_for_test(&format!("call-site:{}", id.0)),
             ..call_site(None)
         }
     }

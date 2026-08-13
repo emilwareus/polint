@@ -166,7 +166,7 @@ pub fn compute_identity_stable_key(
     language: LanguageTag,
     package_or_module: &str,
     container_path: &str,
-    file_id: FileId,
+    repository_relative_path: &str,
     span: &Span,
 ) -> String {
     format!(
@@ -175,7 +175,7 @@ pub fn compute_identity_stable_key(
         language.as_str(),
         escape_field(package_or_module),
         escape_field(container_path),
-        file_id.0,
+        escape_field(repository_relative_path),
         span.start_byte,
         span.end_byte,
     )
@@ -296,7 +296,7 @@ mod tests {
             ),
             multiplicity: 1,
             stable_key: crate::internal_core::stable_key_for_test(
-                "identity|function|go|example.com/pkg|pkg.Type|3|4..5",
+                "identity|function|go|example.com/pkg|pkg.Type|src/sample.go|4..5",
             ),
             originating_call_site_id: None,
             originating_call_target_id: None,
@@ -399,7 +399,7 @@ mod tests {
             LanguageTag::Go,
             "a",
             "b/c",
-            FileId::from_raw(1),
+            "src/main.go",
             &Span::point(FileId::from_raw(1), 1, 1),
         );
         let right = compute_identity_stable_key(
@@ -407,7 +407,7 @@ mod tests {
             LanguageTag::Go,
             "a/b",
             "c",
-            FileId::from_raw(1),
+            "src/main.go",
             &Span::point(FileId::from_raw(1), 1, 1),
         );
         assert_ne!(left, right);
@@ -420,7 +420,7 @@ mod tests {
             LanguageTag::Go,
             "a|b",
             "c",
-            FileId::from_raw(1),
+            "src/main.go",
             &Span::point(FileId::from_raw(1), 1, 1),
         );
         let right = compute_identity_stable_key(
@@ -428,10 +428,35 @@ mod tests {
             LanguageTag::Go,
             "a",
             "b|c",
-            FileId::from_raw(1),
+            "src/main.go",
             &Span::point(FileId::from_raw(1), 1, 1),
         );
         assert_ne!(left, right);
+    }
+
+    #[test]
+    fn stable_key_is_invariant_to_file_id_allocation_order() {
+        let allocated_first = Span::new(FileId::from_raw(0), 4, 9, 1, 5, 1, 10);
+        let allocated_later = Span::new(FileId::from_raw(42), 4, 9, 1, 5, 1, 10);
+
+        let first_key = compute_identity_stable_key(
+            IdentityKind::Function,
+            LanguageTag::Go,
+            "example.com/pkg",
+            "pkg.Main",
+            "src/main.go",
+            &allocated_first,
+        );
+        let later_key = compute_identity_stable_key(
+            IdentityKind::Function,
+            LanguageTag::Go,
+            "example.com/pkg",
+            "pkg.Main",
+            "src/main.go",
+            &allocated_later,
+        );
+
+        assert_eq!(first_key, later_key);
     }
 
     #[test]

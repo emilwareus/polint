@@ -1,4 +1,4 @@
-//! Population pass for `polint.semantic_graph` (GRAPH-02).
+//! Population pass for `polint.semantic_graph`.
 //!
 //! [`build_semantic_graph`] projects a real-but-minimal semantic graph from the
 //! already-available v1.2 fact families — functions, packages, scopes, call sites,
@@ -7,13 +7,12 @@
 //! rows as `Alloc`/`FieldStore`/`FieldLoad`/receiver constraints and accepted
 //! adaptation-model facts as `ModelEdge` constraints. It is a
 //! **read-only projection**: it reads `db` and returns a fresh
-//! [`SemanticGraphOutput`], mutating no upstream fact family (D-13). All
-//! node/edge/constraint stable keys are composed from the
-//! referenced existing stable identity via the length-prefixed recipe, never
-//! run-local dense IDs (D-06); the dense IDs are assigned later by `normalized()`.
+//! [`SemanticGraphOutput`] without mutating upstream fact families. All
+//! node, edge, and constraint stable keys are composed from referenced stable
+//! identities through the length-prefixed recipe, never run-local dense IDs; dense
+//! IDs are assigned later by `normalized()`.
 //!
-//! Honesty boundaries (D-07/D-11): `TypeConstraint` is not emitted in this minimal
-//! pass.
+//! `TypeConstraint` is intentionally not emitted by this minimal pass.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -23,18 +22,22 @@ use oxc_allocator::Allocator;
 #[cfg(all(test, feature = "lang-go", feature = "lang-typescript"))]
 use oxc_semantic::SemanticBuilder;
 
-use crate::analysis::adaptation::store::AdaptationModelStore;
-use crate::analysis::ids::{ObjectTokenId, PlaceId, SemanticNodeId};
-use crate::analysis::semantic_graph::constraints::ConstraintKind;
-#[cfg(all(test, feature = "lang-typescript"))]
-use crate::analysis::semantic_graph::facts::SemanticPrecision;
-use crate::analysis::semantic_graph::facts::{EdgeKind, NodeKind};
-use crate::analysis::semantic_graph::store::SemanticGraphOutput;
-use crate::analysis::stable_key::semantic_stable_key;
-use crate::analysis_kernel::FactFamily;
+use crate::analysis_api::FactFamily;
 #[cfg(all(test, feature = "lang-go", feature = "lang-typescript"))]
-use crate::core::SourceFile;
-use crate::core::{AnalysisDb, FileId, Span};
+use crate::analysis_api::SourceFile;
+use crate::analysis_neutral::AnalysisHost;
+use crate::analysis_neutral::adaptation::store::AdaptationModelStore;
+use crate::analysis_neutral::ids::{ObjectTokenId, PlaceId, SemanticNodeId};
+use crate::analysis_neutral::semantic_graph::build::{
+    function_node_key, node_key_from_identity, place_node_key,
+};
+use crate::analysis_neutral::semantic_graph::constraints::ConstraintKind;
+#[cfg(all(test, feature = "lang-typescript"))]
+use crate::analysis_neutral::semantic_graph::facts::SemanticPrecision;
+use crate::analysis_neutral::semantic_graph::facts::{EdgeKind, NodeKind};
+use crate::analysis_neutral::semantic_graph::store::SemanticGraphOutput;
+use crate::analysis_neutral::stable_key::semantic_stable_key;
+use crate::internal_core::{FileId, StableKeyInterner};
 use crate::ts::binding::direct::{
     TsDirectBindingModuleFile, TsDirectBindingModuleInput, resolve_direct_bindings_with_modules,
 };
@@ -61,31 +64,39 @@ pub(crate) use crate::ts::token_flow::{TsTokenSourceFlow, collect_ts_token_sourc
 
 /// Projects a real-but-minimal semantic graph from already-stored v1.2 facts.
 ///
-/// Reads `db` only; the returned [`SemanticGraphOutput`] is the sole new artifact
-/// (D-13). Dense IDs are NOT assigned here — every node/edge/constraint is emitted
-/// with the default dense id and a composed stable key; the caller runs
-/// `normalized()` (and `SemanticGraphStore::from_output`) to sort by stable key and
-/// assign dense IDs (D-05).
+/// Reads `db` only; the returned [`SemanticGraphOutput`] is the sole new artifact.
+/// Dense IDs are not assigned here: every node, edge, and constraint is emitted with
+/// the default dense ID and a composed stable key. The caller runs `normalized()` and
+/// `SemanticGraphStore::from_output` to sort by stable key and assign dense IDs.
 #[cfg(all(test, feature = "lang-typescript"))]
-pub(crate) fn build_semantic_graph(db: &AnalysisDb) -> SemanticGraphOutput {
+pub(crate) fn build_semantic_graph(db: &impl AnalysisHost) -> SemanticGraphOutput {
     let ts_direct_bindings = collect_ts_direct_binding_collection(db);
-    build_semantic_graph_with_ts_direct_binding_collection(db, &ts_direct_bindings)
+    build_semantic_graph_with_ts_direct_binding_collection(
+        db,
+        &ts_direct_bindings,
+        no_additional_projection,
+    )
 }
 
-pub(crate) fn build_semantic_graph_with_ts_direct_binding_collection(
-    db: &AnalysisDb,
+pub(crate) fn build_semantic_graph_with_ts_direct_binding_collection<H: AnalysisHost>(
+    db: &H,
     ts_direct_bindings: &TsDirectBindingCollection,
+    project_additional_facts: fn(
+        &H,
+        &mut crate::analysis_neutral::semantic_graph::build::SemanticGraphBuilder,
+    ),
 ) -> SemanticGraphOutput {
     build_semantic_graph_with_ts_direct_binding_collection_and_adaptation_models(
         db,
         ts_direct_bindings,
         &AdaptationModelStore::default(),
+        project_additional_facts,
     )
 }
 
 #[cfg(all(test, feature = "lang-typescript"))]
 pub(crate) fn build_semantic_graph_with_ts_direct_bindings(
-    db: &AnalysisDb,
+    db: &impl AnalysisHost,
     ts_direct_bindings: &[TsDirectBindingFact],
 ) -> SemanticGraphOutput {
     build_semantic_graph_with_ts_direct_bindings_and_adaptation_models(
@@ -97,31 +108,52 @@ pub(crate) fn build_semantic_graph_with_ts_direct_bindings(
 
 #[cfg(all(test, feature = "lang-typescript"))]
 pub(crate) fn build_semantic_graph_with_ts_direct_bindings_and_adaptation_models(
-    db: &AnalysisDb,
+    db: &impl AnalysisHost,
     ts_direct_bindings: &[TsDirectBindingFact],
-    adaptation_models: &AdaptationModelStore,
-) -> SemanticGraphOutput {
-    build_semantic_graph_with_inputs(db, ts_direct_bindings, adaptation_models, None)
-}
-
-pub(crate) fn build_semantic_graph_with_ts_direct_binding_collection_and_adaptation_models(
-    db: &AnalysisDb,
-    ts_direct_bindings: &TsDirectBindingCollection,
     adaptation_models: &AdaptationModelStore,
 ) -> SemanticGraphOutput {
     build_semantic_graph_with_inputs(
         db,
-        ts_direct_bindings.bindings(),
+        ts_direct_bindings,
         adaptation_models,
-        Some(ts_direct_bindings.analyses.as_slice()),
+        &TsObjectModelOutput::default(),
+        None,
+        no_additional_projection,
     )
 }
 
-fn build_semantic_graph_with_inputs(
-    db: &AnalysisDb,
+pub(crate) fn build_semantic_graph_with_ts_direct_binding_collection_and_adaptation_models<
+    H: AnalysisHost,
+>(
+    db: &H,
+    ts_direct_bindings: &TsDirectBindingCollection,
+    adaptation_models: &AdaptationModelStore,
+    project_additional_facts: fn(
+        &H,
+        &mut crate::analysis_neutral::semantic_graph::build::SemanticGraphBuilder,
+    ),
+) -> SemanticGraphOutput {
+    let object_model = ts_direct_bindings.object_model_output();
+    build_semantic_graph_with_inputs(
+        db,
+        ts_direct_bindings.bindings(),
+        adaptation_models,
+        &object_model,
+        Some(ts_direct_bindings.analyses.as_slice()),
+        project_additional_facts,
+    )
+}
+
+fn build_semantic_graph_with_inputs<H: AnalysisHost>(
+    db: &H,
     ts_direct_bindings: &[TsDirectBindingFact],
     adaptation_models: &AdaptationModelStore,
+    object_model: &TsObjectModelOutput,
     ts_analyses: Option<&[TsFileAnalysis]>,
+    project_additional_facts: fn(
+        &H,
+        &mut crate::analysis_neutral::semantic_graph::build::SemanticGraphBuilder,
+    ),
 ) -> SemanticGraphOutput {
     let interner_handle = db.stable_key_interner();
     let interner = &interner_handle;
@@ -129,10 +161,10 @@ fn build_semantic_graph_with_inputs(
 
     builder.project_nodes(db);
     builder.project_call_edges_and_constraints(db);
-    builder.project_go_semantic(db);
+    project_additional_facts(db, &mut builder.inner);
     builder.project_ts_direct_bindings(db, ts_direct_bindings);
     builder.project_ts_token_source_flows(db, ts_analyses);
-    builder.project_ts_object_model(db);
+    builder.project_ts_object_model(db, object_model);
     builder.project_adaptation_models(interner, adaptation_models);
     builder.project_member_of_edges(db);
     builder.project_value_constraints(db);
@@ -141,6 +173,13 @@ fn build_semantic_graph_with_inputs(
     // above.
 
     builder.into_output()
+}
+
+#[cfg(all(test, feature = "lang-typescript"))]
+fn no_additional_projection(
+    _db: &impl AnalysisHost,
+    _builder: &mut crate::analysis_neutral::semantic_graph::build::SemanticGraphBuilder,
+) {
 }
 
 pub(crate) use crate::ts::semantic_graph::{TsFileAnalysis, analyze_ts_file};
@@ -201,35 +240,44 @@ impl TsDirectBindingCollection {
         &self.output.bindings
     }
 
-    pub(crate) fn take_object_model_output(&mut self) -> TsObjectModelOutput {
+    pub(crate) fn object_model_output(&self) -> TsObjectModelOutput {
         let mut output = TsObjectModelOutput::default();
-        for analysis in &mut self.analyses {
-            let file_output = std::mem::take(&mut analysis.object_model);
-            output.allocations.extend(file_output.allocations);
-            output.property_writes.extend(file_output.property_writes);
-            output.property_reads.extend(file_output.property_reads);
+        for analysis in &self.analyses {
+            output
+                .allocations
+                .extend(analysis.object_model.allocations.iter().cloned());
+            output
+                .property_writes
+                .extend(analysis.object_model.property_writes.iter().cloned());
+            output
+                .property_reads
+                .extend(analysis.object_model.property_reads.iter().cloned());
             output
                 .receiver_bindings
-                .extend(file_output.receiver_bindings);
-            output.prototype_links.extend(file_output.prototype_links);
+                .extend(analysis.object_model.receiver_bindings.iter().cloned());
+            output
+                .prototype_links
+                .extend(analysis.object_model.prototype_links.iter().cloned());
         }
         output
     }
 }
 
-pub(crate) fn collect_ts_direct_binding_collection(db: &AnalysisDb) -> TsDirectBindingCollection {
+pub(crate) fn collect_ts_direct_binding_collection(
+    db: &impl AnalysisHost,
+) -> TsDirectBindingCollection {
     let analyses = collect_ts_file_analyses(db);
     let output = collect_ts_direct_bindings_from_analyses(db, &analyses);
     TsDirectBindingCollection { output, analyses }
 }
 
 #[cfg(all(test, feature = "lang-go", feature = "lang-typescript"))]
-pub(crate) fn collect_ts_direct_bindings(db: &AnalysisDb) -> TsDirectBindingOutput {
+pub(crate) fn collect_ts_direct_bindings(db: &impl AnalysisHost) -> TsDirectBindingOutput {
     let analyses = collect_ts_binding_file_analyses(db);
     collect_ts_direct_bindings_from_analyses(db, &analyses)
 }
 
-fn collect_ts_file_analyses(db: &AnalysisDb) -> Vec<TsFileAnalysis> {
+fn collect_ts_file_analyses(db: &impl AnalysisHost) -> Vec<TsFileAnalysis> {
     let interner_handle = db.stable_key_interner();
     let interner = &interner_handle;
     db.files()
@@ -240,7 +288,7 @@ fn collect_ts_file_analyses(db: &AnalysisDb) -> Vec<TsFileAnalysis> {
 }
 
 #[cfg(all(test, feature = "lang-go", feature = "lang-typescript"))]
-fn collect_ts_binding_file_analyses(db: &AnalysisDb) -> Vec<TsBindingFileAnalysis> {
+fn collect_ts_binding_file_analyses(db: &impl AnalysisHost) -> Vec<TsBindingFileAnalysis> {
     let interner = db.stable_key_interner();
     db.files()
         .iter()
@@ -251,7 +299,7 @@ fn collect_ts_binding_file_analyses(db: &AnalysisDb) -> Vec<TsBindingFileAnalysi
 
 #[cfg(all(test, feature = "lang-go", feature = "lang-typescript"))]
 fn analyze_ts_binding_file(
-    interner: &crate::core::StableKeyInterner,
+    interner: &StableKeyInterner,
     file: &SourceFile,
 ) -> TsBindingFileAnalysis {
     let source = file.source.as_ref();
@@ -293,7 +341,7 @@ fn analyze_ts_binding_file(
 }
 
 fn collect_ts_direct_bindings_from_analyses<A: TsDirectBindingAnalysis>(
-    db: &AnalysisDb,
+    db: &impl AnalysisHost,
     analyses: &[A],
 ) -> TsDirectBindingOutput {
     if analyses.is_empty() {
@@ -352,7 +400,7 @@ struct GraphBuilder {
 impl GraphBuilder {
     fn intern_node(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &StableKeyInterner,
         kind: NodeKind,
         stable_key_text: String,
     ) -> SemanticNodeId {
@@ -361,7 +409,7 @@ impl GraphBuilder {
 
     fn push_edge(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &StableKeyInterner,
         kind: EdgeKind,
         source: SemanticNodeId,
         target: SemanticNodeId,
@@ -371,43 +419,28 @@ impl GraphBuilder {
 
     fn push_constraint(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &StableKeyInterner,
         kind: ConstraintKind,
         identity: &str,
     ) {
         self.inner.push_constraint(interner, kind, identity);
     }
 
-    fn node_for_key(
-        &self,
-        interner: &crate::core::StableKeyInterner,
-        key: &str,
-    ) -> Option<SemanticNodeId> {
+    fn node_for_key(&self, interner: &StableKeyInterner, key: &str) -> Option<SemanticNodeId> {
         self.inner.node_for_key(interner, key)
     }
 
-    fn project_nodes(&mut self, db: &AnalysisDb) {
+    fn project_nodes(&mut self, db: &impl AnalysisHost) {
         self.inner.project_nodes(db);
-        let interner_handle = db.stable_key_interner();
-        let interner = &interner_handle;
-        for scope in db.scopes() {
-            let key =
-                node_key_from_identity(interner, "scope", &interner.resolve(scope.stable_key));
-            self.intern_node(
-                interner,
-                NodeKind::Scope(crate::analysis::ids::ScopeId(scope.id.0)),
-                key,
-            );
-        }
     }
 
-    fn project_call_edges_and_constraints(&mut self, db: &AnalysisDb) {
+    fn project_call_edges_and_constraints(&mut self, db: &impl AnalysisHost) {
         self.inner.project_call_edges_and_constraints(db);
     }
 
     fn project_adaptation_models(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &StableKeyInterner,
         adaptation_models: &AdaptationModelStore,
     ) {
         self.inner
@@ -416,13 +449,17 @@ impl GraphBuilder {
 
     // -- TS direct binding constraints -------------------------------------
 
-    fn project_ts_direct_bindings(&mut self, db: &AnalysisDb, bindings: &[TsDirectBindingFact]) {
+    fn project_ts_direct_bindings(
+        &mut self,
+        db: &impl AnalysisHost,
+        bindings: &[TsDirectBindingFact],
+    ) {
         let interner_handle = db.stable_key_interner();
         let interner = &interner_handle;
         // Semantic-graph-only projection: TS direct binding rows emit
         // CopyEdge/CallConstraint rows here and do not create CallTargetFact rows.
-        // The calls/refined-calls contract remains owned by analysis::calls until a
-        // later plan deliberately promotes direct TS bindings into that fact family.
+        // The calls/refined-calls contract remains owned by analysis::calls; direct TS
+        // bindings are not part of that fact family.
         let context = TsDirectBindingNodeContext::new(interner, db, self);
         for binding in bindings {
             if binding.status != TsDirectBindingStatus::Resolved {
@@ -465,7 +502,7 @@ impl GraphBuilder {
 
     fn project_ts_token_source_flows(
         &mut self,
-        db: &AnalysisDb,
+        db: &impl AnalysisHost,
         ts_analyses: Option<&[TsFileAnalysis]>,
     ) {
         let interner_handle = db.stable_key_interner();
@@ -493,7 +530,7 @@ impl GraphBuilder {
 
     fn project_ts_token_source_flow(
         &mut self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &StableKeyInterner,
         flow: &TsTokenSourceFlow,
         context: &TsDirectBindingNodeContext<'_>,
     ) {
@@ -518,12 +555,16 @@ impl GraphBuilder {
 
     // -- TS object-model constraints ---------------------------------------
 
-    fn project_ts_object_model(&mut self, db: &AnalysisDb) {
+    fn project_ts_object_model(
+        &mut self,
+        db: &impl AnalysisHost,
+        object_model: &TsObjectModelOutput,
+    ) {
         let interner_handle = db.stable_key_interner();
         let interner = &interner_handle;
-        let context = TsObjectModelNodeContext::new(interner, db, self);
+        let context = TsObjectModelNodeContext::new(interner, db, self, object_model);
 
-        for allocation in db.ts_object_allocations() {
+        for allocation in &object_model.allocations {
             if !is_lowerable_object_model_status(&allocation.status) {
                 continue;
             }
@@ -541,7 +582,7 @@ impl GraphBuilder {
             );
         }
 
-        for write in db.ts_property_writes() {
+        for write in &object_model.property_writes {
             if !is_lowerable_object_model_status(&write.status) {
                 continue;
             }
@@ -563,7 +604,7 @@ impl GraphBuilder {
             );
         }
 
-        for read in db.ts_property_reads() {
+        for read in &object_model.property_reads {
             if !is_lowerable_object_model_status(&read.status) {
                 continue;
             }
@@ -596,7 +637,7 @@ impl GraphBuilder {
             }
         }
 
-        for binding in db.ts_receiver_bindings() {
+        for binding in &object_model.receiver_bindings {
             if !is_lowerable_object_model_status(&binding.status) {
                 continue;
             }
@@ -624,7 +665,7 @@ impl GraphBuilder {
             }
         }
 
-        for link in db.ts_prototype_links() {
+        for link in &object_model.prototype_links {
             if !is_lowerable_object_model_status(&link.status) {
                 continue;
             }
@@ -652,47 +693,13 @@ impl GraphBuilder {
         }
     }
 
-    fn project_go_semantic(&mut self, db: &AnalysisDb) {
-        crate::go::semantic_graph::project_go_semantic(
-            db,
-            &mut self.inner,
-            db.go_semantic_functions(),
-            db.go_semantic_callsites(),
-        );
-    }
-
     // -- member-of edges ----------------------------------------------------
 
-    fn project_member_of_edges(&mut self, db: &AnalysisDb) {
-        let interner_handle = db.stable_key_interner();
-        let interner = &interner_handle;
-        // Scope-in-package containment: scope node -> package node, where both the
-        // scope and its package are projected nodes.
-        let pkg_node: BTreeMap<_, _> = db
-            .packages()
-            .iter()
-            .filter_map(|package| {
-                let key = package_node_key(db, package);
-                self.node_for_key(interner, &key).map(|id| (package.id, id))
-            })
-            .collect();
-
-        for scope in db.scopes() {
-            let Some(package_id) = scope.package else {
-                continue;
-            };
-            let scope_key =
-                node_key_from_identity(interner, "scope", &interner.resolve(scope.stable_key));
-            let Some(scope_node) = self.node_for_key(interner, &scope_key) else {
-                continue;
-            };
-            if let Some(&package_node) = pkg_node.get(&package_id) {
-                self.push_edge(interner, EdgeKind::MemberOf, scope_node, package_node);
-            }
-        }
+    fn project_member_of_edges(&mut self, db: &impl AnalysisHost) {
+        self.inner.project_member_of_edges(db);
     }
 
-    fn project_value_constraints(&mut self, db: &AnalysisDb) {
+    fn project_value_constraints(&mut self, db: &impl AnalysisHost) {
         self.inner.project_value_constraints(db);
     }
 
@@ -721,8 +728,8 @@ struct TsDirectBindingNodeContext<'a> {
 
 impl<'a> TsDirectBindingNodeContext<'a> {
     fn new(
-        interner: &crate::core::StableKeyInterner,
-        db: &'a AnalysisDb,
+        interner: &StableKeyInterner,
+        db: &'a impl AnalysisHost,
         builder: &GraphBuilder,
     ) -> Self {
         let file_by_relative_path = db
@@ -811,13 +818,14 @@ struct TsObjectModelNodeContext<'a> {
 
 impl<'a> TsObjectModelNodeContext<'a> {
     fn new(
-        interner: &crate::core::StableKeyInterner,
-        db: &'a AnalysisDb,
+        interner: &StableKeyInterner,
+        db: &'a impl AnalysisHost,
         builder: &GraphBuilder,
+        object_model: &TsObjectModelOutput,
     ) -> Self {
         let direct = TsDirectBindingNodeContext::new(interner, db, builder);
-        let object_token_by_key = db
-            .ts_object_allocations()
+        let object_token_by_key = object_model
+            .allocations
             .iter()
             .map(|allocation| interner.resolve(allocation.stable_key))
             .collect::<BTreeSet<_>>()
@@ -832,7 +840,7 @@ impl<'a> TsObjectModelNodeContext<'a> {
             .collect::<BTreeMap<_, _>>();
 
         let mut synthetic_place_keys = BTreeSet::new();
-        for allocation in db.ts_object_allocations() {
+        for allocation in &object_model.allocations {
             insert_synthetic_place_key(
                 &place_by_stable_key,
                 &mut synthetic_place_keys,
@@ -842,14 +850,14 @@ impl<'a> TsObjectModelNodeContext<'a> {
                 ),
             );
         }
-        for write in db.ts_property_writes() {
+        for write in &object_model.property_writes {
             insert_synthetic_place_key(
                 &place_by_stable_key,
                 &mut synthetic_place_keys,
                 property_write_source_place_identity(interner, write),
             );
         }
-        for read in db.ts_property_reads() {
+        for read in &object_model.property_reads {
             let key = read
                 .destination_stable_key
                 .map(|key| interner.resolve(key).to_string())
@@ -861,7 +869,7 @@ impl<'a> TsObjectModelNodeContext<'a> {
                 });
             insert_synthetic_place_key(&place_by_stable_key, &mut synthetic_place_keys, key);
         }
-        for binding in db.ts_receiver_bindings() {
+        for binding in &object_model.receiver_bindings {
             let key = binding
                 .receiver_place_stable_key
                 .map(|key| interner.resolve(key).to_string())
@@ -896,7 +904,7 @@ impl<'a> TsObjectModelNodeContext<'a> {
 
     fn object_node(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &StableKeyInterner,
         builder: &mut GraphBuilder,
         object_stable_key: &str,
     ) -> Option<SemanticNodeId> {
@@ -910,7 +918,7 @@ impl<'a> TsObjectModelNodeContext<'a> {
 
     fn allocation_place_node(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &StableKeyInterner,
         builder: &mut GraphBuilder,
         allocation_stable_key: &str,
     ) -> Option<SemanticNodeId> {
@@ -923,7 +931,7 @@ impl<'a> TsObjectModelNodeContext<'a> {
 
     fn property_write_source_node(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &StableKeyInterner,
         builder: &mut GraphBuilder,
         write: &TsPropertyWriteFact,
     ) -> Option<SemanticNodeId> {
@@ -950,7 +958,7 @@ impl<'a> TsObjectModelNodeContext<'a> {
 
     fn property_read_destination_node(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &StableKeyInterner,
         builder: &mut GraphBuilder,
         read: &TsPropertyReadFact,
     ) -> Option<SemanticNodeId> {
@@ -968,7 +976,7 @@ impl<'a> TsObjectModelNodeContext<'a> {
 
     fn receiver_destination_node(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &StableKeyInterner,
         builder: &mut GraphBuilder,
         binding: &TsReceiverBindingFact,
     ) -> Option<SemanticNodeId> {
@@ -983,7 +991,7 @@ impl<'a> TsObjectModelNodeContext<'a> {
 
     fn receiver_source_node(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &StableKeyInterner,
         builder: &mut GraphBuilder,
         binding: &TsReceiverBindingFact,
     ) -> Option<SemanticNodeId> {
@@ -1005,7 +1013,7 @@ impl<'a> TsObjectModelNodeContext<'a> {
 
     fn place_node(
         &self,
-        interner: &crate::core::StableKeyInterner,
+        interner: &StableKeyInterner,
         builder: &mut GraphBuilder,
         place_stable_key: &str,
     ) -> Option<SemanticNodeId> {
@@ -1093,82 +1101,10 @@ fn parse_length_prefixed_token(input: &str, start: usize) -> Option<(&str, usize
 }
 
 // ---------------------------------------------------------------------------
-// Stable-key composition helpers (D-06: composed from referenced identity)
+// Stable-key composition helpers composed from referenced identities
 // ---------------------------------------------------------------------------
 
-/// Function node key = (node-kind label, function stable identity: path + name +
-/// span), composed via the length-prefixed recipe.
-fn function_node_key(
-    interner: &crate::core::StableKeyInterner,
-    db: &AnalysisDb,
-    function: &crate::core::FunctionFact,
-) -> String {
-    let path = db.path_for(function.file);
-    semantic_stable_key(
-        interner,
-        FactFamily::Function,
-        &[
-            ("node_kind", "function".to_string()),
-            ("path", path),
-            ("name", function.name.clone()),
-            ("span", span_identity(&function.span)),
-        ],
-    )
-    .into_string()
-}
-
-fn package_node_key(db: &AnalysisDb, package: &crate::core::PackageFact) -> String {
-    let interner_handle = db.stable_key_interner();
-    let interner = &interner_handle;
-    let path = db.path_for(package.file);
-    semantic_stable_key(
-        interner,
-        FactFamily::Package,
-        &[
-            ("node_kind", "package".to_string()),
-            ("path", path),
-            ("name", package.name.clone()),
-        ],
-    )
-    .into_string()
-}
-
-/// Node key for an entity that already carries its own composed stable key (scopes,
-/// call sites). The node-kind label disambiguates kinds that might otherwise share a
-/// referenced identity string.
-fn node_key_from_identity(
-    interner: &crate::core::StableKeyInterner,
-    node_kind: &str,
-    identity: &str,
-) -> String {
-    semantic_stable_key(
-        interner,
-        FactFamily::Scope,
-        &[
-            ("node_kind", node_kind.to_string()),
-            ("identity", identity.to_string()),
-        ],
-    )
-    .into_string()
-}
-
-/// Place node key derived from the place's OWN content-stable identity (the
-/// `PlaceFact.stable_key`, which the MIR layer composes from stable context, never
-/// run-local dense IDs). Keying on the place identity — not the owning value fact —
-/// is what makes the same place a single shared node across copies.
-fn place_node_key(interner: &crate::core::StableKeyInterner, place_stable_key: &str) -> String {
-    semantic_stable_key(
-        interner,
-        FactFamily::Place,
-        &[
-            ("node_kind", "place".to_string()),
-            ("identity", place_stable_key.to_string()),
-        ],
-    )
-    .into_string()
-}
-
-fn object_node_key(interner: &crate::core::StableKeyInterner, object_stable_key: &str) -> String {
+fn object_node_key(interner: &StableKeyInterner, object_stable_key: &str) -> String {
     semantic_stable_key(
         interner,
         FactFamily::AllocationToken,
@@ -1181,14 +1117,14 @@ fn object_node_key(interner: &crate::core::StableKeyInterner, object_stable_key:
 }
 
 fn allocation_result_place_identity(
-    interner: &crate::core::StableKeyInterner,
+    interner: &StableKeyInterner,
     allocation_stable_key: &str,
 ) -> String {
     object_model_place_identity(interner, "allocation_result", allocation_stable_key)
 }
 
 fn property_write_source_place_identity(
-    interner: &crate::core::StableKeyInterner,
+    interner: &StableKeyInterner,
     write: &TsPropertyWriteFact,
 ) -> String {
     let source_identity = write
@@ -1203,24 +1139,20 @@ fn property_write_source_place_identity(
 }
 
 fn property_read_destination_place_identity(
-    interner: &crate::core::StableKeyInterner,
+    interner: &StableKeyInterner,
     read_stable_key: &str,
 ) -> String {
     object_model_place_identity(interner, "property_read_destination", read_stable_key)
 }
 
 fn receiver_destination_place_identity(
-    interner: &crate::core::StableKeyInterner,
+    interner: &StableKeyInterner,
     receiver_stable_key: &str,
 ) -> String {
     object_model_place_identity(interner, "receiver_destination", receiver_stable_key)
 }
 
-fn object_model_place_identity(
-    interner: &crate::core::StableKeyInterner,
-    kind: &str,
-    identity: &str,
-) -> String {
+fn object_model_place_identity(interner: &StableKeyInterner, kind: &str, identity: &str) -> String {
     semantic_stable_key(
         interner,
         FactFamily::Place,
@@ -1240,31 +1172,30 @@ fn is_lowerable_object_model_status(status: &TsObjectModelStatus) -> bool {
     matches!(status, TsObjectModelStatus::Resolved)
 }
 
-fn span_identity(span: &Span) -> String {
-    format!("{}:{}..{}", span.file.0, span.start_byte, span.end_byte)
-}
-
 #[cfg(all(test, feature = "lang-typescript"))]
 mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    use crate::analysis::adaptation::budget::AdaptationModelBudget;
-    use crate::analysis::adaptation::facts::{
+    use crate::analysis_api::{
+        FunctionFact, ImportFact, ModuleNode, ModuleNodeKind, PackageFact, ResolutionPrecision,
+        ResolutionStatus, ResolvedImportFact,
+    };
+    use crate::analysis_neutral::LocalAnalysisDb;
+    use crate::analysis_neutral::adaptation::budget::AdaptationModelBudget;
+    use crate::analysis_neutral::adaptation::facts::{
         LoadedModelFact, ModelConfidence, ModelLanguage, RejectionReason,
     };
-    use crate::analysis::adaptation::store::AdaptationModelStore;
-    use crate::analysis::adaptation::validate::ValidationUniverse;
-    use crate::analysis::calls::facts::{
+    use crate::analysis_neutral::adaptation::store::AdaptationModelStore;
+    use crate::analysis_neutral::adaptation::validate::ValidationUniverse;
+    use crate::analysis_neutral::calls::facts::{
         CallCallee, CallPrecision, CallSiteFact, CallSyntaxKind, CallTargetStatus,
     };
-    use crate::analysis::calls::store::CallOutput;
-    use crate::analysis::ids::{CallSiteId, MirBodyId, MirOpId};
-    use crate::analysis::semantic_graph::store::SemanticGraphStore;
-    use crate::core::{
-        AnalysisDb, FileId, FunctionFact, FunctionId, ImportFact, ImportId, Language, ModuleNode,
-        ModuleNodeId, ModuleNodeKind, PackageFact, PackageId, ResolutionPrecision,
-        ResolutionStatus, ResolvedImportFact, Span,
+    use crate::analysis_neutral::calls::store::CallOutput;
+    use crate::analysis_neutral::ids::{CallSiteId, MirBodyId, MirOpId};
+    use crate::analysis_neutral::semantic_graph::store::SemanticGraphStore;
+    use crate::internal_core::{
+        FileId, FunctionId, ImportId, Language, ModuleNodeId, PackageId, Span,
     };
     use crate::ts::binding::direct::{
         TsDirectBindingModuleFile, TsDirectBindingModuleInput, resolve_direct_bindings,
@@ -1278,11 +1209,25 @@ mod tests {
         Span::new(file, 0, 10, 1, 0, 1, 10)
     }
 
+    fn build_with_object_model(
+        db: &impl AnalysisHost,
+        object_model: &TsObjectModelOutput,
+    ) -> SemanticGraphOutput {
+        build_semantic_graph_with_inputs(
+            db,
+            &[],
+            &AdaptationModelStore::default(),
+            object_model,
+            None,
+            no_additional_projection,
+        )
+    }
+
     /// Builds a tiny in-memory db with one package, one function, and one call site
     /// (the function calling something) — enough to exercise >=1 node, >=1 Call edge,
     /// and >=1 CallConstraint without running the full language pipeline.
-    fn fixture_db() -> AnalysisDb {
-        let mut db = AnalysisDb::new();
+    fn fixture_db() -> LocalAnalysisDb {
+        let mut db = LocalAnalysisDb::new();
         let file = db.add_file(
             PathBuf::from("main.go"),
             "main.go".to_string(),
@@ -1341,13 +1286,16 @@ mod tests {
         db
     }
 
-    fn ts_db_with_file(path: &str, source: &str) -> (AnalysisDb, FileId) {
-        let mut db = AnalysisDb::new();
+    fn ts_db_with_file(path: &str, source: &str) -> (LocalAnalysisDb, FileId) {
+        let mut db = LocalAnalysisDb::new();
         let file = db.add_file(PathBuf::from(path), path.to_string(), source.to_string());
         (db, file)
     }
 
-    fn push_ts_function(db: &mut AnalysisDb, function: &TsInventoryFunctionFact) -> FunctionId {
+    fn push_ts_function(
+        db: &mut LocalAnalysisDb,
+        function: &TsInventoryFunctionFact,
+    ) -> FunctionId {
         db.push_function(FunctionFact::new(
             FunctionId::from_raw(0),
             function.file,
@@ -1387,7 +1335,7 @@ mod tests {
     }
 
     fn replace_single_ts_callsite(
-        db: &mut AnalysisDb,
+        db: &mut LocalAnalysisDb,
         caller: FunctionId,
         callsite: &TsInventoryCallsiteFact,
     ) {
@@ -1467,7 +1415,7 @@ mod tests {
             "expected >=1 CallConstraint, got {call_constraints}"
         );
 
-        // EXACTLY zero ModelEdge constraints (honest emptiness, D-11).
+        // Exactly zero ModelEdge constraints preserves honest emptiness.
         let model_edges = output
             .constraints
             .iter()
@@ -1591,7 +1539,7 @@ mod tests {
     }
 
     fn node_key(
-        db: &AnalysisDb,
+        db: &impl AnalysisHost,
         output: &SemanticGraphOutput,
         predicate: impl Fn(&NodeKind) -> bool,
     ) -> String {
@@ -1611,7 +1559,7 @@ mod tests {
         sources: &[String],
         targets: &[String],
     ) -> AdaptationModelStore {
-        let interner = crate::core::AnalysisDb::new().stable_key_interner();
+        let interner = crate::analysis_neutral::LocalAnalysisDb::new().stable_key_interner();
         let universe = ValidationUniverse::new(sources.iter().cloned(), targets.iter().cloned())
             .with_oracle_labels(["expected:benchmark-answer"]);
         AdaptationModelStore::build(
@@ -1631,7 +1579,9 @@ mod tests {
             language: ModelLanguage::TypeScript,
             scope: "src/app.ts".to_string(),
             evidence: vec!["src/app.ts:10".to_string()],
-            stable_key: crate::core::stable_key_for_test(&format!("model:{source}->{target}")),
+            stable_key: crate::internal_core::stable_key_for_test(&format!(
+                "model:{source}->{target}"
+            )),
         }
     }
 
@@ -1646,8 +1596,8 @@ mod tests {
         assert_eq!(a.constraints, b.constraints);
         assert_eq!(a.nodes, b.nodes);
 
-        // Building does not mutate any upstream fact family (D-13): the db's call
-        // sites and functions are unchanged after a build.
+        // Building is read-only: the database's call sites and functions remain
+        // unchanged.
         let before_sites = db.call_sites().len();
         let before_funcs = db.functions().len();
         let _ = build_semantic_graph(&db);
@@ -1687,7 +1637,7 @@ function run() {
 
         #[test]
         fn projects_copy_edge_and_call_constraint_for_imported_alias() {
-            let mut db = AnalysisDb::new();
+            let mut db = LocalAnalysisDb::new();
             let app_file = db.add_file(
                 PathBuf::from("src/app.ts"),
                 "src/app.ts".to_string(),
@@ -1727,7 +1677,7 @@ function run() {
             ));
             db.replace_module_graph_facts(
                 vec![ResolvedImportFact::new(
-                    crate::core::ResolvedImportId::from_raw(0),
+                    crate::internal_core::ResolvedImportId::from_raw(0),
                     import,
                     app_file,
                     Some(ModuleNodeId::from_raw(1)),
@@ -1809,7 +1759,7 @@ function run() {
 
         #[test]
         fn source_documents_semantic_graph_only_projection() {
-            let source = include_str!("build.rs");
+            let source = include_str!("semantic_graph_build.rs");
 
             assert!(source.contains("semantic-graph-only projection"));
             assert!(source.contains("do not create CallTargetFact rows"));
@@ -1817,7 +1767,7 @@ function run() {
 
         #[test]
         fn unresolved_no_solver_boundary_rows_emit_zero_target_constraints() {
-            let db = AnalysisDb::new();
+            let db = LocalAnalysisDb::new();
             let interner = db.stable_key_interner();
             let rows = [
                 TsDirectBindingReason::TokenFlowRequired,
@@ -1838,8 +1788,8 @@ function run() {
         }
 
         #[test]
-        fn source_has_no_phase_45_solver_reference_or_token_worklist() {
-            let source = include_str!("build.rs");
+        fn source_has_no_solver_reference_or_token_worklist() {
+            let source = include_str!("semantic_graph_build.rs");
 
             assert!(!source.contains(concat!("analysis", "::solver")));
             assert!(!source.contains(concat!("fixed", "-point")));
@@ -1847,7 +1797,7 @@ function run() {
             assert!(!source.contains(concat!("token", " propagation")));
         }
 
-        fn assert_ts_direct_projection(db: &AnalysisDb, output: SemanticGraphOutput) {
+        fn assert_ts_direct_projection(db: &impl AnalysisHost, output: SemanticGraphOutput) {
             let copy_edges = output
                 .constraints
                 .iter()
@@ -1868,7 +1818,7 @@ function run() {
         }
 
         fn unresolved_binding(
-            interner: &crate::core::StableKeyInterner,
+            interner: &StableKeyInterner,
             reason: TsDirectBindingReason,
         ) -> TsDirectBindingFact {
             TsDirectBindingFact {
@@ -1902,14 +1852,14 @@ function run() {
 
         #[test]
         fn lowers_object_model_rows_to_closed_constraint_vocabulary() {
-            let (mut db, file) = ts_db_with_file("src/app.ts", "const holder = { target: fn };\n");
+            let (db, file) = ts_db_with_file("src/app.ts", "const holder = { target: fn };\n");
             let interner = db.stable_key_interner();
             let holder = "object:holder";
             let target_object = "object:target";
             let class_object = "object:class";
             let prototype_object = "object:class:prototype";
 
-            db.replace_ts_object_model_facts(TsObjectModelOutput {
+            let object_model = TsObjectModelOutput {
                 allocations: vec![
                     allocation(
                         &interner,
@@ -1949,10 +1899,9 @@ function run() {
                     class_object,
                     prototype_object,
                 )],
-            })
-            .expect("object model replace");
+            };
 
-            let output = build_semantic_graph(&db);
+            let output = build_with_object_model(&db, &object_model);
 
             assert!(
                 output
@@ -2006,7 +1955,7 @@ function run() {
             let callsite = ts_callsite(&inventory, "holder.target").clone();
             replace_single_ts_callsite(&mut db, caller, &callsite);
 
-            db.replace_ts_object_model_facts(TsObjectModelOutput {
+            let object_model = TsObjectModelOutput {
                 allocations: vec![allocation(
                     &interner,
                     file,
@@ -2029,10 +1978,9 @@ function run() {
                 }],
                 receiver_bindings: Vec::new(),
                 prototype_links: Vec::new(),
-            })
-            .expect("object model replace");
+            };
 
-            let output = build_semantic_graph(&db);
+            let output = build_with_object_model(&db, &object_model);
 
             assert!(output.constraints.iter().any(|constraint| {
                 matches!(constraint.kind, ConstraintKind::CallConstraint { .. })
@@ -2045,7 +1993,7 @@ function run() {
         }
 
         fn allocation(
-            interner: &crate::core::StableKeyInterner,
+            interner: &StableKeyInterner,
             file: FileId,
             stable_key: &str,
             kind: TsObjectAllocationKind,
@@ -2067,7 +2015,7 @@ function run() {
         }
 
         fn property_write(
-            interner: &crate::core::StableKeyInterner,
+            interner: &StableKeyInterner,
             file: FileId,
             base_object: &str,
             value_object: &str,
@@ -2087,7 +2035,7 @@ function run() {
         }
 
         fn computed_property_read(
-            interner: &crate::core::StableKeyInterner,
+            interner: &StableKeyInterner,
             file: FileId,
             base_object: &str,
         ) -> TsPropertyReadFact {
@@ -2109,7 +2057,7 @@ function run() {
         }
 
         fn receiver_binding(
-            interner: &crate::core::StableKeyInterner,
+            interner: &StableKeyInterner,
             file: FileId,
             receiver_object: &str,
         ) -> TsReceiverBindingFact {
@@ -2131,7 +2079,7 @@ function run() {
         }
 
         fn prototype_link(
-            interner: &crate::core::StableKeyInterner,
+            interner: &StableKeyInterner,
             file: FileId,
             object: &str,
             prototype: &str,
@@ -2154,175 +2102,6 @@ function run() {
                 kind: TsPropertyKeyKind::Static,
                 value: Some(name.to_string()),
             }
-        }
-    }
-
-    mod go_semantic {
-        use super::*;
-        use crate::go::semantic::facts::{
-            GoSemanticCallStatus, GoSemanticCallsiteFact, GoSemanticCallsiteId,
-            GoSemanticFunctionFact, GoSemanticFunctionId, GoSemanticFunctionKind,
-        };
-        use crate::go::semantic::store::GoSemanticFactsOutput;
-
-        #[test]
-        fn direct_go_call_emits_call_constraint_and_static_evidence() {
-            let mut db = go_semantic_db();
-            let interner = db.stable_key_interner();
-            db.replace_go_semantic_facts(go_semantic_output(
-                &interner,
-                GoSemanticCallStatus::ResolvedStatic,
-                Some("example.com/p.run"),
-            ))
-            .expect("go semantic facts replace");
-
-            let output = build_semantic_graph(&db);
-
-            assert!(output.constraints.iter().any(|constraint| {
-                matches!(
-                    constraint.kind,
-                    ConstraintKind::CallConstraint { .. } | ConstraintKind::CopyEdge { .. }
-                ) && db
-                    .resolve_stable_key(constraint.stable_key)
-                    .contains("go-call")
-            }));
-            SemanticGraphStore::from_output(output, &db.stable_key_interner())
-                .expect("Go semantic graph validates");
-        }
-
-        #[test]
-        fn dynamic_go_call_emits_no_static_target_evidence() {
-            let mut db = go_semantic_db();
-            let interner = db.stable_key_interner();
-            db.replace_go_semantic_facts(go_semantic_output(
-                &interner,
-                GoSemanticCallStatus::UnresolvedDynamic,
-                None,
-            ))
-            .expect("go semantic facts replace");
-
-            let output = build_semantic_graph(&db);
-
-            let go_copy_edges = output
-                .constraints
-                .iter()
-                .filter(|constraint| {
-                    matches!(constraint.kind, ConstraintKind::CopyEdge { .. })
-                        && db
-                            .resolve_stable_key(constraint.stable_key)
-                            .contains("go-call")
-                })
-                .count();
-            assert_eq!(go_copy_edges, 0);
-        }
-
-        fn go_semantic_db() -> AnalysisDb {
-            let mut db = AnalysisDb::new();
-            let file = db.add_file(
-                PathBuf::from("main.go"),
-                "main.go".to_string(),
-                "package main\nfunc main(){ run() }\nfunc run(){}\n".to_string(),
-            );
-            db.push_package(PackageFact::new(
-                PackageId::from_raw(0),
-                file,
-                "main".to_string(),
-                span(file),
-                Language::Go,
-            ));
-            let caller = db.push_function(FunctionFact::new(
-                FunctionId::from_raw(0),
-                file,
-                "main".to_string(),
-                span_at(file, 20, 24),
-                Language::Go,
-                false,
-                false,
-                1,
-                vec!["run".to_string()],
-            ));
-            db.push_function(FunctionFact::new(
-                FunctionId::from_raw(0),
-                file,
-                "run".to_string(),
-                span_at(file, 34, 37),
-                Language::Go,
-                false,
-                false,
-                1,
-                Vec::new(),
-            ));
-            db.replace_call_facts(CallOutput {
-                sites: vec![CallSiteFact {
-                    in_throw: false,
-                    id: CallSiteId(0),
-                    language: Language::Go,
-                    file,
-                    caller,
-                    owner_symbol: None,
-                    body: MirBodyId(0),
-                    operation: MirOpId(0),
-                    span: span_at(file, 28, 31),
-                    kind: CallSyntaxKind::Function,
-                    callee: CallCallee::Identifier {
-                        reference: None,
-                        name: "run".to_string(),
-                    },
-                    receiver: None,
-                    arguments: Vec::new(),
-                    result: None,
-                    status: CallTargetStatus::Resolved,
-                    precision: CallPrecision::SetupAware,
-                    stable_key: db
-                        .stable_key_interner()
-                        .intern("go-core-callsite:run".to_string()),
-                }],
-                targets: Vec::new(),
-                unresolved: Vec::new(),
-            })
-            .expect("call replace");
-            db
-        }
-
-        fn go_semantic_output(
-            interner: &crate::core::StableKeyInterner,
-            status: GoSemanticCallStatus,
-            static_callee: Option<&str>,
-        ) -> GoSemanticFactsOutput {
-            GoSemanticFactsOutput {
-                functions: vec![GoSemanticFunctionFact {
-                    id: GoSemanticFunctionId(0),
-                    stable_key: interner.intern("go-fn-run"),
-                    package_id: "example.com/p".to_string(),
-                    package_path: "example.com/p".to_string(),
-                    name: "run".to_string(),
-                    qualified: "example.com/p.run".to_string(),
-                    signature: "()".to_string(),
-                    kind: GoSemanticFunctionKind::Function,
-                    receiver: None,
-                    relative_file: Some("main.go".to_string()),
-                    file: Some(FileId::from_raw(0)),
-                    span: Some(span_at(FileId::from_raw(0), 34, 37)),
-                }],
-                callsites: vec![GoSemanticCallsiteFact {
-                    id: GoSemanticCallsiteId(0),
-                    stable_key: interner.intern("go-call"),
-                    package_id: "example.com/p".to_string(),
-                    package_path: "example.com/p".to_string(),
-                    caller: "example.com/p.main".to_string(),
-                    static_callee: static_callee.map(str::to_string),
-                    status,
-                    reason: None,
-                    relative_file: Some("main.go".to_string()),
-                    file: Some(FileId::from_raw(0)),
-                    span: Some(span_at(FileId::from_raw(0), 28, 31)),
-                }],
-                ..GoSemanticFactsOutput::default()
-            }
-        }
-
-        fn span_at(file: FileId, start: u32, end: u32) -> Span {
-            Span::new(file, start, end, 1, start, 1, end)
         }
     }
 }

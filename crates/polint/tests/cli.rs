@@ -2579,7 +2579,7 @@ fn assert_eval_module_is_crate_private() {
         .unwrap_or_else(|error| panic!("read {}: {error}", lib_rs_path.display()));
 
     assert!(
-        lib_rs.contains("#[cfg(test)]"),
+        lib_rs.contains("#[cfg(all(test, feature = \"lang-go\", feature = \"lang-typescript\"))]"),
         "eval module should stay test-only:\n{lib_rs}"
     );
     assert!(
@@ -6560,6 +6560,100 @@ fn new_rule_rejects_existing_rule_without_overwriting_files() {
     assert_eq!(
         fs::read_to_string(rules.join("src/demo.rs")).unwrap(),
         sentinel
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn new_rule_rejects_symlinked_rules_parent_without_writing_outside_repo() {
+    let temp = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    fs::create_dir_all(temp.path().join(".polint/rules")).unwrap();
+    std::os::unix::fs::symlink(outside.path(), temp.path().join(".polint/rules/src")).unwrap();
+
+    polint_cmd()
+        .current_dir(temp.path())
+        .args(["new-rule", "go", "escaped-rule"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("path escapes repository root"));
+
+    assert!(fs::read_dir(outside.path()).unwrap().next().is_none());
+    assert!(!temp.path().join(".polint/rules/Cargo.toml").exists());
+    assert!(!temp.path().join(".polint/tests").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn new_rule_rejects_symlinked_fixture_parent_before_mutating_rule_pack() {
+    let temp = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let rules = temp.path().join(".polint/rules");
+    fs::create_dir_all(rules.join("src")).unwrap();
+    fs::create_dir_all(temp.path().join(".polint/tests")).unwrap();
+    std::os::unix::fs::symlink(outside.path(), temp.path().join(".polint/tests/rules")).unwrap();
+    let cargo_sentinel = "# cargo sentinel\n";
+    let main_sentinel = "fn main() { polint::runner::run_cli(vec![]) }\n";
+    fs::write(rules.join("Cargo.toml"), cargo_sentinel).unwrap();
+    fs::write(rules.join("src/main.rs"), main_sentinel).unwrap();
+
+    polint_cmd()
+        .current_dir(temp.path())
+        .args(["new-rule", "ts", "escaped-fixture"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("path escapes repository root"));
+
+    assert!(fs::read_dir(outside.path()).unwrap().next().is_none());
+    assert_eq!(
+        fs::read_to_string(rules.join("Cargo.toml")).unwrap(),
+        cargo_sentinel
+    );
+    assert_eq!(
+        fs::read_to_string(rules.join("src/main.rs")).unwrap(),
+        main_sentinel
+    );
+    assert!(!rules.join("src/escaped_fixture.rs").exists());
+}
+
+#[test]
+fn new_rule_preflights_broken_fixture_parent_without_leaving_partial_pack() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::create_dir_all(temp.path().join(".polint/tests")).unwrap();
+    fs::write(temp.path().join(".polint/tests/rules"), "not a directory").unwrap();
+
+    polint_cmd()
+        .current_dir(temp.path())
+        .args(["new-rule", "go", "transactional-rule"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not a directory"));
+
+    assert!(!temp.path().join(".polint/rules").exists());
+    assert_eq!(
+        fs::read_to_string(temp.path().join(".polint/tests/rules")).unwrap(),
+        "not a directory"
+    );
+}
+
+#[test]
+fn new_rule_rejects_fixture_destination_collision_without_mutating_pack() {
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = temp.path().join(".polint/tests/rules/demo");
+    fs::create_dir_all(&fixture).unwrap();
+    fs::write(fixture.join("sentinel"), "keep").unwrap();
+
+    polint_cmd()
+        .current_dir(temp.path())
+        .args(["new-rule", "ts", "demo"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("rule fixture already exists"));
+
+    assert!(!temp.path().join(".polint/rules").exists());
+    assert_eq!(
+        fs::read_to_string(fixture.join("sentinel")).unwrap(),
+        "keep"
     );
 }
 

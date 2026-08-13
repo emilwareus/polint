@@ -304,9 +304,9 @@ fn go_rta_fixture_is_byte_identical_under_ten_seeded_permutations() {
 fn go_rta_solver_output_is_byte_identical_under_permuted_fact_insertion_order() {
     use crate::analysis::solver::budget::SolverBudget;
     use crate::analysis::solver::engine::SolverEngine;
-    use crate::analysis::solver::go_rta::GoRtaInputs;
     use crate::analysis::solver::policy::{GoRtaPolicy, TsPointsToInputs, TsPointsToPolicy};
     use crate::config::load_config;
+    use crate::go::rta::GoRtaInputs;
     use crate::go::semantic::store::GoSemanticFactsOutput;
 
     let fixture = load_native_fixture(&fixture_dir("go_rta")).expect("fixture loads");

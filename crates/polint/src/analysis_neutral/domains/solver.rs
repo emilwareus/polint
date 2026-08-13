@@ -758,6 +758,7 @@ fn materialize_results(
 
 #[cfg(test)]
 mod tests {
+    use crate::analysis_api::FunctionFact;
     use crate::analysis_neutral::LocalAnalysisDb;
 
     use super::*;
@@ -777,9 +778,7 @@ mod tests {
     };
     use crate::analysis_neutral::domains::lattice::TopReason;
     use crate::analysis_neutral::domains::store::{DomainMaterialization, DomainOutput};
-    use crate::analysis_neutral::ids::{
-        CallTargetId, MirBodyId, MirOpId, PlaceId, RefinedCallEdgeId,
-    };
+    use crate::analysis_neutral::ids::{MirBodyId, MirOpId, PlaceId, RefinedCallEdgeId};
     use crate::analysis_neutral::mir_body::{MirBody, MirOutput, MirStatus};
     use crate::analysis_neutral::mir_op::{AssignMode, MirOperation, MirOperationKind, MirValue};
     use crate::analysis_neutral::places::{PlaceFact, PlaceRoot, PlaceStatus};
@@ -1009,6 +1008,21 @@ mod tests {
             let parameter = PlaceId(2);
             let site = CallSiteId(1);
             let mut db = LocalAnalysisDb::new();
+            db.add_file("padding.go".into(), "padding.go".to_string(), String::new());
+            let file = db.add_file("app.go".into(), "app.go".to_string(), String::new());
+            for (name, is_exported) in [("padding", false), ("caller", true), ("callee", true)] {
+                db.push_function(FunctionFact::new(
+                    FunctionId::from_raw(0),
+                    file,
+                    name.to_string(),
+                    Span::point(file, 1, 1),
+                    Language::Go,
+                    is_exported,
+                    true,
+                    1,
+                    Vec::new(),
+                ));
+            }
             let interner = db.stable_key_interner();
             db.replace_semantic_mir(MirOutput {
                 bodies: vec![
@@ -1324,7 +1338,7 @@ mod tests {
             RefinedCallEdgeFact {
                 id: RefinedCallEdgeId(1),
                 site,
-                base_target: Some(CallTargetId(1)),
+                base_target: None,
                 caller,
                 target_function: Some(callee),
                 target_symbol: None,

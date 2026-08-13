@@ -238,7 +238,7 @@ mod tests {
                 LanguageTag::Go,
                 "pkg",
                 "pkg.T",
-                file,
+                "src/main.go",
                 &dangling.span,
             ));
         db.set_identity_records_for_test(vec![dangling]);
@@ -266,7 +266,7 @@ mod tests {
             LanguageTag::Go,
             "src/main.go",
             "main",
-            file,
+            "src/main.go",
             &span,
         ));
         db.replace_identity_facts(IdentityProviderOutput {

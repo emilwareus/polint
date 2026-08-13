@@ -269,6 +269,10 @@ impl FactDatabase for AnalysisDb {
         AnalysisDb::module_nodes(self)
     }
 
+    fn resolved_imports(&self) -> &[crate::analysis_api::ResolvedImportFact] {
+        AnalysisDb::resolved_imports(self)
+    }
+
     fn symbols(&self) -> &[crate::analysis_api::SymbolFact] {
         AnalysisDb::symbols(self)
     }

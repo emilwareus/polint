@@ -126,15 +126,15 @@ fn finalized_output(
 #[cfg(test)]
 fn stable_refined_call_key(
     interner: &StableKeyInterner,
-    target: &crate::analysis::calls::facts::CallTargetFact,
     tier: crate::analysis::refined_calls::facts::RefinedCallTier,
     base_target_key: &str,
+    site_key: &str,
 ) -> crate::internal_core::StableKeyId {
     crate::analysis_neutral::refined_calls::provider::stable_refined_call_key(
         interner,
-        target,
         tier,
         base_target_key,
+        site_key,
     )
 }
 
@@ -927,43 +927,27 @@ mod solver_projection_tests {
 mod tests {
     use super::*;
     use crate::analysis::calls::facts::{
-        CallAlgorithm, CallEdgeKind, CallPrecision, CallProvenance, CallTargetFact,
-        CallTargetStatus,
+        CallAlgorithm, CallEdgeKind, CallPrecision, CallProvenance, CallTargetStatus,
     };
-    use crate::analysis::ids::{CallSiteId, CallTargetId};
-    use crate::core::{FunctionId, SymbolId};
+    use crate::analysis::ids::CallSiteId;
+    use crate::core::FunctionId;
 
     #[test]
-    fn refined_key_is_stable_for_base_target_and_tier() {
+    fn refined_key_uses_stable_site_key_instead_of_dense_site_id() {
         let db = crate::core::AnalysisDb::new();
         let interner = db.stable_key_interner();
-        let target = CallTargetFact {
-            id: CallTargetId(7),
-            site: CallSiteId(3),
-            caller: FunctionId::from_raw(1),
-            target_function: Some(FunctionId::from_raw(2)),
-            target_symbol: Some(SymbolId::from_raw(4)),
-            edge_kind: CallEdgeKind::Direct,
-            algorithm: CallAlgorithm::DirectReference,
-            status: CallTargetStatus::Resolved,
-            reason: None,
-            provenance: CallProvenance::Native,
-            precision: CallPrecision::SetupAware,
-            stable_key: interner.intern("call-target:stable".to_string()),
-        };
-
         assert_eq!(
             stable_refined_call_key(
                 &interner,
-                &target,
                 RefinedCallTier::DirectOnly,
-                "call-target:stable"
+                "call-target:stable",
+                "call-site:stable",
             ),
             stable_refined_call_key(
                 &interner,
-                &target,
                 RefinedCallTier::DirectOnly,
-                "call-target:stable"
+                "call-target:stable",
+                "call-site:stable",
             )
         );
     }

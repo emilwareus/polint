@@ -170,7 +170,7 @@ mod tests {
                 language,
                 "src/foo.ts",
                 "foo",
-                FileId::from_raw(1),
+                "src/foo.ts",
                 &span,
             )),
             originating_call_site_id: None,

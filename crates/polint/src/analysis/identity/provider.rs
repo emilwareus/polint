@@ -268,7 +268,7 @@ mod tests {
                 language,
                 "pkg",
                 container,
-                FileId::from_raw(0),
+                "src/main.go",
                 &span,
             )),
             originating_call_site_id: None,

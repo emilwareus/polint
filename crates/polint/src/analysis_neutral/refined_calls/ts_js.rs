@@ -10,7 +10,7 @@ use crate::analysis_neutral::calls::facts::{
     CallAlgorithm, CallCallee, CallEdgeKind, CallProvenance, CallTargetStatus, UnresolvedCallFact,
     UnresolvedCallReason,
 };
-use crate::analysis_neutral::ids::{PlaceId, RefinedCallEdgeId};
+use crate::analysis_neutral::ids::RefinedCallEdgeId;
 use crate::analysis_neutral::points_to::facts::PointsToStatus;
 use crate::analysis_neutral::semantic_graph::constraints::ConstraintKind;
 use crate::analysis_neutral::semantic_graph::facts::NodeKind;
@@ -46,7 +46,7 @@ fn unresolved_edge(
         _ => CallTargetStatus::Unresolved,
     };
     let unresolved_key = db.resolve_stable_key(unresolved.stable_key).to_string();
-    let place = callable_place(site);
+    let callable_place_key = callable_place_stable_key(db, site);
 
     Some(RefinedCallEdgeFact {
         id: RefinedCallEdgeId(0),
@@ -55,7 +55,8 @@ fn unresolved_edge(
         caller: unresolved.caller,
         target_function: None,
         target_symbol: None,
-        synthetic_target: place.map(|place| format!("ts-js:callable-place:{}", place.0)),
+        synthetic_target: callable_place_key
+            .map(|place_key| format!("ts-js:callable-place:{place_key}")),
         language: site.language,
         edge_kind: CallEdgeKind::Unknown,
         algorithm: CallAlgorithm::PointsTo,
@@ -110,11 +111,18 @@ fn solver_resolved_site(
     })
 }
 
-fn callable_place(site: &crate::analysis_neutral::calls::facts::CallSiteFact) -> Option<PlaceId> {
-    match site.callee {
+fn callable_place_stable_key(
+    db: &impl AnalysisHost,
+    site: &crate::analysis_neutral::calls::facts::CallSiteFact,
+) -> Option<String> {
+    let place = match site.callee {
         CallCallee::FunctionValue { place } => Some(place),
         _ => site.receiver,
-    }
+    }?;
+    db.mir_places()
+        .iter()
+        .find(|candidate| candidate.id == place)
+        .map(|candidate| db.resolve_stable_key(candidate.stable_key).to_string())
 }
 
 #[cfg(test)]
@@ -126,7 +134,9 @@ mod tests {
         CallPrecision, CallSiteFact, CallSyntaxKind, UnresolvedCallFact,
     };
     use crate::analysis_neutral::calls::store::CallOutput;
-    use crate::analysis_neutral::ids::{CallSiteId, MirBodyId, MirOpId};
+    use crate::analysis_neutral::ids::{CallSiteId, MirBodyId, MirOpId, PlaceId};
+    use crate::analysis_neutral::mir_body::MirOutput;
+    use crate::analysis_neutral::places::{PlaceFact, PlaceRoot, PlaceStatus};
     use crate::internal_core::{FileId, FunctionId, Language, Span};
 
     #[test]
@@ -167,6 +177,23 @@ mod tests {
             precision: CallPrecision::Unknown,
             stable_key: crate::internal_core::StableKeyId(0),
         };
+        db.replace_semantic_mir(MirOutput {
+            places: vec![PlaceFact {
+                id: PlaceId(0),
+                language: Language::TypeScript,
+                file: Some(file),
+                function: Some(FunctionId::from_raw(0)),
+                root: PlaceRoot::Local {
+                    function: FunctionId::from_raw(0),
+                    name: "fn".to_string(),
+                },
+                projections: Vec::new(),
+                stable_key: db.stable_key_interner().intern("place:callable:stable"),
+                status: PlaceStatus::Resolved,
+            }],
+            ..MirOutput::default()
+        })
+        .expect("valid MIR places");
         db.replace_call_facts(CallOutput {
             sites: vec![site],
             targets: Vec::new(),
@@ -188,5 +215,9 @@ mod tests {
         assert_eq!(output.edges.len(), 1);
         assert_eq!(output.edges[0].algorithm, CallAlgorithm::PointsTo);
         assert_eq!(output.edges[0].tier, RefinedCallTier::PointsToAssisted);
+        assert_eq!(
+            output.edges[0].synthetic_target.as_deref(),
+            Some("ts-js:callable-place:place:callable:stable")
+        );
     }
 }

@@ -624,6 +624,17 @@ pub fn command_with_go_env(
 
 pub fn apply_go_offline_env(command: &mut Command, offline: bool) {
     if offline {
-        command.env("GOPROXY", "off").env("GOSUMDB", "off");
+        command
+            .env("GOENV", "off")
+            .env("GOPROXY", "off")
+            .env("GOSUMDB", "off")
+            .env("GOPRIVATE", "none")
+            .env("GONOPROXY", "none")
+            .env("GONOSUMDB", "none")
+            .env("GOINSECURE", "none")
+            .env("GOVCS", "*:off")
+            .env("GOAUTH", "off")
+            .env("GOTOOLCHAIN", "local")
+            .env_remove("GOCACHEPROG");
     }
 }

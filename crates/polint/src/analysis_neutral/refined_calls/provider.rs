@@ -4,7 +4,9 @@ use crate::analysis_api::{
     CacheStats, Digest, DigestKind, InputComponent, InputSnapshot, ProviderExecution,
     ProviderFailureReason, ProviderFailureStage,
 };
-use crate::analysis_api::{FactFamily, FactRef, ProviderManifest, stable_key_from_parts};
+use crate::analysis_api::{
+    FactFamily, FactRef, ProviderManifest, stable_key_from_parts, stable_key_text_from_parts,
+};
 use crate::analysis_neutral::calls::facts::{
     CallAlgorithm, CallEdgeKind, CallPrecision, CallProvenance, CallSiteFact, CallSyntaxKind,
     CallTargetFact, CallTargetStatus, UnresolvedCallReason,
@@ -73,12 +75,26 @@ pub fn derive_refined_calls_with_cache_stats(
     let interner = &interner_handle;
     debug_assert_eq!(manifest.id, REFINED_CALLS_PROVIDER_ID);
     let mut output = RefinedCallOutput::empty();
-    let call_site_languages = db
+    let call_sites = db
         .call_sites()
         .iter()
-        .map(|site| (site.id, site.language))
+        .map(|site| {
+            (
+                site.id,
+                (
+                    site.language,
+                    db.resolve_stable_key(site.stable_key).to_string(),
+                ),
+            )
+        })
         .collect::<BTreeMap<_, _>>();
     for target in db.call_targets() {
+        let Some((language, site_key)) = call_sites.get(&target.site) else {
+            return failed_provider_output(format!(
+                "dangling call site {:?} for call target {:?}",
+                target.site, target.id
+            ));
+        };
         let base_target_key = db
             .metadata_for(FactRef::new(FactFamily::CallTarget, target.id.0))
             .map(|metadata| db.resolve_stable_key(metadata.stable_key).to_string())
@@ -88,11 +104,9 @@ pub fn derive_refined_calls_with_cache_stats(
             target,
             crate::analysis_neutral::ids::RefinedCallEdgeId(0),
             RefinedCallTier::DirectOnly,
-            call_site_languages
-                .get(&target.site)
-                .copied()
-                .unwrap_or(Language::Unknown),
+            *language,
             base_target_key,
+            site_key,
         ));
     }
     output.edges.extend(
@@ -117,7 +131,8 @@ pub fn derive_refined_calls_with_cache_stats(
     );
     output = finalized_output(interner, output);
 
-    let output_digest = refined_calls_output_digest(
+    let output_digest = match refined_calls_output_digest(
+        db,
         interner,
         manifest,
         input_snapshot,
@@ -128,7 +143,10 @@ pub fn derive_refined_calls_with_cache_stats(
         &extensions_output_digest,
         &solver_output_digest,
         &output,
-    );
+    ) {
+        Ok(digest) => digest,
+        Err(error) => return failed_provider_output(error.to_string()),
+    };
     let mut cache_stats = CacheStats::default();
     cache_stats.record_recompute();
 
@@ -169,6 +187,7 @@ fn refined_edge_from_base_target(
     tier: RefinedCallTier,
     language: Language,
     base_target_key: String,
+    site_key: &str,
 ) -> RefinedCallEdgeFact {
     RefinedCallEdgeFact {
         id,
@@ -190,7 +209,7 @@ fn refined_edge_from_base_target(
         confidence: confidence_for_target(target),
         evidence: vec!["base_call_target".to_string()],
         input_stable_keys: vec![base_target_key.clone()],
-        stable_key: stable_refined_call_key(interner, target, tier, &base_target_key),
+        stable_key: stable_refined_call_key(interner, tier, &base_target_key, site_key),
     }
 }
 
@@ -558,9 +577,9 @@ fn confidence_for_target(target: &CallTargetFact) -> RefinedCallConfidence {
 
 pub fn stable_refined_call_key(
     interner: &StableKeyInterner,
-    target: &CallTargetFact,
     tier: RefinedCallTier,
     base_target_key: &str,
+    site_key: &str,
 ) -> StableKeyId {
     stable_key_from_parts(
         interner,
@@ -568,13 +587,14 @@ pub fn stable_refined_call_key(
         &[
             ("tier", format!("{tier:?}")),
             ("base_target", base_target_key.to_string()),
-            ("site", target.site.0.to_string()),
+            ("site", site_key.to_string()),
         ],
     )
 }
 
 #[allow(clippy::too_many_arguments)]
 pub fn refined_calls_output_digest(
+    db: &impl AnalysisHost,
     interner: &StableKeyInterner,
     manifest: &ProviderManifest,
     input_snapshot: &InputSnapshot,
@@ -585,7 +605,7 @@ pub fn refined_calls_output_digest(
     extensions_output_digest: &Digest,
     solver_output_digest: &Digest,
     output: &RefinedCallOutput,
-) -> Digest {
+) -> Result<Digest, crate::analysis_neutral::error::AnalysisError> {
     let upstream = vec![
         calls_output_digest.clone(),
         entrypoints_output_digest.clone(),
@@ -624,19 +644,23 @@ pub fn refined_calls_output_digest(
     extend_component_parts(&mut parts, "model", &input_snapshot.models);
     extend_component_parts(&mut parts, "extension", &input_snapshot.extensions);
     extend_component_parts(&mut parts, "tool", &input_snapshot.tool_invocations);
-    parts.extend(output.edges.iter().map(|edge| {
-        format!(
+    for edge in &output.edges {
+        parts.push(format!(
             "refined_call_edge={}",
-            refined_call_edge_payload(interner, edge)
-        )
-    }));
+            refined_call_edge_payload(db, interner, edge)?
+        ));
+    }
     if output.edges.is_empty() {
         parts.push("refined_calls_output=empty".to_string());
     }
 
     parts.sort();
     let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
-    Digest::from_parts(DigestKind::ProviderOutput, "refined_calls_output", &refs)
+    Ok(Digest::from_parts(
+        DigestKind::ProviderOutput,
+        "refined_calls_output",
+        &refs,
+    ))
 }
 
 fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[InputComponent]) {
@@ -652,14 +676,27 @@ fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[I
     }));
 }
 
-fn refined_call_edge_payload(interner: &StableKeyInterner, edge: &RefinedCallEdgeFact) -> String {
-    serde_json::to_string(&RefinedCallEdgeDigest {
-        id: edge.id,
-        site: edge.site,
-        base_target: edge.base_target,
-        caller: edge.caller,
-        target_function: edge.target_function,
-        target_symbol: edge.target_symbol,
+fn refined_call_edge_payload(
+    db: &impl AnalysisHost,
+    interner: &StableKeyInterner,
+    edge: &RefinedCallEdgeFact,
+) -> Result<String, crate::analysis_neutral::error::AnalysisError> {
+    let stable_key = interner.resolve(edge.stable_key);
+    let payload = RefinedCallEdgeDigest {
+        site_key: relation_stable_key(db, interner, FactFamily::CallSite, edge.site.0)?,
+        base_target_key: edge
+            .base_target
+            .map(|target| relation_stable_key(db, interner, FactFamily::CallTarget, target.0))
+            .transpose()?,
+        caller_key: relation_stable_key(db, interner, FactFamily::Function, edge.caller.0)?,
+        target_function_key: edge
+            .target_function
+            .map(|function| relation_stable_key(db, interner, FactFamily::Function, function.0))
+            .transpose()?,
+        target_symbol_key: edge
+            .target_symbol
+            .map(|symbol| relation_stable_key(db, interner, FactFamily::Symbol, symbol.0))
+            .transpose()?,
         synthetic_target: edge.synthetic_target.as_deref(),
         language: edge.language,
         edge_kind: edge.edge_kind,
@@ -673,19 +710,103 @@ fn refined_call_edge_payload(interner: &StableKeyInterner, edge: &RefinedCallEdg
         confidence: edge.confidence,
         evidence: &edge.evidence,
         input_stable_keys: &edge.input_stable_keys,
-        stable_key: interner.resolve(edge.stable_key).as_ref(),
+        stable_key: stable_key.as_ref(),
+    };
+    serde_json::to_string(&payload).map_err(|error| {
+        crate::analysis_neutral::error::AnalysisError::InvalidFact {
+            provider: REFINED_CALLS_PROVIDER_ID,
+            reason: format!("failed to serialize refined call digest payload: {error}"),
+        }
     })
-    .unwrap_or_else(|_| "{}".to_string())
+}
+
+fn relation_stable_key(
+    db: &impl AnalysisHost,
+    interner: &StableKeyInterner,
+    family: FactFamily,
+    run_id: u64,
+) -> Result<String, crate::analysis_neutral::error::AnalysisError> {
+    let relation_exists = match family {
+        FactFamily::CallSite => db.call_sites().iter().any(|site| site.id.0 == run_id),
+        FactFamily::CallTarget => db.call_targets().iter().any(|target| target.id.0 == run_id),
+        FactFamily::Function => db
+            .functions()
+            .iter()
+            .any(|function| function.id.0 == run_id),
+        FactFamily::Symbol => db.symbols().iter().any(|symbol| symbol.id.0 == run_id),
+        _ => false,
+    };
+    if !relation_exists {
+        return Err(crate::analysis_neutral::error::AnalysisError::InvalidFact {
+            provider: REFINED_CALLS_PROVIDER_ID,
+            reason: format!("dangling {} relation with run id {run_id}", family.label()),
+        });
+    }
+    if let Some(metadata) = db.metadata_for(FactRef::new(family, run_id)) {
+        return Ok(db.resolve_stable_key(metadata.stable_key).to_string());
+    }
+
+    let stable_key = match family {
+        FactFamily::CallSite => db
+            .call_sites()
+            .iter()
+            .find(|site| site.id.0 == run_id)
+            .map(|site| interner.resolve(site.stable_key).to_string()),
+        FactFamily::CallTarget => db
+            .call_targets()
+            .iter()
+            .find(|target| target.id.0 == run_id)
+            .map(|target| interner.resolve(target.stable_key).to_string()),
+        FactFamily::Function => db
+            .functions()
+            .iter()
+            .find(|function| function.id.0 == run_id)
+            .map(|function| {
+                stable_key_text_from_parts(
+                    interner,
+                    FactFamily::Function,
+                    &[
+                        ("path", db.path_for(function.file)),
+                        ("language", format!("{:?}", function.language)),
+                        ("name", function.name.clone()),
+                        ("span", stable_span(&function.span)),
+                    ],
+                )
+            }),
+        FactFamily::Symbol => db
+            .symbols()
+            .iter()
+            .find(|symbol| symbol.id.0 == run_id)
+            .map(|symbol| interner.resolve(symbol.stable_key).to_string()),
+        _ => None,
+    };
+    stable_key.ok_or_else(
+        || crate::analysis_neutral::error::AnalysisError::InvalidFact {
+            provider: REFINED_CALLS_PROVIDER_ID,
+            reason: format!("dangling {} relation with run id {run_id}", family.label()),
+        },
+    )
+}
+
+fn stable_span(span: &Span) -> String {
+    format!(
+        "{}-{}:{}:{}-{}:{}",
+        span.start_byte,
+        span.end_byte,
+        span.start_line,
+        span.start_col,
+        span.end_line,
+        span.end_col
+    )
 }
 
 #[derive(Serialize)]
 struct RefinedCallEdgeDigest<'a> {
-    id: crate::analysis_neutral::ids::RefinedCallEdgeId,
-    site: crate::analysis_neutral::ids::CallSiteId,
-    base_target: Option<crate::analysis_neutral::ids::CallTargetId>,
-    caller: FunctionId,
-    target_function: Option<FunctionId>,
-    target_symbol: Option<SymbolId>,
+    site_key: String,
+    base_target_key: Option<String>,
+    caller_key: String,
+    target_function_key: Option<String>,
+    target_symbol_key: Option<String>,
     synthetic_target: Option<&'a str>,
     language: Language,
     edge_kind: CallEdgeKind,
@@ -702,6 +823,20 @@ struct RefinedCallEdgeDigest<'a> {
     stable_key: &'a str,
 }
 
+fn failed_provider_output(message: String) -> RefinedCallsProviderOutput {
+    let mut cache_stats = CacheStats::default();
+    cache_stats.record_recompute();
+    RefinedCallsProviderOutput {
+        diagnostics: vec![provider_error_diagnostic(message)],
+        cache_stats,
+        output_digest: None,
+        execution: ProviderExecution::Failed {
+            stage: ProviderFailureStage::Validation,
+            reason: ProviderFailureReason::ValidationRejected,
+        },
+    }
+}
+
 fn provider_error_diagnostic(message: String) -> Diagnostic {
     Diagnostic::error(
         "polint/internal",
@@ -709,4 +844,232 @@ fn provider_error_diagnostic(message: String) -> Diagnostic {
         DiagnosticRange::point(1, 1),
         format!("Refined calls provider failed: {message}"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::analysis_api::{
+        CachePolicy, FunctionFact, GoLifecycleSnapshot, InputComponentStatus, PrecisionCeiling,
+        ProviderKind, SchemaVersion, SymbolFact, SymbolKind, SymbolNamespace, SymbolPrecision,
+        TsJsLifecycleSnapshot,
+    };
+    use crate::analysis_neutral::LocalAnalysisDb;
+    use crate::analysis_neutral::calls::facts::{CallCallee, CallSiteFact};
+    use crate::analysis_neutral::calls::store::CallOutput;
+    use crate::analysis_neutral::ids::{CallSiteId, CallTargetId, MirBodyId, MirOpId};
+
+    fn manifest() -> ProviderManifest {
+        ProviderManifest {
+            id: REFINED_CALLS_PROVIDER_ID,
+            kind: ProviderKind::WholeRepoDerived,
+            inputs: &[],
+            outputs: &["refined_call_edges"],
+            language_ids: &[],
+            cache_policy: CachePolicy::InMemoryDerived,
+            schema_versions: &[SchemaVersion {
+                name: "refined-call-test",
+                version: 1,
+            }],
+            precision_ceiling: PrecisionCeiling::SetupAware,
+        }
+    }
+
+    fn snapshot() -> InputSnapshot {
+        InputSnapshot {
+            schema_version: "test".to_string(),
+            files: Vec::new(),
+            config: InputComponent {
+                name: "config".to_string(),
+                status: InputComponentStatus::Present,
+                digest: Digest::absent(DigestKind::Config, "test"),
+                detail: Vec::new(),
+            },
+            go_lifecycle: GoLifecycleSnapshot {
+                components: Vec::new(),
+            },
+            ts_js_lifecycle: TsJsLifecycleSnapshot {
+                components: Vec::new(),
+            },
+            rules: Vec::new(),
+            models: Vec::new(),
+            extensions: Vec::new(),
+            tool_invocations: Vec::new(),
+            provider_schemas: Vec::new(),
+        }
+    }
+
+    fn provider_run(db: &mut LocalAnalysisDb) -> RefinedCallsProviderOutput {
+        let upstream = Digest::absent(DigestKind::ProviderOutput, "test");
+        derive_refined_calls_with_cache_stats(
+            db,
+            &snapshot(),
+            &manifest(),
+            upstream.clone(),
+            upstream.clone(),
+            upstream.clone(),
+            upstream.clone(),
+            upstream.clone(),
+            upstream,
+            &[],
+            &[],
+        )
+    }
+
+    fn complete_graph(dense_offset: u64, include_target_function: bool) -> LocalAnalysisDb {
+        let mut db = LocalAnalysisDb::new();
+        let file = db.add_file(
+            "src/app.ts".into(),
+            "src/app.ts".to_string(),
+            "function caller() { callee(); }".to_string(),
+        );
+        for index in 0..dense_offset {
+            db.push_function(FunctionFact::new(
+                FunctionId::from_raw(0),
+                file,
+                format!("padding_{index}"),
+                Span::point(file, 1, 1),
+                Language::TypeScript,
+                false,
+                false,
+                1,
+                Vec::new(),
+            ));
+        }
+        let caller = db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
+            file,
+            "caller".to_string(),
+            Span::point(file, 1, 1),
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
+        let target = if include_target_function {
+            db.push_function(FunctionFact::new(
+                FunctionId::from_raw(0),
+                file,
+                "callee".to_string(),
+                Span::point(file, 1, 20),
+                Language::TypeScript,
+                false,
+                true,
+                1,
+                Vec::new(),
+            ))
+        } else {
+            FunctionId::from_raw(caller.0 + 1)
+        };
+        let site = CallSiteId(10 + dense_offset);
+        let call_target = CallTargetId(20 + dense_offset);
+        let symbol = SymbolId::from_raw(30 + dense_offset);
+        let interner = db.stable_key_interner();
+        db.replace_symbol_graph_facts(
+            vec![SymbolFact::new(
+                symbol,
+                Language::TypeScript,
+                "callee".to_string(),
+                "callee".to_string(),
+                SymbolKind::Function,
+                SymbolNamespace::Value,
+                Some(file),
+                None,
+                None,
+                None,
+                Some(Span::point(file, 1, 20)),
+                false,
+                interner.intern("symbol:callee"),
+                SymbolPrecision::ExactLocal,
+            )],
+            Vec::new(),
+            Vec::new(),
+        );
+        db.replace_call_facts(CallOutput {
+            sites: vec![CallSiteFact {
+                in_throw: false,
+                id: site,
+                language: Language::TypeScript,
+                file,
+                caller,
+                owner_symbol: None,
+                body: MirBodyId(dense_offset),
+                operation: MirOpId(dense_offset),
+                span: Span::point(file, 1, 21),
+                kind: CallSyntaxKind::Function,
+                callee: CallCallee::Identifier {
+                    reference: None,
+                    name: "callee".to_string(),
+                },
+                receiver: None,
+                arguments: Vec::new(),
+                result: None,
+                status: CallTargetStatus::Resolved,
+                precision: CallPrecision::Exact,
+                stable_key: interner.intern("call-site:caller-to-callee"),
+            }],
+            targets: vec![CallTargetFact {
+                id: call_target,
+                site,
+                caller,
+                target_function: Some(target),
+                target_symbol: Some(symbol),
+                edge_kind: CallEdgeKind::Direct,
+                algorithm: CallAlgorithm::DirectReference,
+                status: CallTargetStatus::Resolved,
+                reason: None,
+                provenance: CallProvenance::Native,
+                precision: CallPrecision::Exact,
+                stable_key: interner.intern("call-target:caller-to-callee"),
+            }],
+            unresolved: Vec::new(),
+        })
+        .expect("complete call graph");
+        db
+    }
+
+    #[test]
+    fn provider_digest_is_invariant_to_production_graph_dense_id_remapping() {
+        let mut first_db = complete_graph(0, true);
+        let mut remapped_db = complete_graph(100, true);
+
+        let first = provider_run(&mut first_db);
+        let remapped = provider_run(&mut remapped_db);
+
+        assert!(first.output_digest.is_some());
+        assert!(remapped.output_digest.is_some());
+        assert_ne!(
+            first_db.refined_call_edges()[0].site,
+            remapped_db.refined_call_edges()[0].site
+        );
+        assert_eq!(first.output_digest, remapped.output_digest);
+        assert_eq!(
+            first_db.resolve_stable_key(first_db.refined_call_edges()[0].stable_key),
+            remapped_db.resolve_stable_key(remapped_db.refined_call_edges()[0].stable_key)
+        );
+    }
+
+    #[test]
+    fn provider_rejects_dangling_relation_without_publishing_digest() {
+        let mut db = complete_graph(0, false);
+
+        let output = provider_run(&mut db);
+
+        assert!(output.output_digest.is_none());
+        assert!(matches!(
+            output.execution,
+            ProviderExecution::Failed {
+                stage: ProviderFailureStage::Validation,
+                reason: ProviderFailureReason::ValidationRejected,
+            }
+        ));
+        assert!(
+            output
+                .diagnostics
+                .iter()
+                .any(|diagnostic| { diagnostic.message.contains("dangling Function relation") })
+        );
+        assert!(db.refined_call_edges().is_empty());
+    }
 }

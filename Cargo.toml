@@ -59,6 +59,7 @@ proptest = "1.11.0"
 quote = "1.0.42"
 rayon = "1.12.0"
 rusqlite = { version = "0.40.1", features = ["bundled"] }
+rustix = { version = "1.1.4", features = ["fs"] }
 serde = { version = "1.0.228", features = ["derive", "rc"] }
 serde_json = "1.0.149"
 serde_norway = "0.9.42"
@@ -70,6 +71,7 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["fmt", "env-filter"] }
 tree-sitter = "0.26.8"
 tree-sitter-go = "0.25.0"
+windows-sys = "0.61.2"
 
 
 

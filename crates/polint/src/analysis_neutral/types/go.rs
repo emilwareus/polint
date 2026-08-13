@@ -106,9 +106,14 @@ pub fn derive_go_type_value_alias(db: &impl AnalysisHost) -> TypeValueAliasOutpu
                 unsupported,
                 body,
                 None,
+                &unsupported.construct,
             ));
         } else {
             for place in &unsupported.affected_places {
+                let Some(place_fact) = place_by_id.get(place) else {
+                    continue;
+                };
+                let subject_identity = interner.resolve(place_fact.stable_key);
                 types.push(unsupported_type_fact(
                     interner,
                     types.len() as u64,
@@ -116,6 +121,7 @@ pub fn derive_go_type_value_alias(db: &impl AnalysisHost) -> TypeValueAliasOutpu
                     unsupported,
                     body,
                     Some(*place),
+                    &subject_identity,
                 ));
             }
         }
@@ -201,7 +207,7 @@ fn type_fact_for_place(
             [
                 ("language", "go".to_string()),
                 ("place", interner.resolve(place.stable_key).to_string()),
-                ("phase", format!("{phase:?}")),
+                ("phase", type_phase_label(phase).to_string()),
             ],
         ),
     }
@@ -272,7 +278,6 @@ fn access_path_for_place(
             [
                 ("language", "go".to_string()),
                 ("place", interner.resolve(place.stable_key).to_string()),
-                ("projection_count", place.projections.len().to_string()),
             ],
         ),
     }
@@ -474,7 +479,7 @@ fn push_value_for_mir_value(
                     "operation",
                     interner.resolve(operation.stable_key).to_string(),
                 ),
-                ("ordinal", values.len().to_string()),
+                ("role", "assigned_value".to_string()),
             ],
         ),
     });
@@ -628,6 +633,7 @@ fn unsupported_type_fact(
     unsupported: &crate::analysis_neutral::mir_op::UnsupportedSemanticFact,
     body: Option<&crate::analysis_neutral::mir_body::MirBody>,
     place: Option<crate::analysis_neutral::ids::PlaceId>,
+    subject_identity: &str,
 ) -> TypeFact {
     let (status, phase, precision, shape) = match unsupported.precision {
         UnsupportedPrecision::Partial | UnsupportedPrecision::Unknown => (
@@ -673,9 +679,22 @@ fn unsupported_type_fact(
                     "unsupported",
                     interner.resolve(unsupported.stable_key).to_string(),
                 ),
-                ("ordinal", id.to_string()),
+                ("subject", subject_identity.to_string()),
             ],
         ),
+    }
+}
+
+fn type_phase_label(phase: TypePhase) -> &'static str {
+    match phase {
+        TypePhase::Declared => "declared",
+        TypePhase::Inferred => "inferred",
+        TypePhase::Resolved => "resolved",
+        TypePhase::FlowNarrowed => "flow_narrowed",
+        TypePhase::ExtensionProvided => "extension_provided",
+        TypePhase::Unknown => "unknown",
+        TypePhase::Unsupported => "unsupported",
+        TypePhase::SetupMissing => "setup_missing",
     }
 }
 

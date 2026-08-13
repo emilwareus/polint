@@ -160,7 +160,7 @@ mod tests {
                     RootKind::Main,
                     Language::Go,
                     "main.main",
-                    file,
+                    "cmd/app/main.go",
                     &span(file, 1, 2),
                 ),
             ),

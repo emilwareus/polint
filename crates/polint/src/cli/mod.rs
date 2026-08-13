@@ -742,6 +742,35 @@ fn gitignore_line_covers(line: &str, entry: &str) -> bool {
     t.trim_end_matches('/') == entry.trim_end_matches('/')
 }
 
+#[derive(Debug)]
+struct ScaffoldWrite {
+    relative_path: PathBuf,
+    contents: Vec<u8>,
+    previous: Option<crate::repo_fs::RepoFileSnapshot>,
+}
+
+impl ScaffoldWrite {
+    fn create(relative_path: impl Into<PathBuf>, contents: impl Into<Vec<u8>>) -> Self {
+        Self {
+            relative_path: relative_path.into(),
+            contents: contents.into(),
+            previous: None,
+        }
+    }
+
+    fn replace(
+        relative_path: impl Into<PathBuf>,
+        contents: impl Into<Vec<u8>>,
+        previous: crate::repo_fs::RepoFileSnapshot,
+    ) -> Self {
+        Self {
+            relative_path: relative_path.into(),
+            contents: contents.into(),
+            previous: Some(previous),
+        }
+    }
+}
+
 fn new_rule(root: PathBuf, args: &NewRuleArgs) -> Result<()> {
     let rule_name = validate_rule_name(&args.rule_name)?;
     let language = RuleLanguage::parse(&args.language)?;
@@ -751,37 +780,12 @@ fn new_rule(root: PathBuf, args: &NewRuleArgs) -> Result<()> {
     if let Some(template) = args.template {
         validate_rule_template_language(language, template)?;
     }
-    let rules_dir = root.join(".polint/rules");
+
     let module = rust_module_name(&rule_name);
-    let module_path = rules_dir.join("src").join(format!("{module}.rs"));
+    let writes = plan_new_rule_scaffold(&root, args, language, &rule_name, &module)?;
+    commit_new_rule_scaffold(&root, &writes)?;
 
-    match fs::symlink_metadata(&module_path) {
-        Ok(_) => anyhow::bail!("rule already exists: {}", module_path.display()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("failed to inspect {}", module_path.display()));
-        }
-    }
-
-    fs::create_dir_all(rules_dir.join("src"))
-        .with_context(|| format!("failed to create {}", rules_dir.display()))?;
-
-    let pack_toml = rules_dir.join("Cargo.toml");
-    if !pack_toml.is_file() {
-        write_pack_cargo_toml(&rules_dir)?;
-        write_initial_pack_main(&rules_dir, &module)?;
-    } else if !rules_dir.join("src/main.rs").is_file() {
-        write_initial_pack_main(&rules_dir, &module)?;
-    } else {
-        prepend_pack_mod_use(&rules_dir, &module)?;
-        append_rule_to_run_cli_vec(&rules_dir, &module)?;
-    }
-
-    fs::write(
-        &module_path,
-        rule_module_template(language.as_str(), &rule_name, args.review, args.template),
-    )?;
+    let module_path = root.join(".polint/rules/src").join(format!("{module}.rs"));
     if args.review {
         // A review rule's diagnostics depend on a diff, so the static
         // clean/violating `polint check` fixtures do not apply. Review rules
@@ -792,10 +796,233 @@ fn new_rule(root: PathBuf, args: &NewRuleArgs) -> Result<()> {
             module_path.display()
         );
     } else {
-        write_rule_fixture_skeleton(&root, language, &rule_name, &module, args.template)?;
         println!("Created rule module {}", module_path.display());
     }
     Ok(())
+}
+
+fn plan_new_rule_scaffold(
+    root: &Path,
+    args: &NewRuleArgs,
+    language: RuleLanguage,
+    rule_name: &str,
+    module: &str,
+) -> Result<Vec<ScaffoldWrite>> {
+    let module_relative = PathBuf::from(format!(".polint/rules/src/{module}.rs"));
+    ensure_scaffold_destination_absent(root, &module_relative, "rule")?;
+
+    let cargo_relative = Path::new(".polint/rules/Cargo.toml");
+    let main_relative = Path::new(".polint/rules/src/main.rs");
+    let cargo_previous = read_optional_scaffold_file(root, cargo_relative)?;
+    let main_previous = read_optional_scaffold_file(root, main_relative)?;
+    let mut writes = Vec::new();
+
+    if cargo_previous.is_none() {
+        writes.push(ScaffoldWrite::create(
+            cargo_relative,
+            pack_cargo_toml(&root.join(".polint/rules")),
+        ));
+    }
+
+    let main_contents = match &main_previous {
+        Some(previous) => {
+            let existing = std::str::from_utf8(&previous.contents).with_context(|| {
+                format!("{} is not valid UTF-8", root.join(main_relative).display())
+            })?;
+            register_rule_in_pack_main(existing, module)?
+        }
+        None => initial_pack_main(module),
+    };
+    if let Some(previous) = main_previous {
+        writes.push(ScaffoldWrite::replace(
+            main_relative,
+            main_contents,
+            previous,
+        ));
+    } else {
+        writes.push(ScaffoldWrite::create(main_relative, main_contents));
+    }
+
+    writes.push(ScaffoldWrite::create(
+        module_relative,
+        rule_module_template(language.as_str(), rule_name, args.review, args.template),
+    ));
+
+    if !args.review {
+        writes.extend(plan_rule_fixture_skeleton(
+            root,
+            language,
+            rule_name,
+            module,
+            args.template,
+        )?);
+    }
+
+    // Validate every destination before the first write. In particular, this
+    // catches symlinked rule/fixture parents and regular-file ancestors before
+    // Cargo.toml or main.rs can be changed.
+    for write in &writes {
+        let target = crate::repo_fs::repo_write_target(root, &write.relative_path)
+            .with_context(|| format!("unsafe scaffold path {}", write.relative_path.display()))?;
+        match fs::symlink_metadata(&target) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                anyhow::bail!("refusing to write through symlink: {}", target.display());
+            }
+            Ok(metadata) if !metadata.is_file() => {
+                anyhow::bail!("scaffold destination is not a file: {}", target.display());
+            }
+            Ok(_) if write.previous.is_none() => {
+                anyhow::bail!("scaffold destination already exists: {}", target.display());
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                if write.previous.is_some() {
+                    anyhow::bail!("scaffold destination disappeared: {}", target.display());
+                }
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to inspect {}", target.display()));
+            }
+        }
+    }
+
+    Ok(writes)
+}
+
+fn ensure_scaffold_destination_absent(root: &Path, relative_path: &Path, kind: &str) -> Result<()> {
+    let target = crate::repo_fs::repo_write_target(root, relative_path)
+        .with_context(|| format!("unsafe {kind} path {}", relative_path.display()))?;
+    match fs::symlink_metadata(&target) {
+        Ok(_) => anyhow::bail!("{kind} already exists: {}", target.display()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("failed to inspect {}", target.display())),
+    }
+}
+
+fn read_optional_scaffold_file(
+    root: &Path,
+    relative_path: &Path,
+) -> Result<Option<crate::repo_fs::RepoFileSnapshot>> {
+    crate::repo_fs::read_optional_repo_file_snapshot(root, relative_path)
+        .with_context(|| format!("failed to inspect {}", relative_path.display()))
+}
+
+fn commit_new_rule_scaffold(root: &Path, writes: &[ScaffoldWrite]) -> Result<()> {
+    commit_new_rule_scaffold_with(root, writes, |root, write, created_directories| {
+        if let Some(previous) = &write.previous {
+            crate::repo_fs::write_repo_file_atomic_tracked(
+                root,
+                &write.relative_path,
+                &write.contents,
+                previous,
+                created_directories,
+            )
+        } else {
+            crate::repo_fs::write_repo_file_atomic_noclobber_tracked(
+                root,
+                &write.relative_path,
+                &write.contents,
+                created_directories,
+            )
+        }
+    })
+}
+
+fn commit_new_rule_scaffold_with<F>(
+    root: &Path,
+    writes: &[ScaffoldWrite],
+    mut write_file: F,
+) -> Result<()>
+where
+    F: FnMut(
+        &Path,
+        &ScaffoldWrite,
+        &mut Vec<crate::repo_fs::RepoCreatedDirectory>,
+    ) -> std::result::Result<
+        crate::repo_fs::RepoFileIdentity,
+        crate::repo_fs::RepoFileReadError,
+    >,
+{
+    let mut created_directories = Vec::new();
+    let mut committed = Vec::new();
+    for write in writes {
+        match write_file(root, write, &mut created_directories) {
+            Ok(identity) => committed.push((write, identity)),
+            Err(error) => {
+                let rollback = rollback_new_rule_scaffold(root, &committed, &created_directories);
+                return match rollback {
+                    Ok(()) => Err(error).with_context(|| {
+                        format!(
+                            "failed to write {}; scaffold was rolled back",
+                            write.relative_path.display()
+                        )
+                    }),
+                    Err(rollback_error) => Err(error).with_context(|| {
+                        format!(
+                            "failed to write {}; rollback refused a concurrent replacement or also failed: {rollback_error:#}",
+                            write.relative_path.display()
+                        )
+                    }),
+                };
+            }
+        }
+    }
+    Ok(())
+}
+
+fn rollback_new_rule_scaffold(
+    root: &Path,
+    committed: &[(&ScaffoldWrite, crate::repo_fs::RepoFileIdentity)],
+    created_directories: &[crate::repo_fs::RepoCreatedDirectory],
+) -> Result<()> {
+    let mut failures = Vec::new();
+    for (write, identity) in committed.iter().rev() {
+        let committed_snapshot = crate::repo_fs::RepoFileSnapshot {
+            identity: identity.clone(),
+            contents: write.contents.clone(),
+        };
+        let result = if let Some(previous) = &write.previous {
+            crate::repo_fs::restore_repo_file_if_matches(
+                root,
+                &write.relative_path,
+                &committed_snapshot,
+                &previous.contents,
+            )
+        } else {
+            crate::repo_fs::remove_repo_file_if_matches(
+                root,
+                &write.relative_path,
+                &committed_snapshot,
+            )
+        };
+        match result {
+            Ok(true) => {}
+            Ok(false) => failures.push(format!(
+                "{}: destination changed concurrently; preserved it",
+                write.relative_path.display()
+            )),
+            Err(error) => failures.push(format!("{}: {error}", write.relative_path.display())),
+        }
+    }
+    for created_directory in created_directories.iter().rev() {
+        match crate::repo_fs::remove_created_repo_directory(root, created_directory) {
+            Ok(true) => {}
+            Ok(false) => failures.push(format!(
+                "{}: directory changed concurrently or is not empty; preserved it",
+                created_directory.relative_path.display()
+            )),
+            Err(error) => failures.push(format!(
+                "{}: {error}",
+                created_directory.relative_path.display()
+            )),
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        anyhow::bail!("{}", failures.join("; "))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -893,7 +1120,7 @@ fn enabled_language_features() -> Vec<&'static str> {
     .collect()
 }
 
-fn write_pack_cargo_toml(rules_dir: &Path) -> Result<()> {
+fn pack_cargo_toml(rules_dir: &Path) -> String {
     let version = env!("CARGO_PKG_VERSION");
     let features = enabled_language_features()
         .into_iter()
@@ -908,10 +1135,8 @@ fn write_pack_cargo_toml(rules_dir: &Path) -> Result<()> {
             r#"polint = {{ version = "{version}", default-features = false, features = [{features}] }}"#
         ),
     };
-    fs::write(
-        rules_dir.join("Cargo.toml"),
-        format!(
-            r#"[package]
+    format!(
+        r#"[package]
 name = "polint-local-rules"
 version = "{version}"
 edition = "2024"
@@ -922,16 +1147,11 @@ publish = false
 
 [workspace]
 "#,
-            version = version,
-            polint_dep_line = polint_dep_line,
-        ),
     )
-    .with_context(|| format!("failed to write {}", rules_dir.join("Cargo.toml").display()))?;
-    Ok(())
 }
 
-fn write_initial_pack_main(rules_dir: &Path, module: &str) -> Result<()> {
-    let initial = format!(
+fn initial_pack_main(module: &str) -> String {
+    format!(
         r#"mod {module};
 
 use std::process::ExitCode;
@@ -942,39 +1162,20 @@ fn main() -> ExitCode {{
     ])
 }}
 "#
-    );
-    fs::write(rules_dir.join("src/main.rs"), initial).with_context(|| {
-        format!(
-            "failed to write {}",
-            rules_dir.join("src/main.rs").display()
-        )
-    })?;
-    Ok(())
+    )
 }
 
-fn prepend_pack_mod_use(rules_dir: &Path, module: &str) -> Result<()> {
-    let main_path = rules_dir.join("src/main.rs");
-    let mut src = fs::read_to_string(&main_path)
-        .with_context(|| format!("failed to read {}", main_path.display()))?;
+fn register_rule_in_pack_main(existing: &str, module: &str) -> Result<String> {
+    let mut src = existing.to_string();
     let mod_decl = format!("mod {module};");
     if !src.contains(&mod_decl) {
         src.insert_str(0, &format!("{mod_decl}\n"));
-        fs::write(&main_path, src)?;
     }
-    Ok(())
-}
 
-fn append_rule_to_run_cli_vec(rules_dir: &Path, module: &str) -> Result<()> {
-    let main_path = rules_dir.join("src/main.rs");
-    let src = fs::read_to_string(&main_path)
-        .with_context(|| format!("failed to read {}", main_path.display()))?;
     let needle = "polint::runner::run_cli(vec![";
-    let start = src.find(needle).with_context(|| {
-        format!(
-            "{} must call polint::runner::run_cli(vec![...])",
-            main_path.display()
-        )
-    })?;
+    let start = src
+        .find(needle)
+        .with_context(|| "main.rs must call polint::runner::run_cli(vec![...])")?;
     let inner_start = start + needle.len();
     let mut depth = 1u32;
     let mut end = None;
@@ -991,7 +1192,7 @@ fn append_rule_to_run_cli_vec(rules_dir: &Path, module: &str) -> Result<()> {
             _ => {}
         }
     }
-    let end = end.with_context(|| format!("unclosed vec![ in {}", main_path.display()))?;
+    let end = end.context("unclosed vec![ in main.rs")?;
     let inner = &src[inner_start..end];
     let trimmed = inner.trim_end();
     let new_inner = if trimmed.is_empty() {
@@ -999,12 +1200,11 @@ fn append_rule_to_run_cli_vec(rules_dir: &Path, module: &str) -> Result<()> {
     } else {
         format!("{trimmed}\n        {module}::{module}(),\n    ")
     };
-    let mut new_src = String::new();
+    let mut new_src = String::with_capacity(src.len() + new_inner.len());
     new_src.push_str(&src[..inner_start]);
     new_src.push_str(&new_inner);
     new_src.push_str(&src[end..]);
-    fs::write(&main_path, new_src)?;
-    Ok(())
+    Ok(new_src)
 }
 
 fn validate_rule_name(name: &str) -> Result<String> {
@@ -1023,20 +1223,20 @@ fn validate_rule_name(name: &str) -> Result<String> {
     Ok(sanitized)
 }
 
-fn write_rule_fixture_skeleton(
+fn plan_rule_fixture_skeleton(
     root: &Path,
     language: RuleLanguage,
     rule_name: &str,
     module: &str,
     template: Option<RuleTemplateKind>,
-) -> Result<()> {
-    let rule_tests_dir = root.join(".polint/tests/rules").join(module);
-    if rule_tests_dir.exists() {
-        return Ok(());
-    }
+) -> Result<Vec<ScaffoldWrite>> {
+    let rule_tests_relative = PathBuf::from(format!(".polint/tests/rules/{module}"));
+    ensure_scaffold_destination_absent(root, &rule_tests_relative, "rule fixture")?;
+
     let fixture_file = language.fixture_file();
-    write_rule_fixture_case(
-        &rule_tests_dir.join("clean"),
+    let mut writes = Vec::new();
+    writes.extend(plan_rule_fixture_case(
+        &rule_tests_relative.join("clean"),
         language.as_str(),
         &rule_fixture_clean_source_template(language.as_str(), template),
         &rule_fixture_manifest_template(
@@ -1046,9 +1246,9 @@ fn write_rule_fixture_skeleton(
             rule_fixture_message_contains(template),
             rule_fixture_severity(template),
         ),
-    )?;
-    write_rule_fixture_case(
-        &rule_tests_dir.join("violating"),
+    ));
+    writes.extend(plan_rule_fixture_case(
+        &rule_tests_relative.join("violating"),
         language.as_str(),
         &rule_fixture_violating_source_template(language.as_str(), template),
         &rule_fixture_manifest_template(
@@ -1058,39 +1258,36 @@ fn write_rule_fixture_skeleton(
             rule_fixture_message_contains(template),
             rule_fixture_severity(template),
         ),
-    )?;
-    Ok(())
+    ));
+    Ok(writes)
 }
 
-fn write_rule_fixture_case(
-    case_dir: &Path,
+fn plan_rule_fixture_case(
+    case_relative: &Path,
     language: &str,
     source: &str,
     manifest: &str,
-) -> Result<()> {
-    let source_path = match language {
-        "go" => case_dir.join("src/example.go"),
-        "js" => case_dir.join("src/example.js"),
-        _ => case_dir.join("src/example.ts"),
+) -> Vec<ScaffoldWrite> {
+    let source_relative = match language {
+        "go" => case_relative.join("src/example.go"),
+        "js" => case_relative.join("src/example.js"),
+        _ => case_relative.join("src/example.ts"),
     };
-    fs::create_dir_all(source_path.parent().unwrap_or(case_dir))
-        .with_context(|| format!("failed to create {}", case_dir.display()))?;
-    fs::write(case_dir.join("polint-test.toml"), manifest).with_context(|| {
-        format!(
-            "failed to write {}",
-            case_dir.join("polint-test.toml").display()
-        )
-    })?;
+    let mut writes = vec![ScaffoldWrite::create(
+        case_relative.join("polint-test.toml"),
+        manifest.as_bytes().to_vec(),
+    )];
     if language == "go" {
-        fs::write(
-            case_dir.join("go.mod"),
-            "module example.com/polint-rule-fixture\n\ngo 1.22\n",
-        )
-        .with_context(|| format!("failed to write {}", case_dir.join("go.mod").display()))?;
+        writes.push(ScaffoldWrite::create(
+            case_relative.join("go.mod"),
+            b"module example.com/polint-rule-fixture\n\ngo 1.22\n".to_vec(),
+        ));
     }
-    fs::write(&source_path, source)
-        .with_context(|| format!("failed to write {}", source_path.display()))?;
-    Ok(())
+    writes.push(ScaffoldWrite::create(
+        source_relative,
+        source.as_bytes().to_vec(),
+    ));
+    writes
 }
 
 fn rule_fixture_manifest_template(
@@ -4271,8 +4468,8 @@ mod tests {
     use clap::CommandFactory;
 
     use super::{
-        Cli, FactsListReport, LocalRuleHostProfile, enabled_language_features,
-        explain_derived_edge_provenance, public_fact_view,
+        Cli, FactsListReport, LocalRuleHostProfile, ScaffoldWrite, commit_new_rule_scaffold_with,
+        enabled_language_features, explain_derived_edge_provenance, public_fact_view,
     };
 
     #[test]
@@ -4282,6 +4479,206 @@ mod tests {
         assert_eq!(
             features.contains(&"lang-typescript"),
             cfg!(feature = "lang-typescript")
+        );
+    }
+
+    #[test]
+    fn new_rule_transaction_rolls_back_failure_at_every_write_boundary() {
+        let sentinel = b"fn main() { polint::runner::run_cli(vec![]) }\n";
+        for failed_boundary in 0..5 {
+            let repo = tempfile::tempdir().expect("repo");
+            let main = repo.path().join(".polint/rules/src/main.rs");
+            std::fs::create_dir_all(main.parent().expect("main parent"))
+                .expect("create existing pack");
+            std::fs::write(&main, sentinel).expect("write existing main");
+            let main_previous = crate::repo_fs::read_optional_repo_file_snapshot(
+                repo.path(),
+                ".polint/rules/src/main.rs",
+            )
+            .expect("snapshot main")
+            .expect("main exists");
+            let writes = vec![
+                ScaffoldWrite::create(".polint/rules/Cargo.toml", b"[workspace]\n".to_vec()),
+                ScaffoldWrite::replace(
+                    ".polint/rules/src/main.rs",
+                    b"updated main\n".to_vec(),
+                    main_previous,
+                ),
+                ScaffoldWrite::create(".polint/rules/src/demo.rs", b"rule module\n".to_vec()),
+                ScaffoldWrite::create(
+                    ".polint/tests/rules/demo/clean/polint-test.toml",
+                    b"fixture manifest\n".to_vec(),
+                ),
+                ScaffoldWrite::create(
+                    ".polint/tests/rules/demo/clean/src/example.ts",
+                    b"fixture source\n".to_vec(),
+                ),
+            ];
+            let mut boundary = 0usize;
+
+            let error = commit_new_rule_scaffold_with(
+                repo.path(),
+                &writes,
+                |root, write, created_directories| {
+                    let current = boundary;
+                    boundary += 1;
+                    if current == failed_boundary {
+                        return Err(crate::repo_fs::RepoFileReadError::Write);
+                    }
+                    if let Some(previous) = &write.previous {
+                        crate::repo_fs::write_repo_file_atomic_tracked(
+                            root,
+                            &write.relative_path,
+                            &write.contents,
+                            previous,
+                            created_directories,
+                        )
+                    } else {
+                        crate::repo_fs::write_repo_file_atomic_noclobber_tracked(
+                            root,
+                            &write.relative_path,
+                            &write.contents,
+                            created_directories,
+                        )
+                    }
+                },
+            )
+            .expect_err("injected boundary failure must fail the transaction");
+
+            assert!(
+                error.to_string().contains("scaffold was rolled back"),
+                "boundary {failed_boundary}: {error:#}"
+            );
+            assert_eq!(
+                std::fs::read(&main).expect("restored main"),
+                sentinel,
+                "boundary {failed_boundary}"
+            );
+            assert!(
+                !repo.path().join(".polint/rules/Cargo.toml").exists(),
+                "boundary {failed_boundary}"
+            );
+            assert!(
+                !repo.path().join(".polint/rules/src/demo.rs").exists(),
+                "boundary {failed_boundary}"
+            );
+            assert!(
+                !repo.path().join(".polint/tests").exists(),
+                "boundary {failed_boundary}"
+            );
+        }
+    }
+
+    #[test]
+    fn new_rule_rollback_preserves_concurrent_destination_replacement() {
+        let repo = tempfile::tempdir().expect("repo");
+        let main = repo.path().join(".polint/rules/src/main.rs");
+        std::fs::create_dir_all(main.parent().expect("main parent")).expect("create pack");
+        std::fs::write(&main, b"original main\n").expect("write original");
+        let previous = crate::repo_fs::read_optional_repo_file_snapshot(
+            repo.path(),
+            ".polint/rules/src/main.rs",
+        )
+        .expect("snapshot main")
+        .expect("main exists");
+        let writes = vec![
+            ScaffoldWrite::replace(
+                ".polint/rules/src/main.rs",
+                b"transaction main\n".to_vec(),
+                previous,
+            ),
+            ScaffoldWrite::create(
+                ".polint/rules/src/demo.rs",
+                b"transaction module\n".to_vec(),
+            ),
+        ];
+        let mut boundary = 0usize;
+
+        let error = commit_new_rule_scaffold_with(
+            repo.path(),
+            &writes,
+            |root, write, created_directories| {
+                let current = boundary;
+                boundary += 1;
+                if current == 1 {
+                    std::fs::write(&main, b"concurrent replacement\n")
+                        .expect("replace committed destination concurrently");
+                    return Err(crate::repo_fs::RepoFileReadError::Write);
+                }
+                let previous = write.previous.as_ref().expect("first write replaces main");
+                crate::repo_fs::write_repo_file_atomic_tracked(
+                    root,
+                    &write.relative_path,
+                    &write.contents,
+                    previous,
+                    created_directories,
+                )
+            },
+        )
+        .expect_err("injected later failure must fail transaction");
+
+        assert!(
+            error
+                .to_string()
+                .contains("rollback refused a concurrent replacement"),
+            "{error:#}"
+        );
+        assert_eq!(
+            std::fs::read(&main).expect("concurrent main remains"),
+            b"concurrent replacement\n"
+        );
+        assert!(!repo.path().join(".polint/rules/src/demo.rs").exists());
+    }
+
+    #[test]
+    fn new_rule_rollback_does_not_delete_concurrently_replaced_created_file() {
+        let repo = tempfile::tempdir().expect("repo");
+        let destination = repo.path().join(".polint/rules/src/demo.rs");
+        let writes = vec![
+            ScaffoldWrite::create(
+                ".polint/rules/src/demo.rs",
+                b"transaction module\n".to_vec(),
+            ),
+            ScaffoldWrite::create(
+                ".polint/tests/rules/demo/polint-test.toml",
+                b"later write\n".to_vec(),
+            ),
+        ];
+        let mut boundary = 0usize;
+
+        let error = commit_new_rule_scaffold_with(
+            repo.path(),
+            &writes,
+            |root, write, created_directories| {
+                let current = boundary;
+                boundary += 1;
+                if current == 1 {
+                    let replacement = destination.with_extension("replacement");
+                    std::fs::write(&replacement, b"concurrent replacement\n")
+                        .expect("write replacement inode");
+                    std::fs::rename(&replacement, &destination)
+                        .expect("replace created destination concurrently");
+                    return Err(crate::repo_fs::RepoFileReadError::Write);
+                }
+                crate::repo_fs::write_repo_file_atomic_noclobber_tracked(
+                    root,
+                    &write.relative_path,
+                    &write.contents,
+                    created_directories,
+                )
+            },
+        )
+        .expect_err("injected later failure must fail transaction");
+
+        assert!(
+            error
+                .to_string()
+                .contains("rollback refused a concurrent replacement"),
+            "{error:#}"
+        );
+        assert_eq!(
+            std::fs::read(&destination).expect("concurrent file remains"),
+            b"concurrent replacement\n"
         );
     }
 

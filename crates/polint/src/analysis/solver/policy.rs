@@ -7,7 +7,7 @@
 pub(crate) use crate::analysis_neutral::solver::policy::{PolicyOutcome, SolverPolicy};
 
 use super::budget::SolverBudget;
-use super::go_rta::{GoRtaInputs, solve_go_rta};
+use crate::go::rta::{GoRtaInputs, solve_go_rta};
 
 pub(crate) use crate::ts::points_to::{TsPointsToInputs, budget_status, solve_ts_points_to};
 
@@ -95,8 +95,8 @@ mod tests {
     use crate::analysis::ids::SemanticNodeId;
     use crate::analysis::solver::budget::BudgetStatus;
     use crate::analysis::solver::engine::SolverEngine;
-    use crate::analysis::solver::go_rta::inputs::{GoRtaCallsite, GoRtaMethod};
     use crate::analysis_neutral::solver::policy::PointsToPolicy;
+    use crate::go::rta::inputs::{GoRtaCallsite, GoRtaMethod};
 
     #[test]
     fn ts_policy_id_is_stable() {

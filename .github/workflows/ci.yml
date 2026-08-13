@@ -50,8 +50,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
+          arguments: ""
           command: check
-          arguments: --all-features --locked
+          command-arguments: all
 
   # ── Compile checks (~1-3 min each) ────────────────────────────────────────
 
@@ -125,9 +126,8 @@ jobs:
         with:
           go-version: "1.25.x"
           cache-dependency-path: |
-            crates/polint/go-sidecar/polint-go-frontend/go.sum
-            tools/polint-go-symbols/go.sum
-            crates/polint/go-sidecar/polint-go-symbols/go.sum
+            crates/polint/src/go-sidecar/polint-go-frontend/go.sum
+            crates/polint/src/go-sidecar/polint-go-symbols/go.sum
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -161,9 +161,8 @@ jobs:
         with:
           go-version: "1.25.x"
           cache-dependency-path: |
-            crates/polint/go-sidecar/polint-go-frontend/go.sum
-            tools/polint-go-symbols/go.sum
-            crates/polint/go-sidecar/polint-go-symbols/go.sum
+            crates/polint/src/go-sidecar/polint-go-frontend/go.sum
+            crates/polint/src/go-sidecar/polint-go-symbols/go.sum
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -188,9 +187,8 @@ jobs:
         with:
           go-version: "1.25.x"
           cache-dependency-path: |
-            crates/polint/go-sidecar/polint-go-frontend/go.sum
-            tools/polint-go-symbols/go.sum
-            crates/polint/go-sidecar/polint-go-symbols/go.sum
+            crates/polint/src/go-sidecar/polint-go-frontend/go.sum
+            crates/polint/src/go-sidecar/polint-go-symbols/go.sum
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -224,9 +222,8 @@ jobs:
         with:
           go-version: "1.25.x"
           cache-dependency-path: |
-            crates/polint/go-sidecar/polint-go-frontend/go.sum
-            tools/polint-go-symbols/go.sum
-            crates/polint/go-sidecar/polint-go-symbols/go.sum
+            crates/polint/src/go-sidecar/polint-go-frontend/go.sum
+            crates/polint/src/go-sidecar/polint-go-symbols/go.sum
 
       - uses: dtolnay/rust-toolchain@stable
 

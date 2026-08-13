@@ -5,7 +5,6 @@ pub(crate) mod error_convert;
 pub(crate) use crate::analysis_neutral::ids;
 pub(crate) use crate::analysis_neutral::places;
 pub(crate) use crate::analysis_neutral::points_to;
-pub(crate) use crate::analysis_neutral::stable_key;
 pub(crate) use crate::analysis_neutral::store;
 pub(crate) use crate::analysis_neutral::values;
 

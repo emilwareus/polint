@@ -47,7 +47,7 @@ fn validate_refined_call_edges(
                 "duplicate stable key".to_string(),
             ));
         }
-        if !call_sites.contains(&edge.site) && !uses_synthetic_framework_site(edge) {
+        if !call_sites.contains(&edge.site) {
             diagnostics.push(invalid_refined_call_diagnostic(
                 stable_key.as_ref(),
                 format!("dangling call site {:?}", edge.site),
@@ -148,17 +148,6 @@ fn validate_refined_call_edges(
     }
 }
 
-fn uses_synthetic_framework_site(
-    edge: &crate::analysis_neutral::refined_calls::facts::RefinedCallEdgeFact,
-) -> bool {
-    edge.base_target.is_none()
-        && edge.edge_kind == CallEdgeKind::Synthetic
-        && edge
-            .evidence
-            .iter()
-            .any(|evidence| evidence == "framework_dispatch" || evidence == "unresolved_framework")
-}
-
 fn valid_synthetic_target(target: &str) -> bool {
     !target.trim().is_empty()
         && !target.starts_with('/')
@@ -193,19 +182,15 @@ mod tests {
     use crate::analysis_neutral::ids::{CallSiteId, MirBodyId, MirOpId, RefinedCallEdgeId};
     use crate::analysis_neutral::refined_calls::facts::RefinedCallConfidence;
     use crate::analysis_neutral::refined_calls::facts::RefinedCallTier;
-    use crate::analysis_neutral::refined_calls::store::RefinedCallOutput;
     use crate::internal_core::{FileId, FunctionId, Language, Span};
 
     #[test]
     fn validation_catches_dangling_call_site() {
-        let mut db = db_with_call_site();
-        db.replace_refined_call_facts(RefinedCallOutput {
-            edges: vec![edge("family=RefinedCallEdge/test", CallSiteId(99))],
-        })
-        .expect("store accepts edge for validation");
+        let db = db_with_call_site();
+        let dangling = edge("family=RefinedCallEdge/test", CallSiteId(99));
         let mut diagnostics = Vec::new();
 
-        validate_refined_calls(&db, &mut diagnostics);
+        validate_refined_call_edges(&db, &[dangling], &mut diagnostics);
 
         assert!(
             diagnostics

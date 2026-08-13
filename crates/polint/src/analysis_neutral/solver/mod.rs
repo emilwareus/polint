@@ -3,6 +3,7 @@ pub mod cache_key;
 pub mod digest;
 pub mod engine;
 pub mod facts;
+pub(crate) mod go_rta;
 pub mod policy;
 pub mod provenance;
 pub mod store;

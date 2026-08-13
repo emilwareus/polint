@@ -6,7 +6,7 @@ use crate::internal_core::{StableKeyId, StableKeyInterner};
 
 use crate::analysis_neutral::AnalysisHost;
 use crate::analysis_neutral::adaptation::store::AdaptationModelStore;
-use crate::analysis_neutral::ids::{PlaceId, SemanticNodeId};
+use crate::analysis_neutral::ids::{PlaceId, ScopeId, SemanticNodeId};
 use crate::analysis_neutral::points_to::facts::{PointsToPrecision, PointsToStatus};
 use crate::analysis_neutral::semantic_graph::constraints::{ConstraintFact, ConstraintKind};
 use crate::analysis_neutral::semantic_graph::facts::{
@@ -160,6 +160,11 @@ impl SemanticGraphBuilder {
                 node_key_from_identity(interner, "callsite", &interner.resolve(site.stable_key));
             self.intern_node(interner, NodeKind::Callsite(site.id), key);
         }
+        for scope in db.semantic_scopes() {
+            let key =
+                node_key_from_identity(interner, "scope", &interner.resolve(scope.stable_key));
+            self.intern_node(interner, NodeKind::Scope(ScopeId(scope.id.0)), key);
+        }
     }
 
     pub fn function_node(
@@ -237,6 +242,34 @@ impl SemanticGraphBuilder {
                 },
                 &interner.resolve(fact.stable_key),
             );
+        }
+    }
+
+    // -- neutral containment edges ------------------------------------------
+
+    pub fn project_member_of_edges(&mut self, db: &impl AnalysisHost) {
+        let interner = db.stable_key_interner();
+        let package_nodes: BTreeMap<_, _> = db
+            .packages()
+            .iter()
+            .filter_map(|package| {
+                self.node_for_key(&interner, &package_node_key(db, package))
+                    .map(|node| (package.id, node))
+            })
+            .collect();
+
+        for scope in db.semantic_scopes() {
+            let Some(package) = scope.package else {
+                continue;
+            };
+            let scope_key =
+                node_key_from_identity(&interner, "scope", &interner.resolve(scope.stable_key));
+            let Some(scope_node) = self.node_for_key(&interner, &scope_key) else {
+                continue;
+            };
+            if let Some(&package_node) = package_nodes.get(&package) {
+                self.push_edge(&interner, EdgeKind::MemberOf, scope_node, package_node);
+            }
         }
     }
 

@@ -164,7 +164,7 @@ pub fn compute_reachability_root_stable_key(
     kind: RootKind,
     language: Language,
     function_identity: &str,
-    file_id: FileId,
+    repository_relative_path: &str,
     span: &Span,
 ) -> String {
     format!(
@@ -172,7 +172,7 @@ pub fn compute_reachability_root_stable_key(
         kind.as_str(),
         language_label(language),
         escape_field(function_identity),
-        file_id.0,
+        escape_field(repository_relative_path),
         span.start_byte,
         span.end_byte,
     )
@@ -231,7 +231,7 @@ mod tests {
                     RootKind::Main,
                     Language::Go,
                     "main.main",
-                    FileId::from_raw(3),
+                    "cmd/app/main.go",
                     &span,
                 ),
             ),
@@ -327,7 +327,7 @@ mod tests {
             RootKind::Exported,
             Language::Go,
             "a|b",
-            FileId::from_raw(1),
+            "src/main.go",
             &span,
         );
         // A sibling whose function identity is "b|c" joined the same way proves
@@ -336,7 +336,7 @@ mod tests {
             RootKind::Exported,
             Language::Go,
             "b|c",
-            FileId::from_raw(1),
+            "src/main.go",
             &span,
         );
         assert_ne!(left, right_with_pipe);
@@ -346,14 +346,40 @@ mod tests {
     }
 
     #[test]
+    fn stable_key_is_invariant_to_file_id_allocation_order() {
+        let allocated_first = span_bytes(FileId::from_raw(0), 4, 9);
+        let allocated_later = span_bytes(FileId::from_raw(42), 4, 9);
+
+        let first_key = compute_reachability_root_stable_key(
+            RootKind::Main,
+            Language::Go,
+            "main.main",
+            "cmd/app/main.go",
+            &allocated_first,
+        );
+        let later_key = compute_reachability_root_stable_key(
+            RootKind::Main,
+            Language::Go,
+            "main.main",
+            "cmd/app/main.go",
+            &allocated_later,
+        );
+
+        assert_eq!(first_key, later_key);
+    }
+
+    #[test]
     fn stable_key_is_keyed_on_stable_identity_not_dense_ids() {
         let key = compute_reachability_root_stable_key(
             RootKind::Main,
             Language::Go,
             "main.main",
-            FileId::from_raw(3),
+            "cmd/app/main.go",
             &span_bytes(FileId::from_raw(3), 4, 9),
         );
-        assert_eq!(key, "reachability_root|main|go|main.main|3|4..9");
+        assert_eq!(
+            key,
+            "reachability_root|main|go|main.main|cmd/app/main.go|4..9"
+        );
     }
 }

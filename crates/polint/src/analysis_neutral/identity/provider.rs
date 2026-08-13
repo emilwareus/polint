@@ -135,6 +135,7 @@ pub fn function_identity_record(
     let display_name: Arc<str> = Arc::from(function.name.as_str());
     Some(build_record(
         interner,
+        &db.path_for(function.file),
         IdentityKind::Function,
         function.file,
         &function.span,
@@ -164,6 +165,7 @@ fn callsite_identity_record(
     let display_name: Arc<str> = Arc::from(callsite_display_name(site));
     Some(build_record(
         interner,
+        &db.path_for(site.file),
         IdentityKind::Callsite,
         site.file,
         &site.span,
@@ -178,6 +180,7 @@ fn callsite_identity_record(
 #[allow(clippy::too_many_arguments)]
 fn build_record(
     interner: &StableKeyInterner,
+    repository_relative_path: &str,
     kind: IdentityKind,
     file: FileId,
     span: &Span,
@@ -200,7 +203,7 @@ fn build_record(
         language,
         &package_or_module,
         &container_path,
-        file,
+        repository_relative_path,
         span,
     ));
     IdentityRecord {

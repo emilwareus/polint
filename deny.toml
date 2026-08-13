@@ -1,6 +1,6 @@
 # cargo-deny configuration for the polint workspace.
 #
-# Run locally: `cargo deny --all-features --locked check`
+# Run locally: `cargo deny check all`
 # Reference: https://embarkstudios.github.io/cargo-deny/
 
 [graph]

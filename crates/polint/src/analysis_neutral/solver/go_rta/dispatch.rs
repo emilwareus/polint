@@ -1,32 +1,29 @@
-//! RTA dispatch resolver: interface-invoke-by-method-set + func-value-by-signature
-//! (D-06, D-08, D-09).
+//! RTA dispatch resolver: interface-invoke-by-method-set + func-value-by-signature.
 //!
-//! [`resolve_callsite`] resolves one `UnresolvedDynamic` Go callsite to its candidate
-//! callees, FILTERED by the current instantiated runtime-type set (the filter that
-//! makes this RTA, not coarse CHA), and emits each resolved edge as a
-//! [`DerivedEdgeFact`] `caller-function-node -> callee-function-node` in the unified
-//! vocabulary (D-04). Edges reuse the shared `points_to` status/precision vocabulary,
-//! carry [`DerivedEdgeProvenance`] listing the contributing callsite + dispatch +
-//! method-set + instantiated-type facts (so the deletion-invalidation property holds,
-//! D-09), and never claim exact precision (D-08 — the store's `derived_edge_precision_
-//! ceiling` is the hard gate; we floor RTA edges at `Heuristic` because dynamic
-//! dispatch is an over-approximation).
+//! [`resolve_callsite`] resolves one `UnresolvedDynamic` Go callsite to candidate
+//! callees filtered by the current instantiated runtime-type set. Each result is a
+//! [`DerivedEdgeFact`] from caller function node to callee function node in the unified
+//! vocabulary. Edges reuse the shared `points_to` status and precision vocabulary.
+//! [`DerivedEdgeProvenance`] records every contributing callsite, dispatch, method-set,
+//! and instantiated-type fact so deleting a contributor invalidates the edge. Dynamic
+//! dispatch is an over-approximation, so RTA edges are never marked exact and remain
+//! subject to the store's `derived_edge_precision_ceiling`.
 
 use std::collections::BTreeSet;
 
-use crate::analysis::ids::DerivedEdgeId;
-use crate::analysis::points_to::facts::{PointsToPrecision, PointsToStatus};
-use crate::analysis::semantic_graph::constraints::ConstraintKind;
-use crate::analysis::solver::engine::{weakest_precision, weakest_status};
-use crate::analysis::solver::facts::DerivedEdgeFact;
-use crate::analysis::solver::provenance::{ContributingFact, DerivedEdgeProvenance};
-use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
-use crate::core::StableKeyId;
+use crate::analysis_api::{FactFamily, stable_key_from_parts};
+use crate::analysis_neutral::ids::DerivedEdgeId;
+use crate::analysis_neutral::points_to::facts::{PointsToPrecision, PointsToStatus};
+use crate::analysis_neutral::semantic_graph::constraints::ConstraintKind;
+use crate::analysis_neutral::solver::engine::{weakest_precision, weakest_status};
+use crate::analysis_neutral::solver::facts::DerivedEdgeFact;
+use crate::analysis_neutral::solver::provenance::{ContributingFact, DerivedEdgeProvenance};
+use crate::internal_core::StableKeyId;
 
-use super::inputs::{GoRtaCallsite, GoRtaInputs};
+use super::snapshot::{RtaCallsite, RtaInputs};
 
 /// Outcome of resolving one callsite: the (possibly empty) resolved edges and whether
-/// the per-callsite candidate cap was exceeded (a run-level exhaustion signal, D-13).
+/// the per-callsite candidate cap was exceeded (a run-level exhaustion signal).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct CallsiteResolution {
     pub(crate) edges: Vec<DerivedEdgeFact>,
@@ -34,38 +31,38 @@ pub(crate) struct CallsiteResolution {
 }
 
 /// Resolve one dynamic callsite to its candidate-callee edges under the current
-/// instantiated-type / address-taken sets (D-06).
+/// instantiated-type / address-taken sets.
 ///
 /// - Interface invoke (`interface_method` set): candidate callees are the concrete
 ///   methods whose receiver type is instantiated AND whose method-set contains the
 ///   invoked method. The instantiated-type filter is the RTA discriminant — it is baked
-///   into [`GoRtaInputs::interface_candidate_index`] at build time (FIX 2), so this hot
+///   into [`RtaInputs::interface_candidate_index`] at build time, so this hot
 ///   path is a single index lookup rather than a per-callsite instantiated-set scan.
 /// - Func-value call (`signature` set): candidate callees are address-taken functions
 ///   whose signature matches.
 ///
-/// Honest-unresolved (D-08): a callsite whose interface type / method has no
+/// A callsite whose interface type or method has no
 /// method-set match — or whose caller/callee has no semantic node — contributes NO
 /// edge; it stays an unresolved obligation rather than a fabricated edge. When the
 /// candidate set would exceed `max_candidates_per_callsite`, resolution stops and
 /// `candidate_cap_exceeded` latches (edges resolved before the cap keep their honest
-/// status — review finding #R1).
+/// status).
 ///
-/// `resolve_func_values` (FINDING 7) gates ONLY the func-value (signature) path: when the
+/// `resolve_func_values` gates ONLY the func-value (signature) path: when the
 /// address-taken surface exceeds `address_taken_threshold` the caller disables func-value
 /// resolution, but interface-invoke resolution (which never consults the address-taken
 /// set) still proceeds — a func-value callsite then resolves to nothing (honest
 /// unresolved), an interface callsite is unaffected.
 pub(crate) fn resolve_callsite(
-    interner: &crate::core::StableKeyInterner,
-    callsite: &GoRtaCallsite,
-    inputs: &GoRtaInputs,
+    interner: &crate::internal_core::StableKeyInterner,
+    callsite: &RtaCallsite,
+    inputs: &RtaInputs,
     address_taken: &BTreeSet<String>,
     max_candidates_per_callsite: usize,
     resolve_func_values: bool,
     solver_step: u64,
 ) -> CallsiteResolution {
-    // The edge SOURCE is the caller FUNCTION node (D-04), not the callsite node; the
+    // The edge SOURCE is the caller FUNCTION node, not the callsite node; the
     // callsite node is recorded via the producing CallConstraint in provenance. No
     // caller node => no honest edge anchor.
     let Some(&caller_node) = inputs.function_node.get(&callsite.caller) else {
@@ -87,7 +84,7 @@ pub(crate) fn resolve_callsite(
         );
     } else if let Some(signature) = callsite.signature.as_deref() {
         // Func-value resolution is suppressed when the address-taken surface is too large
-        // (FINDING 7); the interface path above is never gated.
+        // while the interface path above is never gated.
         if resolve_func_values {
             collect_func_value_candidates(
                 signature,
@@ -102,10 +99,10 @@ pub(crate) fn resolve_callsite(
 
     let mut edges = Vec::with_capacity(candidates.len());
     for candidate in candidates {
-        // Worst-trust status/precision across the adopted derivation (D-09). The
+        // Worst-trust status/precision across the adopted derivation. The
         // contributing frontend facts are all "present", so status is Present; an
         // RTA-resolved dynamic edge is an over-approximation, so precision is floored
-        // at Heuristic via the worst-of combine (never exact — D-08).
+        // at Heuristic via the worst-of combine (never exact).
         let status = weakest_status(PointsToStatus::Present, PointsToStatus::Present);
         let precision = weakest_precision(
             PointsToPrecision::Heuristic,
@@ -114,7 +111,7 @@ pub(crate) fn resolve_callsite(
 
         // Contributing facts: the callsite + dispatch detail (always) + whatever
         // method-set / instantiated-type / address-taken facts justified THIS callee
-        // (so deleting any of them does not reproduce the edge — D-09).
+        // (so deleting any of them does not reproduce the edge).
         let mut contributing: Vec<ContributingFact> = vec![
             ContributingFact {
                 stable_key: callsite.callsite_stable_key,
@@ -166,26 +163,26 @@ pub(crate) fn resolve_callsite(
 
 /// One resolved candidate callee with the contributing-fact keys that justified it.
 struct DispatchCandidate {
-    node: crate::analysis::ids::SemanticNodeId,
+    node: crate::analysis_neutral::ids::SemanticNodeId,
     contributing_keys: Vec<StableKeyId>,
 }
 
 /// Interface-invoke candidates: concrete methods named `method` whose receiver type
-/// is instantiated AND whose method-set contains `method` (D-06). The instantiated
+/// is instantiated AND whose method-set contains `method`. The instantiated
 /// filter is what makes it RTA. Deterministic by `(type_name, callee qualified)`.
 ///
-/// FIX 2 (scale): resolved via the pre-built inverted index
-/// [`GoRtaInputs::interface_candidate_index`] — a single `BTreeMap` lookup — instead of
+/// Resolved via the pre-built inverted index
+/// [`RtaInputs::interface_candidate_index`] — a single `BTreeMap` lookup — instead of
 /// re-scanning the WHOLE instantiated set per callsite. The index was built by iterating
 /// `instantiated` (sorted) then `methods_by_receiver[type]` (in order), so `index[method]`
-/// is byte-IDENTICAL to what the old whole-set scan produced for this `method`: same
+/// is byte-identical to the reference whole-set scan for this `method`: the same
 /// candidate set, same order, same per-candidate `contributing_keys`. The per-callsite
 /// cap is applied to the SAME prefix, so the cap-exceeded signal and the emitted edges
 /// (and their stable keys) are unchanged. The whole reachable program's total interface
 /// resolution drops from O(C_iface · T) to O(C_iface · resolved-candidates).
 fn collect_interface_candidates(
     method: &str,
-    inputs: &GoRtaInputs,
+    inputs: &RtaInputs,
     max_candidates_per_callsite: usize,
     candidates: &mut Vec<DispatchCandidate>,
     candidate_cap_exceeded: &mut bool,
@@ -194,7 +191,7 @@ fn collect_interface_candidates(
         return;
     };
     // The index Vec is already in the scan's `(instantiated-sorted, then within-type)`
-    // order, so applying the cap to this prefix matches the old behavior exactly.
+    // order, so applying the cap to this prefix preserves reference behavior exactly.
     for candidate in indexed {
         if candidates.len() >= max_candidates_per_callsite {
             *candidate_cap_exceeded = true;
@@ -208,10 +205,10 @@ fn collect_interface_candidates(
 }
 
 /// Func-value candidates: address-taken functions whose signature matches the call
-/// signature (D-06). Deterministic by address-taken qualified identity.
+/// signature. Deterministic by address-taken qualified identity.
 fn collect_func_value_candidates(
     signature: &str,
-    inputs: &GoRtaInputs,
+    inputs: &RtaInputs,
     address_taken: &BTreeSet<String>,
     max_candidates_per_callsite: usize,
     candidates: &mut Vec<DispatchCandidate>,
@@ -249,15 +246,15 @@ mod tests {
     use super::*;
     use std::collections::{BTreeMap, BTreeSet};
 
-    use super::super::inputs::{GoRtaCallsite, GoRtaInputs, GoRtaMethod};
-    use crate::analysis::ids::SemanticNodeId;
+    use super::super::snapshot::{RtaCallsite, RtaInputs, RtaMethod};
+    use crate::analysis_neutral::ids::SemanticNodeId;
 
     /// Two instantiated types both declare `Read` → two candidate callees. A
     /// per-callsite cap of 1 latches `candidate_cap_exceeded` and emits only the
-    /// pre-cap edge (review finding #R1: edges resolved before the cap are honest).
+    /// pre-cap edge (edges resolved before the cap are honest).
     #[test]
     fn per_callsite_candidate_cap_latches_and_keeps_precap_edges() {
-        let interner = crate::core::test_stable_key_interner();
+        let interner = crate::internal_core::test_stable_key_interner();
         let mut function_node = BTreeMap::new();
         function_node.insert("main.main".to_string(), SemanticNodeId(1));
         function_node.insert("(pkg.A).Read".to_string(), SemanticNodeId(3));
@@ -273,7 +270,7 @@ mod tests {
         let mut methods_by_receiver = BTreeMap::new();
         methods_by_receiver.insert(
             "pkg.A".to_string(),
-            vec![GoRtaMethod {
+            vec![RtaMethod {
                 method_name: "Read".to_string(),
                 qualified: "(pkg.A).Read".to_string(),
                 node: SemanticNodeId(3),
@@ -281,7 +278,7 @@ mod tests {
         );
         methods_by_receiver.insert(
             "pkg.B".to_string(),
-            vec![GoRtaMethod {
+            vec![RtaMethod {
                 method_name: "Read".to_string(),
                 qualified: "(pkg.B).Read".to_string(),
                 node: SemanticNodeId(4),
@@ -292,17 +289,17 @@ mod tests {
         instantiated_keys.insert("pkg.A".to_string(), interner.intern("inst|A"));
         instantiated_keys.insert("pkg.B".to_string(), interner.intern("inst|B"));
 
-        let inputs = GoRtaInputs {
+        let inputs = RtaInputs {
             method_sets,
             method_set_keys,
             instantiated: BTreeSet::from(["pkg.A".to_string(), "pkg.B".to_string()]),
             instantiated_keys,
             methods_by_receiver,
             function_node,
-            ..GoRtaInputs::default()
+            ..RtaInputs::default()
         }
         .finalize_indexes();
-        let callsite = GoRtaCallsite {
+        let callsite = RtaCallsite {
             caller: "main.main".to_string(),
             callsite_node: SemanticNodeId(2),
             callsite_stable_key: interner.intern("cs|main"),
@@ -312,7 +309,7 @@ mod tests {
         };
 
         let resolution = resolve_callsite(
-            &crate::core::test_stable_key_interner(),
+            &crate::internal_core::test_stable_key_interner(),
             &callsite,
             &inputs,
             &BTreeSet::new(),
@@ -332,9 +329,9 @@ mod tests {
     /// No caller node => no honest edge anchor (the source endpoint is missing).
     #[test]
     fn missing_caller_node_resolves_nothing() {
-        let interner = crate::core::test_stable_key_interner();
-        let inputs = GoRtaInputs::default();
-        let callsite = GoRtaCallsite {
+        let interner = crate::internal_core::test_stable_key_interner();
+        let inputs = RtaInputs::default();
+        let callsite = RtaCallsite {
             caller: "main.main".to_string(),
             callsite_node: SemanticNodeId(2),
             callsite_stable_key: interner.intern("cs|main"),
@@ -343,7 +340,7 @@ mod tests {
             dispatch_stable_key: interner.intern("dd|main"),
         };
         let resolution = resolve_callsite(
-            &crate::core::test_stable_key_interner(),
+            &crate::internal_core::test_stable_key_interner(),
             &callsite,
             &inputs,
             &BTreeSet::new(),
@@ -355,12 +352,12 @@ mod tests {
         assert!(!resolution.candidate_cap_exceeded);
     }
 
-    /// FINDING 7: with `resolve_func_values = false`, a func-value (signature) callsite
+    /// With `resolve_func_values = false`, a func-value (signature) callsite
     /// resolves to NOTHING even though a signature-matching address-taken function exists
     /// — the func-value path is gated. An interface callsite (separate test) is unaffected.
     #[test]
     fn func_value_resolution_is_suppressed_when_disabled() {
-        let interner = crate::core::test_stable_key_interner();
+        let interner = crate::internal_core::test_stable_key_interner();
         let mut function_node = BTreeMap::new();
         function_node.insert("main.main".to_string(), SemanticNodeId(1));
         function_node.insert("pkg.handler".to_string(), SemanticNodeId(3));
@@ -370,15 +367,15 @@ mod tests {
         let mut address_taken_keys = BTreeMap::new();
         address_taken_keys.insert("pkg.handler".to_string(), interner.intern("at|handler"));
 
-        let inputs = GoRtaInputs {
+        let inputs = RtaInputs {
             function_node,
             function_signature,
             address_taken: address_taken.clone(),
             address_taken_keys,
-            ..GoRtaInputs::default()
+            ..RtaInputs::default()
         }
         .finalize_indexes();
-        let callsite = GoRtaCallsite {
+        let callsite = RtaCallsite {
             caller: "main.main".to_string(),
             callsite_node: SemanticNodeId(2),
             callsite_stable_key: interner.intern("cs|main:fv"),
@@ -389,7 +386,7 @@ mod tests {
 
         // Disabled: no edge (the signature-matching handler is NOT resolved).
         let disabled = resolve_callsite(
-            &crate::core::test_stable_key_interner(),
+            &crate::internal_core::test_stable_key_interner(),
             &callsite,
             &inputs,
             &address_taken,
@@ -404,7 +401,7 @@ mod tests {
         );
         // Enabled: the same callsite resolves to the address-taken handler (control).
         let enabled = resolve_callsite(
-            &crate::core::test_stable_key_interner(),
+            &crate::internal_core::test_stable_key_interner(),
             &callsite,
             &inputs,
             &address_taken,
@@ -418,15 +415,18 @@ mod tests {
         );
     }
 
-    /// Reference oracle: the PRE-FIX-2 whole-instantiated-set scan, reproduced verbatim so
+    /// Reference oracle: the whole-instantiated-set scan, reproduced verbatim so
     /// the test can prove the indexed path is byte-identical to it. Iterates `instantiated`
     /// (sorted BTreeSet) then `methods_by_receiver[type]` (in order), pushing every concrete
     /// method named `method` whose type's method-set contains `method`, capping the same way.
     fn collect_interface_candidates_via_whole_scan(
         method: &str,
-        inputs: &GoRtaInputs,
+        inputs: &RtaInputs,
         max_candidates_per_callsite: usize,
-    ) -> (Vec<(SemanticNodeId, Vec<crate::core::StableKeyId>)>, bool) {
+    ) -> (
+        Vec<(SemanticNodeId, Vec<crate::internal_core::StableKeyId>)>,
+        bool,
+    ) {
         let mut candidates = Vec::new();
         let mut capped = false;
         for type_name in &inputs.instantiated {
@@ -460,15 +460,15 @@ mod tests {
         (candidates, capped)
     }
 
-    /// FIX 2: the indexed `collect_interface_candidates` produces the SAME candidate set,
+    /// The indexed `collect_interface_candidates` produces the SAME candidate set,
     /// ORDER, and per-candidate contributing keys as the whole-instantiated-set scan it
-    /// replaces — and the per-callsite cap selects the same prefix. Three instantiated types
+    /// models, and the per-callsite cap selects the same prefix. Three instantiated types
     /// share the method `Speak`; a fourth type declares `Speak` in its method-set but is NOT
     /// instantiated (it must be excluded); a fifth instantiated type lacks `Speak` from its
     /// set (also excluded). Byte-identity is proven by comparing against the reference oracle.
     #[test]
     fn indexed_interface_candidates_match_whole_set_scan_and_cap_prefix() {
-        let interner = crate::core::test_stable_key_interner();
+        let interner = crate::internal_core::test_stable_key_interner();
         let node = |id: u64| SemanticNodeId(id);
 
         // Three instantiated implementers of `Speak`, one declared-but-not-instantiated
@@ -492,7 +492,7 @@ mod tests {
             ("pkg.Zebra".to_string(), interner.intern("ms|Zebra")),
             ("pkg.Mute".to_string(), interner.intern("ms|Mute")),
         ]);
-        let method = |receiver: &str, n: &str, id: u64| GoRtaMethod {
+        let method = |receiver: &str, n: &str, id: u64| RtaMethod {
             method_name: n.to_string(),
             qualified: format!("({receiver}).{n}"),
             node: node(id),
@@ -521,13 +521,13 @@ mod tests {
             ("pkg.Mute".to_string(), interner.intern("inst|Mute")),
         ]);
 
-        let inputs = GoRtaInputs {
+        let inputs = RtaInputs {
             method_sets,
             method_set_keys,
             instantiated,
             instantiated_keys,
             methods_by_receiver,
-            ..GoRtaInputs::default()
+            ..RtaInputs::default()
         }
         .finalize_indexes();
 
@@ -540,10 +540,11 @@ mod tests {
             let mut indexed = Vec::new();
             let mut indexed_capped = false;
             collect_interface_candidates("Speak", &inputs, cap, &mut indexed, &mut indexed_capped);
-            let indexed_pairs: Vec<(SemanticNodeId, Vec<crate::core::StableKeyId>)> = indexed
-                .into_iter()
-                .map(|candidate| (candidate.node, candidate.contributing_keys))
-                .collect();
+            let indexed_pairs: Vec<(SemanticNodeId, Vec<crate::internal_core::StableKeyId>)> =
+                indexed
+                    .into_iter()
+                    .map(|candidate| (candidate.node, candidate.contributing_keys))
+                    .collect();
 
             assert_eq!(
                 indexed_pairs, expected,

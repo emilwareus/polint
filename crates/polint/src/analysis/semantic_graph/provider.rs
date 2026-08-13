@@ -7,12 +7,12 @@ use crate::analysis::adaptation::cache_key::adaptation_model_digest;
 use crate::analysis::adaptation::loader::load_model_file;
 use crate::analysis::adaptation::store::AdaptationModelStore;
 use crate::analysis::adaptation::validate::ValidationUniverse;
-use crate::analysis::semantic_graph::build::{
+use crate::analysis::semantic_graph::store::{SEMANTIC_GRAPH_PROVIDER_ID, SemanticGraphOutput};
+use crate::analysis::semantic_graph::{
     build_semantic_graph_with_ts_direct_binding_collection,
     build_semantic_graph_with_ts_direct_binding_collection_and_adaptation_models,
     collect_ts_direct_binding_collection,
 };
-use crate::analysis::semantic_graph::store::{SEMANTIC_GRAPH_PROVIDER_ID, SemanticGraphOutput};
 use crate::analysis_api::{ProviderExecution, ProviderFailureReason, ProviderFailureStage};
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
@@ -28,6 +28,18 @@ use crate::ts::binding::store::{
 
 const ADAPTATION_MODEL_DIR: &str = ".polint/models";
 const ADAPTATION_MODEL_MAX_BYTES: u64 = 1_048_576;
+
+fn project_go_semantic_facts(
+    db: &AnalysisDb,
+    builder: &mut crate::analysis_neutral::semantic_graph::build::SemanticGraphBuilder,
+) {
+    crate::go::semantic_graph::project_go_semantic(
+        db,
+        builder,
+        db.go_semantic_functions(),
+        db.go_semantic_callsites(),
+    );
+}
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SemanticGraphProviderRunOutput {
@@ -86,12 +98,12 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
     // Step: collect the private TS analysis side inputs once. This keeps
     // direct bindings, object-model rows, and token-source flow projection on
     // the same parse/semantic pass per TS file.
-    let mut ts_direct_bindings = collect_ts_direct_binding_collection(db);
+    let ts_direct_bindings = collect_ts_direct_binding_collection(db);
 
     // Step: refresh private TS object-model rows. This keeps the projection's
     // consumed object/property facts deterministic and digest-visible without
     // promoting a public object-model provider surface.
-    let object_model = ts_direct_bindings.take_object_model_output();
+    let object_model = ts_direct_bindings.object_model_output();
     if let Err(error) = db.replace_ts_object_model_facts(object_model) {
         return SemanticGraphProviderRunOutput {
             diagnostics: vec![provider_error_diagnostic(error.to_string())],
@@ -108,9 +120,12 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
     // stable-key order the digest is computed over.
     let ts_direct_binding_output_digest =
         ts_direct_binding_output_digest(ts_direct_bindings.output(), interner);
-    let base_output =
-        build_semantic_graph_with_ts_direct_binding_collection(db, &ts_direct_bindings)
-            .normalized(interner);
+    let base_output = build_semantic_graph_with_ts_direct_binding_collection(
+        db,
+        &ts_direct_bindings,
+        project_go_semantic_facts,
+    )
+    .normalized(interner);
     let adaptation_models =
         collect_adaptation_model_input(interner, loaded, &base_output, adaptation_budget);
     let output = if adaptation_models.store.accepted().is_empty() {
@@ -120,6 +135,7 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
             db,
             &ts_direct_bindings,
             &adaptation_models.store,
+            project_go_semantic_facts,
         )
         .normalized(interner)
     };
@@ -627,10 +643,11 @@ fn provider_error_diagnostic(message: String) -> Diagnostic {
     .with_evidence("reason", message)
 }
 
-#[cfg(all(test, feature = "lang-typescript"))]
+#[cfg(all(test, any(feature = "lang-go", feature = "lang-typescript")))]
 mod tests {
     use super::*;
-    use crate::analysis::semantic_graph::build::build_semantic_graph_with_ts_direct_bindings;
+    #[cfg(feature = "lang-typescript")]
+    use crate::analysis::semantic_graph::build_semantic_graph_with_ts_direct_bindings;
     use crate::analysis_kernel::AnalysisKernel;
     use crate::analysis_kernel::incremental::{Digest, DigestKind};
     use crate::analysis_plan::AnalysisPlan;
@@ -761,6 +778,157 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "lang-go")]
+    mod go_projection {
+        use super::*;
+        use crate::analysis::calls::facts::{
+            CallCallee, CallPrecision, CallSiteFact, CallSyntaxKind, CallTargetStatus,
+        };
+        use crate::analysis::calls::store::CallOutput;
+        use crate::analysis::ids::{CallSiteId, MirBodyId, MirOpId};
+        use crate::analysis::semantic_graph::constraints::ConstraintKind;
+        use crate::go::semantic::facts::{
+            GoSemanticCallStatus, GoSemanticCallsiteFact, GoSemanticCallsiteId,
+            GoSemanticFunctionFact, GoSemanticFunctionId, GoSemanticFunctionKind,
+        };
+        use crate::go::semantic::store::GoSemanticFactsOutput;
+
+        #[test]
+        fn provider_projects_installed_go_semantic_facts_into_constraints() {
+            let mut db = db_with_go_call();
+            install_go_semantic_facts(&mut db);
+
+            let output = run(&mut db);
+
+            assert!(output.output_digest.is_some());
+            let interner = db.stable_key_interner();
+            let mut projected_kinds = db
+                .semantic_constraints()
+                .iter()
+                .filter(|constraint| {
+                    interner
+                        .resolve(constraint.stable_key)
+                        .contains("go-semantic-call:main-to-run")
+                })
+                .map(|constraint| &constraint.kind);
+            let has_call_constraint = projected_kinds
+                .clone()
+                .any(|kind| matches!(kind, ConstraintKind::CallConstraint { .. }));
+            let has_static_target =
+                projected_kinds.any(|kind| matches!(kind, ConstraintKind::CopyEdge { .. }));
+            assert_eq!(
+                (has_call_constraint, has_static_target),
+                (true, true),
+                "provider composition should invoke the Go projection"
+            );
+        }
+
+        fn db_with_go_call() -> AnalysisDb {
+            let mut db = AnalysisDb::new();
+            let file = db.add_file(
+                PathBuf::from("cmd/app/main.go"),
+                "cmd/app/main.go".to_string(),
+                "package main\nfunc main() { run() }\nfunc run() {}\n".to_string(),
+            );
+            db.push_package(PackageFact::new(
+                PackageId::from_raw(0),
+                file,
+                "main".to_string(),
+                span(file, 0, 12),
+                Language::Go,
+            ));
+            let caller = db.push_function(FunctionFact::new(
+                FunctionId::from_raw(0),
+                file,
+                "main".to_string(),
+                span(file, 18, 22),
+                Language::Go,
+                false,
+                false,
+                1,
+                vec!["run".to_string()],
+            ));
+            db.push_function(FunctionFact::new(
+                FunctionId::from_raw(0),
+                file,
+                "run".to_string(),
+                span(file, 40, 43),
+                Language::Go,
+                false,
+                false,
+                1,
+                Vec::new(),
+            ));
+            let call_stable_key = db
+                .stable_key_interner()
+                .intern("go-core-callsite:main-to-run");
+            db.replace_call_facts(CallOutput {
+                sites: vec![CallSiteFact {
+                    in_throw: false,
+                    id: CallSiteId(0),
+                    language: Language::Go,
+                    file,
+                    caller,
+                    owner_symbol: None,
+                    body: MirBodyId(0),
+                    operation: MirOpId(0),
+                    span: span(file, 27, 30),
+                    kind: CallSyntaxKind::Function,
+                    callee: CallCallee::Identifier {
+                        reference: None,
+                        name: "run".to_string(),
+                    },
+                    receiver: None,
+                    arguments: Vec::new(),
+                    result: None,
+                    status: CallTargetStatus::Resolved,
+                    precision: CallPrecision::SetupAware,
+                    stable_key: call_stable_key,
+                }],
+                targets: Vec::new(),
+                unresolved: Vec::new(),
+            })
+            .expect("call facts install");
+            db
+        }
+
+        fn install_go_semantic_facts(db: &mut AnalysisDb) {
+            let interner = db.stable_key_interner();
+            db.replace_go_semantic_facts(GoSemanticFactsOutput {
+                functions: vec![GoSemanticFunctionFact {
+                    id: GoSemanticFunctionId(0),
+                    stable_key: interner.intern("go-semantic-function:run"),
+                    package_id: "example.com/app".to_string(),
+                    package_path: "example.com/app".to_string(),
+                    name: "run".to_string(),
+                    qualified: "example.com/app.run".to_string(),
+                    signature: "()".to_string(),
+                    kind: GoSemanticFunctionKind::Function,
+                    receiver: None,
+                    relative_file: Some("cmd/app/main.go".to_string()),
+                    file: Some(crate::core::FileId::from_raw(0)),
+                    span: Some(span(crate::core::FileId::from_raw(0), 40, 43)),
+                }],
+                callsites: vec![GoSemanticCallsiteFact {
+                    id: GoSemanticCallsiteId(0),
+                    stable_key: interner.intern("go-semantic-call:main-to-run"),
+                    package_id: "example.com/app".to_string(),
+                    package_path: "example.com/app".to_string(),
+                    caller: "example.com/app.main".to_string(),
+                    static_callee: Some("example.com/app.run".to_string()),
+                    status: GoSemanticCallStatus::ResolvedStatic,
+                    reason: None,
+                    relative_file: Some("cmd/app/main.go".to_string()),
+                    file: Some(crate::core::FileId::from_raw(0)),
+                    span: Some(span(crate::core::FileId::from_raw(0), 27, 30)),
+                }],
+                ..GoSemanticFactsOutput::default()
+            })
+            .expect("Go semantic facts install");
+        }
+    }
+
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn provider_refreshes_ts_object_model_rows_before_projection() {
         let mut db = AnalysisDb::new();
@@ -787,6 +955,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn provider_loads_repo_local_adaptation_models_into_model_constraints() {
         let temp = tempdir().expect("tempdir");

@@ -74,7 +74,125 @@ fn internal_dependency_directions_are_acyclic() {
         &["crate::frontend_api", "crate::go", "crate::ts"],
     );
     assert_tree_excludes(&src.join("go"), &["crate::ts"]);
-    assert_tree_excludes(&src.join("ts"), &["crate::go"]);
+    assert_tree_excludes(
+        &src.join("ts"),
+        &["crate::go", "crate::analysis::", "crate::core::AnalysisDb"],
+    );
+}
+
+#[test]
+fn semantic_graph_facade_delegates_ts_builder_without_ts_implementation_imports() {
+    let src = repo_root().join("crates/polint/src");
+    let facade_dir = src.join("analysis/semantic_graph");
+    assert!(
+        !facade_dir.join("build.rs").exists(),
+        "the composition facade must not own the TypeScript semantic-graph builder"
+    );
+
+    let facade =
+        fs::read_to_string(facade_dir.join("mod.rs")).expect("read semantic-graph facade module");
+    assert!(
+        facade.contains("crate::ts::semantic_graph_build"),
+        "the composition facade must narrowly re-export the TypeScript-owned builder"
+    );
+    assert_tree_excludes(
+        &facade_dir,
+        &[
+            "crate::ts::binding::direct",
+            "crate::ts::binding::facts",
+            "crate::ts::inventory",
+            "crate::ts::object_model",
+            "crate::ts::parse",
+            "crate::ts::scope",
+            "crate::ts::semantic_graph::",
+            "crate::ts::token_flow",
+        ],
+    );
+
+    let ts_builder_path = src.join("ts/semantic_graph_build.rs");
+    assert!(
+        ts_builder_path.is_file(),
+        "the TypeScript frontend must own semantic-graph projection"
+    );
+    let ts_builder = fs::read_to_string(ts_builder_path).expect("read TypeScript graph builder");
+    for forbidden in ["crate::analysis::", "crate::core::AnalysisDb"] {
+        assert!(
+            !ts_builder.contains(forbidden),
+            "the TypeScript graph builder must use neutral host contracts, not `{forbidden}`"
+        );
+    }
+}
+
+#[test]
+fn go_rta_projection_is_separate_from_the_neutral_engine() {
+    let src = repo_root().join("crates/polint/src");
+    let neutral = src.join("analysis_neutral/solver/go_rta");
+    let go = src.join("go/rta");
+
+    for file in ["snapshot.rs", "dispatch.rs", "fixpoint.rs"] {
+        assert!(
+            neutral.join(file).is_file(),
+            "the frontend-neutral RTA engine must own {file}"
+        );
+        assert!(
+            !go.join(file).exists(),
+            "the Go frontend must not own RTA algorithm file {file}"
+        );
+    }
+
+    let mut go_files = Vec::new();
+    collect_rs_files(&go, &mut go_files);
+    let mut go_file_names = go_files
+        .iter()
+        .map(|path| {
+            path.file_name()
+                .expect("RTA file name")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect::<Vec<_>>();
+    go_file_names.sort();
+    assert_eq!(
+        go_file_names,
+        ["inputs.rs", "mod.rs"],
+        "the Go RTA directory is a projection adapter and facade only"
+    );
+
+    let snapshot = fs::read_to_string(neutral.join("snapshot.rs")).expect("read RTA snapshot");
+    assert!(snapshot.contains("struct RtaInputs"));
+    assert!(!snapshot.contains("struct GoRtaInputs"));
+
+    let adapter = fs::read_to_string(go.join("inputs.rs")).expect("read Go RTA input adapter");
+    assert!(adapter.contains("fn from_db"));
+    assert!(adapter.contains("crate::go::semantic::facts"));
+    assert!(!adapter.contains("crate::analysis::"));
+    for algorithm in [
+        "fn resolve_callsite",
+        "fn solve_rta",
+        "while !frontier.is_empty()",
+    ] {
+        assert!(
+            !adapter.contains(algorithm),
+            "the Go input adapter contains neutral algorithm logic: {algorithm}"
+        );
+    }
+
+    let facade = fs::read_to_string(go.join("mod.rs")).expect("read Go RTA facade");
+    assert!(facade.contains("analysis_neutral::solver::go_rta::solve_rta"));
+    assert_tree_excludes(
+        &neutral,
+        &[
+            "crate::go",
+            "crate::core",
+            "crate::analysis::",
+            "AnalysisDb",
+            "GoSemantic",
+        ],
+    );
+    assert!(
+        !src.join("analysis/solver/go_rta").exists(),
+        "the composition-root solver must not duplicate the neutral RTA engine"
+    );
 }
 
 fn assert_tree_excludes(root: &Path, forbidden: &[&str]) {
@@ -154,6 +272,31 @@ fn language_features_are_isolated_and_default_to_both() {
                 .as_array()
                 .unwrap()
                 .contains(&format!("dep:{dependency}").into())
+        );
+    }
+}
+
+#[test]
+fn ci_uses_supported_supply_chain_and_existing_go_cache_inputs() {
+    let root = repo_root();
+    let workflow =
+        fs::read_to_string(root.join(".github/workflows/ci.yml")).expect("read CI workflow");
+
+    assert!(workflow.contains("command: check"));
+    assert!(workflow.contains("command-arguments: all"));
+    assert!(workflow.contains("arguments: \"\""));
+    assert!(!workflow.contains("arguments: --all-features --locked"));
+    assert!(workflow.contains("crates/polint/src/go-sidecar/polint-go-frontend/go.sum"));
+    assert!(workflow.contains("crates/polint/src/go-sidecar/polint-go-symbols/go.sum"));
+    assert!(!workflow.contains("crates/polint/go-sidecar/"));
+
+    for path in [
+        "crates/polint/src/go-sidecar/polint-go-frontend/go.sum",
+        "crates/polint/src/go-sidecar/polint-go-symbols/go.sum",
+    ] {
+        assert!(
+            root.join(path).is_file(),
+            "CI cache input is missing: {path}"
         );
     }
 }

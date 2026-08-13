@@ -14,6 +14,7 @@ use crate::analysis_api::{
 use crate::internal_core::{Language, StableKeyId, StableKeyInterner};
 
 use crate::analysis_neutral::summaries::facts::SummaryDomainKind;
+use crate::analysis_neutral::symbol_graph::semantic::ScopeFact;
 use crate::analysis_neutral::{
     CALLS_PROVIDER_ID, POLINT_ABSTRACT_DOMAINS_PROVIDER_ID, POLINT_DIRECT_SUMMARIES_PROVIDER_ID,
 };
@@ -267,6 +268,11 @@ pub trait AnalysisHost: FactDatabase {
         self.calls_store().sites()
     }
 
+    /// Language-neutral semantic scopes installed by the composition root.
+    fn semantic_scopes(&self) -> &[ScopeFact] {
+        &[]
+    }
+
     fn call_targets(&self) -> &[CallTargetFact] {
         self.calls_store().targets()
     }
@@ -305,9 +311,24 @@ pub trait AnalysisHost: FactDatabase {
         &mut self,
         output: RefinedCallOutput,
     ) -> Result<(), AnalysisError> {
+        let valid_call_sites = self.call_sites().iter().map(|site| site.id).collect();
+        let valid_call_targets = self.call_targets().iter().map(|target| target.id).collect();
+        let valid_functions = self
+            .functions()
+            .iter()
+            .map(|function| function.id)
+            .collect();
+        let valid_symbols = self.symbols().iter().map(|symbol| symbol.id).collect();
         let interner = self.stable_key_interner();
         *store_mut::<RefinedCallStore>(self, REFINED_CALL_STORE_FAMILY) =
-            RefinedCallStore::from_output(output, &interner)?;
+            RefinedCallStore::from_output(
+                output,
+                &interner,
+                &valid_call_sites,
+                &valid_call_targets,
+                &valid_functions,
+                &valid_symbols,
+            )?;
         refresh_refined_call_metadata(self);
         Ok(())
     }

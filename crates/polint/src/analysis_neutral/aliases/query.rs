@@ -34,6 +34,7 @@ impl<'a> AliasQueryIndex<'a> {
         right: AliasOperand,
     ) -> AliasAnswerFact {
         let (status, reason, precision, evidence) = self.classify(left, right);
+        let stable_key = self.answer_stable_key(interner, left, right, status, &reason);
         AliasAnswerFact {
             id: AliasAnswerId(0),
             left,
@@ -42,16 +43,56 @@ impl<'a> AliasQueryIndex<'a> {
             reason,
             evidence,
             precision,
-            stable_key: stable_key_from_parts(
-                interner,
-                FactFamily::AliasAnswer,
-                &[
-                    ("left", format!("{left:?}")),
-                    ("right", format!("{right:?}")),
-                    ("status", format!("{status:?}")),
-                ],
-            ),
+            stable_key,
         }
+    }
+
+    pub(super) fn operand_stable_identity(
+        &self,
+        interner: &crate::internal_core::StableKeyInterner,
+        operand: AliasOperand,
+    ) -> String {
+        match operand {
+            AliasOperand::AccessPath(path) => self
+                .access_paths
+                .get(&path)
+                .map(|fact| interner.resolve(fact.stable_key).to_string())
+                .expect("alias access-path operand must reference an indexed path"),
+            AliasOperand::Place(place) => {
+                let mut path_keys = self
+                    .access_paths
+                    .values()
+                    .filter(|path| path.base == place)
+                    .map(|path| interner.resolve(path.stable_key).to_string())
+                    .collect::<BTreeSet<_>>();
+                if path_keys.is_empty()
+                    && let Some(set) = self.points_to.get(&vars::place_var(place))
+                {
+                    path_keys.insert(interner.resolve(set.stable_key).to_string());
+                }
+                semantic_relation_identity(&path_keys)
+            }
+        }
+    }
+
+    pub(super) fn answer_stable_key(
+        &self,
+        interner: &crate::internal_core::StableKeyInterner,
+        left: AliasOperand,
+        right: AliasOperand,
+        status: AliasStatus,
+        reason: &AliasReason,
+    ) -> crate::internal_core::StableKeyId {
+        stable_key_from_parts(
+            interner,
+            FactFamily::AliasAnswer,
+            &[
+                ("left", self.operand_stable_identity(interner, left)),
+                ("right", self.operand_stable_identity(interner, right)),
+                ("status", alias_status_label(status).to_string()),
+                ("reason", alias_reason_label(reason).to_string()),
+            ],
+        )
     }
 
     fn classify(
@@ -175,6 +216,44 @@ impl<'a> AliasQueryIndex<'a> {
     }
 }
 
+fn semantic_relation_identity(fragments: &BTreeSet<String>) -> String {
+    assert!(
+        !fragments.is_empty(),
+        "alias place operand must be referenced by at least one access path"
+    );
+    fragments
+        .iter()
+        .map(|fragment| format!("{}:{fragment}", fragment.len()))
+        .collect()
+}
+
+fn alias_status_label(status: AliasStatus) -> &'static str {
+    match status {
+        AliasStatus::NoAlias => "no_alias",
+        AliasStatus::MayAlias => "may_alias",
+        AliasStatus::MustAlias => "must_alias",
+        AliasStatus::PartialAlias => "partial_alias",
+        AliasStatus::Unknown => "unknown",
+    }
+}
+
+fn alias_reason_label(reason: &AliasReason) -> &'static str {
+    match reason {
+        AliasReason::SameStablePlace => "same_stable_place",
+        AliasReason::DisjointLocals => "disjoint_locals",
+        AliasReason::DisjointAllocations => "disjoint_allocations",
+        AliasReason::DisjointPointsToSets => "disjoint_points_to_sets",
+        AliasReason::OverlappingPointsToSets => "overlapping_points_to_sets",
+        AliasReason::SingletonEqualObject => "singleton_equal_object",
+        AliasReason::CommonBaseDifferentProjection => "common_base_different_projection",
+        AliasReason::UnsupportedDynamicConstruct => "unsupported_dynamic_construct",
+        AliasReason::SetupMissing => "setup_missing",
+        AliasReason::BudgetExceeded => "budget_exceeded",
+        AliasReason::ExtensionProvided => "extension_provided",
+        AliasReason::MissingPointsTo => "missing_points_to",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,6 +268,7 @@ mod tests {
         let paths = vec![
             path(AccessPathId(0), PlaceId(1), "a"),
             path(AccessPathId(1), PlaceId(1), "b"),
+            path(AccessPathId(2), PlaceId(9), "missing"),
         ];
         let sets = vec![
             set(vars::place_var(PlaceId(1)), &[ObjectTokenId(1)]),

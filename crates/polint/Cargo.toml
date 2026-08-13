@@ -55,6 +55,17 @@ tree-sitter-go = { workspace = true, optional = true }
 # Direct promotion of an already-vetted transitive dep (present in Cargo.lock).
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
+rustix.workspace = true
+
+# Windows-only: Job Objects keep spawned Go process trees contained after the
+# direct process exits or the runner reaches its timeout.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
 
 [lib]
 path = "src/lib.rs"

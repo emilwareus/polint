@@ -179,7 +179,7 @@ mod tests {
                     kind,
                     Language::Go,
                     &format!("pkg.F{function}"),
-                    FileId::from_raw(1),
+                    "src/fixture.go",
                     &span,
                 ),
             ),

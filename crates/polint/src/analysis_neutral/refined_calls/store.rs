@@ -60,20 +60,45 @@ pub struct RefinedCallStore {
 }
 
 impl RefinedCallStore {
+    #[allow(clippy::too_many_arguments)]
     pub fn from_output(
         output: RefinedCallOutput,
         interner: &StableKeyInterner,
+        valid_call_sites: &BTreeSet<CallSiteId>,
+        valid_call_targets: &BTreeSet<crate::analysis_neutral::ids::CallTargetId>,
+        valid_functions: &BTreeSet<FunctionId>,
+        valid_symbols: &BTreeSet<SymbolId>,
     ) -> Result<Self, AnalysisError> {
-        Self::from_normalized_output(output.normalized(interner), interner)
+        Self::from_normalized_output(
+            output.normalized(interner),
+            interner,
+            valid_call_sites,
+            valid_call_targets,
+            valid_functions,
+            valid_symbols,
+        )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn from_normalized_output(
         output: RefinedCallOutput,
         interner: &StableKeyInterner,
+        valid_call_sites: &BTreeSet<CallSiteId>,
+        valid_call_targets: &BTreeSet<crate::analysis_neutral::ids::CallTargetId>,
+        valid_functions: &BTreeSet<FunctionId>,
+        valid_symbols: &BTreeSet<SymbolId>,
     ) -> Result<Self, AnalysisError> {
         let mut seen_keys = BTreeSet::new();
         let mut seen_ids = BTreeSet::new();
         for edge in &output.edges {
+            validate_relations(
+                edge,
+                interner,
+                valid_call_sites,
+                valid_call_targets,
+                valid_functions,
+                valid_symbols,
+            )?;
             if !seen_keys.insert(edge.stable_key) {
                 return Err(AnalysisError::InvalidFact {
                     provider: "polint.refined_calls",
@@ -174,6 +199,50 @@ impl RefinedCallStore {
     }
 }
 
+fn validate_relations(
+    edge: &RefinedCallEdgeFact,
+    interner: &StableKeyInterner,
+    valid_call_sites: &BTreeSet<CallSiteId>,
+    valid_call_targets: &BTreeSet<crate::analysis_neutral::ids::CallTargetId>,
+    valid_functions: &BTreeSet<FunctionId>,
+    valid_symbols: &BTreeSet<SymbolId>,
+) -> Result<(), AnalysisError> {
+    let invalid = |reason| AnalysisError::InvalidFact {
+        provider: "polint.refined_calls",
+        reason: format!(
+            "{reason} for refined call `{}`",
+            interner.resolve(edge.stable_key)
+        ),
+    };
+
+    if !valid_call_sites.contains(&edge.site) {
+        return Err(invalid(format!("dangling call site {:?}", edge.site)));
+    }
+    if let Some(target) = edge.base_target
+        && !valid_call_targets.contains(&target)
+    {
+        return Err(invalid(format!("dangling base call target {target:?}")));
+    }
+    if !valid_functions.contains(&edge.caller) {
+        return Err(invalid(format!(
+            "dangling caller function {:?}",
+            edge.caller
+        )));
+    }
+    if let Some(function) = edge.target_function
+        && !valid_functions.contains(&function)
+    {
+        return Err(invalid(format!("dangling target function {function:?}")));
+    }
+    if let Some(symbol) = edge.target_symbol
+        && !valid_symbols.contains(&symbol)
+    {
+        return Err(invalid(format!("dangling target symbol {symbol:?}")));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,7 +256,7 @@ mod tests {
     #[test]
     fn store_normalizes_edges_and_indexes_by_tier() {
         let interner = crate::internal_core::test_stable_key_interner();
-        let store = RefinedCallStore::from_output(
+        let store = store_from_output(
             RefinedCallOutput {
                 edges: vec![
                     edge(1, "b", RefinedCallTier::PointsToAssisted),
@@ -203,9 +272,52 @@ mod tests {
     }
 
     #[test]
+    fn store_rejects_every_dangling_refined_call_relation() {
+        let interner = crate::internal_core::test_stable_key_interner();
+        let valid_sites = BTreeSet::from([CallSiteId(0)]);
+        let valid_targets = BTreeSet::from([crate::analysis_neutral::ids::CallTargetId(1)]);
+        let valid_functions = BTreeSet::from([FunctionId::from_raw(0), FunctionId::from_raw(1)]);
+        let valid_symbols = BTreeSet::from([SymbolId::from_raw(2)]);
+        let mut complete = edge(0, "complete", RefinedCallTier::DirectOnly);
+        complete.base_target = Some(crate::analysis_neutral::ids::CallTargetId(1));
+        complete.target_function = Some(FunctionId::from_raw(1));
+        complete.target_symbol = Some(SymbolId::from_raw(2));
+
+        let mut cases = Vec::new();
+        let mut missing_site = complete.clone();
+        missing_site.site = CallSiteId(99);
+        cases.push((missing_site, "dangling call site"));
+        let mut missing_target = complete.clone();
+        missing_target.base_target = Some(crate::analysis_neutral::ids::CallTargetId(99));
+        cases.push((missing_target, "dangling base call target"));
+        let mut missing_caller = complete.clone();
+        missing_caller.caller = FunctionId::from_raw(99);
+        cases.push((missing_caller, "dangling caller function"));
+        let mut missing_function = complete.clone();
+        missing_function.target_function = Some(FunctionId::from_raw(99));
+        cases.push((missing_function, "dangling target function"));
+        let mut missing_symbol = complete;
+        missing_symbol.target_symbol = Some(SymbolId::from_raw(99));
+        cases.push((missing_symbol, "dangling target symbol"));
+
+        for (edge, expected) in cases {
+            let error = RefinedCallStore::from_output(
+                RefinedCallOutput { edges: vec![edge] },
+                &interner,
+                &valid_sites,
+                &valid_targets,
+                &valid_functions,
+                &valid_symbols,
+            )
+            .expect_err("dangling relation must be rejected");
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+    }
+
+    #[test]
     fn store_rejects_duplicate_stable_keys() {
         let interner = crate::internal_core::test_stable_key_interner();
-        let result = RefinedCallStore::from_output(
+        let result = store_from_output(
             RefinedCallOutput {
                 edges: vec![
                     edge(0, "duplicate", RefinedCallTier::DirectOnly),
@@ -216,6 +328,20 @@ mod tests {
         );
 
         assert!(result.is_err());
+    }
+
+    fn store_from_output(
+        output: RefinedCallOutput,
+        interner: &StableKeyInterner,
+    ) -> Result<RefinedCallStore, AnalysisError> {
+        RefinedCallStore::from_output(
+            output,
+            interner,
+            &BTreeSet::from([CallSiteId(0)]),
+            &BTreeSet::new(),
+            &BTreeSet::from([FunctionId::from_raw(0)]),
+            &BTreeSet::new(),
+        )
     }
 
     fn edge(id: u64, stable_key: &str, tier: RefinedCallTier) -> RefinedCallEdgeFact {

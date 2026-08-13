@@ -979,7 +979,7 @@ mod tests {
                 language,
                 &file.relative_path,
                 &file.relative_path,
-                file.id,
+                &file.relative_path,
                 &span,
             )),
             originating_call_site_id: None,

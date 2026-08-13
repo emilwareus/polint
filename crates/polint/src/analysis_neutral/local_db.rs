@@ -9,9 +9,9 @@ use std::sync::Arc;
 use crate::analysis_api::{
     BranchObligation, CachedFileFacts, ComplexityMetricFact, CoverageFact, DefinitionFact,
     FactDatabase, FactFamily, FactMetaStore, FactStore, FactStoreEntry, FileMetricFact,
-    FunctionFact, FunctionMetricFact, ImportFact, JsxAttributeFact, PackageFact, ReferenceFact,
-    SemanticImportFact, SourceFile, StringLiteralFact, SymbolFact, TestFact, TsClassFact,
-    TsComponentFact,
+    FunctionFact, FunctionMetricFact, ImportFact, JsxAttributeFact, ModuleNode, PackageFact,
+    ReferenceFact, ResolvedImportFact, SemanticImportFact, SourceFile, StringLiteralFact,
+    SymbolFact, TestFact, TsClassFact, TsComponentFact,
 };
 #[cfg(test)]
 use crate::internal_core::test_stable_key_interner;
@@ -54,6 +54,8 @@ pub struct LocalAnalysisDb {
     packages: Vec<PackageFact>,
     functions: Vec<FunctionFact>,
     imports: Vec<ImportFact>,
+    resolved_imports: Vec<ResolvedImportFact>,
+    module_nodes: Vec<ModuleNode>,
     branches: Vec<BranchObligation>,
     tests: Vec<TestFact>,
     coverage: Vec<CoverageFact>,
@@ -124,6 +126,8 @@ impl LocalAnalysisDb {
             packages: Vec::new(),
             functions: Vec::new(),
             imports: Vec::new(),
+            resolved_imports: Vec::new(),
+            module_nodes: Vec::new(),
             branches: Vec::new(),
             tests: Vec::new(),
             coverage: Vec::new(),
@@ -175,6 +179,10 @@ impl LocalAnalysisDb {
 
     pub fn push_function(&mut self, fact: FunctionFact) -> FunctionId {
         FactDatabase::push_function(self, fact)
+    }
+
+    pub fn push_import(&mut self, fact: ImportFact) -> ImportId {
+        FactDatabase::push_import(self, fact)
     }
 
     pub fn push_package(&mut self, fact: PackageFact) -> PackageId {
@@ -241,6 +249,24 @@ impl LocalAnalysisDb {
 
     pub fn imports(&self) -> &[ImportFact] {
         FactDatabase::imports(self)
+    }
+
+    pub fn resolved_imports(&self) -> &[ResolvedImportFact] {
+        FactDatabase::resolved_imports(self)
+    }
+
+    pub fn module_nodes(&self) -> &[ModuleNode] {
+        FactDatabase::module_nodes(self)
+    }
+
+    pub fn replace_module_graph_facts(
+        &mut self,
+        resolved_imports: Vec<ResolvedImportFact>,
+        module_nodes: Vec<ModuleNode>,
+        _module_edges: Vec<crate::analysis_api::ModuleEdge>,
+    ) {
+        self.resolved_imports = resolved_imports;
+        self.module_nodes = module_nodes;
     }
 
     pub fn mir_bodies(&self) -> &[crate::analysis_neutral::mir_body::MirBody] {
@@ -513,7 +539,11 @@ impl FactDatabase for LocalAnalysisDb {
     }
 
     fn module_nodes(&self) -> &[crate::analysis_api::ModuleNode] {
-        &[]
+        &self.module_nodes
+    }
+
+    fn resolved_imports(&self) -> &[ResolvedImportFact] {
+        &self.resolved_imports
     }
 
     fn symbols(&self) -> &[SymbolFact] {

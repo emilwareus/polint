@@ -36,6 +36,7 @@ impl ConstraintBuilder {
             let Some(dst) = subject_var(&value.subject) else {
                 continue;
             };
+            let source_identity = interner.resolve(value.stable_key);
             match &value.kind {
                 ValueKind::Object(object)
                 | ValueKind::Array(object)
@@ -46,6 +47,8 @@ impl ConstraintBuilder {
                             dst,
                             object: vars::allocation_object(*object),
                         },
+                        &source_identity,
+                        "value_object",
                     );
                 }
                 ValueKind::PlaceRef(src) => {
@@ -55,6 +58,8 @@ impl ConstraintBuilder {
                             dst,
                             src: vars::place_var(*src),
                         },
+                        &source_identity,
+                        "place_copy",
                     );
                 }
                 ValueKind::CallReturn(place) if value.status == ValueStatus::Present => {
@@ -64,6 +69,8 @@ impl ConstraintBuilder {
                             dst,
                             value: value.id,
                         },
+                        &source_identity,
+                        "call_return_value",
                     );
                     self.push(
                         interner,
@@ -71,6 +78,8 @@ impl ConstraintBuilder {
                             dst,
                             src: vars::place_var(*place),
                         },
+                        &source_identity,
+                        "call_return_place",
                     );
                 }
                 ValueKind::CallReturn(_) => {}
@@ -81,6 +90,8 @@ impl ConstraintBuilder {
                             dst,
                             object: vars::abstract_value_object(value.value),
                         },
+                        &source_identity,
+                        "abstract_value_object",
                     );
                 }
                 ValueKind::Unknown { .. }
@@ -102,12 +113,15 @@ impl ConstraintBuilder {
     ) {
         for allocation in allocations {
             if let Some(place) = allocation.source_place {
+                let source_identity = interner.resolve(allocation.stable_key);
                 self.push(
                     interner,
                     PointsToConstraintKind::AddressOf {
                         dst: vars::place_var(place),
                         object: vars::allocation_object(allocation.id),
                     },
+                    &source_identity,
+                    "allocation_source_place",
                 );
             }
         }
@@ -119,8 +133,13 @@ impl ConstraintBuilder {
         paths: &[AccessPathFact],
     ) {
         for path in paths {
+            let path_identity = interner.resolve(path.stable_key);
+            let mut projection_prefix = Vec::new();
             let mut base = vars::place_var(path.base);
             for (index, projection) in path.projections.iter().enumerate() {
+                projection_prefix.push(projection_identity(projection));
+                let source_identity =
+                    projection_source_identity(interner, &path_identity, &projection_prefix);
                 let dst = if index + 1 == path.projections.len() {
                     access_path_var(path)
                 } else {
@@ -135,6 +154,8 @@ impl ConstraintBuilder {
                                 base,
                                 field: field.clone(),
                             },
+                            &source_identity,
+                            "field_load",
                         );
                         self.push(
                             interner,
@@ -143,6 +164,8 @@ impl ConstraintBuilder {
                                 field: field.clone(),
                                 src: dst,
                             },
+                            &source_identity,
+                            "field_store",
                         );
                     }
                     AccessPathProjection::IndexKnown(index) => {
@@ -153,6 +176,8 @@ impl ConstraintBuilder {
                                 base,
                                 index: index.clone(),
                             },
+                            &source_identity,
+                            "element_load",
                         );
                         self.push(
                             interner,
@@ -161,6 +186,8 @@ impl ConstraintBuilder {
                                 index: index.clone(),
                                 src: dst,
                             },
+                            &source_identity,
+                            "element_store",
                         );
                     }
                     AccessPathProjection::IndexUnknown { evidence } => {
@@ -171,6 +198,8 @@ impl ConstraintBuilder {
                                 base,
                                 index: format!("unknown:{evidence}"),
                             },
+                            &source_identity,
+                            "unknown_element_load",
                         );
                         self.push(
                             interner,
@@ -179,12 +208,16 @@ impl ConstraintBuilder {
                                 index: format!("unknown:{evidence}"),
                                 src: dst,
                             },
+                            &source_identity,
+                            "unknown_element_store",
                         );
                     }
                     AccessPathProjection::Deref => {
                         self.push(
                             interner,
                             PointsToConstraintKind::Load { dst, pointer: base },
+                            &source_identity,
+                            "load",
                         );
                         self.push(
                             interner,
@@ -192,16 +225,20 @@ impl ConstraintBuilder {
                                 pointer: base,
                                 src: dst,
                             },
+                            &source_identity,
+                            "store",
                         );
                     }
-                    AccessPathProjection::CallReturn(call) => {
+                    AccessPathProjection::CallReturn(_) => {
                         self.push(
                             interner,
                             PointsToConstraintKind::SummaryFlow {
                                 dst,
                                 src: base,
-                                summary_key: format!("call:{}", call.0),
+                                summary_key: source_identity.clone(),
                             },
+                            &source_identity,
+                            "call_return",
                         );
                     }
                     AccessPathProjection::AwaitResult | AccessPathProjection::Unknown { .. } => {}
@@ -215,8 +252,10 @@ impl ConstraintBuilder {
         &mut self,
         interner: &crate::internal_core::StableKeyInterner,
         kind: PointsToConstraintKind,
+        source_identity: &str,
+        relation: &str,
     ) {
-        let stable_key = constraint_stable_key(interner, &kind);
+        let stable_key = constraint_stable_key(interner, source_identity, relation);
         self.constraints.push(PointsToConstraintFact {
             id: PointsToConstraintId(self.constraints.len() as u64),
             kind,
@@ -257,14 +296,52 @@ fn access_path_var(path: &AccessPathFact) -> PtVarId {
     vars::access_path_var(path.id)
 }
 
+fn projection_source_identity(
+    interner: &crate::internal_core::StableKeyInterner,
+    path_identity: &str,
+    projection_prefix: &[String],
+) -> String {
+    let encoded_prefix = projection_prefix
+        .iter()
+        .map(|projection| format!("{}:{projection}", projection.len()))
+        .collect::<String>();
+    interner
+        .resolve(stable_key_from_parts(
+            interner,
+            FactFamily::AccessPath,
+            &[
+                ("path", path_identity.to_string()),
+                ("projection_prefix", encoded_prefix),
+            ],
+        ))
+        .to_string()
+}
+
+fn projection_identity(projection: &AccessPathProjection) -> String {
+    match projection {
+        AccessPathProjection::Field(field) => format!("field:{field}"),
+        AccessPathProjection::Property(property) => format!("property:{property}"),
+        AccessPathProjection::IndexKnown(index) => format!("index_known:{index}"),
+        AccessPathProjection::IndexUnknown { evidence } => format!("index_unknown:{evidence}"),
+        AccessPathProjection::Deref => "deref".to_string(),
+        AccessPathProjection::AwaitResult => "await_result".to_string(),
+        AccessPathProjection::CallReturn(_) => "call_return".to_string(),
+        AccessPathProjection::Unknown { evidence } => format!("unknown:{evidence}"),
+    }
+}
+
 fn constraint_stable_key(
     interner: &crate::internal_core::StableKeyInterner,
-    kind: &PointsToConstraintKind,
+    source_identity: &str,
+    relation: &str,
 ) -> crate::internal_core::StableKeyId {
     stable_key_from_parts(
         interner,
         FactFamily::PointsToConstraint,
-        &[("kind", format!("{kind:?}"))],
+        &[
+            ("source", source_identity.to_string()),
+            ("relation", relation.to_string()),
+        ],
     )
 }
 

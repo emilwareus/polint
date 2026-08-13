@@ -19,7 +19,7 @@
 
 use std::path::Path;
 
-use crate::analysis::semantic_graph::build::collect_ts_direct_bindings;
+use crate::analysis::semantic_graph::collect_ts_direct_bindings;
 use crate::analysis::semantic_graph::debug::metadata_debug_json_for_test as semantic_graph_debug_json;
 use crate::analysis_kernel::KernelOutput;
 use crate::analysis_kernel::incremental::Digest;

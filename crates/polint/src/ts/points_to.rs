@@ -3,7 +3,7 @@
 //! This module owns the frontend-specific projection from semantic-graph constraints
 //! to Andersen constraints and the derived indirect-call edges.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use crate::analysis_neutral::AnalysisHost;
 
@@ -141,6 +141,12 @@ pub fn solve_ts_points_to(
             let Some((target, target_stable_key)) = inputs.callable_objects.get(object) else {
                 continue;
             };
+            let Some((_, caller_stable_key)) = inputs
+                .callable_objects
+                .get(&object_for_node(callsite.caller_node))
+            else {
+                continue;
+            };
             let provenance = DerivedEdgeProvenance::new(
                 interner,
                 vec![
@@ -166,8 +172,8 @@ pub fn solve_ts_points_to(
                 interner,
                 FactFamily::SolverDerivedEdge,
                 &[
-                    ("source", callsite.caller_node.0.to_string()),
-                    ("target", target.0.to_string()),
+                    ("source", interner.resolve(*caller_stable_key).to_string()),
+                    ("target", interner.resolve(*target_stable_key).to_string()),
                     ("provenance", provenance.stable_key_fragment(interner)),
                 ],
             );
@@ -201,7 +207,7 @@ fn project_constraints(
     interner: &crate::internal_core::StableKeyInterner,
     inputs: &TsPointsToInputs,
 ) -> Vec<PointsToConstraintFact> {
-    let mut kinds = BTreeSet::new();
+    let mut projected = BTreeMap::new();
     let callsite_by_source_key = inputs
         .constraints
         .iter()
@@ -211,11 +217,17 @@ fn project_constraints(
         })
         .collect::<BTreeMap<_, _>>();
 
-    for (&object, &(node, _)) in &inputs.callable_objects {
-        kinds.insert(PointsToConstraintKind::AddressOf {
-            dst: var_for_node(node),
-            object,
-        });
+    for (&object, &(node, node_stable_key)) in &inputs.callable_objects {
+        insert_projected_constraint(
+            interner,
+            &mut projected,
+            node_stable_key,
+            "callable_object",
+            PointsToConstraintKind::AddressOf {
+                dst: var_for_node(node),
+                object,
+            },
+        );
     }
     for constraint in &inputs.constraints {
         if constraint.status != PointsToStatus::Present {
@@ -223,41 +235,77 @@ fn project_constraints(
         }
         match &constraint.kind {
             ConstraintKind::CopyEdge { dst, src } => {
-                kinds.insert(PointsToConstraintKind::Copy {
-                    dst: var_for_node(*dst),
-                    src: var_for_node(*src),
-                });
+                insert_projected_constraint(
+                    interner,
+                    &mut projected,
+                    constraint.stable_key,
+                    "copy",
+                    PointsToConstraintKind::Copy {
+                        dst: var_for_node(*dst),
+                        src: var_for_node(*src),
+                    },
+                );
             }
             ConstraintKind::Alloc { dst, object } => {
                 let object_token = object_for_node(*object);
-                kinds.insert(PointsToConstraintKind::AddressOf {
-                    dst: var_for_node(*object),
-                    object: object_token,
-                });
-                kinds.insert(PointsToConstraintKind::AddressOf {
-                    dst: var_for_node(*dst),
-                    object: object_token,
-                });
+                insert_projected_constraint(
+                    interner,
+                    &mut projected,
+                    constraint.stable_key,
+                    "allocation_object",
+                    PointsToConstraintKind::AddressOf {
+                        dst: var_for_node(*object),
+                        object: object_token,
+                    },
+                );
+                insert_projected_constraint(
+                    interner,
+                    &mut projected,
+                    constraint.stable_key,
+                    "allocation_destination",
+                    PointsToConstraintKind::AddressOf {
+                        dst: var_for_node(*dst),
+                        object: object_token,
+                    },
+                );
             }
             ConstraintKind::FieldLoad { dst, base, field } => {
-                kinds.insert(PointsToConstraintKind::FieldLoad {
-                    dst: var_for_node(*dst),
-                    base: var_for_node(*base),
-                    field: field.clone(),
-                });
+                insert_projected_constraint(
+                    interner,
+                    &mut projected,
+                    constraint.stable_key,
+                    "field_load",
+                    PointsToConstraintKind::FieldLoad {
+                        dst: var_for_node(*dst),
+                        base: var_for_node(*base),
+                        field: field.clone(),
+                    },
+                );
                 if let Some(callsite) = callsite_by_source_key.get(&constraint.stable_key) {
-                    kinds.insert(PointsToConstraintKind::Copy {
-                        dst: var_for_node(*callsite),
-                        src: var_for_node(*dst),
-                    });
+                    insert_projected_constraint(
+                        interner,
+                        &mut projected,
+                        constraint.stable_key,
+                        "field_load_callsite",
+                        PointsToConstraintKind::Copy {
+                            dst: var_for_node(*callsite),
+                            src: var_for_node(*dst),
+                        },
+                    );
                 }
             }
             ConstraintKind::FieldStore { base, field, src } => {
-                kinds.insert(PointsToConstraintKind::FieldStore {
-                    base: var_for_node(*base),
-                    field: field.clone(),
-                    src: var_for_node(*src),
-                });
+                insert_projected_constraint(
+                    interner,
+                    &mut projected,
+                    constraint.stable_key,
+                    "field_store",
+                    PointsToConstraintKind::FieldStore {
+                        base: var_for_node(*base),
+                        field: field.clone(),
+                        src: var_for_node(*src),
+                    },
+                );
             }
             ConstraintKind::CallConstraint { .. }
             | ConstraintKind::ModelEdge { .. }
@@ -265,21 +313,37 @@ fn project_constraints(
         }
     }
 
-    kinds
+    projected
         .into_iter()
         .enumerate()
-        .map(|(index, kind)| PointsToConstraintFact {
+        .map(|(index, (_, (stable_key, kind)))| PointsToConstraintFact {
             id: PointsToConstraintId(index as u64),
-            stable_key: stable_key_from_parts(
-                interner,
-                FactFamily::PointsToConstraint,
-                &[("kind", format!("{kind:?}"))],
-            ),
+            stable_key,
             kind,
             status: PointsToStatus::Present,
             precision: PointsToPrecision::FlowInsensitive,
         })
         .collect()
+}
+
+fn insert_projected_constraint(
+    interner: &crate::internal_core::StableKeyInterner,
+    projected: &mut BTreeMap<String, (StableKeyId, PointsToConstraintKind)>,
+    source_stable_key: StableKeyId,
+    relation: &str,
+    kind: PointsToConstraintKind,
+) {
+    let stable_key = stable_key_from_parts(
+        interner,
+        FactFamily::PointsToConstraint,
+        &[
+            ("source", interner.resolve(source_stable_key).to_string()),
+            ("relation", relation.to_string()),
+        ],
+    );
+    projected
+        .entry(interner.resolve(stable_key).to_string())
+        .or_insert((stable_key, kind));
 }
 
 fn var_for_node(node: SemanticNodeId) -> PtVarId {

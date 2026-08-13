@@ -698,13 +698,27 @@ mod tests {
     use crate::analysis::solver::provenance::{ContributingFact, DerivedEdgeProvenance};
     use crate::analysis::solver::store::SolverOutput;
     use crate::core::{
-        FunctionId, ImportFact, ImportId, Language, ModuleEdge, ModuleNode, ResolutionStatus,
-        ResolvedImportFact, ResolvedImportId, Span, UnresolvedReason,
+        FunctionFact, FunctionId, ImportFact, ImportId, Language, ModuleEdge, ModuleNode,
+        ResolutionStatus, ResolvedImportFact, ResolvedImportId, Span, UnresolvedReason,
     };
     use crate::diagnostics::{Diagnostic, TextRange};
     use crate::go::semantic::facts::{GoSemanticPackageErrorFact, GoSemanticPackageErrorId};
     use crate::go::semantic::store::GoSemanticFactsOutput;
     use std::collections::BTreeSet;
+
+    fn install_caller_function(db: &mut AnalysisDb, file: crate::core::FileId) {
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
+            file,
+            "caller".to_string(),
+            Span::point(file, 1, 1),
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
+    }
 
     #[test]
     fn public_import_unknowns_preserve_current_status_docs_and_artifact() {
@@ -752,6 +766,7 @@ mod tests {
     fn public_policy_call_unknowns_are_cap_filtered() {
         let mut db = AnalysisDb::new();
         let file = db.add_file("a.ts".into(), "a.ts".to_string(), "call();".to_string());
+        install_caller_function(&mut db, file);
         db.replace_call_facts(CallOutput {
             sites: vec![CallSiteFact {
                 in_throw: false,
@@ -804,6 +819,7 @@ mod tests {
     fn aggregate_unknowns_include_policy_capabilities() {
         let mut db = AnalysisDb::new();
         let file = db.add_file("a.ts".into(), "a.ts".to_string(), "call();".to_string());
+        install_caller_function(&mut db, file);
         db.replace_call_facts(CallOutput {
             sites: vec![CallSiteFact {
                 in_throw: false,
@@ -922,6 +938,7 @@ mod tests {
             "a.ts".to_string(),
             "sink(value);".to_string(),
         );
+        install_caller_function(&mut db, file);
         db.replace_call_facts(CallOutput {
             sites: vec![CallSiteFact {
                 in_throw: false,
@@ -1005,6 +1022,7 @@ mod tests {
         })
         .expect("solver facts");
         let file = db.add_file("a.ts".into(), "a.ts".to_string(), "call();".to_string());
+        install_caller_function(&mut db, file);
         db.replace_call_facts(CallOutput {
             sites: vec![CallSiteFact {
                 in_throw: false,

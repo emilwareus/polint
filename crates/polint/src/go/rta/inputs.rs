@@ -1,128 +1,24 @@
-//! The closed Go RTA input snapshot (D-01, D-06, D-07).
+//! Go fact projection into the frontend-neutral RTA snapshot.
 //!
-//! [`GoRtaInputs`] is the closed snapshot the [`super::super::policy::GoRtaPolicy`]
-//! owns, mirroring how `PointsToPolicy` owns its `Vec<PointsToConstraintFact>`. It
-//! is built once via [`GoRtaInputs::from_db`] from the stored Go-frontend facts plus
-//! the already-built `polint.semantic_graph` function nodes, and is then iterated by
-//! [`super::fixpoint::solve_go_rta`] without re-reading the db.
-//!
-//! Every accumulator is `BTree`-keyed on official Go string identity (`qualified`
-//! function names, `type_name`s), never run-local discovery order — this is what
-//! keeps the 10-shuffle determinism gate green (D-17).
+//! This adapter reads Go semantic facts and the composed semantic graph once, then
+//! returns a closed [`GoRtaInputs`] snapshot. It owns no dispatch or fixpoint logic.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::analysis::ids::SemanticNodeId;
-use crate::analysis::semantic_graph::facts::NodeKind;
-use crate::analysis::stable_key::semantic_stable_key;
-use crate::analysis_kernel::FactFamily;
+use crate::analysis_api::FactFamily;
+use crate::analysis_neutral::ids::SemanticNodeId;
+use crate::analysis_neutral::semantic_graph::facts::NodeKind;
+use crate::analysis_neutral::stable_key::semantic_stable_key;
 use crate::core::{AnalysisDb, FileId, FunctionFact, Language, Span, StableKeyId};
 use crate::go::semantic::facts::{GoSemanticCallStatus, GoSemanticFunctionFact};
 
-/// One concrete Go method, indexed by its receiver type, for interface-invoke
-/// resolution. `qualified` is the method's official identity; `node` is the unified
-/// semantic-graph node the resolved edge targets.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct GoRtaMethod {
-    pub(crate) method_name: String,
-    pub(crate) qualified: String,
-    pub(crate) node: SemanticNodeId,
-}
-
-/// One pre-resolved interface-invoke candidate callee in the inverted dispatch index
-/// (FIX 2): the target `node` plus the contributing-fact keys that justify the edge
-/// (`[method_set_keys[type], instantiated_keys[type]]`, each present only if recorded).
-/// Built ONCE in [`GoRtaInputs::from_db`] so per-callsite resolution is a single
-/// `BTreeMap` lookup instead of an O(whole-instantiated-set) scan — see
-/// [`GoRtaInputs::interface_candidate_index`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct GoRtaInterfaceCandidate {
-    pub(crate) node: SemanticNodeId,
-    pub(crate) contributing_keys: Vec<StableKeyId>,
-}
-
-/// The closed dispatch obligation for one `UnresolvedDynamic` Go callsite that maps
-/// to a `CallConstraint` node in the semantic graph, joined with its dispatch detail.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct GoRtaCallsite {
-    /// The caller function's official `qualified` identity (a key into
-    /// [`GoRtaInputs::function_node`] / the reachable set).
-    pub(crate) caller: String,
-    /// The unified `CallConstraint` callsite node (the edge SOURCE for resolved
-    /// edges is the caller function node, not this — see the fixpoint).
-    pub(crate) callsite_node: SemanticNodeId,
-    /// The contributing callsite fact's stable key (recorded in edge provenance so
-    /// the deletion-invalidation property holds — D-09).
-    pub(crate) callsite_stable_key: StableKeyId,
-    /// Interface-invoke discriminant: the invoked interface method name, if any.
-    pub(crate) interface_method: Option<String>,
-    /// Func-value-call discriminant: the call signature, if any.
-    pub(crate) signature: Option<String>,
-    /// The dynamic-dispatch detail fact's stable key (a second contributing fact for
-    /// the resolved edge's provenance).
-    pub(crate) dispatch_stable_key: StableKeyId,
-}
-
-/// The closed RTA input snapshot. See the module docs for the determinism contract.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct GoRtaInputs {
-    /// Reachability-root function identities (`qualified`) that map to a Go function
-    /// node — the RTA seed (D-07).
-    pub(crate) roots: BTreeSet<String>,
-    /// Every `UnresolvedDynamic` callsite that maps to a `CallConstraint` node, with
-    /// its dispatch detail joined by `callsite_stable_key`.
-    pub(crate) callsites: Vec<GoRtaCallsite>,
-    /// `type_name -> method names` (the method-set input). Text-keyed for RTA
-    /// graph algorithms; ordered by type-name string, never by StableKeyId.
-    pub(crate) method_sets: BTreeMap<String, BTreeSet<String>>,
-    /// Lookup-only map: `type_name -> method-set fact StableKeyId` for provenance
-    /// membership. Not an ordering surface; contributing keys are sorted by
-    /// resolved text in `DerivedEdgeProvenance::new`.
-    pub(crate) method_set_keys: BTreeMap<String, StableKeyId>,
-    /// The instantiated runtime-type set (the RTA rapid-type set).
-    pub(crate) instantiated: BTreeSet<String>,
-    /// Lookup-only map: `type_name -> instantiated-type fact StableKeyId` for
-    /// provenance membership (not an ordering surface).
-    pub(crate) instantiated_keys: BTreeMap<String, StableKeyId>,
-    /// Address-taken function identities (`qualified`) — func-value candidates.
-    pub(crate) address_taken: BTreeSet<String>,
-    /// Lookup-only map: `qualified -> address-taken fact StableKeyId` for
-    /// provenance membership (not an ordering surface).
-    pub(crate) address_taken_keys: BTreeMap<String, StableKeyId>,
-    /// `qualified -> the function's unified semantic node` (edge endpoints).
-    pub(crate) function_node: BTreeMap<String, SemanticNodeId>,
-    /// `qualified -> the function's signature` (func-value matching).
-    pub(crate) function_signature: BTreeMap<String, String>,
-    /// `receiver type_name -> its concrete methods` (interface-invoke resolution).
-    pub(crate) methods_by_receiver: BTreeMap<String, Vec<GoRtaMethod>>,
-    /// Inverted interface-dispatch index `invoked method name -> candidate callees`
-    /// (FIX 2, scale). Built ONCE from `instantiated` ⋈ `method_sets` ⋈
-    /// `methods_by_receiver` so resolving one interface-invoke callsite is a single
-    /// `BTreeMap` lookup, NOT an O(whole-instantiated-set) scan per callsite — the old
-    /// `collect_interface_candidates` made total interface resolution O(C_iface · T)
-    /// (callsites × instantiated types), uncapped by the worklist-step budget. Each
-    /// per-method `Vec` is built by iterating `instantiated` in its `BTreeSet` (sorted)
-    /// order and, within a type, `methods_by_receiver[type]` in its existing order, so
-    /// the candidate order — and therefore the resolved edge set, the per-callsite cap
-    /// prefix, and the stable keys — is byte-IDENTICAL to the whole-set scan it replaces.
-    /// A type whose method-set lacks the method, or that is not instantiated, contributes
-    /// no entry (the same exclusions the scan applied).
-    pub(crate) interface_candidate_index: BTreeMap<String, Vec<GoRtaInterfaceCandidate>>,
-    /// `caller qualified -> statically-called callee qualified`s — the resolved STATIC
-    /// call graph restricted to Go functions in [`Self::function_node`] (FINDING 1).
-    /// Standard RTA reachability is the fixpoint closure over BOTH static-call edges and
-    /// resolved-dynamic-dispatch edges from roots: a function reached only via a direct
-    /// (static) call that is not itself a root must still enter the worklist so dispatch
-    /// inside it is resolved. Static edges GROW reachability only — they do NOT emit
-    /// `DerivedEdgeFact`s (only dynamic-dispatch resolution emits edges). Built from the
-    /// `ResolvedStatic` callsite facts whose `static_callee` resolves to a known function
-    /// identity; an unresolvable static callee is skipped (honest, no fabrication).
-    pub(crate) static_call_targets: BTreeMap<String, BTreeSet<String>>,
-}
+pub(crate) use crate::analysis_neutral::solver::go_rta::{
+    RtaCallsite as GoRtaCallsite, RtaInputs as GoRtaInputs, RtaMethod as GoRtaMethod,
+};
 
 impl GoRtaInputs {
     /// Build the closed snapshot from the stored Go-frontend facts + the already-built
-    /// `polint.semantic_graph` function nodes (D-01). Reads only the AnalysisDb
+    /// `polint.semantic_graph` function nodes. Reads only the AnalysisDb
     /// accessors; builds `BTree`-keyed structures for determinism. Honest by
     /// construction: a function with no matching semantic node is simply absent from
     /// [`Self::function_node`] (its edges cannot be emitted), never fabricated.
@@ -138,11 +34,11 @@ impl GoRtaInputs {
             .map(|node| (db.resolve_stable_key(node.stable_key).to_string(), node.id))
             .collect();
 
-        // Build the Go-only core-function / call-site / callsite-node indexes ONCE (FIX 1,
+        // Build the Go-only core-function, call-site, and callsite-node indexes once for
         // scale). Every per-Go-function / per-dispatch-row join below is a bucket lookup
         // into this, never a fresh `db.functions()` / `db.call_sites()` /
-        // `db.semantic_nodes()` linear scan — turning the old O(F_go · F_total) +
-        // O(rows · call_sites) joins into near-linear work, byte-identically (the buckets
+        // `db.semantic_nodes()` linear scan. This keeps the O(F_go · F_total) plus
+        // O(rows · call_sites) joins near-linear while preserving byte identity (the buckets
         // preserve storage order; see `GoCoreIndex`).
         let index = GoCoreIndex::build(db);
 
@@ -150,7 +46,7 @@ impl GoRtaInputs {
         let mut function_signature: BTreeMap<String, String> = BTreeMap::new();
         let mut methods_by_receiver: BTreeMap<String, Vec<GoRtaMethod>> = BTreeMap::new();
         // `qualified -> core FunctionId` for the caller-disambiguated callsite join
-        // (WR-08 / FINDING 5): a Go callsite's `caller` is a `qualified` identity; resolve
+        // A Go callsite's `caller` is a `qualified` identity; resolve
         // it to the core `FunctionId` so `callsite_constraint_node` can bind the
         // provenance to the CALLER's own same-span call site, not a sibling's.
         let mut caller_function_id: BTreeMap<String, crate::core::FunctionId> = BTreeMap::new();
@@ -260,7 +156,7 @@ impl GoRtaInputs {
             // emitted; if it did not (e.g. no matching core call site), there is no
             // edge SOURCE/anchor — skip rather than fabricate. The join is disambiguated
             // by the caller's core `FunctionId` so a method-chain / mixed static+dynamic
-            // shared span binds to the right sibling (WR-08 / FINDING 5).
+            // shared span binds to the right sibling.
             let caller = caller_function_id.get(callsite.caller.as_str()).copied();
             let Some(callsite_node) =
                 callsite_constraint_node_indexed(interner, &index, callsite, caller)
@@ -288,7 +184,7 @@ impl GoRtaInputs {
                 ))
         });
 
-        // Static call graph (FINDING 1): caller qualified -> statically-called callee
+        // Static call graph: caller qualified -> statically-called callee
         // qualified, restricted to Go functions that map to a `function_node`. The Go
         // frontend emits `static_callee` as the callee's `ssa.Function.String()`, which
         // is the SAME identity format as a function's `qualified` (the `function_node`
@@ -330,105 +226,25 @@ impl GoRtaInputs {
             function_signature,
             methods_by_receiver,
             // Built ONCE by `finalize_indexes` below from the now-populated primary fields
-            // (FIX 2), so per-callsite resolution is a map lookup, not an
+            // so per-callsite resolution is a map lookup rather than an
             // O(whole-instantiated-set) scan.
             interface_candidate_index: BTreeMap::new(),
             static_call_targets,
         }
         .finalize_indexes()
     }
-
-    /// (Re)build the derived dispatch indexes from the primary RTA fields and return self
-    /// (FIX 2). This is the SINGLE chokepoint that populates
-    /// [`Self::interface_candidate_index`] — `from_db` calls it after building the primary
-    /// fields, and any hand-constructed `GoRtaInputs` (tests) calls it so the index stays
-    /// consistent with `instantiated` / `method_sets` / `methods_by_receiver`. Idempotent:
-    /// the index is rebuilt from scratch, so calling it twice yields the same result.
-    pub(crate) fn finalize_indexes(mut self) -> Self {
-        self.interface_candidate_index = build_interface_candidate_index(
-            &self.instantiated,
-            &self.method_sets,
-            &self.method_set_keys,
-            &self.instantiated_keys,
-            &self.methods_by_receiver,
-        );
-        self
-    }
-}
-
-/// Build the inverted interface-dispatch index (FIX 2): `invoked method name ->
-/// candidate callees`, replacing the old per-callsite whole-instantiated-set scan with
-/// a single `BTreeMap` lookup while preserving byte-identical candidate order.
-///
-/// **Byte-identity contract.** The replaced scan, for a query method `M`, iterated
-/// `instantiated` in `BTreeSet` (sorted) order and, for each instantiated type whose
-/// `method_sets[type]` CONTAINS `M`, iterated `methods_by_receiver[type]` in order,
-/// pushing every concrete method named `M` with `contributing_keys =
-/// [method_set_keys[type]?, instantiated_keys[type]?]`. This builder visits the SAME
-/// (type, concrete-method) pairs in the SAME order and files each concrete method under
-/// the key of its OWN bare name — but only when `method_sets[type]` contains that name —
-/// so for any `M`, `index[M]` equals the scan's output for `M` element-for-element
-/// (set, order, contributing keys, and therefore the per-callsite cap prefix). A type
-/// not in `instantiated`, or whose method-set lacks the method, is simply never visited
-/// / never filed (the scan's exact exclusions).
-fn build_interface_candidate_index(
-    instantiated: &BTreeSet<String>,
-    method_sets: &BTreeMap<String, BTreeSet<String>>,
-    method_set_keys: &BTreeMap<String, StableKeyId>,
-    instantiated_keys: &BTreeMap<String, StableKeyId>,
-    methods_by_receiver: &BTreeMap<String, Vec<GoRtaMethod>>,
-) -> BTreeMap<String, Vec<GoRtaInterfaceCandidate>> {
-    let mut index: BTreeMap<String, Vec<GoRtaInterfaceCandidate>> = BTreeMap::new();
-    // Iterate the instantiated set in BTreeSet (sorted) order — the scan's outer loop.
-    for type_name in instantiated {
-        // The type must declare a method-set; otherwise it dispatches nothing (the scan
-        // `continue`d on a missing method-set).
-        let Some(methods) = method_sets.get(type_name) else {
-            continue;
-        };
-        let Some(concrete_methods) = methods_by_receiver.get(type_name) else {
-            continue;
-        };
-        // The contributing-fact keys are per-TYPE, identical for every candidate of this
-        // type — compute them once (the scan rebuilt the same Vec per candidate).
-        let mut contributing_keys = Vec::new();
-        if let Some(key) = method_set_keys.get(type_name) {
-            contributing_keys.push(*key);
-        }
-        if let Some(key) = instantiated_keys.get(type_name) {
-            contributing_keys.push(*key);
-        }
-        // Within a type, iterate `methods_by_receiver[type]` in its existing order — the
-        // scan's inner loop — filing each concrete method under its own bare name, but
-        // only when the method-set contains that name (the scan's `methods.contains`
-        // guard, here applied per concrete method so the `index[M]` lookup is exact).
-        for concrete in concrete_methods {
-            if !methods.contains(&concrete.method_name) {
-                continue;
-            }
-            index
-                .entry(concrete.method_name.clone())
-                .or_default()
-                .push(GoRtaInterfaceCandidate {
-                    node: concrete.node,
-                    contributing_keys: contributing_keys.clone(),
-                });
-        }
-    }
-    index
 }
 
 /// Indexes built ONCE per [`GoRtaInputs::from_db`] so the core-function and call-site
 /// joins are bucket lookups, not full linear scans of every core fact in the repo
-/// (FIX 1, scale). Without these, `from_db` was O(F_go · F_total): each Go semantic
-/// function did a `db.functions().iter().find(...)` over EVERY core function in the
-/// whole polyglot repo (twice, counting the zero-width-point fallback), and each
-/// dynamic-dispatch row did a `db.call_sites().iter().filter(...)` over every core call
-/// site. The indexes are restricted to Go facts and bucketed by `(file, name)` /
+/// to keep `from_db` near-linear rather than O(F_go · F_total). Each Go semantic
+/// function lookup is limited to its `(file, name)` bucket, including the zero-width
+/// point fallback, and each dynamic-dispatch row is limited to its `(file, span)` callsite
+/// bucket. The indexes are restricted to Go facts and bucketed by `(file, name)` /
 /// `(file, span)`, so a join touches only the handful of same-`(file, name)` candidates.
 ///
-/// Determinism contract (byte-identity, NOT just "fast"): each bucket's `Vec` preserves
-/// `db.functions()` / `db.call_sites()` STORAGE ORDER. The replaced scans used `.find()`
+/// Determinism contract (byte identity, not just speed): each bucket's `Vec` preserves
+/// `db.functions()` / `db.call_sites()` storage order. The reference scans use `.find()`
 /// (first match in storage order for the exact-span case) and `Iterator::min_by_key`
 /// (which returns the FIRST element achieving the minimum). Preserving storage order
 /// within the bucket makes the indexed `.find()` / `.min_by_key()` pick the exact same
@@ -441,7 +257,7 @@ struct GoCoreIndex<'a> {
     /// borrow-clean; the few owned-key allocations per build are O(F_go), not O(F_go²).
     core_functions_by_file_name: BTreeMap<(FileId, String), Vec<&'a FunctionFact>>,
     /// `FunctionId` -> its core `FunctionFact` (for the reverse `qualified_for_function_id`
-    /// lookup, replacing a `db.functions().iter().find(id == ..)` per reachability root).
+    /// lookup, avoiding a `db.functions().iter().find(id == ..)` per reachability root).
     core_function_by_id: BTreeMap<crate::core::FunctionId, &'a FunctionFact>,
     /// `(file, name)` -> the Go semantic functions with that file+name, in
     /// `db.go_semantic_functions()` storage order (for `qualified_for_function_id`'s
@@ -451,11 +267,11 @@ struct GoCoreIndex<'a> {
     /// `db.call_sites()` storage order (for `callsite_constraint_node`). Restricted to
     /// `Language::Go`.
     call_sites_by_file_span:
-        BTreeMap<(FileId, u32, u32), Vec<&'a crate::analysis::calls::facts::CallSiteFact>>,
+        BTreeMap<(FileId, u32, u32), Vec<&'a crate::analysis_neutral::calls::facts::CallSiteFact>>,
     /// Callsite-kind semantic node stable key -> its `SemanticNodeId`, so the final
     /// callsite-node lookup in `callsite_constraint_node` is a map hit, not a
     /// `db.semantic_nodes().iter().find(...)` per dynamic-dispatch row. Keeps the FIRST
-    /// occurrence to mirror the replaced `.find()` (stable keys are unique in practice).
+    /// occurrence to mirror reference `.find()` semantics (stable keys are unique in practice).
     callsite_node_by_stable_key: BTreeMap<String, SemanticNodeId>,
 }
 
@@ -492,7 +308,7 @@ impl<'a> GoCoreIndex<'a> {
 
         let mut call_sites_by_file_span: BTreeMap<
             (FileId, u32, u32),
-            Vec<&'a crate::analysis::calls::facts::CallSiteFact>,
+            Vec<&'a crate::analysis_neutral::calls::facts::CallSiteFact>,
         > = BTreeMap::new();
         for site in db.call_sites() {
             if site.language == Language::Go {
@@ -506,7 +322,7 @@ impl<'a> GoCoreIndex<'a> {
         let mut callsite_node_by_stable_key: BTreeMap<String, SemanticNodeId> = BTreeMap::new();
         for node in db.semantic_nodes() {
             if matches!(node.kind, NodeKind::Callsite(_)) {
-                // First-occurrence wins (mirrors the replaced `.find()`).
+                // First-occurrence wins, matching reference `.find()` semantics.
                 callsite_node_by_stable_key
                     .entry(db.resolve_stable_key(node.stable_key).to_string())
                     .or_insert(node.id);
@@ -545,7 +361,7 @@ impl<'a> GoCoreIndex<'a> {
         &self,
         file: FileId,
         span: &Span,
-    ) -> &[&'a crate::analysis::calls::facts::CallSiteFact] {
+    ) -> &[&'a crate::analysis_neutral::calls::facts::CallSiteFact] {
         self.call_sites_by_file_span
             .get(&(file, span.start_byte, span.end_byte))
             .map_or(&[], Vec::as_slice)
@@ -577,13 +393,12 @@ fn bare_method_name(name: &str) -> String {
 /// The `qualified` identity of the Go semantic function matching a core `FunctionId`,
 /// if any. This is the exact INVERSE of [`matching_core_function_indexed`]: it returns
 /// the semantic function `S` such that `matching_core_function_indexed(S) == function_id`,
-/// so the two directions are in genuine lockstep (WR-04 / FINDING E) rather than merely
+/// so the two directions are in genuine lockstep rather than merely
 /// "similar". Defining the reverse via the forward is what keeps the point-containment
 /// fallback symmetric: the forward maps a zero-width SSA point to the INNERMOST
 /// containing core declaration (`min_by_key`), so the reverse must NOT map an OUTER
-/// same-named declaration to a point that actually belongs to a tighter inner one. A
-/// previous `find()` (first-match) fallback did exactly that — both the outer and inner
-/// declarations matched the same contained point, breaking symmetry.
+/// same-named declaration to a point that actually belongs to a tighter inner one.
+/// Otherwise both declarations could match the same contained point and break symmetry.
 #[cfg(test)]
 fn qualified_for_function_id(
     db: &AnalysisDb,
@@ -596,7 +411,7 @@ fn qualified_for_function_id(
 /// reachability root, reusing the prebuilt [`GoCoreIndex`] (the core function is found by
 /// id, and the reverse semantic-function scan is restricted to the `(file, name)` bucket
 /// in storage order). Identical resolution order to the `db`-based version, so the
-/// forward/reverse lockstep (WR-04 / FINDING E) is preserved.
+/// forward/reverse lockstep is preserved.
 fn qualified_for_function_id_indexed(
     index: &GoCoreIndex<'_>,
     function_id: crate::core::FunctionId,
@@ -606,7 +421,7 @@ fn qualified_for_function_id_indexed(
 
     // 1. Prefer a semantic function with an EXACT-equal span (unambiguous, and the forward
     //    direction's step 1 — so this side agrees). `.find()` over the storage-ordered
-    //    bucket mirrors the old first-match-in-storage-order semantics; the bucket already
+    //    bucket preserves first-match-in-storage-order semantics; the bucket already
     //    enforces the `file == Some(function.file) && name == function.name` identity.
     if let Some(exact) = bucket.iter().copied().find(|semantic_function| {
         semantic_function.span.as_ref().is_some_and(|span| {
@@ -642,7 +457,7 @@ fn qualified_for_function_id_indexed(
 
 /// The core `FunctionFact` matching a Go semantic function (file + language + name +
 /// span), resolved through the prebuilt [`GoCoreIndex`] (the hot-path join `from_db`
-/// runs once per Go semantic function — FIX 1 — instead of a fresh `db.functions()`
+/// runs once per Go semantic function instead of a fresh `db.functions()`
 /// scan).
 ///
 /// The Go SSA frontend and the core (tree-sitter) facts disagree on the span of a
@@ -653,7 +468,7 @@ fn qualified_for_function_id_indexed(
 /// point-in-declaration CONTAINMENT only when the semantic span is a zero-width point
 /// (the documented SSA-method case). Containment is not a unique relation — two
 /// same-named declarations whose byte ranges nest could otherwise mis-map under a
-/// first-match-wins scan (review WR-04) — so the fallback both requires a zero-width
+/// first-match-wins scan, so the fallback both requires a zero-width
 /// point and is the narrowest match available. Honest by construction: `name` + `file`
 /// disambiguate and the exact match is tried first.
 fn matching_core_function_indexed<'a>(
@@ -667,7 +482,7 @@ fn matching_core_function_indexed<'a>(
 
 /// Shared file+language+name+span disambiguation for mapping a Go semantic span to its
 /// core `FunctionFact` (used by both [`matching_core_function_indexed`] and
-/// [`qualified_for_function_id`] so the two directions stay in lockstep, WR-04).
+/// [`qualified_for_function_id`] so the two directions stay in lockstep).
 ///
 /// Resolution order:
 /// 1. EXACT span equality (`start == start && end == end`) — the precise, unambiguous
@@ -690,7 +505,7 @@ fn matching_core_function_for<'a>(
 /// `(file, name)` bucket (storage-ordered) rather than the full `db.functions()` slice.
 /// Because the bucket already restricts to same-`(file, name)` Go functions — exactly the
 /// `same_identity` predicate — and preserves storage order, the indexed `.find()` /
-/// `.min_by_key()` choose the SAME `FunctionFact` the full-slice scan did (FIX 1).
+/// `.min_by_key()` choose the SAME `FunctionFact` the full-slice scan did.
 fn matching_core_function_for_indexed<'a>(
     index: &GoCoreIndex<'a>,
     file: FileId,
@@ -756,12 +571,11 @@ fn function_node_key(
 /// the prebuilt [`GoCoreIndex`]: the span-matched candidate set comes from the
 /// `(file, span)` bucket (storage-ordered, restricted to Go) instead of a
 /// `db.call_sites().iter().filter(...)` scan, and the final callsite-node resolution is a
-/// stable-key map hit instead of a `db.semantic_nodes().iter().find(...)` scan — turning
-/// the per-dynamic-dispatch-row join from O(rows · call_sites) into near-linear work
-/// (FIX 1). `select_constraint_callsite` runs over the SAME candidate set, so the
-/// disambiguation — and the resulting node — is byte-identical to the old scan.
+/// stable-key map hit instead of a `db.semantic_nodes().iter().find(...)` scan. This keeps
+/// the per-dynamic-dispatch-row join near-linear over all rows. `select_constraint_callsite` runs over the same candidate set, so the
+/// disambiguation and resulting node remain byte-identical to the reference scan.
 ///
-/// WR-08 / FINDING 5: the core-call-site match must be DISAMBIGUATED, not first-match.
+/// The core-call-site match must be disambiguated rather than first-match.
 /// Several core call sites can share one byte span — a method chain `a().b()` reports
 /// nested call expressions at the same outer span, and a single span can host both a
 /// resolved-static and a dynamic call. Matching by `(file, language, span)` alone could
@@ -790,7 +604,7 @@ fn callsite_constraint_node_indexed(
 }
 
 /// Disambiguate a set of span-matched core call sites to the one that anchors a dynamic
-/// Go callsite's provenance (WR-08 / FINDING 5). Pure (no db) so the disambiguation is
+/// Go callsite's provenance. Pure (no db) so the disambiguation is
 /// unit-testable in isolation.
 ///
 /// Resolution order (each step narrows; a step that would empty the set is skipped so
@@ -805,13 +619,14 @@ fn callsite_constraint_node_indexed(
 ///    never a first-match that depends on storage order.
 fn select_constraint_callsite<'a>(
     interner: &crate::core::StableKeyInterner,
-    candidates: &[&'a crate::analysis::calls::facts::CallSiteFact],
+    candidates: &[&'a crate::analysis_neutral::calls::facts::CallSiteFact],
     caller: Option<crate::core::FunctionId>,
-) -> Option<&'a crate::analysis::calls::facts::CallSiteFact> {
-    use crate::analysis::calls::facts::CallTargetStatus;
+) -> Option<&'a crate::analysis_neutral::calls::facts::CallSiteFact> {
+    use crate::analysis_neutral::calls::facts::CallTargetStatus;
 
     // 1. Prefer the caller's own call sites (skip if that would drop every candidate).
-    let caller_matched: Vec<&'a crate::analysis::calls::facts::CallSiteFact> = match caller {
+    let caller_matched: Vec<&'a crate::analysis_neutral::calls::facts::CallSiteFact> = match caller
+    {
         Some(caller) => candidates
             .iter()
             .copied()
@@ -819,27 +634,28 @@ fn select_constraint_callsite<'a>(
             .collect(),
         None => Vec::new(),
     };
-    let narrowed: &[&'a crate::analysis::calls::facts::CallSiteFact] = if caller_matched.is_empty()
-    {
-        candidates
-    } else {
-        &caller_matched
-    };
+    let narrowed: &[&'a crate::analysis_neutral::calls::facts::CallSiteFact] =
+        if caller_matched.is_empty() {
+            candidates
+        } else {
+            &caller_matched
+        };
 
     // 2. Among those, prefer dynamic-dispatch-status sites (skip if none).
-    let is_dynamic = |site: &&crate::analysis::calls::facts::CallSiteFact| {
+    let is_dynamic = |site: &&crate::analysis_neutral::calls::facts::CallSiteFact| {
         matches!(
             site.status,
             CallTargetStatus::Unresolved | CallTargetStatus::Ambiguous
         )
     };
-    let dynamic: Vec<&'a crate::analysis::calls::facts::CallSiteFact> =
+    let dynamic: Vec<&'a crate::analysis_neutral::calls::facts::CallSiteFact> =
         narrowed.iter().copied().filter(is_dynamic).collect();
-    let final_set: &[&'a crate::analysis::calls::facts::CallSiteFact] = if dynamic.is_empty() {
-        narrowed
-    } else {
-        &dynamic
-    };
+    let final_set: &[&'a crate::analysis_neutral::calls::facts::CallSiteFact] =
+        if dynamic.is_empty() {
+            narrowed
+        } else {
+            &dynamic
+        };
 
     // 3. Deterministic minimum by stable key (never first-match on storage order).
     final_set.iter().copied().min_by(|left, right| {
@@ -877,8 +693,8 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    use crate::analysis::semantic_graph::facts::{SemanticNodeFact, SemanticPrecision};
-    use crate::analysis::semantic_graph::store::SemanticGraphOutput;
+    use crate::analysis_neutral::semantic_graph::facts::{SemanticNodeFact, SemanticPrecision};
+    use crate::analysis_neutral::semantic_graph::store::SemanticGraphOutput;
     use crate::core::{FunctionId, Span};
     use crate::go::semantic::facts::{
         GoSemanticFunctionFact, GoSemanticFunctionKind, GoSemanticInstantiatedTypeFact,
@@ -1032,7 +848,7 @@ mod tests {
 
     #[test]
     fn from_db_maps_method_when_ssa_point_span_lies_within_core_declaration_span() {
-        // Regression for the verification finding: the SSA frontend reports a
+        // The SSA frontend reports a
         // zero-width POINT span for a method (`func` token), while tree-sitter reports
         // the FULL declaration span. `matching_core_function` must map the method by
         // file + name + span-CONTAINMENT, or interface dispatch resolves nothing.
@@ -1119,7 +935,7 @@ mod tests {
         assert_eq!(methods[0].node, SemanticNodeId(0));
     }
 
-    /// WR-04: an EXACT span match must win even when a same-named core function's range
+    /// An exact span match must win even when a same-named core function's range
     /// CONTAINS the semantic span. Two same-named declarations are pushed — an outer one
     /// spanning 0..100 and an inner one spanning 40..60. A semantic span of exactly
     /// 40..60 must map to the INNER function, never the containing outer one (which a
@@ -1155,7 +971,7 @@ mod tests {
         assert_ne!(matched.id, outer);
     }
 
-    /// WR-04: a zero-width SSA point that lands inside TWO same-named containing
+    /// A zero-width SSA point that lands inside TWO same-named containing
     /// declarations resolves to the INNERMOST (narrowest) one, deterministically, rather
     /// than the first scanned. Point 45 lies inside both 0..100 and 40..60; the narrower
     /// 40..60 wins.
@@ -1195,12 +1011,12 @@ mod tests {
         caller: FunctionId,
         start: u32,
         end: u32,
-        status: crate::analysis::calls::facts::CallTargetStatus,
+        status: crate::analysis_neutral::calls::facts::CallTargetStatus,
         stable_key: &str,
-    ) -> crate::analysis::calls::facts::CallSiteFact {
-        use crate::analysis::calls::facts::{CallCallee, CallPrecision, CallSyntaxKind};
-        use crate::analysis::ids::{CallSiteId, MirBodyId, MirOpId};
-        crate::analysis::calls::facts::CallSiteFact {
+    ) -> crate::analysis_neutral::calls::facts::CallSiteFact {
+        use crate::analysis_neutral::calls::facts::{CallCallee, CallPrecision, CallSyntaxKind};
+        use crate::analysis_neutral::ids::{CallSiteId, MirBodyId, MirOpId};
+        crate::analysis_neutral::calls::facts::CallSiteFact {
             in_throw: false,
             id: CallSiteId(id),
             language: Language::Go,
@@ -1212,7 +1028,8 @@ mod tests {
             span: span(FileId::from_raw(1), start, end),
             kind: CallSyntaxKind::Method,
             callee: CallCallee::Unknown {
-                reason: crate::analysis::calls::facts::UnresolvedCallReason::InterfaceDispatch,
+                reason:
+                    crate::analysis_neutral::calls::facts::UnresolvedCallReason::InterfaceDispatch,
             },
             receiver: None,
             arguments: Vec::new(),
@@ -1223,13 +1040,13 @@ mod tests {
         }
     }
 
-    /// WR-08 / FINDING 5: when several core call sites share one byte span, the
+    /// When several core call sites share one byte span, the
     /// disambiguator binds to the site whose `caller` matches the semantic callsite's
     /// caller AND that is a dynamic-dispatch-status site — never a sibling's call or a
     /// co-located static call at the same span.
     #[test]
     fn select_constraint_callsite_disambiguates_by_caller_and_dynamic_status() {
-        use crate::analysis::calls::facts::CallTargetStatus;
+        use crate::analysis_neutral::calls::facts::CallTargetStatus;
         let caller_a = FunctionId::from_raw(10);
         let caller_b = FunctionId::from_raw(20);
         let interner = crate::core::StableKeyInterner::default();
@@ -1279,13 +1096,13 @@ mod tests {
         assert_eq!(chosen_b.id.0, 3);
     }
 
-    /// WR-08 / FINDING 5: with NO dynamic site for the matched caller, fall back to that
+    /// With no dynamic site for the matched caller, fall back to that
     /// caller's site (a static one) rather than coalescing onto another caller's. And with
     /// an unresolved caller (None), the disambiguator still prefers a dynamic site and is
     /// deterministic (minimum stable key), never first-match on storage order.
     #[test]
     fn select_constraint_callsite_degrades_gracefully_and_is_deterministic() {
-        use crate::analysis::calls::facts::CallTargetStatus;
+        use crate::analysis_neutral::calls::facts::CallTargetStatus;
         let caller_a = FunctionId::from_raw(10);
         let caller_b = FunctionId::from_raw(20);
         let interner = crate::core::StableKeyInterner::default();
@@ -1357,7 +1174,7 @@ mod tests {
         );
     }
 
-    /// FINDING E (WR-04 lockstep): the reverse map (`qualified_for_function_id`) must be the
+    /// The reverse map (`qualified_for_function_id`) must remain in lockstep as the
     /// exact INVERSE of the forward map's innermost (`min_by_key`) point-containment rule —
     /// not a first-match that lets an OUTER same-named declaration claim a point belonging to
     /// a tighter inner one. Two same-named core declarations (outer 0..100, inner 40..60) and
@@ -1429,7 +1246,7 @@ mod tests {
         );
     }
 
-    /// WR-04: a non-zero-width semantic span that does NOT exactly equal any core span
+    /// A non-zero-width semantic span that does not exactly equal any core span
     /// must NOT fall back to containment — the fallback is reserved for zero-width SSA
     /// points. A 45..50 span inside 0..100 (but not exactly equal) matches nothing.
     #[test]
@@ -1456,7 +1273,7 @@ mod tests {
         assert!(matching_core_function_for(&db, file, "F", &span(file, 45, 50)).is_none());
     }
 
-    /// FIX 1 guard: `matching_core_function_for` is keyed on `(file, name)` — two Go
+    /// Indexing invariant: `matching_core_function_for` is keyed on `(file, name)` — two Go
     /// functions of the SAME NAME in DIFFERENT files must each resolve to the core
     /// function in their OWN file, never cross-matched/collapsed. This pins the
     /// per-file disambiguation the indexed lookup must preserve (a `(file, name)` bucket
@@ -1509,7 +1326,7 @@ mod tests {
         assert_eq!(matched_b.file, file_b);
     }
 
-    /// FIX 1 guard (end to end): TWO Go semantic functions of the SAME NAME in DIFFERENT
+    /// Indexing invariant: TWO Go semantic functions of the SAME NAME in DIFFERENT
     /// files, each mapping to its own semantic node, must each resolve to the node in its
     /// OWN file — the `(file, name)` join must not collapse them. Asserts `function_node`
     /// carries both distinct `qualified` identities mapped to their own nodes.
@@ -1633,7 +1450,7 @@ mod tests {
         assert_ne!(node_a, node_b);
     }
 
-    /// FIX 1 guard: a METHOD and a free FUNCTION sharing the BARE name `Speak` (the method
+    /// Indexing invariant: a METHOD and a free FUNCTION sharing the BARE name `Speak` (the method
     /// is `Dog.Speak`, the free function is `Speak`) must each resolve to their own core
     /// function/node, and only the method is indexed by receiver. Pins that the
     /// name-keyed join distinguishes `Dog.Speak` from `Speak` (the core `name` field

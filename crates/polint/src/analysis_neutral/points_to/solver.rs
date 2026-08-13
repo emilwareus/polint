@@ -39,11 +39,12 @@ pub fn solve_points_to(
     constraints: &[PointsToConstraintFact],
     budget: PointsToBudget,
 ) -> PointsToSolveResult {
-    let mut solver = Solver::new(constraints, budget);
+    let mut solver = Solver::new(interner, constraints, budget);
     solver.solve(interner)
 }
 
 struct Solver<'a> {
+    interner: &'a crate::internal_core::StableKeyInterner,
     constraints: &'a [PointsToConstraintFact],
     budget: PointsToBudget,
     sets: BTreeMap<PtVarId, BTreeSet<ObjectTokenId>>,
@@ -55,14 +56,21 @@ struct Solver<'a> {
     object_slots: BTreeMap<(ObjectTokenId, String), PtVarId>,
     queue: VecDeque<(PtVarId, BTreeSet<ObjectTokenId>)>,
     dynamic_vars: BTreeSet<PtVarId>,
+    variable_identities: BTreeMap<PtVarId, BTreeSet<String>>,
+    object_identities: BTreeMap<ObjectTokenId, BTreeSet<String>>,
     steps: usize,
     budget_exceeded: bool,
     budget_reasons: BTreeSet<String>,
 }
 
 impl<'a> Solver<'a> {
-    fn new(constraints: &'a [PointsToConstraintFact], budget: PointsToBudget) -> Self {
+    fn new(
+        interner: &'a crate::internal_core::StableKeyInterner,
+        constraints: &'a [PointsToConstraintFact],
+        budget: PointsToBudget,
+    ) -> Self {
         Self {
+            interner,
             constraints,
             budget,
             sets: BTreeMap::new(),
@@ -74,6 +82,8 @@ impl<'a> Solver<'a> {
             object_slots: BTreeMap::new(),
             queue: VecDeque::new(),
             dynamic_vars: BTreeSet::new(),
+            variable_identities: BTreeMap::new(),
+            object_identities: BTreeMap::new(),
             steps: 0,
             budget_exceeded: false,
             budget_reasons: BTreeSet::new(),
@@ -96,7 +106,8 @@ impl<'a> Solver<'a> {
     }
 
     fn initialize(&mut self) {
-        for constraint in self.constraints {
+        for constraint in self.constraints.iter().cloned() {
+            self.record_constraint_identities(&constraint);
             match &constraint.kind {
                 PointsToConstraintKind::AddressOf { dst, object } => {
                     self.add_object(*dst, *object);
@@ -241,6 +252,16 @@ impl<'a> Solver<'a> {
             return *var;
         }
         let var = vars::dynamic_var(self.object_slots.len());
+        let object_identity = self.semantic_object_identity(object);
+        let slot_identity = stable_key_from_parts(
+            self.interner,
+            FactFamily::PointsToSet,
+            &[("object", object_identity), ("slot", slot.to_string())],
+        );
+        self.variable_identities
+            .entry(var)
+            .or_default()
+            .insert(self.interner.resolve(slot_identity).to_string());
         self.object_slots.insert(key, var);
         self.dynamic_vars.insert(var);
         if self.dynamic_vars.len() > self.budget.max_dynamic_vars {
@@ -249,6 +270,89 @@ impl<'a> Solver<'a> {
                 .insert(BudgetReason::PointsToMaxDynamicVars.as_str().to_string());
         }
         var
+    }
+
+    fn record_constraint_identities(&mut self, constraint: &PointsToConstraintFact) {
+        use PointsToConstraintKind as Kind;
+        let key = self.interner.resolve(constraint.stable_key);
+        match &constraint.kind {
+            Kind::AddressOf { dst, object } => {
+                self.record_variable_identity(*dst, &key, "address_of_destination");
+                self.record_object_identity(*object, &key, "address_of_object");
+            }
+            Kind::Copy { dst, src } => {
+                self.record_variable_identity(*dst, &key, "copy_destination");
+                self.record_variable_identity(*src, &key, "copy_source");
+            }
+            Kind::Load { dst, pointer } => {
+                self.record_variable_identity(*dst, &key, "load_destination");
+                self.record_variable_identity(*pointer, &key, "load_pointer");
+            }
+            Kind::Store { pointer, src } => {
+                self.record_variable_identity(*pointer, &key, "store_pointer");
+                self.record_variable_identity(*src, &key, "store_source");
+            }
+            Kind::FieldLoad { dst, base, .. } | Kind::ElementLoad { dst, base, .. } => {
+                self.record_variable_identity(*dst, &key, "projection_load_destination");
+                self.record_variable_identity(*base, &key, "projection_load_base");
+            }
+            Kind::FieldStore { base, src, .. } | Kind::ElementStore { base, src, .. } => {
+                self.record_variable_identity(*base, &key, "projection_store_base");
+                self.record_variable_identity(*src, &key, "projection_store_source");
+            }
+            Kind::CallReturn { dst, value } => {
+                self.record_variable_identity(*dst, &key, "call_return_destination");
+                self.record_object_identity(
+                    vars::value_fact_object(*value),
+                    &key,
+                    "call_return_object",
+                );
+            }
+            Kind::SummaryFlow { dst, src, .. } => {
+                self.record_variable_identity(*dst, &key, "summary_destination");
+                self.record_variable_identity(*src, &key, "summary_source");
+            }
+        }
+    }
+
+    fn record_variable_identity(&mut self, variable: PtVarId, key: &str, role: &str) {
+        let fragment = stable_key_from_parts(
+            self.interner,
+            FactFamily::PointsToSet,
+            &[("relation", key.to_string()), ("role", role.to_string())],
+        );
+        self.variable_identities
+            .entry(variable)
+            .or_default()
+            .insert(self.interner.resolve(fragment).to_string());
+    }
+
+    fn record_object_identity(&mut self, object: ObjectTokenId, key: &str, role: &str) {
+        let fragment = stable_key_from_parts(
+            self.interner,
+            FactFamily::PointsToSet,
+            &[("relation", key.to_string()), ("role", role.to_string())],
+        );
+        self.object_identities
+            .entry(object)
+            .or_default()
+            .insert(self.interner.resolve(fragment).to_string());
+    }
+
+    fn semantic_variable_identity(&self, variable: PtVarId) -> String {
+        semantic_relation_identity(
+            self.variable_identities
+                .get(&variable)
+                .expect("points-to set variable must originate in a constraint or object slot"),
+        )
+    }
+
+    fn semantic_object_identity(&self, object: ObjectTokenId) -> String {
+        semantic_relation_identity(
+            self.object_identities
+                .get(&object)
+                .expect("points-to object must originate in an address or call-return constraint"),
+        )
     }
 
     fn step_budget_ok(&mut self) -> bool {
@@ -292,8 +396,11 @@ impl<'a> Solver<'a> {
                     interner,
                     FactFamily::PointsToSet,
                     &[
-                        ("variable", variable.0.to_string()),
-                        ("budget", format!("{budget_status:?}")),
+                        ("variable", self.semantic_variable_identity(*variable)),
+                        (
+                            "budget",
+                            points_to_budget_status_label(budget_status).to_string(),
+                        ),
                     ],
                 ),
             })
@@ -303,6 +410,21 @@ impl<'a> Solver<'a> {
             budget_status,
             budget_reasons: self.budget_reasons.clone(),
         }
+    }
+}
+
+fn semantic_relation_identity(fragments: &BTreeSet<String>) -> String {
+    fragments
+        .iter()
+        .map(|fragment| format!("{}:{fragment}", fragment.len()))
+        .collect()
+}
+
+fn points_to_budget_status_label(status: PointsToBudgetStatus) -> &'static str {
+    match status {
+        PointsToBudgetStatus::WithinBudget => "within_budget",
+        PointsToBudgetStatus::BudgetExceeded => "budget_exceeded",
+        PointsToBudgetStatus::NotRun => "not_run",
     }
 }
 

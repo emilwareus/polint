@@ -31,6 +31,7 @@ mod repo_fs;
 pub mod scope;
 #[cfg(feature = "lang-typescript")]
 pub mod semantic_graph;
+pub(crate) mod semantic_graph_build;
 #[cfg(feature = "lang-typescript")]
 pub mod spans;
 #[cfg(feature = "lang-typescript")]

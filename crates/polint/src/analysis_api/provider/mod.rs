@@ -100,6 +100,11 @@ pub trait FactDatabase: Any + Send {
     /// Module graph nodes when the composition root has installed them.
     fn module_nodes(&self) -> &[crate::analysis_api::module_facts::ModuleNode];
 
+    /// Resolved import rows when the composition root has installed them.
+    fn resolved_imports(&self) -> &[crate::analysis_api::module_facts::ResolvedImportFact] {
+        &[]
+    }
+
     /// Symbol-graph rows when the composition root has installed them.
     fn symbols(&self) -> &[crate::analysis_api::symbol_facts::SymbolFact];
     fn definitions(&self) -> &[crate::analysis_api::symbol_facts::DefinitionFact];

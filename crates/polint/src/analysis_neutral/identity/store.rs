@@ -142,7 +142,7 @@ mod tests {
                 language,
                 "pkg",
                 &format!("pkg.T{id}"),
-                FileId::from_raw(file),
+                "src/fixture.go",
                 &span,
             )),
             originating_call_site_id: site.map(CallSiteId),

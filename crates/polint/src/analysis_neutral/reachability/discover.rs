@@ -169,7 +169,7 @@ fn entrypoint_bridge_root(
             kind,
             entrypoint.language,
             &function_identity,
-            entrypoint.registration_file,
+            &db.path_for(entrypoint.registration_file),
             &entrypoint.registration_span,
         ));
     ReachabilityRootFact {
@@ -225,7 +225,7 @@ fn configured_roots_for(
                             RootKind::ConfiguredEntrypoint,
                             Language::Unknown,
                             &format!("configured:{entry}"),
-                            UNRESOLVED_FILE,
+                            "<unresolved>",
                             &unresolved_span(),
                         ));
                 ReachabilityRootFact {
@@ -261,7 +261,7 @@ fn configured_resolved_root(
             RootKind::ConfiguredEntrypoint,
             function.language,
             &function_identity,
-            function.file,
+            &db.path_for(function.file),
             &function.span,
         ));
     ReachabilityRootFact {
@@ -299,7 +299,7 @@ fn native_root(
             kind,
             function.language,
             &function_identity,
-            function.file,
+            &db.path_for(function.file),
             &function.span,
         ));
     ReachabilityRootFact {

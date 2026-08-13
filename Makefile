@@ -21,9 +21,9 @@ doc:
 install-smoke:
 	$(CARGO) test -p polint --test cargo_install_smoke --locked -- --ignored
 
-# Supply-chain / policy (install: `cargo install cargo-deny`). Older binaries may only support `cargo deny check`.
+# Supply-chain / policy (install: `cargo install cargo-deny`).
 deny:
-	$(CARGO) deny check
+	$(CARGO) deny check all
 
 # Full local gate aligned with `.github/workflows/ci.yml` (all jobs on one machine).
 check: lint test doc install-smoke deny

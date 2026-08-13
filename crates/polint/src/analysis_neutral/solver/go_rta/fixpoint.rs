@@ -1,84 +1,53 @@
-//! The Go RTA fixpoint (D-06, D-07, D-13).
+//! The Go RTA fixpoint.
 //!
-//! [`solve_go_rta`] runs Rapid Type Analysis over a closed [`GoRtaInputs`] snapshot,
-//! structurally mirroring `points_to::solver::solve` (a bounded worklist drain with
-//! an honest `if !budget_ok { break; }`) and reusing `engine::derive_edges`'
-//! disciplines: `BTreeMap`/`BTreeSet`-ordered accumulation, a GLOBAL monotonic
-//! `solver_step` counter, and dense IDs assigned only after a stable-key sort via
-//! [`SolverOutput::normalized`].
+//! [`solve_rta`] runs Rapid Type Analysis over a closed [`RtaInputs`] snapshot. It uses
+//! `BTreeMap` and `BTreeSet` ordering, a globally monotonic `solver_step`, and assigns
+//! dense IDs only after stable-key sorting through [`SolverOutput::normalized`].
 //!
 //! The fixpoint iterates **reachability ⊗ dispatch**:
 //!
-//! 1. Seed the reachable function set from the reachability roots (D-07).
-//! 2. Seed the instantiated runtime-type set and the address-taken set from the
-//!    Go-frontend facts. These are the WHOLE reachable program's rapid-type /
-//!    address-taken sets (the sidecar built SSA over `ssautil.AllPackages` and
-//!    harvested `MakeInterface`/`MakeClosure` over the reachable program), so per
-//!    D-06 they are "whole-program-instantiated-but-reachable" — the facts carry no
-//!    per-function attribution to filter them further, and over-filtering would drop
-//!    real RTA targets. The RTA discriminant (interface invoke resolves ONLY to
-//!    callees whose receiver type is instantiated) is preserved end-to-end.
-//! 3. Each round, for every caller that became reachable in the PRIOR round (a
-//!    FRONTIER, seeded from roots), the fixpoint (a) grows reachability over that
-//!    caller's STATIC-call edges (`inputs.static_call_targets`) — standard RTA closes
-//!    reachability over BOTH static-call AND resolved-dynamic-dispatch edges, so a
-//!    function reached only via a direct call that is not itself a root still enters
-//!    the worklist and its dispatch is resolved; static edges GROW reachability only
-//!    and do NOT emit edges — and (b) resolves that caller's `UnresolvedDynamic`
-//!    callsites via [`super::dispatch::resolve_callsite`] (filtered by the instantiated
-//!    set), records the resolved edges, and adds each newly-resolved callee to the
-//!    reachable set. The union of statically- and dynamically-newly-reached functions
-//!    is the next round's frontier. Iterate until no new function becomes reachable (a
-//!    fixed point). A caller is processed exactly ONCE (when it first enters the
-//!    frontier), never re-scanned every round.
+//! 1. Seed reachable functions from the reachability roots.
+//! 2. Seed instantiated runtime types and address-taken functions from the Go frontend.
+//!    These sets cover the reachable program because the sidecar builds SSA over
+//!    `ssautil.AllPackages` and harvests `MakeInterface` and `MakeClosure` instructions.
+//!    The facts have no per-function attribution, so filtering them further could drop
+//!    valid RTA targets. Interface invokes still resolve only to instantiated receiver
+//!    types.
+//! 3. Process each newly reachable caller once. Static calls extend reachability without
+//!    emitting derived edges. Dynamic callsites resolve through [`resolve_callsite`],
+//!    emit their edges, and add newly resolved callees to the next frontier. Iteration
+//!    stops when no new function becomes reachable.
 //!
-//! Budget (D-13): the loop is bounded by `budget.go.max_rta_rounds` (the DISPATCH-round
-//! cap), the Go-scaled `budget.go.max_worklist_steps` (worklist-step cap — one step per
-//! callsite resolution AND one per static-call-edge expansion, so a deep static chain
-//! consumes the same budget; sized like points-to `max_steps` = 10_000, NOT the
-//! policy-count `max_outer_iterations` = 64 — review CR-01), and
-//! `budget.go.max_candidates_per_callsite` (per-callsite fan-out). The address-taken
-//! set exceeding `budget.go.address_taken_threshold` also latches exhaustion (but only
-//! when func-value resolution is actually NEEDED — see FIX 2). The round cap bounds only
-//! GENUINE dynamic-dispatch re-iteration: it counts a round ONLY when that round
-//! (re)resolved a dynamic callsite and could thus grow the resolved-edge set. Static
-//! reachability growth does NOT consume the round budget — it runs to completion bounded
-//! solely by `max_worklist_steps` — so a deep first-party STATIC call chain whose depth
-//! exceeds `max_rta_rounds` still converges and resolves its dispatch (FIX 1). Counting
-//! static-BFS levels instead made `round` equal the static call-graph depth, silently
-//! truncating reachability (and latching a FALSE BudgetExceeded) for any function deeper
-//! than the cap. Termination does not depend on the round cap: `reachable` is monotonic
-//! and bounded by the finite function set; `max_worklist_steps` is the real runaway guard.
-//! A cap latches the run-level [`BudgetStatus::BudgetExceeded`] only when it actually
-//! prevents pending work — the round cap latches BudgetExceeded only when dynamic
-//! dispatch work is prevented. Static-only pending work remains bounded by
-//! `max_worklist_steps`. A non-empty frontier with no dynamic callsites at the cap
-//! boundary can still converge honestly without a round-cap budget signal. Edges
-//! resolved before a cap keep their honest status (review finding #R1); the loop never
-//! runs unbounded.
+//! Three independent limits bound the work: `budget.go.max_rta_rounds` for dynamic
+//! dispatch waves, `budget.go.max_worklist_steps` for callsite resolutions and static
+//! edge expansions, and `budget.go.max_candidates_per_callsite` for fan-out. An
+//! oversized address-taken set disables function-value resolution only when a reachable
+//! signature-bearing callsite needs it; interface dispatch remains unaffected.
 //!
-//! The frontier-only scan is what keeps the worklist-step count proportional to real
-//! work (≈ Σ reachable_callers × their_callsites) instead of growing super-linearly
-//! with the round count: a full per-round re-scan of the whole reachable set inflated
-//! the step counter so a modest multi-round graph could exceed a 64-step cap and drop
-//! real edges (review CR-01). Because the instantiated / address-taken sets are seeded
-//! once and do NOT grow during the fixpoint, resolving each caller exactly once yields
-//! the same edge set a full per-round re-scan would.
+//! Static reachability does not consume the dynamic-round budget. It is bounded by the
+//! worklist-step limit, allowing deep finite static chains to reach their dynamic
+//! callsites. A budget status is latched only when a limit actually prevents pending
+//! work, and edges resolved before the limit retain their honest status.
+//!
+//! Processing only the frontier keeps the step count proportional to actual work.
+//! Because instantiated and address-taken sets do not grow during the fixpoint, resolving
+//! each caller once yields the same edge set as repeatedly scanning every reachable
+//! caller.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::analysis::solver::budget::{BudgetReason, BudgetStatus, SolverBudget};
-use crate::analysis::solver::facts::DerivedEdgeFact;
-use crate::analysis::solver::store::SolverOutput;
+use crate::analysis_neutral::solver::budget::{BudgetReason, BudgetStatus, SolverBudget};
+use crate::analysis_neutral::solver::facts::DerivedEdgeFact;
+use crate::analysis_neutral::solver::store::SolverOutput;
 
 use super::dispatch::resolve_callsite;
-use super::inputs::GoRtaInputs;
+use super::snapshot::RtaInputs;
 
 /// Run the RTA fixpoint over the closed snapshot, returning a normalized
-/// [`SolverOutput`] (D-06/D-07/D-13). See the module docs for the model + budget.
-pub(crate) fn solve_go_rta(
-    interner: &crate::core::StableKeyInterner,
-    inputs: &GoRtaInputs,
+/// [`SolverOutput`]. See the module docs for the model + budget.
+pub(crate) fn solve_rta(
+    interner: &crate::internal_core::StableKeyInterner,
+    inputs: &RtaInputs,
     budget: &SolverBudget,
 ) -> SolverOutput {
     // Index callsites by caller for deterministic, efficient per-round scanning.
@@ -93,17 +62,17 @@ pub(crate) fn solve_go_rta(
     // Reverse index `SemanticNodeId -> qualified` so a resolved callee node maps back
     // to its identity in O(1), built once (no per-edge linear scan of the function
     // index). Deterministic: the source map is BTree-keyed.
-    let node_to_qualified: BTreeMap<crate::analysis::ids::SemanticNodeId, &str> = inputs
+    let node_to_qualified: BTreeMap<crate::analysis_neutral::ids::SemanticNodeId, &str> = inputs
         .function_node
         .iter()
         .map(|(qualified, &node)| (node, qualified.as_str()))
         .collect();
 
-    // Seed the reachable set from roots (D-07). The instantiated + address-taken sets
+    // Seed the reachable set from roots. The instantiated + address-taken sets
     // are the whole reachable program's rapid-type / address-taken sets (see module
     // docs); they do not grow during the fixpoint, so the loop is bounded by reachable
     // growth alone (plus the explicit caps). The instantiated-type FILTER is baked into
-    // `inputs.interface_candidate_index` at build time (FIX 2), so the fixpoint no longer
+    // `inputs.interface_candidate_index` at build time, so the fixpoint no longer
     // threads the instantiated set into `resolve_callsite` — it consults the index.
     let mut reachable: BTreeSet<String> = inputs.roots.clone();
     let address_taken = &inputs.address_taken;
@@ -112,7 +81,7 @@ pub(crate) fn solve_go_rta(
     // frontier is the roots; each subsequent round's frontier is the callees newly
     // reached in the prior round. A caller is resolved exactly once, so the step count
     // tracks real work rather than re-scanning the whole reachable set every round
-    // (review CR-01). Deterministic (BTreeSet order).
+    // while preserving deterministic BTreeSet order.
     let mut frontier: BTreeSet<String> = inputs.roots.clone();
 
     // Membership-only dedup keyed by StableKeyId (the store rejects duplicate stable
@@ -120,21 +89,23 @@ pub(crate) fn solve_go_rta(
     // key, so we keep the first occurrence — its `solver_step` is the earliest, a
     // stable monotonic witness). Iteration order is NOT load-bearing: `finish`
     // always runs `SolverOutput::normalized` (resolved-text sort).
-    let mut edges_by_key: std::collections::HashMap<crate::core::StableKeyId, DerivedEdgeFact> =
-        std::collections::HashMap::new();
+    let mut edges_by_key: std::collections::HashMap<
+        crate::internal_core::StableKeyId,
+        DerivedEdgeFact,
+    > = std::collections::HashMap::new();
 
     let mut budget_exceeded = false;
     let mut budget_reasons = BTreeSet::new();
-    // GLOBAL monotonic step counter (R3): increments once per callsite resolution
+    // GLOBAL monotonic step counter: increments once per callsite resolution
     // across the WHOLE run and is never reset, so every derived edge's `solver_step`
     // is globally monotonic.
     let mut solver_step: u64 = 0;
-    // DISPATCH-round counter (FIX 1): the round cap bounds GENUINE dynamic-dispatch
+    // DISPATCH-round counter: the round cap bounds GENUINE dynamic-dispatch
     // re-iteration, NOT static-call-graph DEPTH. Only a round that actually (re)resolved
     // a dynamic callsite — and could therefore grow the resolved-edge set — counts toward
     // `max_rta_rounds`. Pure static-reachability growth does NOT consume the round budget;
     // it runs to completion bounded solely by `max_worklist_steps`. Counting static-BFS
-    // levels here (the prior behavior) made `round` equal the static call-graph depth, so
+    // levels here would make `round` equal the static call-graph depth, so
     // any first-party function whose shortest static-call path from a root exceeded the cap
     // had its dispatch silently dropped AND the run falsely latched `BudgetExceeded`.
     // Termination does not depend on this cap: `reachable` grows monotonically and is
@@ -142,13 +113,13 @@ pub(crate) fn solve_go_rta(
     // resolution consumes one `max_worklist_steps` step (the real runaway guard).
     let mut dispatch_rounds: usize = 0;
 
-    // Address-taken threshold (D-10/D-13, FINDING 7): a pathologically large func-value
+    // Address-taken threshold: a pathologically large func-value
     // surface disables FUNC-VALUE (signature) resolution rather than exploding the
     // candidate search — but it is SCOPED to func-value resolution only. Pure interface
     // dispatch never consults the address-taken set, so it must STILL proceed; aborting
     // the whole fixpoint here would drop real interface-invoke edges that have nothing to
     // do with the func-value surface. The set is seeded once and never grows, so this is
-    // loop-invariant (review IN-03): evaluate once.
+    // loop-invariant, so evaluate it once.
     let resolve_func_values = address_taken.len() <= budget.go.address_taken_threshold;
     // Latch BudgetExceeded for disabled func-value resolution ONLY when the fixpoint reaches
     // a signature-bearing callsite and therefore actually skips work. An unreachable
@@ -159,16 +130,16 @@ pub(crate) fn solve_go_rta(
         // reached in the prior round, or the roots in round 1). Collect callees that
         // become newly reachable — they are the next round's frontier. Track whether this
         // round resolved any dynamic callsite, so only genuine dispatch waves count toward
-        // the round cap (FIX 1).
+        // the round cap.
         let mut newly_reachable: BTreeSet<String> = BTreeSet::new();
         let mut resolved_dispatch_this_round = false;
         for caller in &frontier {
-            // Static-call edges GROW reachability (FINDING 1): a function reached only via
+            // Static-call edges GROW reachability: a function reached only via
             // a direct (static) call that is not itself a root must still enter the
             // worklist so dispatch inside it is resolved (standard RTA = closure over
             // static-call ⊗ dynamic-dispatch edges from roots). Static edges do NOT emit
             // a DerivedEdgeFact — only dynamic-dispatch resolution does. Each static-edge
-            // expansion consumes one worklist step too (CR-01: caps must account for deep
+            // expansion consumes one worklist step too (caps must account for deep
             // static chains), bounded by `max_worklist_steps`.
             if let Some(static_callees) = inputs.static_call_targets.get(caller.as_str()) {
                 for callee in static_callees {
@@ -187,7 +158,7 @@ pub(crate) fn solve_go_rta(
             let Some(callsite_indices) = callsites_by_caller.get(caller.as_str()) else {
                 continue;
             };
-            // Round cap (D-13): bound only genuine dynamic-dispatch re-iteration.
+            // Round cap: bound only genuine dynamic-dispatch re-iteration.
             // Static-call expansion above is independent and remains governed by
             // `go.max_worklist_steps`; the dispatch cap must never block static
             // reachability closure or falsely latch when only static work remains.
@@ -197,15 +168,15 @@ pub(crate) fn solve_go_rta(
                 continue;
             }
             // This caller has at least one dynamic callsite: the round performs genuine
-            // dispatch resolution, so it counts toward the round cap (FIX 1).
+            // dispatch resolution, so it counts toward the round cap.
             resolved_dispatch_this_round = true;
             for &index in callsite_indices {
-                // Worklist-step cap (D-13, CR-01): one callsite resolution is one step,
+                // Worklist-step cap: one callsite resolution is one step,
                 // bounded by the Go-scaled `max_worklist_steps` (10_000), NOT the
                 // policy-count `max_outer_iterations` (64).
                 solver_step += 1;
                 if solver_step > budget.go.max_worklist_steps as u64 {
-                    // Edges resolved before the cap keep their honest status (R1).
+                    // Edges resolved before the cap keep their honest status.
                     budget_reasons.insert(BudgetReason::GoMaxWorklistSteps.as_str().to_string());
                     return finish(interner, edges_by_key, true, budget_reasons);
                 }
@@ -251,7 +222,7 @@ pub(crate) fn solve_go_rta(
         }
 
         // Only a round that genuinely resolved dynamic dispatch counts toward the round
-        // cap (FIX 1); a pure static-BFS round leaves `dispatch_rounds` untouched so deep
+        // cap; a pure static-BFS round leaves `dispatch_rounds` untouched so deep
         // static chains do not consume the dispatch budget.
         if resolved_dispatch_this_round {
             dispatch_rounds += 1;
@@ -269,8 +240,8 @@ pub(crate) fn solve_go_rta(
 /// Assemble the normalized output from the deduplicated edge accumulator + the
 /// run-level budget status.
 fn finish(
-    interner: &crate::core::StableKeyInterner,
-    edges_by_key: std::collections::HashMap<crate::core::StableKeyId, DerivedEdgeFact>,
+    interner: &crate::internal_core::StableKeyInterner,
+    edges_by_key: std::collections::HashMap<crate::internal_core::StableKeyId, DerivedEdgeFact>,
     budget_exceeded: bool,
     budget_reasons: BTreeSet<String>,
 ) -> SolverOutput {
@@ -292,17 +263,17 @@ mod tests {
     use super::*;
     use std::collections::{BTreeMap, BTreeSet};
 
-    use crate::analysis::ids::SemanticNodeId;
-    use crate::analysis::points_to::facts::PointsToStatus;
-    use crate::analysis::solver::go_rta::inputs::{GoRtaCallsite, GoRtaInputs, GoRtaMethod};
+    use crate::analysis_neutral::ids::SemanticNodeId;
+    use crate::analysis_neutral::points_to::facts::PointsToStatus;
+    use crate::analysis_neutral::solver::go_rta::snapshot::{RtaCallsite, RtaInputs, RtaMethod};
 
     /// Build a small interface-dispatch scenario: a `main` caller, an interface invoke
     /// of method `Read` at a callsite, and a concrete type `pkg.File` with a `Read`
     /// method. Whether `pkg.File` is instantiated is the RTA discriminant.
     ///
     /// Nodes: main=1, callsite=2, File.Read=3, Buf.Read=4.
-    fn interface_scenario(instantiated_types: &[&str]) -> GoRtaInputs {
-        let interner = crate::core::test_stable_key_interner();
+    fn interface_scenario(instantiated_types: &[&str]) -> RtaInputs {
+        let interner = crate::internal_core::test_stable_key_interner();
         let mut function_node = BTreeMap::new();
         function_node.insert("main.main".to_string(), SemanticNodeId(1));
         function_node.insert("(pkg.File).Read".to_string(), SemanticNodeId(3));
@@ -322,7 +293,7 @@ mod tests {
         let mut methods_by_receiver = BTreeMap::new();
         methods_by_receiver.insert(
             "pkg.File".to_string(),
-            vec![GoRtaMethod {
+            vec![RtaMethod {
                 method_name: "Read".to_string(),
                 qualified: "(pkg.File).Read".to_string(),
                 node: SemanticNodeId(3),
@@ -330,7 +301,7 @@ mod tests {
         );
         methods_by_receiver.insert(
             "pkg.Buf".to_string(),
-            vec![GoRtaMethod {
+            vec![RtaMethod {
                 method_name: "Read".to_string(),
                 qualified: "(pkg.Buf).Read".to_string(),
                 node: SemanticNodeId(4),
@@ -347,9 +318,9 @@ mod tests {
             );
         }
 
-        GoRtaInputs {
+        RtaInputs {
             roots: BTreeSet::from(["main.main".to_string()]),
-            callsites: vec![GoRtaCallsite {
+            callsites: vec![RtaCallsite {
                 caller: "main.main".to_string(),
                 callsite_node: SemanticNodeId(2),
                 callsite_stable_key: interner.intern("cs|main:read"),
@@ -363,9 +334,9 @@ mod tests {
             instantiated_keys,
             function_node,
             methods_by_receiver,
-            ..GoRtaInputs::default()
+            ..RtaInputs::default()
         }
-        // FIX 2: derive the interface-dispatch index from the hand-built primary fields so
+        // derive the interface-dispatch index from the hand-built primary fields so
         // dispatch resolution (which now reads the index) behaves as the scan would have.
         .finalize_indexes()
     }
@@ -373,10 +344,10 @@ mod tests {
     #[test]
     fn interface_invoke_resolves_only_instantiated_receiver() {
         // pkg.File is instantiated → exactly the pkg.File.Read edge is derived; pkg.Buf
-        // is NOT instantiated → no Buf.Read edge (the RTA filter, D-06).
+        // is NOT instantiated → no Buf.Read edge (the RTA filter).
         let inputs = interface_scenario(&["pkg.File"]);
-        let output = solve_go_rta(
-            &crate::core::test_stable_key_interner(),
+        let output = solve_rta(
+            &crate::internal_core::test_stable_key_interner(),
             &inputs,
             &SolverBudget::default(),
         );
@@ -413,8 +384,8 @@ mod tests {
 
     #[test]
     fn static_call_edge_brings_non_root_caller_into_worklist_resolving_its_dispatch() {
-        let interner = crate::core::test_stable_key_interner();
-        // FINDING 1: `main` (the only root) makes a DIRECT (static) call to `run`, a
+        let interner = crate::internal_core::test_stable_key_interner();
+        // `main` (the only root) makes a DIRECT (static) call to `run`, a
         // non-root helper. The interface invoke `s.Speak()` lives in `run`, not in main.
         // RTA reachability must close over the static main -> run edge so run enters the
         // worklist and its dispatch resolves to (pkg.File).Read. Without static-edge
@@ -432,7 +403,7 @@ mod tests {
         let mut methods_by_receiver = BTreeMap::new();
         methods_by_receiver.insert(
             "pkg.File".to_string(),
-            vec![GoRtaMethod {
+            vec![RtaMethod {
                 method_name: "Read".to_string(),
                 qualified: "(pkg.File).Read".to_string(),
                 node: SemanticNodeId(3),
@@ -450,9 +421,9 @@ mod tests {
             BTreeSet::from(["main.run".to_string()]),
         );
 
-        let inputs = GoRtaInputs {
+        let inputs = RtaInputs {
             roots: BTreeSet::from(["main.main".to_string()]),
-            callsites: vec![GoRtaCallsite {
+            callsites: vec![RtaCallsite {
                 caller: "main.run".to_string(),
                 callsite_node: SemanticNodeId(2),
                 callsite_stable_key: interner.intern("cs|run:read"),
@@ -467,12 +438,12 @@ mod tests {
             function_node,
             methods_by_receiver,
             static_call_targets,
-            ..GoRtaInputs::default()
+            ..RtaInputs::default()
         }
         .finalize_indexes();
 
-        let output = solve_go_rta(
-            &crate::core::test_stable_key_interner(),
+        let output = solve_rta(
+            &crate::internal_core::test_stable_key_interner(),
             &inputs,
             &SolverBudget::default(),
         );
@@ -498,17 +469,12 @@ mod tests {
 
     #[test]
     fn deep_static_chain_with_bottom_dispatch_converges_at_default_budget() {
-        let interner = crate::core::test_stable_key_interner();
-        // FIX 1 (HIGH): the round cap must bound only GENUINE dispatch re-iteration, NOT
-        // static-call-graph DEPTH. A deep first-party STATIC chain
-        // main -> s1 -> s2 -> ... -> s200 whose BOTTOM function does a dynamic dispatch
-        // MUST converge WithinBudget AT THE DEFAULT budget (no inflated round cap) and
-        // resolve the deep dispatch edge. Static-reachability growth runs to completion
-        // bounded solely by `max_worklist_steps`; the round cap counts only the dispatch
-        // waves (here exactly one), so the 200-deep static chain never trips the default
-        // `max_rta_rounds = 32`. Before the fix, `round` incremented once per static hop,
-        // so depth 200 hit the cap at hop 32, latched a FALSE BudgetExceeded, AND silently
-        // dropped the deep dispatch — the original FINDING-1 silent-drop bug above depth 32.
+        let interner = crate::internal_core::test_stable_key_interner();
+        // The round cap bounds genuine dispatch re-iteration, not static-call-graph
+        // depth. A 200-deep static chain whose bottom function performs dynamic dispatch
+        // must converge within the default budget and resolve the deep edge. Static
+        // reachability is bounded by `max_worklist_steps`, while this graph consumes only
+        // one dynamic dispatch round.
         const CHAIN: usize = 200;
         let qualified = |i: usize| -> String {
             if i == 0 {
@@ -544,7 +510,7 @@ mod tests {
         let mut methods_by_receiver = BTreeMap::new();
         methods_by_receiver.insert(
             "pkg.File".to_string(),
-            vec![GoRtaMethod {
+            vec![RtaMethod {
                 method_name: "Read".to_string(),
                 qualified: "(pkg.File).Read".to_string(),
                 node: SemanticNodeId(TARGET_NODE),
@@ -555,10 +521,10 @@ mod tests {
         let mut instantiated_keys = BTreeMap::new();
         instantiated_keys.insert("pkg.File".to_string(), interner.intern("inst|pkg.File"));
 
-        let inputs = GoRtaInputs {
+        let inputs = RtaInputs {
             roots: BTreeSet::from(["main.main".to_string()]),
             // The dynamic dispatch lives in the DEEPEST statically-reached function.
-            callsites: vec![GoRtaCallsite {
+            callsites: vec![RtaCallsite {
                 caller: qualified(CHAIN),
                 callsite_node: SemanticNodeId(900_000),
                 callsite_stable_key: interner.intern("cs|deep:read"),
@@ -573,14 +539,14 @@ mod tests {
             methods_by_receiver,
             function_node,
             static_call_targets,
-            ..GoRtaInputs::default()
+            ..RtaInputs::default()
         }
         .finalize_indexes();
 
         // THE DEFAULT BUDGET — no inflated `max_rta_rounds`. The default `max_rta_rounds`
-        // (32) is far below the chain depth (200); the fix is what lets this converge.
-        let output = solve_go_rta(
-            &crate::core::test_stable_key_interner(),
+        // (32) is far below the chain depth (200), yet static closure must converge.
+        let output = solve_rta(
+            &crate::internal_core::test_stable_key_interner(),
             &inputs,
             &SolverBudget::default(),
         );
@@ -607,7 +573,7 @@ mod tests {
 
     #[test]
     fn pure_deep_static_chain_converges_at_default_budget() {
-        // FIX 1 companion: a deep-but-finite STATIC chain with NO dispatch anywhere must
+        // A deep-but-finite STATIC chain with NO dispatch anywhere must
         // also converge WithinBudget AT THE DEFAULT budget. Static-edge expansion consumes
         // the worklist-step budget (10_000, comfortably admitting the chain) and grows no
         // dispatch waves, so the round cap is never approached. No dynamic callsites → no
@@ -633,16 +599,16 @@ mod tests {
                 .insert(qualified(i + 1));
         }
 
-        let inputs = GoRtaInputs {
+        let inputs = RtaInputs {
             roots: BTreeSet::from(["main.main".to_string()]),
             function_node,
             static_call_targets,
-            ..GoRtaInputs::default()
+            ..RtaInputs::default()
         }
         .finalize_indexes();
 
-        let output = solve_go_rta(
-            &crate::core::test_stable_key_interner(),
+        let output = solve_rta(
+            &crate::internal_core::test_stable_key_interner(),
             &inputs,
             &SolverBudget::default(),
         );
@@ -658,10 +624,10 @@ mod tests {
     #[test]
     fn type_not_in_instantiated_set_derives_no_edge() {
         // No type instantiated at all → the interface invoke resolves to nothing
-        // (honest unresolved, not a fabricated edge — D-08).
+        // (honest unresolved, not a fabricated edge).
         let inputs = interface_scenario(&[]);
-        let output = solve_go_rta(
-            &crate::core::test_stable_key_interner(),
+        let output = solve_rta(
+            &crate::internal_core::test_stable_key_interner(),
             &inputs,
             &SolverBudget::default(),
         );
@@ -671,7 +637,7 @@ mod tests {
 
     #[test]
     fn func_value_resolves_via_address_taken_by_signature() {
-        let interner = crate::core::test_stable_key_interner();
+        let interner = crate::internal_core::test_stable_key_interner();
         // A func-value callsite resolves to address-taken functions whose signature
         // matches. handler (addr-taken, sig "func()") matches; other (sig "func(int)")
         // does not.
@@ -691,9 +657,9 @@ mod tests {
         address_taken_keys.insert("pkg.handler".to_string(), interner.intern("at|pkg.handler"));
         address_taken_keys.insert("pkg.other".to_string(), interner.intern("at|pkg.other"));
 
-        let inputs = GoRtaInputs {
+        let inputs = RtaInputs {
             roots: BTreeSet::from(["main.main".to_string()]),
-            callsites: vec![GoRtaCallsite {
+            callsites: vec![RtaCallsite {
                 caller: "main.main".to_string(),
                 callsite_node: SemanticNodeId(2),
                 callsite_stable_key: interner.intern("cs|main:fv"),
@@ -705,12 +671,12 @@ mod tests {
             address_taken_keys,
             function_node,
             function_signature,
-            ..GoRtaInputs::default()
+            ..RtaInputs::default()
         }
         .finalize_indexes();
 
-        let output = solve_go_rta(
-            &crate::core::test_stable_key_interner(),
+        let output = solve_rta(
+            &crate::internal_core::test_stable_key_interner(),
             &inputs,
             &SolverBudget::default(),
         );
@@ -733,12 +699,12 @@ mod tests {
     #[test]
     fn honest_unresolved_when_method_set_has_no_match() {
         // The instantiated type's method-set does NOT contain the invoked method →
-        // no edge (honest unresolved, D-08).
+        // no edge (honest unresolved).
         let mut inputs = interface_scenario(&["pkg.File"]);
         // The callsite invokes a method nobody declares.
         inputs.callsites[0].interface_method = Some("Frobnicate".to_string());
-        let output = solve_go_rta(
-            &crate::core::test_stable_key_interner(),
+        let output = solve_rta(
+            &crate::internal_core::test_stable_key_interner(),
             &inputs,
             &SolverBudget::default(),
         );
@@ -747,11 +713,11 @@ mod tests {
 
     #[test]
     fn deleting_a_contributing_fact_invalidates_the_rta_edge() {
-        // D-09 for RTA: the resolved edge depends on its contributing instantiated-type
-        // / method-set / callsite / dispatch facts. Removing the instantiated-type fact
+        // The resolved edge depends on its contributing instantiated-type
+        // method-set, callsite, and dispatch facts. Removing the instantiated-type fact
         // (i.e. the type is no longer instantiated) does NOT reproduce the SAME edge.
-        let baseline = solve_go_rta(
-            &crate::core::test_stable_key_interner(),
+        let baseline = solve_rta(
+            &crate::internal_core::test_stable_key_interner(),
             &interface_scenario(&["pkg.File"]),
             &SolverBudget::default(),
         );
@@ -763,8 +729,8 @@ mod tests {
         let baseline_key = edge.stable_key;
 
         // Remove pkg.File from the instantiated set (delete the contributing fact).
-        let without_instantiated = solve_go_rta(
-            &crate::core::test_stable_key_interner(),
+        let without_instantiated = solve_rta(
+            &crate::internal_core::test_stable_key_interner(),
             &interface_scenario(&[]),
             &SolverBudget::default(),
         );
@@ -778,7 +744,7 @@ mod tests {
 
         // Removing the method-set match (the type no longer declares the method) also
         // invalidates the edge. Mutating a primary field requires rebuilding the derived
-        // dispatch index (FIX 2) — exactly what re-running `from_db` would do.
+        // dispatch index — exactly what re-running `from_db` would do.
         let mut no_method_set = interface_scenario(&["pkg.File"]);
         no_method_set
             .method_sets
@@ -786,8 +752,8 @@ mod tests {
             .unwrap()
             .remove("Read");
         let no_method_set = no_method_set.finalize_indexes();
-        let rerun = solve_go_rta(
-            &crate::core::test_stable_key_interner(),
+        let rerun = solve_rta(
+            &crate::internal_core::test_stable_key_interner(),
             &no_method_set,
             &SolverBudget::default(),
         );
@@ -801,28 +767,28 @@ mod tests {
     }
 
     #[test]
-    fn solve_go_rta_is_shuffle_stable() {
+    fn solve_rta_is_shuffle_stable() {
         // BTree-keyed inputs make the output insensitive to insertion order. Build the
         // same scenario via two different instantiated-type insertion orders and assert
         // byte-identical normalized output.
-        let forward = solve_go_rta(
-            &crate::core::test_stable_key_interner(),
+        let forward = solve_rta(
+            &crate::internal_core::test_stable_key_interner(),
             &interface_scenario(&["pkg.File", "pkg.Buf"]),
             &SolverBudget::default(),
         );
-        let reversed = solve_go_rta(
-            &crate::core::test_stable_key_interner(),
+        let reversed = solve_rta(
+            &crate::internal_core::test_stable_key_interner(),
             &interface_scenario(&["pkg.Buf", "pkg.File"]),
             &SolverBudget::default(),
         );
 
-        let interner = crate::core::test_stable_key_interner();
-        let forward_json = crate::analysis::solver::facts::serialize_derived_edges_stable(
+        let interner = crate::internal_core::test_stable_key_interner();
+        let forward_json = crate::analysis_neutral::solver::facts::serialize_derived_edges_stable(
             &interner,
             &forward.derived_edges,
         )
         .expect("serialize forward");
-        let reversed_json = crate::analysis::solver::facts::serialize_derived_edges_stable(
+        let reversed_json = crate::analysis_neutral::solver::facts::serialize_derived_edges_stable(
             &interner,
             &reversed.derived_edges,
         )
@@ -832,9 +798,9 @@ mod tests {
 
     #[test]
     fn runaway_dispatch_latches_budget_exceeded_not_unbounded() {
-        let interner = crate::core::test_stable_key_interner();
+        let interner = crate::internal_core::test_stable_key_interner();
         // A deliberately tight round cap forces the fixpoint to latch BudgetExceeded
-        // rather than loop unbounded (D-13). Build a reachable chain main -> a -> b so
+        // rather than loop unbounded. Build a reachable chain main -> a -> b so
         // resolution needs more than one round, then cap rounds at 1.
         let mut function_node = BTreeMap::new();
         function_node.insert("main.main".to_string(), SemanticNodeId(1));
@@ -851,7 +817,7 @@ mod tests {
         let mut methods_by_receiver = BTreeMap::new();
         methods_by_receiver.insert(
             "pkg.A".to_string(),
-            vec![GoRtaMethod {
+            vec![RtaMethod {
                 method_name: "Step".to_string(),
                 qualified: "(pkg.A).Step".to_string(),
                 node: SemanticNodeId(3),
@@ -859,7 +825,7 @@ mod tests {
         );
         methods_by_receiver.insert(
             "pkg.B".to_string(),
-            vec![GoRtaMethod {
+            vec![RtaMethod {
                 method_name: "Step".to_string(),
                 qualified: "(pkg.B).Step".to_string(),
                 node: SemanticNodeId(5),
@@ -871,11 +837,11 @@ mod tests {
         instantiated_keys.insert("pkg.A".to_string(), interner.intern("inst|A"));
         instantiated_keys.insert("pkg.B".to_string(), interner.intern("inst|B"));
 
-        let inputs = GoRtaInputs {
+        let inputs = RtaInputs {
             roots: BTreeSet::from(["main.main".to_string()]),
             callsites: vec![
                 // main -> A.Step (resolvable round 1)
-                GoRtaCallsite {
+                RtaCallsite {
                     caller: "main.main".to_string(),
                     callsite_node: SemanticNodeId(2),
                     callsite_stable_key: interner.intern("cs|main"),
@@ -884,7 +850,7 @@ mod tests {
                     dispatch_stable_key: interner.intern("dd|main"),
                 },
                 // A.Step -> B.Step (only reachable in round 2)
-                GoRtaCallsite {
+                RtaCallsite {
                     caller: "(pkg.A).Step".to_string(),
                     callsite_node: SemanticNodeId(4),
                     callsite_stable_key: interner.intern("cs|a"),
@@ -899,13 +865,17 @@ mod tests {
             instantiated_keys,
             methods_by_receiver,
             function_node,
-            ..GoRtaInputs::default()
+            ..RtaInputs::default()
         }
         .finalize_indexes();
 
         let mut budget = SolverBudget::default();
         budget.go.max_rta_rounds = 1;
-        let output = solve_go_rta(&crate::core::test_stable_key_interner(), &inputs, &budget);
+        let output = solve_rta(
+            &crate::internal_core::test_stable_key_interner(),
+            &inputs,
+            &budget,
+        );
         // The cap is hit before the second round resolves A.Step's callsite, so the
         // run latches BudgetExceeded honestly rather than looping.
         assert_eq!(output.budget_status, BudgetStatus::BudgetExceeded);
@@ -913,8 +883,8 @@ mod tests {
 
     #[test]
     fn address_taken_threshold_suppresses_only_func_value_not_interface_dispatch() {
-        let interner = crate::core::test_stable_key_interner();
-        // FINDING 7: a pathologically large address-taken (func-value) surface must
+        let interner = crate::internal_core::test_stable_key_interner();
+        // a pathologically large address-taken (func-value) surface must
         // disable only FUNC-VALUE (signature) resolution; pure INTERFACE dispatch (which
         // does not consult the address-taken set) must still resolve. `main` has an
         // interface invoke of `Read` (resolves to the instantiated (pkg.File).Read) AND a
@@ -936,7 +906,7 @@ mod tests {
         let mut methods_by_receiver = BTreeMap::new();
         methods_by_receiver.insert(
             "pkg.File".to_string(),
-            vec![GoRtaMethod {
+            vec![RtaMethod {
                 method_name: "Read".to_string(),
                 qualified: "(pkg.File).Read".to_string(),
                 node: SemanticNodeId(3),
@@ -957,11 +927,11 @@ mod tests {
         function_signature.insert("pkg.h1".to_string(), "func()".to_string());
         function_signature.insert("pkg.h2".to_string(), "func()".to_string());
 
-        let inputs = GoRtaInputs {
+        let inputs = RtaInputs {
             roots: BTreeSet::from(["main.main".to_string()]),
             callsites: vec![
                 // Interface invoke of Read (must still resolve).
-                GoRtaCallsite {
+                RtaCallsite {
                     caller: "main.main".to_string(),
                     callsite_node: SemanticNodeId(2),
                     callsite_stable_key: interner.intern("cs|main:read"),
@@ -970,7 +940,7 @@ mod tests {
                     dispatch_stable_key: interner.intern("dd|main:read"),
                 },
                 // Func-value call of func() (must be suppressed under the threshold).
-                GoRtaCallsite {
+                RtaCallsite {
                     caller: "main.main".to_string(),
                     callsite_node: SemanticNodeId(4),
                     callsite_stable_key: interner.intern("cs|main:fv"),
@@ -988,13 +958,17 @@ mod tests {
             function_node,
             function_signature,
             methods_by_receiver,
-            ..GoRtaInputs::default()
+            ..RtaInputs::default()
         }
         .finalize_indexes();
 
         let mut budget = SolverBudget::default();
         budget.go.address_taken_threshold = 1;
-        let output = solve_go_rta(&crate::core::test_stable_key_interner(), &inputs, &budget);
+        let output = solve_rta(
+            &crate::internal_core::test_stable_key_interner(),
+            &inputs,
+            &budget,
+        );
 
         // Interface dispatch still resolves despite the large address-taken set.
         assert!(
@@ -1019,16 +993,15 @@ mod tests {
 
     #[test]
     fn large_address_taken_with_no_func_value_callsite_stays_within_budget() {
-        let interner = crate::core::test_stable_key_interner();
-        // FIX 2 (MEDIUM): an oversized address-taken (func-value) surface must latch
+        let interner = crate::internal_core::test_stable_key_interner();
+        // an oversized address-taken (func-value) surface must latch
         // BudgetExceeded ONLY when func-value resolution is actually NEEDED — i.e. at
         // least one reachable callsite is a func-value (signature-bearing) callsite.
         // Here the only callsite is an INTERFACE invoke (no signature), so disabling
         // func-value resolution costs nothing: interface dispatch still resolves and the
-        // run must stay WithinBudget. Before the fix, the threshold latched BudgetExceeded
-        // unconditionally, producing a FALSE exhaustion signal (folded into
-        // solver_output_digest / WR-06) on a codebase that has many address-taken
-        // functions but no indirect func-value calls.
+        // run must stay WithinBudget. Latching unconditionally would produce a false
+        // exhaustion signal in `solver_output_digest` for codebases with many
+        // address-taken functions but no indirect function-value calls.
         let mut inputs = interface_scenario(&["pkg.File"]);
         // A large address-taken surface (3 funcs) with threshold 1: func-value resolution
         // is "disabled", but there is NO func-value callsite to resolve. The scenario's
@@ -1047,7 +1020,11 @@ mod tests {
 
         let mut budget = SolverBudget::default();
         budget.go.address_taken_threshold = 1;
-        let output = solve_go_rta(&crate::core::test_stable_key_interner(), &inputs, &budget);
+        let output = solve_rta(
+            &crate::internal_core::test_stable_key_interner(),
+            &inputs,
+            &budget,
+        );
 
         // Interface dispatch still resolves: main(1) -> (pkg.File).Read(3).
         assert!(
@@ -1070,7 +1047,7 @@ mod tests {
 
     #[test]
     fn large_address_taken_with_only_unreachable_func_value_callsite_stays_within_budget() {
-        let interner = crate::core::test_stable_key_interner();
+        let interner = crate::internal_core::test_stable_key_interner();
         // A signature-bearing func-value callsite that is NOT reachable from any RTA root
         // must not latch BudgetExceeded. The threshold signal is about skipped reachable
         // work, not dormant obligations in disconnected functions.
@@ -1095,7 +1072,7 @@ mod tests {
             ("pkg.h1".to_string(), interner.intern("at|h1")),
             ("pkg.h2".to_string(), interner.intern("at|h2")),
         ]);
-        inputs.callsites.push(GoRtaCallsite {
+        inputs.callsites.push(RtaCallsite {
             caller: "pkg.unreachable".to_string(),
             callsite_node: SemanticNodeId(53),
             callsite_stable_key: interner.intern("cs|unreachable:fv"),
@@ -1106,8 +1083,8 @@ mod tests {
 
         let mut budget = SolverBudget::default();
         budget.go.address_taken_threshold = 1;
-        let output = solve_go_rta(
-            &crate::core::test_stable_key_interner(),
+        let output = solve_rta(
+            &crate::internal_core::test_stable_key_interner(),
             &inputs.finalize_indexes(),
             &budget,
         );
@@ -1136,15 +1113,15 @@ mod tests {
 
     #[test]
     fn convergence_at_round_boundary_with_no_pending_work_stays_within_budget() {
-        let interner = crate::core::test_stable_key_interner();
-        // FINDING 6: at the `max_rta_rounds` boundary the cap must latch BudgetExceeded
+        let interner = crate::internal_core::test_stable_key_interner();
+        // at the `max_rta_rounds` boundary the cap must latch BudgetExceeded
         // ONLY when there is genuinely pending dispatch work. Here `main` (root) invokes
         // `Step`, resolving to (pkg.A).Step in round 1; (pkg.A).Step has NO callsites
         // and only a static edge back to already-reachable main, so the round-2 frontier
         // {A.Step} has nothing left to resolve — the analysis has CONVERGED. With
-        // max_rta_rounds = 1 the old code latched BudgetExceeded purely because the
-        // frontier had a static-call row, a false positive. (Contrast the runaway test
-        // where A.Step DOES invoke B.Step — genuine pending work that still latches.)
+        // `max_rta_rounds = 1`, the static-call row must not by itself latch
+        // `BudgetExceeded`. By contrast, A.Step invoking B.Step leaves genuine pending
+        // work and must still latch.
         let mut function_node = BTreeMap::new();
         function_node.insert("main.main".to_string(), SemanticNodeId(1));
         function_node.insert("(pkg.A).Step".to_string(), SemanticNodeId(3));
@@ -1157,7 +1134,7 @@ mod tests {
         let mut methods_by_receiver = BTreeMap::new();
         methods_by_receiver.insert(
             "pkg.A".to_string(),
-            vec![GoRtaMethod {
+            vec![RtaMethod {
                 method_name: "Step".to_string(),
                 qualified: "(pkg.A).Step".to_string(),
                 node: SemanticNodeId(3),
@@ -1168,12 +1145,12 @@ mod tests {
         let mut instantiated_keys = BTreeMap::new();
         instantiated_keys.insert("pkg.A".to_string(), interner.intern("inst|A"));
 
-        let inputs = GoRtaInputs {
+        let inputs = RtaInputs {
             roots: BTreeSet::from(["main.main".to_string()]),
             // Only main has a callsite; (pkg.A).Step has none, and its static edge is
             // already closed over reachable main → the round-2 frontier is converged
             // with no pending work.
-            callsites: vec![GoRtaCallsite {
+            callsites: vec![RtaCallsite {
                 caller: "main.main".to_string(),
                 callsite_node: SemanticNodeId(2),
                 callsite_stable_key: interner.intern("cs|main"),
@@ -1191,13 +1168,17 @@ mod tests {
                 "(pkg.A).Step".to_string(),
                 BTreeSet::from(["main.main".to_string()]),
             )]),
-            ..GoRtaInputs::default()
+            ..RtaInputs::default()
         }
         .finalize_indexes();
 
         let mut budget = SolverBudget::default();
         budget.go.max_rta_rounds = 1;
-        let output = solve_go_rta(&crate::core::test_stable_key_interner(), &inputs, &budget);
+        let output = solve_rta(
+            &crate::internal_core::test_stable_key_interner(),
+            &inputs,
+            &budget,
+        );
         // The single resolvable edge is derived AND the run is WithinBudget (converged at
         // the boundary, no pending work the cap prevented).
         assert!(
@@ -1216,7 +1197,7 @@ mod tests {
 
     #[test]
     fn static_only_expansion_after_dispatch_round_cap_stays_within_budget() {
-        let interner = crate::core::test_stable_key_interner();
+        let interner = crate::internal_core::test_stable_key_interner();
         // The dispatch round cap is a dynamic-dispatch cap, not a static reachability
         // cap. Round 1 resolves main -> A dynamically. At the cap boundary, A has only
         // a static call to B, so the analysis must still close over B without latching
@@ -1234,16 +1215,16 @@ mod tests {
         let mut methods_by_receiver = BTreeMap::new();
         methods_by_receiver.insert(
             "pkg.A".to_string(),
-            vec![GoRtaMethod {
+            vec![RtaMethod {
                 method_name: "Step".to_string(),
                 qualified: "(pkg.A).Step".to_string(),
                 node: SemanticNodeId(3),
             }],
         );
 
-        let inputs = GoRtaInputs {
+        let inputs = RtaInputs {
             roots: BTreeSet::from(["main.main".to_string()]),
-            callsites: vec![GoRtaCallsite {
+            callsites: vec![RtaCallsite {
                 caller: "main.main".to_string(),
                 callsite_node: SemanticNodeId(2),
                 callsite_stable_key: interner.intern("cs|main"),
@@ -1261,14 +1242,18 @@ mod tests {
                 "(pkg.A).Step".to_string(),
                 BTreeSet::from(["pkg.B".to_string()]),
             )]),
-            ..GoRtaInputs::default()
+            ..RtaInputs::default()
         }
         .finalize_indexes();
 
         let mut budget = SolverBudget::default();
         budget.go.max_rta_rounds = 1;
 
-        let output = solve_go_rta(&crate::core::test_stable_key_interner(), &inputs, &budget);
+        let output = solve_rta(
+            &crate::internal_core::test_stable_key_interner(),
+            &inputs,
+            &budget,
+        );
 
         assert!(
             output
@@ -1288,23 +1273,19 @@ mod tests {
         );
     }
 
-    /// Regression for CR-01: a multi-round RTA convergence whose total dynamic
-    /// callsite-visits EXCEED the old policy-count cap (64) but which is NOT runaway
-    /// dispatch. Before the fix, the fixpoint capped its per-callsite worklist-step
-    /// counter against `max_outer_iterations` (= 64) AND re-scanned the whole reachable
-    /// set every round, so this graph spuriously latched `BudgetExceeded` and dropped
-    /// real edges. After the fix (Go-scaled `max_worklist_steps` = 10_000 + frontier-
-    /// only per-round scan) it must converge `WithinBudget` and resolve EVERY chain
-    /// edge.
+    /// A multi-round RTA convergence may exceed the policy iteration count without
+    /// being runaway dispatch. The worklist uses `max_worklist_steps`, and frontier-only
+    /// scanning counts each reachable caller's actual work once. This graph must converge
+    /// `WithinBudget` and resolve every chain edge.
     ///
     /// Shape: a deep reachable chain `step.0 -> step.1 -> ... -> step.N`. Each `step.i`
     /// is a method on a distinct instantiated type `pkg.S{i}`; it has one interface
     /// invoke of the uniquely-named method `M{i+1}`, which resolves ONLY to `step.{i+1}`
     /// (on `pkg.S{i+1}`). Resolving the whole chain therefore needs N rounds and N
-    /// callsite-visits. With N = 80 (> 64) the old step cap would trip mid-chain.
+    /// callsite-visits. With N = 80, the graph also exceeds the policy iteration count.
     #[test]
     fn deep_multi_round_chain_exceeding_64_visits_stays_within_budget() {
-        let interner = crate::core::test_stable_key_interner();
+        let interner = crate::internal_core::test_stable_key_interner();
         const CHAIN: usize = 80;
 
         let mut function_node = BTreeMap::new();
@@ -1339,7 +1320,7 @@ mod tests {
             );
             methods_by_receiver.insert(
                 type_name.clone(),
-                vec![GoRtaMethod {
+                vec![RtaMethod {
                     method_name: method,
                     qualified: qualified(i),
                     node: SemanticNodeId((i + 1) as u64),
@@ -1354,7 +1335,7 @@ mod tests {
         // Caller step.i (for i in 0..CHAIN) invokes M{i+1}, reaching step.{i+1}.
         for i in 0..CHAIN {
             let next = i + 1;
-            callsites.push(GoRtaCallsite {
+            callsites.push(RtaCallsite {
                 caller: qualified(i),
                 callsite_node: SemanticNodeId((1000 + i) as u64),
                 callsite_stable_key: interner.intern(format!("cs|{i}")),
@@ -1364,7 +1345,7 @@ mod tests {
             });
         }
 
-        let inputs = GoRtaInputs {
+        let inputs = RtaInputs {
             roots: BTreeSet::from(["main.main".to_string()]),
             callsites,
             method_sets,
@@ -1373,29 +1354,33 @@ mod tests {
             instantiated_keys,
             methods_by_receiver,
             function_node,
-            ..GoRtaInputs::default()
+            ..RtaInputs::default()
         }
         .finalize_indexes();
 
         // Default worklist-step cap (10_000) easily admits the 80 visits; the round cap
         // must be raised above the chain depth so the round cap itself is not what trips
-        // (we are pinning the STEP cap's scale, the CR-01 regression). The default
-        // worklist-step cap stays untouched, proving 80 visits no longer trip 64.
+        // This pins the step cap's scale. The default
+        // worklist-step cap stays untouched, proving 80 visits remain within budget.
         let mut budget = SolverBudget::default();
         budget.go.max_rta_rounds = CHAIN + 1;
         assert!(
             CHAIN > budget.max_outer_iterations,
-            "the chain must exceed the OLD policy-count cap ({}) to be a real regression",
+            "the chain must exceed the policy iteration count ({})",
             budget.max_outer_iterations
         );
 
-        let output = solve_go_rta(&crate::core::test_stable_key_interner(), &inputs, &budget);
+        let output = solve_rta(
+            &crate::internal_core::test_stable_key_interner(),
+            &inputs,
+            &budget,
+        );
 
         // The fixpoint converges honestly — NOT a spurious BudgetExceeded.
         assert_eq!(
             output.budget_status,
             BudgetStatus::WithinBudget,
-            "an {CHAIN}-visit multi-round convergence must NOT trip the worklist-step cap (CR-01)"
+            "an {CHAIN}-visit multi-round convergence must not trip the worklist-step cap"
         );
         // Every chain edge step.i -> step.{i+1} is resolved (no edge silently dropped).
         assert_eq!(
@@ -1417,14 +1402,14 @@ mod tests {
         }
     }
 
-    /// CR-01 honesty floor: genuine runaway dispatch must STILL latch `BudgetExceeded`
+    /// Genuine runaway dispatch must still latch `BudgetExceeded`
     /// once it exceeds the (Go-scaled) worklist-step cap. A tight `max_worklist_steps`
     /// forces the same chain to truncate mid-resolution, proving the cap still bites
     /// when work genuinely exceeds it (the `iteration-cap` fixture stays green for the
     /// candidate-cap path; this pins the step-cap path).
     #[test]
     fn worklist_step_cap_still_latches_budget_exceeded_when_genuinely_exceeded() {
-        let interner = crate::core::test_stable_key_interner();
+        let interner = crate::internal_core::test_stable_key_interner();
         let mut function_node = BTreeMap::new();
         function_node.insert("main.main".to_string(), SemanticNodeId(1));
         function_node.insert("(pkg.A).Step".to_string(), SemanticNodeId(3));
@@ -1440,7 +1425,7 @@ mod tests {
         let mut methods_by_receiver = BTreeMap::new();
         methods_by_receiver.insert(
             "pkg.A".to_string(),
-            vec![GoRtaMethod {
+            vec![RtaMethod {
                 method_name: "Step".to_string(),
                 qualified: "(pkg.A).Step".to_string(),
                 node: SemanticNodeId(3),
@@ -1448,7 +1433,7 @@ mod tests {
         );
         methods_by_receiver.insert(
             "pkg.B".to_string(),
-            vec![GoRtaMethod {
+            vec![RtaMethod {
                 method_name: "Step".to_string(),
                 qualified: "(pkg.B).Step".to_string(),
                 node: SemanticNodeId(5),
@@ -1460,10 +1445,10 @@ mod tests {
         instantiated_keys.insert("pkg.A".to_string(), interner.intern("inst|A"));
         instantiated_keys.insert("pkg.B".to_string(), interner.intern("inst|B"));
 
-        let inputs = GoRtaInputs {
+        let inputs = RtaInputs {
             roots: BTreeSet::from(["main.main".to_string()]),
             callsites: vec![
-                GoRtaCallsite {
+                RtaCallsite {
                     caller: "main.main".to_string(),
                     callsite_node: SemanticNodeId(2),
                     callsite_stable_key: interner.intern("cs|main"),
@@ -1471,7 +1456,7 @@ mod tests {
                     signature: None,
                     dispatch_stable_key: interner.intern("dd|main"),
                 },
-                GoRtaCallsite {
+                RtaCallsite {
                     caller: "(pkg.A).Step".to_string(),
                     callsite_node: SemanticNodeId(4),
                     callsite_stable_key: interner.intern("cs|a"),
@@ -1486,7 +1471,7 @@ mod tests {
             instantiated_keys,
             methods_by_receiver,
             function_node,
-            ..GoRtaInputs::default()
+            ..RtaInputs::default()
         }
         .finalize_indexes();
 
@@ -1494,7 +1479,11 @@ mod tests {
         // chain truncates and the run latches BudgetExceeded honestly.
         let mut budget = SolverBudget::default();
         budget.go.max_worklist_steps = 1;
-        let output = solve_go_rta(&crate::core::test_stable_key_interner(), &inputs, &budget);
+        let output = solve_rta(
+            &crate::internal_core::test_stable_key_interner(),
+            &inputs,
+            &budget,
+        );
         assert_eq!(output.budget_status, BudgetStatus::BudgetExceeded);
     }
 }
