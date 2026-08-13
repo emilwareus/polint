@@ -59,10 +59,10 @@ impl KernelRunReport {
     }
 
     #[cfg_attr(
-        not(test),
+        any(not(test), not(all(feature = "lang-go", feature = "lang-typescript"))),
         expect(
             dead_code,
-            reason = "demand trace is currently surfaced through test-only metadata debug output"
+            reason = "demand trace is surfaced by polyglot metadata debug coverage"
         )
     )]
     pub(crate) fn demand_query_trace(&self) -> &DemandQueryTrace {
@@ -75,7 +75,7 @@ impl KernelRunReport {
         self
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "lang-go", feature = "lang-typescript"))]
     pub(crate) fn scc_closure_debug(&self) -> Option<&SccClosureDebugSnapshot> {
         self.scc_closure_debug.as_ref()
     }

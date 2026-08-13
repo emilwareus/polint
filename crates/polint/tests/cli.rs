@@ -6484,9 +6484,17 @@ fn new_rule_creates_skeleton() {
         .assert()
         .success();
 
+    let manifest_path = temp.path().join(".polint/rules/Cargo.toml");
     assert!(
-        temp.path().join(".polint/rules/Cargo.toml").exists(),
+        manifest_path.exists(),
         "expected one pack manifest at .polint/rules/Cargo.toml"
+    );
+    let manifest = fs::read_to_string(manifest_path).unwrap();
+    assert!(manifest.contains("default-features = false"));
+    assert_eq!(manifest.contains(r#""lang-go""#), cfg!(feature = "lang-go"));
+    assert_eq!(
+        manifest.contains(r#""lang-typescript""#),
+        cfg!(feature = "lang-typescript")
     );
     assert!(
         temp.path()
@@ -12209,4 +12217,130 @@ fn review_requires_local_rule_hosts() {
         .stderr(predicate::str::contains(
             "polint new-rule generic <name> --review",
         ));
+}
+
+#[cfg(not(feature = "lang-go"))]
+#[test]
+fn disabled_go_feature_reports_capability_diagnostic() {
+    let dir = tempfile::tempdir().unwrap();
+    write_file(
+        &dir.path().join("main.go"),
+        "package main\nfunc main() {}\n",
+    );
+
+    let report = stdout_json(
+        polint_cmd()
+            .current_dir(dir.path())
+            .args([
+                "check",
+                "--format",
+                "json",
+                "--fail-on",
+                "none",
+                "--no-cache",
+            ])
+            .assert()
+            .success(),
+    );
+    let diagnostic = diagnostics_for_rule(&report, "polint/capability")
+        .into_iter()
+        .find(|diagnostic| diagnostic_has_evidence(diagnostic, "feature", "lang-go"))
+        .expect("disabled Go frontend should emit a capability diagnostic");
+    assert_eq!(diagnostic["file"], "main.go");
+    assert!(diagnostic_has_evidence(
+        diagnostic,
+        "reason",
+        "language-feature-disabled"
+    ));
+    assert!(diagnostic_has_evidence(diagnostic, "status", "unsupported"));
+}
+
+#[cfg(not(feature = "lang-typescript"))]
+#[test]
+fn disabled_typescript_feature_reports_capability_diagnostic() {
+    let dir = tempfile::tempdir().unwrap();
+    write_file(&dir.path().join("main.ts"), "export const value = 1;\n");
+
+    let report = stdout_json(
+        polint_cmd()
+            .current_dir(dir.path())
+            .args([
+                "check",
+                "--format",
+                "json",
+                "--fail-on",
+                "none",
+                "--no-cache",
+            ])
+            .assert()
+            .success(),
+    );
+    let diagnostic = diagnostics_for_rule(&report, "polint/capability")
+        .into_iter()
+        .find(|diagnostic| diagnostic_has_evidence(diagnostic, "feature", "lang-typescript"))
+        .expect("disabled TypeScript frontend should emit a capability diagnostic");
+    assert_eq!(diagnostic["file"], "main.ts");
+    assert!(diagnostic_has_evidence(
+        diagnostic,
+        "reason",
+        "language-feature-disabled"
+    ));
+    assert!(diagnostic_has_evidence(diagnostic, "status", "unsupported"));
+}
+
+#[cfg(feature = "lang-go")]
+#[test]
+fn enabled_go_feature_does_not_report_feature_disabled() {
+    let dir = tempfile::tempdir().unwrap();
+    write_file(
+        &dir.path().join("main.go"),
+        "package main\nfunc main() {}\n",
+    );
+    let report = stdout_json(
+        polint_cmd()
+            .current_dir(dir.path())
+            .args([
+                "check",
+                "--format",
+                "json",
+                "--fail-on",
+                "none",
+                "--no-cache",
+            ])
+            .assert()
+            .success(),
+    );
+    assert!(
+        diagnostics_for_rule(&report, "polint/capability")
+            .iter()
+            .all(|diagnostic| { !diagnostic_has_evidence(diagnostic, "feature", "lang-go") })
+    );
+}
+
+#[cfg(feature = "lang-typescript")]
+#[test]
+fn enabled_typescript_feature_does_not_report_feature_disabled() {
+    let dir = tempfile::tempdir().unwrap();
+    write_file(&dir.path().join("main.ts"), "export const value = 1;\n");
+    let report = stdout_json(
+        polint_cmd()
+            .current_dir(dir.path())
+            .args([
+                "check",
+                "--format",
+                "json",
+                "--fail-on",
+                "none",
+                "--no-cache",
+            ])
+            .assert()
+            .success(),
+    );
+    assert!(
+        diagnostics_for_rule(&report, "polint/capability")
+            .iter()
+            .all(|diagnostic| {
+                !diagnostic_has_evidence(diagnostic, "feature", "lang-typescript")
+            })
+    );
 }

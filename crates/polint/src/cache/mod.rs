@@ -972,6 +972,7 @@ mod tests {
         assert_eq!(cache.root(), temp.path().join(".polint/cache/analysis"));
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn cache_json_is_written_compactly() {
         let temp = tempfile::tempdir().unwrap();

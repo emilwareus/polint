@@ -30,6 +30,15 @@ procedural macro remains separate because Cargo requires proc-macro crates to be
 distinct. All runtime implementation lives inside `polint`; `polint-eval` and
 `polint-bench` are unpublished workspace tooling.
 
+Language implementations are compile-time optional inside the facade. The
+default and `all-languages` features enable both `lang-go` and
+`lang-typescript`; single-language and no-language builds keep the SDK, runner,
+shared fact contracts, and frontend registry shapes while excluding the unused
+parser dependency family. A registered frontend whose feature is disabled
+returns a typed setup failure and `polint/capability` diagnostic when matching
+sources exist. It never publishes empty placeholder facts as successful
+analysis. Generated rule-pack manifests copy the CLI build's language-feature selection with default features disabled, preserving that boundary in the repo-local rule host. Existing rule-pack manifests are user-owned and require the same explicit dependency settings when migrated; the CLI does not rewrite them.
+
 The former product-crate seams are private modules so they can evolve atomically
 without creating seven additional crates.io contracts:
 

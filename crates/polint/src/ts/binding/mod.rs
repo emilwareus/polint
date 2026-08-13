@@ -2,7 +2,7 @@ pub mod direct;
 pub mod facts;
 pub mod store;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-typescript"))]
 mod direct_local {
     use std::path::PathBuf;
 
@@ -305,7 +305,7 @@ function run(cb, obj, key) {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-typescript"))]
 mod direct_modules {
     use std::path::PathBuf;
 

@@ -111,3 +111,49 @@ fn repo_root() -> PathBuf {
         .canonicalize()
         .expect("canonical repo root")
 }
+
+#[test]
+fn language_features_are_isolated_and_default_to_both() {
+    let root = repo_root();
+    let manifest =
+        fs::read_to_string(root.join("crates/polint/Cargo.toml")).expect("read polint manifest");
+    let parsed: toml::Value = toml::from_str(&manifest).expect("parse polint manifest");
+    let features = parsed["features"].as_table().expect("features table");
+    assert_eq!(
+        features["default"],
+        toml::Value::Array(vec!["lang-go".into(), "lang-typescript".into()])
+    );
+    assert_eq!(
+        features["all-languages"],
+        toml::Value::Array(vec!["lang-go".into(), "lang-typescript".into()])
+    );
+
+    let dependencies = parsed["dependencies"]
+        .as_table()
+        .expect("dependencies table");
+    for dependency in ["tree-sitter", "tree-sitter-go"] {
+        assert_eq!(dependencies[dependency]["optional"].as_bool(), Some(true));
+        assert!(
+            features["lang-go"]
+                .as_array()
+                .unwrap()
+                .contains(&format!("dep:{dependency}").into())
+        );
+    }
+    for dependency in [
+        "oxc_allocator",
+        "oxc_ast",
+        "oxc_parser",
+        "oxc_resolver",
+        "oxc_semantic",
+        "oxc_span",
+    ] {
+        assert_eq!(dependencies[dependency]["optional"].as_bool(), Some(true));
+        assert!(
+            features["lang-typescript"]
+                .as_array()
+                .unwrap()
+                .contains(&format!("dep:{dependency}").into())
+        );
+    }
+}

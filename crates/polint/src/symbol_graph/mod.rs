@@ -2,6 +2,7 @@ pub(crate) use crate::go::symbol_graph as go;
 pub(crate) mod model;
 pub(crate) mod query;
 pub(crate) mod semantic;
+#[cfg(feature = "lang-typescript")]
 pub(crate) use crate::ts::symbol_graph as ts;
 
 use crate::analysis_kernel::ProviderManifest;
@@ -225,6 +226,7 @@ fn derive_requested_symbols_uncached_with_payload(
         plan.requests_capability("symbols"),
         plan.requests_capability("references"),
     );
+    #[cfg(feature = "lang-typescript")]
     merge_language_output(
         &mut derivation,
         &mut semantic_output,
@@ -1273,9 +1275,13 @@ mod symbol_graph_derivation {
     use std::fs;
     use std::path::Path;
 
+    #[cfg(feature = "lang-typescript")]
     type SymbolRows = Vec<(Language, String, SymbolPrecision)>;
+    #[cfg(feature = "lang-typescript")]
     type ReferenceRows = Vec<(Language, String, SymbolResolutionStatus, SymbolPrecision)>;
+    #[cfg(feature = "lang-typescript")]
     type SupportRows = Vec<(String, Option<Language>, CapabilitySupportStatus)>;
+    #[cfg(feature = "lang-typescript")]
     type DeriveSnapshot = (SymbolRows, ReferenceRows, SupportRows, Vec<String>);
 
     fn loaded_config_for(root: &Path) -> crate::config::LoadedConfig {
@@ -1289,6 +1295,7 @@ mod symbol_graph_derivation {
         db.add_file(path, relative_path.to_string(), source.to_string())
     }
 
+    #[cfg(feature = "lang-typescript")]
     fn stale_symbol_fact(interner: &crate::core::StableKeyInterner, file: FileId) -> SymbolFact {
         SymbolFact::new(
             SymbolId::from_raw(999),
@@ -1308,6 +1315,7 @@ mod symbol_graph_derivation {
         )
     }
 
+    #[cfg(feature = "lang-typescript")]
     fn stale_definition_fact(
         interner: &crate::core::StableKeyInterner,
         file: FileId,
@@ -1332,6 +1340,7 @@ mod symbol_graph_derivation {
         )
     }
 
+    #[cfg(feature = "lang-typescript")]
     fn stale_reference_fact(
         interner: &crate::core::StableKeyInterner,
         file: FileId,
@@ -1736,6 +1745,7 @@ export function answer() {{
         );
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn requested_symbol_derivation_replaces_facts_deterministically() {
         fn derive_once() -> DeriveSnapshot {
@@ -1904,6 +1914,7 @@ export function answer() {{
             assert_eq!(second.cache_stats.recomputes, 1);
         }
 
+        #[cfg(feature = "lang-typescript")]
         #[test]
         fn symbol_graph_layer_disabled_cache_records_bypass_without_layer_files() {
             let temp = tempfile::tempdir().expect("tempdir");
@@ -1966,13 +1977,17 @@ mod semantic_layer_payload {
     use super::*;
     use crate::analysis_kernel::incremental::LayerCacheManifest;
     use crate::analysis_kernel::{FactFamily, FactRef};
+    #[cfg(feature = "lang-typescript")]
     use crate::analysis_plan::AnalysisPlan;
+    #[cfg(feature = "lang-typescript")]
     use crate::cache::Cache;
+    #[cfg(feature = "lang-typescript")]
     use crate::config::load_config;
+    use crate::core::{AnalysisDb, FileId, Language, SymbolNamespace};
+    #[cfg(feature = "lang-typescript")]
     use crate::core::{
-        AnalysisDb, FileId, ImportFact, ImportId, Language, ModuleNode, ModuleNodeId,
-        ModuleNodeKind, ResolutionPrecision, ResolutionStatus, ResolvedImportFact,
-        ResolvedImportId, Span, SymbolNamespace, span_from_byte_range,
+        ImportFact, ImportId, ModuleNode, ModuleNodeId, ModuleNodeKind, ResolutionPrecision,
+        ResolutionStatus, ResolvedImportFact, ResolvedImportId, Span, span_from_byte_range,
     };
     use crate::symbol_graph::semantic::{
         ExportFact, ExportId, ExportKind, ScopeFact, ScopeId, ScopeKind, SemanticIndexOutput,
@@ -1980,6 +1995,7 @@ mod semantic_layer_payload {
     };
     use std::path::Path;
 
+    #[cfg(feature = "lang-typescript")]
     fn add_file(db: &mut AnalysisDb, root: &Path, relative_path: &str, source: &str) -> FileId {
         let path = root.join(relative_path);
         std::fs::create_dir_all(path.parent().expect("test file has parent")).expect("mkdirs");
@@ -1987,6 +2003,7 @@ mod semantic_layer_payload {
         db.add_file(path, relative_path.to_string(), source.to_string())
     }
 
+    #[cfg(feature = "lang-typescript")]
     fn span_for(file: FileId, source: &str, needle: &str) -> Span {
         let start = source
             .find(needle)
@@ -1994,6 +2011,7 @@ mod semantic_layer_payload {
         span_from_byte_range(file, source, start, start + needle.len())
     }
 
+    #[cfg(feature = "lang-typescript")]
     fn push_import(db: &mut AnalysisDb, file: FileId, source: &str, path: &str) -> ImportId {
         db.push_import(ImportFact::new(
             ImportId::from_raw(0),
@@ -2005,6 +2023,7 @@ mod semantic_layer_payload {
         ))
     }
 
+    #[cfg(feature = "lang-typescript")]
     fn fixture_db(root: &Path) -> AnalysisDb {
         let mut db = AnalysisDb::new();
         let app_source = r#"
@@ -2149,6 +2168,7 @@ export function answer() {
         }
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn cold_payload_writes_semantic_rows() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -2303,17 +2323,25 @@ export function answer() {
 
 #[cfg(test)]
 mod semantic_cache_restore {
+    #[cfg(any(feature = "lang-go", feature = "lang-typescript"))]
     use crate::analysis_kernel::{AnalysisKernel, KernelInput, KernelOutput};
+    #[cfg(any(feature = "lang-go", feature = "lang-typescript"))]
     use crate::analysis_plan::AnalysisPlan;
+    #[cfg(any(feature = "lang-go", feature = "lang-typescript"))]
     use crate::cache::Cache;
+    #[cfg(any(feature = "lang-go", feature = "lang-typescript"))]
     use crate::config::load_config;
+    #[cfg(feature = "lang-go")]
     use crate::symbol_graph::semantic::SemanticStatus;
+    #[cfg(any(feature = "lang-go", feature = "lang-typescript"))]
     use std::path::Path;
 
+    #[cfg(any(feature = "lang-go", feature = "lang-typescript"))]
     fn requested_symbol_plan() -> AnalysisPlan {
         AnalysisPlan::from_capability_names_for_test(&["symbols", "references"])
     }
 
+    #[cfg(any(feature = "lang-go", feature = "lang-typescript"))]
     fn run_kernel(root: &Path, cache: &Cache, plan: &AnalysisPlan) -> KernelOutput {
         let loaded = load_config(root).expect("default config loads");
         AnalysisKernel::run(KernelInput {
@@ -2327,6 +2355,7 @@ mod semantic_cache_restore {
         .expect("kernel run should succeed")
     }
 
+    #[cfg(any(feature = "lang-go", feature = "lang-typescript"))]
     fn symbol_graph_outcome(output: &KernelOutput) -> &crate::analysis_kernel::ProviderOutcome {
         output
             .run_report
@@ -2336,6 +2365,7 @@ mod semantic_cache_restore {
             .expect("symbol graph provider outcome exists")
     }
 
+    #[cfg(any(feature = "lang-go", feature = "lang-typescript"))]
     fn symbol_graph_telemetry(
         output: &KernelOutput,
     ) -> &crate::analysis_kernel::incremental::ProviderTelemetry {
@@ -2347,6 +2377,7 @@ mod semantic_cache_restore {
             .expect("symbol graph provider telemetry exists")
     }
 
+    #[cfg(any(feature = "lang-go", feature = "lang-typescript"))]
     fn stable_export_keys(output: &KernelOutput) -> Vec<String> {
         let has_empty_key = output
             .db
@@ -2364,6 +2395,7 @@ mod semantic_cache_restore {
         keys
     }
 
+    #[cfg(any(feature = "lang-go", feature = "lang-typescript"))]
     fn assert_warm_symbol_graph_reuse(output: &KernelOutput) {
         let outcome = symbol_graph_outcome(output);
         assert_eq!(
@@ -2377,6 +2409,7 @@ mod semantic_cache_restore {
         assert_eq!(telemetry.cache_stats.recomputes, 0);
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn ts_stable_exports_survive_warm_cache_restore() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -2404,6 +2437,7 @@ mod semantic_cache_restore {
         assert_eq!(cold_keys, warm_keys);
     }
 
+    #[cfg(feature = "lang-go")]
     #[test]
     fn go_stable_exports_survive_warm_cache_restore_when_setup_succeeds() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -2555,7 +2589,7 @@ mod symbol_graph_go_facade_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-typescript"))]
 mod symbol_graph_ts_import_links {
     use super::ts;
     use crate::core::{

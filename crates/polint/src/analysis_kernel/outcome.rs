@@ -242,7 +242,7 @@ impl ProviderOutcome {
         self.failure_stage = Some(ProviderFailureStage::Validation);
         self.failure_reason = Some(ProviderFailureReason::ValidationRejected);
     }
-    #[cfg(test)]
+    #[cfg(all(test, feature = "lang-go", feature = "lang-typescript"))]
     pub(crate) fn validation_display(&self) -> String {
         match (self.failure_stage, self.failure_reason) {
             (None, None) => self.status.label().to_string(),

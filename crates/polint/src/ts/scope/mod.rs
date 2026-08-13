@@ -1,8 +1,9 @@
+#[cfg(feature = "lang-typescript")]
 pub mod extract;
 pub mod facts;
 pub mod store;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-typescript"))]
 mod direct_binding_boundary {
     use std::path::PathBuf;
 

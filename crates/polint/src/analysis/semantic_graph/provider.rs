@@ -627,7 +627,7 @@ fn provider_error_diagnostic(message: String) -> Diagnostic {
     .with_evidence("reason", message)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-typescript"))]
 mod tests {
     use super::*;
     use crate::analysis::semantic_graph::build::build_semantic_graph_with_ts_direct_bindings;

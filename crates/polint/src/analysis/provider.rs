@@ -10,7 +10,9 @@ use crate::analysis_kernel::incremental::{
 use crate::analysis_neutral::mir_body_compose::merge_language_outputs;
 use crate::core::AnalysisDb;
 use crate::diagnostics::{Diagnostic, TextRange};
+#[cfg(feature = "lang-go")]
 use crate::go::lower_go_mir;
+#[cfg(feature = "lang-typescript")]
 use crate::ts::lower_ts_mir;
 
 #[derive(Debug, Clone, Default)]
@@ -32,7 +34,12 @@ pub(crate) fn derive_semantic_mir_with_cache_stats(
     let interner_handle = db.stable_key_interner();
     let interner = &interner_handle;
     let output = crate::analysis_neutral::mir_body_compose::merge_language_outputs(
-        [lower_go_mir(db), lower_ts_mir(db)],
+        [
+            #[cfg(feature = "lang-go")]
+            lower_go_mir(db),
+            #[cfg(feature = "lang-typescript")]
+            lower_ts_mir(db),
+        ],
         interner,
     );
     let output_digest = semantic_mir_output_digest(
@@ -327,13 +334,19 @@ fn provider_error_diagnostic(reason: String) -> Diagnostic {
 
 #[cfg(test)]
 mod semantic_mir_provider {
-    use crate::analysis::ids::{CallSiteId, MirBodyId, MirOpId, MirPredicateId, PlaceId};
+    #[cfg(any(feature = "lang-go", feature = "lang-typescript"))]
+    use crate::analysis::ids::CallSiteId;
+    use crate::analysis::ids::{MirBodyId, MirOpId, MirPredicateId, PlaceId};
     use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
     use crate::analysis::mir::op::{MirOperation, MirOperationKind};
     use crate::analysis::places::{PlaceFact, PlaceRoot, PlaceStatus};
+    use crate::analysis_kernel::AnalysisKernel;
+    #[cfg(any(feature = "lang-go", feature = "lang-typescript"))]
+    use crate::analysis_kernel::KernelInput;
     use crate::analysis_kernel::incremental::{Digest, DigestKind};
-    use crate::analysis_kernel::{AnalysisKernel, KernelInput};
+    #[cfg(any(feature = "lang-go", feature = "lang-typescript"))]
     use crate::analysis_plan::AnalysisPlan;
+    #[cfg(any(feature = "lang-go", feature = "lang-typescript"))]
     use crate::cache::Cache;
     use crate::config::load_config;
     use crate::core::{FileId, FunctionId, Language, Span};
@@ -342,6 +355,7 @@ mod semantic_mir_provider {
         Span::new(FileId::from_raw(1), 1, 2, 1, 1, 1, 2)
     }
 
+    #[cfg(any(feature = "lang-go", feature = "lang-typescript"))]
     fn call_sites_from_real_provider(
         files: &[(&str, &str)],
     ) -> Vec<(String, Language, CallSiteId, Span)> {
@@ -444,6 +458,7 @@ mod semantic_mir_provider {
         }
     }
 
+    #[cfg(all(feature = "lang-go", feature = "lang-typescript"))]
     #[test]
     fn derivation_stores_non_empty_mixed_language_mir() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -581,6 +596,7 @@ mod semantic_mir_provider {
         ));
     }
 
+    #[cfg(feature = "lang-go")]
     #[test]
     fn real_go_provider_assigns_distinct_call_site_ids_per_file() {
         let sites = call_sites_from_real_provider(&[
@@ -621,6 +637,7 @@ mod semantic_mir_provider {
         assert_ne!(sites[0].2, sites[1].2);
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn real_ts_provider_assigns_distinct_call_site_ids_per_file() {
         let sites = call_sites_from_real_provider(&[
@@ -640,6 +657,7 @@ mod semantic_mir_provider {
         assert_ne!(sites[0].2, sites[1].2);
     }
 
+    #[cfg(all(feature = "lang-go", feature = "lang-typescript"))]
     #[test]
     fn real_polyglot_provider_separates_equal_legacy_call_site_coordinates() {
         let sites = call_sites_from_real_provider(&[

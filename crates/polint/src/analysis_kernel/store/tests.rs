@@ -2,18 +2,24 @@ use super::*;
 use crate::analysis_kernel::go_syntax_projection::{
     CanonicalGoSyntaxOutput, GoSyntaxProviderProjection,
 };
+#[cfg(all(feature = "lang-go", feature = "lang-typescript"))]
+use crate::analysis_kernel::incremental::PrecisionTier;
 use crate::analysis_kernel::incremental::{
-    Digest, DigestKind, FileSnapshot, PrecisionTier, RunManifest, RunManifestInputs,
+    Digest, DigestKind, FileSnapshot, RunManifest, RunManifestInputs,
 };
-use crate::analysis_kernel::metrics_projection::{
-    CanonicalMetricsInputs, MetricsProviderProjection,
-};
+#[cfg(feature = "lang-typescript")]
+use crate::analysis_kernel::metrics_projection::CanonicalMetricsInputs;
+use crate::analysis_kernel::metrics_projection::MetricsProviderProjection;
+#[cfg(feature = "lang-typescript")]
+use crate::analysis_kernel::{AnalysisKernel, KernelInput};
 use crate::analysis_kernel::{
-    AnalysisKernel, KernelInput, ProviderFailureReason, ProviderFailureStage, ProviderOutcome,
-    ProviderOutcomeStatus,
+    ProviderFailureReason, ProviderFailureStage, ProviderOutcome, ProviderOutcomeStatus,
 };
+#[cfg(feature = "lang-typescript")]
 use crate::analysis_plan::AnalysisPlan;
+#[cfg(feature = "lang-typescript")]
 use crate::cache::Cache;
+#[cfg(feature = "lang-typescript")]
 use crate::config::load_config;
 use crate::core::{AnalysisDb, Language};
 
@@ -339,9 +345,11 @@ mod go_syntax_provider_mirror_storage {
 mod provider_mirror {
     use super::*;
 
+    #[cfg(feature = "lang-typescript")]
     const SOURCE: &str =
         "export function score(value: number) {\n  return value > 0 ? value : 0;\n}\n";
 
+    #[cfg(feature = "lang-typescript")]
     fn configured_projection(
         root: &Path,
         source_text: &str,
@@ -374,6 +382,7 @@ mod provider_mirror {
         MetricsProviderProjection::from_db(outcome, &output.db).expect("canonical real projection")
     }
 
+    #[cfg(feature = "lang-typescript")]
     fn real_projection(root: &Path, source_text: &str) -> MetricsProviderProjection {
         configured_projection(
             root,
@@ -385,6 +394,7 @@ mod provider_mirror {
         )
     }
 
+    #[cfg(feature = "lang-typescript")]
     fn manifest(projection: &MetricsProviderProjection, config_seed: &str) -> ManifestFixture {
         let files = projection
             .inputs
@@ -403,6 +413,7 @@ mod provider_mirror {
         ManifestFixture::new(config_seed, files)
     }
 
+    #[cfg(feature = "lang-typescript")]
     fn publish_real(
         temp: &tempfile::TempDir,
     ) -> (
@@ -428,6 +439,7 @@ mod provider_mirror {
         (config, handle, manifest, projection)
     }
 
+    #[cfg(feature = "lang-typescript")]
     fn changed(
         baseline: &MetricsProviderProjection,
         edit: impl FnOnce(&mut CanonicalMetricsInputs),
@@ -437,6 +449,7 @@ mod provider_mirror {
         changed
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn real_sealed_success_reopens_and_matches_exactly() {
         let temp = tempfile::tempdir().expect("temp directory");
@@ -622,6 +635,7 @@ mod provider_mirror {
         );
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn consumed_source_and_function_matrix_misses_but_locked_exclusions_preserve() {
         let temp = tempfile::tempdir().expect("temp directory");
@@ -713,6 +727,7 @@ mod provider_mirror {
         );
     }
 
+    #[cfg(feature = "lang-typescript")]
     fn tamper_then_refuse(statement: &str) {
         let temp = tempfile::tempdir().expect("temp directory");
         let (config, _, _, _) = publish_real(&temp);
@@ -738,6 +753,7 @@ mod provider_mirror {
         assert_eq!(lifecycle, (1, 1), "refusal mutated lifecycle: {statement}");
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn relational_semantic_bounds_and_catalog_tamper_fail_closed() {
         for statement in [
@@ -803,10 +819,14 @@ mod provider_mirror {
 mod go_syntax_provider_mirror {
     use super::*;
 
+    #[cfg(all(feature = "lang-go", feature = "lang-typescript"))]
     const GO_MAIN: &str = "package sample\nimport \"fmt\"\nfunc Answer(v string) string { if v == \"\" { return \"empty\" }; return fmt.Sprintf(\"%s\", v) }\n";
+    #[cfg(all(feature = "lang-go", feature = "lang-typescript"))]
     const GO_TEST: &str = "package sample\nimport \"testing\"\nfunc TestAnswer(t *testing.T) { t.Run(\"empty\", func(t *testing.T) { if Answer(\"\") != \"empty\" { t.Fatal(\"bad\") } }) }\n";
+    #[cfg(all(feature = "lang-go", feature = "lang-typescript"))]
     const TS_SOURCE: &str = "export const unrelated = 'ts-only';\n";
 
+    #[cfg(all(feature = "lang-go", feature = "lang-typescript"))]
     fn write_fixture(root: &Path) {
         std::fs::write(root.join("a.go"), GO_MAIN).unwrap();
         std::fs::write(root.join("b_test.go"), GO_TEST).unwrap();
@@ -814,6 +834,7 @@ mod go_syntax_provider_mirror {
     }
 
     #[rustfmt::skip]
+    #[cfg(all(feature = "lang-go", feature = "lang-typescript"))]
     fn projections(root: &Path, config_digest: &str, rule_digest: &str, metric_capability: &str, cache_enabled: bool) -> (ManifestFixture, MetricsProviderProjection, GoSyntaxProviderProjection) {
         let loaded = load_config(root).unwrap();
         let cache = Cache::new(root.join("analysis-cache"), cache_enabled);
@@ -833,6 +854,7 @@ mod go_syntax_provider_mirror {
     }
 
     #[rustfmt::skip]
+    #[cfg(all(feature = "lang-go", feature = "lang-typescript"))]
     fn publish_real(temp: &tempfile::TempDir) -> (StoreConfig, GenerationHandle, ManifestFixture, MetricsProviderProjection, GoSyntaxProviderProjection) {
         write_fixture(temp.path());
         let (manifest, metrics, go) = projections(temp.path(), "config", "rules", "file_metrics", false);
@@ -843,12 +865,14 @@ mod go_syntax_provider_mirror {
     }
 
     #[rustfmt::skip]
+    #[cfg(all(feature = "lang-go", feature = "lang-typescript"))]
     fn changed(baseline: &GoSyntaxProviderProjection, mutate: fn(&mut GoSyntaxProviderProjection)) -> GoSyntaxProviderProjection {
         let mut changed = baseline.clone();
         mutate(&mut changed);
         changed
     }
 
+    #[cfg(all(feature = "lang-go", feature = "lang-typescript"))]
     #[test]
     #[rustfmt::skip]
     fn real_success_reopens_exactly_and_invalidation_polarity_is_provider_scoped() {
@@ -935,6 +959,7 @@ mod go_syntax_provider_mirror {
     }
 
     #[rustfmt::skip]
+    #[cfg(all(feature = "lang-go", feature = "lang-typescript"))]
     fn tamper_then_refuse(statement: &str) -> (GenerationError, GenerationError) {
         let temp = tempfile::tempdir().unwrap();
         let (config, _, manifest, _, expected) = publish_real(&temp);
@@ -950,6 +975,7 @@ mod go_syntax_provider_mirror {
         (active, matched)
     }
 
+    #[cfg(all(feature = "lang-go", feature = "lang-typescript"))]
     #[test]
     #[rustfmt::skip]
     fn quoted_literal_whitespace_and_reserved_catalog_objects_are_refused() {
@@ -960,6 +986,7 @@ mod go_syntax_provider_mirror {
         ] { assert_eq!(tamper_then_refuse(statement), (refused.clone(), refused.clone())); }
     }
 
+    #[cfg(all(feature = "lang-go", feature = "lang-typescript"))]
     #[test]
     #[rustfmt::skip]
     fn go_source_aggregate_is_bounded_after_relationship_preflight() {
@@ -975,6 +1002,7 @@ mod go_syntax_provider_mirror {
         assert_eq!(super::super::with_aggregate_bytes_limit(8_192, || super::super::go_syntax_mirror::read(&connection, handle).map(|_| ())), Err(GenerationError::InvalidProviderMirror));
     }
 
+    #[cfg(all(feature = "lang-go", feature = "lang-typescript"))]
     #[test]
     #[rustfmt::skip]
     fn manifest_outcome_dependency_bounds_and_catalog_tamper_fail_closed() {

@@ -24,7 +24,7 @@ pub(crate) use metadata::{
     ValidationStatus, resolution_metadata, resolution_status_metadata, stable_key_from_parts,
     stable_key_text_from_parts, symbol_metadata,
 };
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-go", feature = "lang-typescript"))]
 pub(crate) use outcome::hard_dependencies;
 pub(crate) use outcome::{
     ProviderFailureReason, ProviderFailureStage, ProviderOutcome, ProviderOutcomeStatus,
@@ -509,7 +509,7 @@ impl AnalysisKernel {
         debug::metadata_debug_json_for_test(db)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "lang-go", feature = "lang-typescript"))]
     pub(crate) fn metadata_debug_json_for_output_for_test(
         output: &KernelOutput,
     ) -> serde_json::Value {
@@ -533,7 +533,7 @@ impl AnalysisKernel {
         output.run_report.provider_outputs.clone()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "lang-go", feature = "lang-typescript"))]
     pub(crate) fn semantic_store_schema_is_current_for_test(path: &std::path::Path) -> bool {
         store::current_schema_is_valid_for_test(path)
     }
@@ -1022,6 +1022,7 @@ mod tests {
         }
     }
 
+    #[cfg(all(feature = "lang-go", feature = "lang-typescript"))]
     #[test]
     fn scheduled_deep_provider_stack_has_complete_valid_metadata() {
         let temp = tempfile::tempdir().expect("temp directory");
@@ -1386,6 +1387,7 @@ mod tests {
         );
     }
 
+    #[cfg(all(feature = "lang-go", feature = "lang-typescript"))]
     #[test]
     fn kernel_run_report_syntax_provider_rows_carry_adapter_cache_stats() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -1413,6 +1415,7 @@ mod tests {
         assert!(ts.cache_stats.recomputes > 0);
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn kernel_run_report_module_graph_row_carries_layer_cache_stats() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -1465,6 +1468,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn kernel_run_report_symbol_graph_row_carries_layer_cache_stats() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -1512,6 +1516,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn kernel_run_report_module_topology_row_carries_layer_cache_stats() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -1579,6 +1584,7 @@ mod tests {
         assert!(!disabled_module_topology.output_digest.value.is_empty());
     }
 
+    #[cfg(all(feature = "lang-go", feature = "lang-typescript"))]
     #[test]
     fn kernel_run_report_semantic_mir_row_carries_output_digest() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -1612,6 +1618,7 @@ mod tests {
         assert_eq!(semantic_mir.cache_stats.recomputes, 1);
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn kernel_run_report_cfg_row_carries_output_digest() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -1640,6 +1647,7 @@ mod tests {
         assert_eq!(cfg.cache_stats.recomputes, 1);
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn kernel_run_report_calls_row_carries_output_digest() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -1668,6 +1676,7 @@ mod tests {
         assert_eq!(calls.cache_stats.recomputes, 1);
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn kernel_run_report_metrics_row_carries_layer_cache_stats() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -1841,6 +1850,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn symbols_and_references_stay_off_semantic_pipeline() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -1886,6 +1896,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn control_flow_plan_keeps_cfg_and_refined_call_facts() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -1963,6 +1974,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn calls_plan_keeps_full_cfg_relation_rows() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -2116,6 +2128,7 @@ function cleanup(value: string) {{ return value.trim(); }}
         }
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn calls_plan_skips_data_flow_and_evidence() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -2323,6 +2336,7 @@ function cleanup(value: string) {{ return value.trim(); }}
         }
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn typescript_framework_entrypoints_from_real_source_include_handler_and_path() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -2385,6 +2399,7 @@ function setup() {
         );
     }
 
+    #[cfg(all(feature = "lang-go", feature = "lang-typescript"))]
     #[test]
     fn framework_entrypoint_eval_fixture_sources_include_go_and_ts_entrypoints() {
         let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))

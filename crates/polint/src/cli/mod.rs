@@ -882,11 +882,31 @@ fn polint_deps_path_prefix(rules_dir: &Path) -> Option<String> {
     }
 }
 
+fn enabled_language_features() -> Vec<&'static str> {
+    [
+        #[cfg(feature = "lang-go")]
+        "lang-go",
+        #[cfg(feature = "lang-typescript")]
+        "lang-typescript",
+    ]
+    .into_iter()
+    .collect()
+}
+
 fn write_pack_cargo_toml(rules_dir: &Path) -> Result<()> {
     let version = env!("CARGO_PKG_VERSION");
+    let features = enabled_language_features()
+        .into_iter()
+        .map(|feature| format!(r#""{feature}""#))
+        .collect::<Vec<_>>()
+        .join(", ");
     let polint_dep_line = match polint_deps_path_prefix(rules_dir) {
-        Some(prefix) => format!(r#"polint = {{ path = "{prefix}polint" }}"#),
-        None => format!(r#"polint = "{version}""#),
+        Some(prefix) => format!(
+            r#"polint = {{ path = "{prefix}polint", default-features = false, features = [{features}] }}"#
+        ),
+        None => format!(
+            r#"polint = {{ version = "{version}", default-features = false, features = [{features}] }}"#
+        ),
     };
     fs::write(
         rules_dir.join("Cargo.toml"),
@@ -4251,9 +4271,19 @@ mod tests {
     use clap::CommandFactory;
 
     use super::{
-        Cli, FactsListReport, LocalRuleHostProfile, explain_derived_edge_provenance,
-        public_fact_view,
+        Cli, FactsListReport, LocalRuleHostProfile, enabled_language_features,
+        explain_derived_edge_provenance, public_fact_view,
     };
+
+    #[test]
+    fn rule_host_dependency_features_match_the_cli_build() {
+        let features = enabled_language_features();
+        assert_eq!(features.contains(&"lang-go"), cfg!(feature = "lang-go"));
+        assert_eq!(
+            features.contains(&"lang-typescript"),
+            cfg!(feature = "lang-typescript")
+        );
+    }
 
     #[test]
     fn explain_private_plumbing_surfaces_derived_edge_provenance() {

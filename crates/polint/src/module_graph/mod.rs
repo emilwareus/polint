@@ -2398,6 +2398,7 @@ mod tests {
         ))
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn module_graph_layer_cache_cold_warm() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -2941,6 +2942,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "lang-typescript")]
     fn node_label(db: &AnalysisDb, id: Option<ModuleNodeId>) -> Option<&str> {
         let id = id?;
         db.module_nodes()
@@ -2976,6 +2978,7 @@ mod tests {
         assert!(db.module_edges().is_empty());
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn module_graph_derives_for_symbol_capabilities() {
         for capability in ["symbols", "references"] {
@@ -3580,6 +3583,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn module_graph_ts_resolution_resolves_relative_import_to_local_file() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -3611,6 +3615,7 @@ mod tests {
         assert_eq!(node_label(&db, fact.target_node), Some("src/tokens.ts"));
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn module_graph_ts_resolution_resolves_tsconfig_path_alias_to_local_file() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -3646,6 +3651,7 @@ mod tests {
         assert_eq!(node_label(&db, fact.target_node), Some("src/tokens.ts"));
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn module_graph_ts_resolution_classifies_package_imports_as_external_dependencies() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -3688,6 +3694,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn module_graph_ts_resolution_keeps_missing_relative_import_unresolved_not_found() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -3713,6 +3720,7 @@ mod tests {
         assert_eq!(fact.target_node, None);
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn module_graph_ts_resolution_keeps_missing_matched_alias_unresolved_not_found() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -3743,6 +3751,7 @@ mod tests {
         assert_eq!(fact.target_node, None);
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn module_graph_ts_resolution_keeps_missing_alias_from_commented_tsconfig_unresolved_not_found()
     {
@@ -3780,6 +3789,7 @@ mod tests {
         assert_eq!(fact.target_node, None);
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn module_graph_ts_resolution_keeps_missing_alias_from_extended_tsconfig_unresolved_not_found()
     {
@@ -3816,6 +3826,7 @@ mod tests {
         assert_eq!(fact.target_node, None);
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn module_graph_ts_setup_missing_reports_ts_reason_without_go_inputs() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -3878,6 +3889,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn module_graph_ts_resolution_creates_project_module_with_contains_and_dependency_edges() {
         let temp = tempfile::tempdir().expect("tempdir");

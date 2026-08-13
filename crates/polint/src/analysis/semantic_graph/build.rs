@@ -18,21 +18,21 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-go", feature = "lang-typescript"))]
 use oxc_allocator::Allocator;
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-go", feature = "lang-typescript"))]
 use oxc_semantic::SemanticBuilder;
 
 use crate::analysis::adaptation::store::AdaptationModelStore;
 use crate::analysis::ids::{ObjectTokenId, PlaceId, SemanticNodeId};
 use crate::analysis::semantic_graph::constraints::ConstraintKind;
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-typescript"))]
 use crate::analysis::semantic_graph::facts::SemanticPrecision;
 use crate::analysis::semantic_graph::facts::{EdgeKind, NodeKind};
 use crate::analysis::semantic_graph::store::SemanticGraphOutput;
 use crate::analysis::stable_key::semantic_stable_key;
 use crate::analysis_kernel::FactFamily;
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-go", feature = "lang-typescript"))]
 use crate::core::SourceFile;
 use crate::core::{AnalysisDb, FileId, Span};
 use crate::ts::binding::direct::{
@@ -40,9 +40,11 @@ use crate::ts::binding::direct::{
 };
 use crate::ts::binding::facts::{TsDirectBindingFact, TsDirectBindingKind, TsDirectBindingStatus};
 use crate::ts::binding::store::TsDirectBindingOutput;
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-typescript"))]
+use crate::ts::inventory::extract::extract_ts_inventory;
+#[cfg(all(test, feature = "lang-go", feature = "lang-typescript"))]
 use crate::ts::inventory::extract::{
-    extract_ts_inventory, extract_ts_inventory_from_program, mark_inventory_partial_ast,
+    extract_ts_inventory_from_program, mark_inventory_partial_ast,
 };
 use crate::ts::inventory::store::TsInventoryOutput;
 use crate::ts::object_model::facts::{
@@ -50,9 +52,9 @@ use crate::ts::object_model::facts::{
     TsReceiverBindingFact,
 };
 use crate::ts::object_model::store::TsObjectModelOutput;
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-go", feature = "lang-typescript"))]
 use crate::ts::parse::parse_ts_file;
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-go", feature = "lang-typescript"))]
 use crate::ts::scope::extract::{extract_ts_scope_from_program, mark_scope_partial_ast};
 use crate::ts::scope::store::TsScopeOutput;
 pub(crate) use crate::ts::token_flow::{TsTokenSourceFlow, collect_ts_token_source_flows};
@@ -64,7 +66,7 @@ pub(crate) use crate::ts::token_flow::{TsTokenSourceFlow, collect_ts_token_sourc
 /// with the default dense id and a composed stable key; the caller runs
 /// `normalized()` (and `SemanticGraphStore::from_output`) to sort by stable key and
 /// assign dense IDs (D-05).
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-typescript"))]
 pub(crate) fn build_semantic_graph(db: &AnalysisDb) -> SemanticGraphOutput {
     let ts_direct_bindings = collect_ts_direct_binding_collection(db);
     build_semantic_graph_with_ts_direct_binding_collection(db, &ts_direct_bindings)
@@ -81,7 +83,7 @@ pub(crate) fn build_semantic_graph_with_ts_direct_binding_collection(
     )
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-typescript"))]
 pub(crate) fn build_semantic_graph_with_ts_direct_bindings(
     db: &AnalysisDb,
     ts_direct_bindings: &[TsDirectBindingFact],
@@ -93,7 +95,7 @@ pub(crate) fn build_semantic_graph_with_ts_direct_bindings(
     )
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-typescript"))]
 pub(crate) fn build_semantic_graph_with_ts_direct_bindings_and_adaptation_models(
     db: &AnalysisDb,
     ts_direct_bindings: &[TsDirectBindingFact],
@@ -143,7 +145,7 @@ fn build_semantic_graph_with_inputs(
 
 pub(crate) use crate::ts::semantic_graph::{TsFileAnalysis, analyze_ts_file};
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-go", feature = "lang-typescript"))]
 struct TsBindingFileAnalysis {
     file: FileId,
     inventory: TsInventoryOutput,
@@ -170,7 +172,7 @@ impl TsDirectBindingAnalysis for TsFileAnalysis {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-go", feature = "lang-typescript"))]
 impl TsDirectBindingAnalysis for TsBindingFileAnalysis {
     fn file(&self) -> FileId {
         self.file
@@ -221,7 +223,7 @@ pub(crate) fn collect_ts_direct_binding_collection(db: &AnalysisDb) -> TsDirectB
     TsDirectBindingCollection { output, analyses }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-go", feature = "lang-typescript"))]
 pub(crate) fn collect_ts_direct_bindings(db: &AnalysisDb) -> TsDirectBindingOutput {
     let analyses = collect_ts_binding_file_analyses(db);
     collect_ts_direct_bindings_from_analyses(db, &analyses)
@@ -237,7 +239,7 @@ fn collect_ts_file_analyses(db: &AnalysisDb) -> Vec<TsFileAnalysis> {
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-go", feature = "lang-typescript"))]
 fn collect_ts_binding_file_analyses(db: &AnalysisDb) -> Vec<TsBindingFileAnalysis> {
     let interner = db.stable_key_interner();
     db.files()
@@ -247,7 +249,7 @@ fn collect_ts_binding_file_analyses(db: &AnalysisDb) -> Vec<TsBindingFileAnalysi
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-go", feature = "lang-typescript"))]
 fn analyze_ts_binding_file(
     interner: &crate::core::StableKeyInterner,
     file: &SourceFile,
@@ -1242,7 +1244,7 @@ fn span_identity(span: &Span) -> String {
     format!("{}:{}..{}", span.file.0, span.start_byte, span.end_byte)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-typescript"))]
 mod tests {
     use super::*;
     use std::path::PathBuf;

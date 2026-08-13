@@ -2,7 +2,12 @@
 //! merge facts and parser diagnostics into a host [`crate::analysis_api::FactDatabase`],
 //! with optional disk cache via [`crate::analysis_api::AnalysisCache`].
 
+#[cfg(feature = "lang-typescript")]
 mod adapter;
+#[cfg(not(feature = "lang-typescript"))]
+mod unavailable;
+#[cfg(not(feature = "lang-typescript"))]
+pub use unavailable::{semantic_graph, token_flow};
 pub mod binding;
 pub mod error;
 mod frontend;
@@ -11,20 +16,27 @@ mod hash;
 pub mod ids;
 pub mod inventory;
 mod local_db;
+#[cfg(feature = "lang-typescript")]
 mod mir;
 pub mod module_graph;
+#[cfg(feature = "lang-typescript")]
 #[doc(hidden)]
 pub use mir::lower_ts_mir;
 pub mod object_model;
+#[cfg(feature = "lang-typescript")]
 pub mod parse;
 pub mod points_to;
 #[allow(dead_code)]
 mod repo_fs;
 pub mod scope;
+#[cfg(feature = "lang-typescript")]
 pub mod semantic_graph;
+#[cfg(feature = "lang-typescript")]
 pub mod spans;
+#[cfg(feature = "lang-typescript")]
 pub mod symbol_graph;
 pub mod syntax_store;
+#[cfg(feature = "lang-typescript")]
 pub mod token_flow;
 
 use std::cell::RefCell;
@@ -32,9 +44,9 @@ use std::sync::Arc;
 
 use crate::internal_core::{StableKeyId, StableKeyInterner};
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-typescript"))]
 mod test_cache;
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-typescript"))]
 mod tests;
 
 thread_local! {
@@ -80,18 +92,21 @@ pub fn resolve_frontend_stable_key(key: StableKeyId) -> Arc<str> {
     })
 }
 
+#[cfg(feature = "lang-typescript")]
 pub use parse::{PARSER_RECOVERY_CONSTRUCT, parse_ts_file};
 
 pub use crate::analysis_api::{anonymous_callable_name, is_anonymous_callable_name};
 /// Re-export for `polint::_bench::ts`; production callers use the plan-aware entrypoint.
+#[cfg(feature = "lang-typescript")]
 #[allow(unreachable_pub, unused_imports)]
 pub use adapter::analyze_with_options;
+#[cfg(feature = "lang-typescript")]
 #[allow(unused_imports)]
 pub use adapter::{
     DYNAMIC_IMPORT_SPECIFIER, analyze_files_with_plan_options_and_cache_stats,
     analyze_with_plan_options, analyze_with_plan_options_and_cache_stats, class_callable_name,
 };
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-typescript"))]
 pub(crate) use adapter::{analyze, analyze_with_cache};
 
 pub use frontend::{FAMILY_TYPESCRIPT_JAVASCRIPT, TS_FRONTEND_PROFILE, TsJsFrontend};

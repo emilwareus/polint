@@ -522,8 +522,10 @@ mod tests {
             std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs")).unwrap();
 
         assert!(
-            lib_rs.contains("#[cfg(test)]"),
-            "eval module should stay test-only:\n{lib_rs}"
+            lib_rs.contains(
+                "#[cfg(all(test, feature = \"lang-go\", feature = \"lang-typescript\"))]"
+            ),
+            "polyglot eval harness should require tests and both language implementations:\n{lib_rs}"
         );
         assert!(
             lib_rs.contains("#[path = \"../../polint-eval/src/harness/mod.rs\"]"),

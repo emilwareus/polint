@@ -2,14 +2,17 @@
 //! parser diagnostics into a host [`crate::analysis_api::FactDatabase`], with optional
 //! disk cache via [`crate::analysis_api::AnalysisCache`].
 
+#[cfg(feature = "lang-go")]
 mod adapter;
 pub mod error;
 mod frontend;
 mod hash;
 pub mod lifecycle;
 mod local_db;
+#[cfg(feature = "lang-go")]
 mod mir;
 pub mod module_graph;
+#[cfg(feature = "lang-go")]
 #[doc(hidden)]
 pub use mir::lower_go_mir;
 #[allow(dead_code)]
@@ -20,16 +23,18 @@ mod stable_key;
 pub mod symbol_graph;
 mod syntax_store;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-go"))]
 mod test_cache;
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-go"))]
 mod tests;
 
 /// Re-export for `polint::_bench::go`; production callers use the plan-aware entrypoint.
+#[cfg(feature = "lang-go")]
 #[allow(unreachable_pub, unused_imports)]
 pub use adapter::analyze_with_options;
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-go"))]
 pub(crate) use adapter::{analyze, analyze_with_cache};
+#[cfg(feature = "lang-go")]
 #[allow(unused_imports)]
 pub(crate) use adapter::{
     analyze_files_with_plan_options_and_cache_stats, analyze_with_plan_options,

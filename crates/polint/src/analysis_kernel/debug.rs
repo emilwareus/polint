@@ -3012,12 +3012,20 @@ mod calls_debug_json {
 }
 
 mod semantic_debug_json {
+    #[cfg(feature = "lang-typescript")]
     use super::super::{AnalysisKernel, KernelInput};
+    #[cfg(feature = "lang-typescript")]
     use crate::analysis_plan::AnalysisPlan;
+    #[cfg(feature = "lang-typescript")]
     use crate::cache::Cache;
+    #[cfg(feature = "lang-typescript")]
     use crate::config::load_config;
+    #[cfg(feature = "lang-typescript")]
     use serde_json::Value;
+    #[cfg(feature = "lang-typescript")]
     use std::fs;
+
+    #[cfg(feature = "lang-typescript")]
 
     #[test]
     fn metadata_debug_json_contains_semantic_index_families() {
@@ -3053,6 +3061,8 @@ mod semantic_debug_json {
         );
     }
 
+    #[cfg(feature = "lang-typescript")]
+
     #[test]
     fn semantic_debug_json_rows_include_status_fact_precision_and_nested_metadata() {
         let report = debug_report_from_kernel_run();
@@ -3084,6 +3094,7 @@ mod semantic_debug_json {
         }
     }
 
+    #[cfg(feature = "lang-typescript")]
     fn debug_report_from_kernel_run() -> Value {
         let temp = tempfile::tempdir().expect("tempdir");
         fs::create_dir_all(temp.path().join("src")).expect("create src directory");
@@ -3791,7 +3802,7 @@ export const value = answer();
         }
     }
 
-    fn debug_report_from_kernel_run() -> (tempfile::TempDir, Value) {
+        fn debug_report_from_kernel_run() -> (tempfile::TempDir, Value) {
         let fixture = debug_fixture();
         let report = AnalysisKernel::metadata_debug_json_for_test(&fixture.db);
         (fixture.temp, report)
@@ -3833,6 +3844,8 @@ export const value = answer();
             collect_files(&entry, files);
         }
     }
+
+    #[cfg(feature = "lang-typescript")]
 
     #[test]
     fn metadata_debug_json_contains_files_imports_symbols_and_references() {

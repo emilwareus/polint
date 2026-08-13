@@ -380,7 +380,7 @@ fn next_location_part<'a>(
         .ok_or_else(|| anyhow::anyhow!("Jelly location `{raw}` missing {field}"))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-typescript"))]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::Arc;

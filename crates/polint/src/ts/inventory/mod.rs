@@ -1,8 +1,9 @@
+#[cfg(feature = "lang-typescript")]
 pub mod extract;
 pub mod facts;
 pub mod store;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-typescript"))]
 mod extract_function_forms {
     use std::collections::BTreeSet;
     use std::path::PathBuf;
@@ -142,7 +143,7 @@ class Box {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-typescript"))]
 mod extract_callsite_forms {
     use std::collections::BTreeSet;
     use std::path::PathBuf;

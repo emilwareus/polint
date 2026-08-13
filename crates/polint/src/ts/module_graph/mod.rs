@@ -14,6 +14,7 @@ use crate::analysis_neutral::module_graph::topology::{
     TopologyStatus, WorkspaceRootFact, WorkspaceRootId, WorkspaceRootKind,
 };
 use crate::internal_core::{FileId, Language, ModuleNodeId, StableKeyInterner};
+#[cfg(feature = "lang-typescript")]
 use crate::ts::DYNAMIC_IMPORT_SPECIFIER;
 use crate::ts::repo_fs::{
     RepoFileReadError, TOPOLOGY_LOCKFILE_MAX_BYTES, TOPOLOGY_MANIFEST_MAX_BYTES, normalize_path,
@@ -27,6 +28,7 @@ use formats::js_lockfile::{
 };
 use formats::package_json::{PackageJsonManifest, parse_package_json, unsupported_package_json};
 pub use formats::pnpm_workspace::parse_pnpm_workspace_packages;
+#[cfg(feature = "lang-typescript")]
 use oxc_resolver::{ResolveError, ResolveOptions, Resolver, TsconfigDiscovery};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -67,6 +69,26 @@ fn intern_module_graph_stable_key(key: impl Into<String>) -> crate::internal_cor
     })
 }
 
+#[cfg(not(feature = "lang-typescript"))]
+pub struct TsResolverContext;
+
+#[cfg(not(feature = "lang-typescript"))]
+impl TsResolverContext {
+    pub fn new(_root: &Path, _db: &dyn FactDatabase, _owner_module: Option<ModuleNodeId>) -> Self {
+        Self
+    }
+}
+
+#[cfg(not(feature = "lang-typescript"))]
+pub fn resolve_ts_import(
+    input: ResolverInput<'_>,
+    _context: Option<&TsResolverContext>,
+) -> ResolvedImportDraft {
+    let _ = input;
+    ResolvedImportDraft::unsupported_language()
+}
+
+#[cfg(feature = "lang-typescript")]
 pub struct TsResolverContext {
     resolver: Resolver,
     root: PathBuf,
@@ -75,6 +97,7 @@ pub struct TsResolverContext {
     pub(crate) owner_module: Option<ModuleNodeId>,
 }
 
+#[cfg(feature = "lang-typescript")]
 impl TsResolverContext {
     pub fn new(root: &Path, db: &dyn FactDatabase, owner_module: Option<ModuleNodeId>) -> Self {
         #[cfg(test)]
@@ -104,6 +127,7 @@ impl TsResolverContext {
     }
 }
 
+#[cfg(feature = "lang-typescript")]
 pub fn resolve_ts_import(
     input: ResolverInput<'_>,
     context: Option<&TsResolverContext>,
@@ -175,6 +199,7 @@ pub fn resolve_ts_import(
     }
 }
 
+#[cfg(feature = "lang-typescript")]
 fn resolved_path_draft(
     context: &TsResolverContext,
     input: ResolverInput<'_>,
@@ -1508,6 +1533,7 @@ fn is_external_package_specifier(specifier: &str) -> bool {
         && !specifier.starts_with("@/")
 }
 
+#[cfg(feature = "lang-typescript")]
 fn tsconfig_path_alias_matches(
     context: &TsResolverContext,
     importer_path: &Path,
@@ -1735,6 +1761,7 @@ struct TsconfigCompilerOptionsWire {
     paths: Option<BTreeMap<String, Vec<String>>>,
 }
 
+#[cfg(feature = "lang-typescript")]
 fn resolve_options() -> ResolveOptions {
     ResolveOptions {
         tsconfig: Some(TsconfigDiscovery::Auto),

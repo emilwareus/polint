@@ -7,17 +7,24 @@
 //! and `runtime_blocked_rules` into `run_rules_with_runtime_provider_blockers`,
 //! which is exactly the call these tests exercise.
 
-use super::{AnalysisKernel, KernelInput, KernelOutput, ProviderOutcome};
+#[cfg(all(feature = "lang-go", feature = "lang-typescript"))]
+use super::ProviderOutcome;
+use super::{AnalysisKernel, KernelInput, KernelOutput};
 use crate::analysis_plan::AnalysisPlan;
 use crate::cache::Cache;
 use crate::config::{LoadedConfig, load_config};
+#[cfg(all(feature = "lang-go", feature = "lang-typescript"))]
+use crate::core::CapabilitySupportView;
 use crate::core::{
-    Capabilities, CapabilitySupportView, Rule, RuleKind, RuleMeta,
-    run_rules_with_runtime_provider_blockers,
+    Capabilities, Rule, RuleKind, RuleMeta, run_rules_with_runtime_provider_blockers,
 };
-use crate::diagnostics::{Diagnostic, Severity, TextRange, sort_diagnostics};
+#[cfg(all(feature = "lang-go", feature = "lang-typescript"))]
+use crate::diagnostics::sort_diagnostics;
+use crate::diagnostics::{Diagnostic, Severity, TextRange};
 use crate::sdk::facts::{FactView, FileMetrics as Metrics};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+#[cfg(all(feature = "lang-go", feature = "lang-typescript"))]
+use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 type Counter = std::sync::Arc<AtomicUsize>;
@@ -35,6 +42,7 @@ fn dispatch(output: &KernelOutput, rules: &[Rule], parallel: bool) -> Vec<Diagno
     )
 }
 
+#[cfg(all(feature = "lang-go", feature = "lang-typescript"))]
 #[derive(Debug, PartialEq, Eq)]
 struct Projection {
     support: CapabilitySupportView,
@@ -125,6 +133,7 @@ fn blocker_fixture(
     (diagnostics, counts(&counters))
 }
 
+#[cfg(all(feature = "lang-go", feature = "lang-typescript"))]
 fn project(output: &KernelOutput, rules: &[Rule], counters: &[Counter; 2]) -> Projection {
     let before = counts(counters);
     let mut policy_diagnostics = dispatch(output, rules, false);
@@ -180,6 +189,7 @@ fn production_dispatch_blocks_events_for_applicable_syntax_failure() {
     assert_eq!(decisions, [0, 1]);
 }
 
+#[cfg(all(feature = "lang-go", feature = "lang-typescript"))]
 #[test]
 fn cold_warm_production_semantic_projection_matches() {
     let temp = tempfile::tempdir().expect("tempdir");

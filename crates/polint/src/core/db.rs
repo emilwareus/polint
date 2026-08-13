@@ -1088,7 +1088,7 @@ impl AnalysisDb {
     /// Injects identity records directly, bypassing store-level reference
     /// validation, so validation diagnostics (the defense-in-depth layer) can be
     /// exercised even for records that the store would have rejected.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "lang-go", feature = "lang-typescript"))]
     pub(crate) fn set_identity_records_for_test(&mut self, records: Vec<IdentityRecord>) {
         let mut store = IdentityStore::default();
         store.records = records;
@@ -1665,7 +1665,7 @@ impl AnalysisDb {
         &self.go_semantic_store().output().dynamic_dispatch
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "lang-go", feature = "lang-typescript"))]
     pub(crate) fn go_semantic_rta_edges(
         &self,
     ) -> &[crate::go::semantic::facts::GoSemanticRtaEdgeFact] {
