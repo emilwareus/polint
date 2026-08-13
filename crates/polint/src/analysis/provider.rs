@@ -480,6 +480,10 @@ mod semantic_mir_provider {
             output.db.mir_operations().len() >= 2,
             "expected lowered operations"
         );
+        assert!(
+            output.db.missing_fact_metadata().is_empty(),
+            "scheduled provider run left missing fact metadata"
+        );
     }
 
     #[test]

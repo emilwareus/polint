@@ -423,3 +423,5 @@ impl FactDatabase for LocalFactDb {
         }
     }
 }
+
+impl polint_analysis::AnalysisHost for LocalFactDb {}

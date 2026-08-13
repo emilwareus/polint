@@ -12,6 +12,9 @@
 - Starting verdict: NOT READY — 1 blocker, 8 high, 8 medium.
 - Current `main`: `fafd08d8af78d78313fdd61ff616a887652ac0ab`; read-only merge simulation reported 13 conflicts.
 - Original 44 untracked artifacts must remain untouched; this GSD directory and the review directory are intentional additions.
+- Stabilization checkpoint starts at `442a206e`; branch is one local commit ahead of origin and no push is authorized.
+- Baseline package graph contains nine publishable packages (`polint`, `polint-macros`, and seven internal packages) plus unpublished `polint-bench` / `polint-eval`; supported prelude allowlist is 116 names; current debug binary is approximately 101.6 MB.
+- Baseline golden cost gate is independently red at committed HEAD for `examples/go-sensitive-writes/json` (448 ms against a 429.6 ms allowance), confirming the local stabilization diff did not introduce that timing regression.
 
 ## Finding ledger
 
@@ -20,7 +23,7 @@
 | B-1 | Reconcile current main and rerun final gates | open | — |
 | H-1 | Cross-file/language call-site ID collisions | open | — |
 | H-2 | Providers publish digest after failed store | open | — |
-| H-3 | Neutral replacements omit metadata lifecycle | open | — |
+| H-3 | Neutral replacements omit metadata lifecycle | fixed locally | Facade `AnalysisHost` replacements now refresh stable metadata atomically; scheduled Go+TS deep-stack validation is clean. |
 | H-4 | `new-rule` follows symlinked output parents | open | — |
 | H-5 | Go embedded sidecar temp cache trusts marker | open | — |
 | H-6 | Go offline mode misses cold sidecar build | open | — |
@@ -86,4 +89,7 @@ _In progress._
 - Kernel now gates upstream digests and Phase65 identity fallback on explicit typed success, records typed failures immediately, and blocks hard dependents in the same scheduling loop.
 - Validation store rejection returns no digest and typed validation failure; failed outcomes carry no provider identity.
 - Focused evidence: `cargo fmt --all`; `cargo check --workspace`; `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`; `cargo test -p polint --lib analysis_kernel::outcome -- --nocapture` (8 passed); `cargo test -p polint-analysis --lib data_flow::store::tests::store_rejects -- --nocapture` (6 passed); `cargo test -p polint-analysis --lib -- --nocapture` (791 passed, 1 ignored).
-- H-3 lifecycle metadata work intentionally deferred/reverted after review; no lifecycle hook or placeholder metadata remains in this iteration.
+- H-3 was completed in the stabilization tranche: `AnalysisDb` now owns metadata refresh after scheduled neutral replacements, including identity, reachability, solver, semantic graph, domains, and the existing moved families. Reachability metadata caps resolved roots at the provider's `setup_aware` ceiling, and semantic references use stable fact keys rather than dense IDs.
+- A real `dataflow` capability plan over representative Go and TypeScript sources now schedules the deep provider closure and asserts both zero missing metadata and a clean full metadata-validation report.
+- The semantic-store future-schema parity assertion now derives `found` from the installed future fixture rather than preserving the stale literal `2`.
+- Stabilization evidence: formatting, workspace all-target/all-feature check and clippy, full capability matrix, semantic-store parity, `polint-analysis` all targets (790 passed, 1 ignored), `POLINT_VALIDATE_FACTS=1` Go/TS capability paths, public-surface leak, polyglot canary, and determinism gate all pass. The golden diagnostic outputs remain byte-stable, but the cost gate is currently 2–74 ms above the pre-existing `go-sensitive-writes/json` wall-clock budget across three local runs and remains open for performance triage.

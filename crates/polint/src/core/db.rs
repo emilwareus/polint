@@ -2,7 +2,6 @@
 //!
 //! Extracted from the core monolith without behaviour changes.
 
-#[cfg(test)]
 use super::POLINT_ABSTRACT_DOMAINS_PROVIDER_ID;
 use crate::analysis::access_paths::facts::AccessPathFact;
 use crate::analysis::access_paths::store::AccessPathStore;
@@ -40,21 +39,21 @@ use crate::analysis::evidence::store::{EvidenceOutput, EvidenceStore};
 use crate::analysis::extensions::store::{
     AcceptedExtensionFact, ExtensionActivationRow, ExtensionOutput, RejectedExtensionFact,
 };
-use crate::analysis::identity::facts::IdentityRecord;
-use crate::analysis::identity::store::IdentityStore;
+use crate::analysis::identity::facts::{IdentityKind, IdentityRecord};
+use crate::analysis::identity::store::{IdentityProviderOutput, IdentityStore};
 use crate::analysis::ids::CallSiteId;
 use crate::analysis::mir::body::{MirBlock, MirBody, MirOutput, MirStatement, MirTerminator};
 use crate::analysis::mir::op::{MirOperation, UnsupportedSemanticFact};
 use crate::analysis::places::PlaceFact;
-use crate::analysis::points_to::facts::{PointsToConstraintFact, PointsToSetFact};
+use crate::analysis::points_to::facts::{PointsToConstraintFact, PointsToSetFact, PointsToStatus};
 use crate::analysis::points_to::store::PointsToStore;
-use crate::analysis::reachability::facts::ReachabilityRootFact;
+use crate::analysis::reachability::facts::{ReachabilityRootFact, RootPrecision, RootStatus};
 use crate::analysis::reachability::store::{ReachabilityProviderOutput, ReachabilityStore};
 use crate::analysis::refined_calls::facts::RefinedCallEdgeFact;
 use crate::analysis::refined_calls::provider::REFINED_CALLS_PROVIDER_ID;
 use crate::analysis::refined_calls::store::{RefinedCallOutput, RefinedCallStore};
 use crate::analysis::semantic_graph::constraints::ConstraintFact;
-use crate::analysis::semantic_graph::facts::SemanticNodeFact;
+use crate::analysis::semantic_graph::facts::{SemanticEdgeFact, SemanticNodeFact};
 use crate::analysis::semantic_graph::store::{SemanticGraphOutput, SemanticGraphStore};
 use crate::analysis::solver::budget::BudgetStatus;
 use crate::analysis::solver::facts::DerivedEdgeFact;
@@ -97,13 +96,9 @@ use crate::ts::object_model::facts::{
     TsReceiverBindingFact,
 };
 use crate::ts::object_model::store::{TsObjectModelOutput, TsObjectModelStore};
-#[cfg(test)]
 use polint_analysis::domains::facts::{DomainEventFact, DomainObservationFact};
-#[cfg(test)]
 use polint_analysis::domains::store::DomainOutput;
 use polint_analysis::domains::store::DomainStore;
-#[cfg(test)]
-use polint_analysis::semantic_graph::facts::SemanticEdgeFact;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -440,6 +435,11 @@ impl AnalysisDb {
             .expect("IdentityStore is installed when AnalysisDb is constructed")
     }
 
+    fn identity_store_mut(&mut self) -> &mut IdentityStore {
+        self.fact_store_mut(IDENTITY_STORE_FAMILY)
+            .expect("IdentityStore is installed when AnalysisDb is constructed")
+    }
+
     fn refined_call_store_inner(&self) -> &RefinedCallStore {
         self.fact_store(REFINED_CALL_STORE_FAMILY)
             .expect("RefinedCallStore is installed when AnalysisDb is constructed")
@@ -483,7 +483,6 @@ impl AnalysisDb {
             .expect("DomainStore is installed when AnalysisDb is constructed")
     }
 
-    #[cfg(test)]
     fn domain_store_mut(&mut self) -> &mut DomainStore {
         self.fact_store_mut(DOMAIN_STORE_FAMILY)
             .expect("DomainStore is installed when AnalysisDb is constructed")
@@ -989,12 +988,101 @@ impl AnalysisDb {
         Ok(())
     }
 
+    fn identity_status_metadata(_record: &IdentityRecord) -> (FactPrecision, FactConfidence) {
+        (FactPrecision::SetupAware, FactConfidence::High)
+    }
+
+    fn identity_kind_label(kind: IdentityKind) -> &'static str {
+        match kind {
+            IdentityKind::Function => "function",
+            IdentityKind::Callsite => "callsite",
+        }
+    }
+
+    fn format_signature_digest(
+        digest: crate::analysis::identity::facts::SignatureDigest,
+    ) -> String {
+        digest.0.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    fn refresh_identity_metadata(&mut self) {
+        let interner = self.stable_key_interner();
+        self.fact_meta.remove_family(FactFamily::Identity);
+        let records = self.identity_records().to_vec();
+        for record in &records {
+            let (precision, confidence) = Self::identity_status_metadata(record);
+            let payload = stable_parts([
+                ("kind", Self::identity_kind_label(record.kind).to_string()),
+                ("language", record.language.as_str().to_string()),
+                ("file", self.path_for(record.file_id)),
+                ("span", span_metadata_value(&record.span)),
+                ("package_or_module", record.package_or_module.to_string()),
+                ("container_path", record.container_path.to_string()),
+                ("display_name", record.display_name.to_string()),
+                (
+                    "signature_digest",
+                    Self::format_signature_digest(record.signature_digest),
+                ),
+                ("multiplicity", record.multiplicity.to_string()),
+                (
+                    "originating_call_site",
+                    record
+                        .originating_call_site_id
+                        .map(|id| self.fact_stable_key(FactFamily::CallSite, id.0))
+                        .unwrap_or_else(none_value),
+                ),
+                (
+                    "originating_call_target",
+                    record
+                        .originating_call_target_id
+                        .map(|id| self.fact_stable_key(FactFamily::CallTarget, id.0))
+                        .unwrap_or_else(none_value),
+                ),
+            ]);
+            self.record_fact_meta(
+                FactFamily::Identity,
+                record.id.0,
+                fact_meta_from_stable_key(
+                    &interner,
+                    "polint.identity",
+                    precision,
+                    confidence,
+                    record.stable_key,
+                    payload,
+                ),
+            );
+        }
+        self.finish_fact_meta_insertions(&[FactFamily::Identity]);
+    }
+
     #[allow(
         dead_code,
         reason = "Retained for AnalysisDb until dual accessors are removed."
     )]
     pub(crate) fn identity_records(&self) -> &[IdentityRecord] {
         self.identity_store_inner().records()
+    }
+
+    pub(crate) fn replace_identity_facts(
+        &mut self,
+        output: IdentityProviderOutput,
+    ) -> Result<(), AnalysisError> {
+        let valid_sites = self
+            .calls_store()
+            .sites()
+            .iter()
+            .map(|site| site.id)
+            .collect::<BTreeSet<_>>();
+        let valid_targets = self
+            .call_targets()
+            .iter()
+            .map(|target| target.id)
+            .collect::<BTreeSet<_>>();
+        let interner = self.stable_key_interner();
+        let store = IdentityStore::from_output(output, &interner, &valid_sites, &valid_targets)?;
+        *self.identity_store_mut() = store;
+        self.refresh_identity_metadata();
+        Ok(())
     }
 
     /// Injects identity records directly, bypassing store-level reference
@@ -1066,14 +1154,12 @@ impl AnalysisDb {
         Ok(())
     }
 
-    #[cfg(test)]
     pub(crate) fn replace_abstract_domain_facts(&mut self, output: DomainOutput) {
         let interner = self.stable_key_interner();
         let store = DomainStore::from_output(output, &interner);
         self.replace_abstract_domain_store(store);
     }
 
-    #[cfg(test)]
     fn replace_abstract_domain_store(&mut self, store: DomainStore) {
         *self.domain_store_mut() = store;
         let interner = self.stable_key_interner();
@@ -1384,6 +1470,7 @@ impl AnalysisDb {
             &valid_entrypoint_ids,
         )?;
         *self.reachability_store_mut() = store;
+        self.refresh_reachability_metadata();
         Ok(())
     }
 
@@ -1424,6 +1511,7 @@ impl AnalysisDb {
         let interner = self.stable_key_interner();
         *self.semantic_graph_store_mut() =
             SemanticGraphStore::from_normalized_output(output, &interner)?;
+        self.refresh_semantic_graph_metadata();
         Ok(())
     }
 
@@ -1431,7 +1519,6 @@ impl AnalysisDb {
         self.semantic_graph_store_inner().nodes()
     }
 
-    #[cfg(test)]
     pub(crate) fn semantic_edges(&self) -> &[SemanticEdgeFact] {
         self.semantic_graph_store_inner().edges()
     }
@@ -1495,6 +1582,7 @@ impl AnalysisDb {
     ) -> Result<(), AnalysisError> {
         let interner = self.stable_key_interner();
         *self.solver_store_mut() = SolverStore::from_output(output, &interner)?;
+        self.refresh_solver_metadata();
         Ok(())
     }
 
@@ -1874,13 +1962,12 @@ impl AnalysisDb {
             FactFamily::EvidenceReplayKey,
         ]);
     }
-    #[cfg(test)]
     fn refresh_abstract_domain_metadata(&mut self, interner: &crate::core::StableKeyInterner) {
         self.fact_meta.remove_family(FactFamily::DomainObservation);
         self.fact_meta.remove_family(FactFamily::DomainEvent);
 
-        let observations = self.abstract_domain_observations().to_vec();
-        let events = self.abstract_domain_events().to_vec();
+        let observations = self.domain_store_inner().observations().to_vec();
+        let events = self.domain_store_inner().events().to_vec();
         for fact in &observations {
             let metadata = self.domain_observation_metadata(interner, fact);
             self.record_fact_meta(FactFamily::DomainObservation, fact.id.0, metadata);
@@ -5020,7 +5107,6 @@ impl AnalysisDb {
         )
     }
 
-    #[cfg(test)]
     fn domain_observation_metadata(
         &self,
         interner: &crate::core::StableKeyInterner,
@@ -5067,7 +5153,6 @@ impl AnalysisDb {
         )
     }
 
-    #[cfg(test)]
     fn domain_event_metadata(
         &self,
         interner: &crate::core::StableKeyInterner,
@@ -5463,4 +5548,234 @@ impl AnalysisDb {
 fn option_file_path(db: &AnalysisDb, file: Option<FileId>) -> String {
     file.map(|file| db.path_for(file))
         .unwrap_or_else(none_value)
+}
+
+impl AnalysisDb {
+    fn refresh_reachability_metadata(&mut self) {
+        self.fact_meta.remove_family(FactFamily::Reachability);
+        let interner = self.stable_key_interner();
+        let roots = self.reachability_roots().to_vec();
+        for root in &roots {
+            let precision = match root.precision {
+                // Reachability combines roots with setup-dependent call and entrypoint
+                // facts, so even a statically discovered root cannot exceed the
+                // provider's setup-aware precision ceiling.
+                RootPrecision::ResolvedStatic | RootPrecision::SetupAware => {
+                    FactPrecision::SetupAware
+                }
+                RootPrecision::Heuristic | RootPrecision::Conservative => FactPrecision::Heuristic,
+                RootPrecision::Unknown => FactPrecision::Unresolved,
+            };
+            let confidence = match root.status {
+                RootStatus::Resolved => FactConfidence::High,
+                RootStatus::Partial => FactConfidence::Medium,
+                RootStatus::Unresolved | RootStatus::SetupMissing | RootStatus::Unsupported => {
+                    FactConfidence::Low
+                }
+            };
+            let metadata = fact_meta_from_stable_key(
+                &interner,
+                "polint.reachability",
+                precision,
+                confidence,
+                root.stable_key,
+                stable_parts([
+                    ("kind", root.kind.as_str().to_string()),
+                    ("language", language_label(root.language).to_string()),
+                    (
+                        "target_function",
+                        self.fact_stable_key(FactFamily::Function, root.target_function.0),
+                    ),
+                    (
+                        "target_symbol",
+                        root.target_symbol
+                            .map(|id| self.fact_stable_key(FactFamily::Symbol, id.0))
+                            .unwrap_or_else(none_value),
+                    ),
+                    (
+                        "originating_entrypoint",
+                        root.originating_entrypoint
+                            .map(|id| self.fact_stable_key(FactFamily::Entrypoint, id.0))
+                            .unwrap_or_else(none_value),
+                    ),
+                    ("path", self.path_for(root.file)),
+                    ("span", span_metadata_value(&root.span)),
+                    ("precision", root.precision.as_str().to_string()),
+                    ("provenance", root.provenance.as_str().to_string()),
+                    ("status", root.status.as_str().to_string()),
+                ]),
+            );
+            self.record_fact_meta(FactFamily::Reachability, root.id.0, metadata);
+        }
+        self.finish_fact_meta_insertions(&[FactFamily::Reachability]);
+    }
+
+    fn refresh_solver_metadata(&mut self) {
+        self.fact_meta.remove_family(FactFamily::SolverDerivedEdge);
+        let interner = self.stable_key_interner();
+        let edges = self.solver_derived_edges().to_vec();
+        for edge in &edges {
+            let precision =
+                polint_analysis::solver::facts::derived_edge_precision_ceiling(edge.precision);
+            let confidence = match edge.status {
+                PointsToStatus::Present => FactConfidence::High,
+                PointsToStatus::BudgetExceeded => FactConfidence::Medium,
+                PointsToStatus::Unknown
+                | PointsToStatus::Unsupported
+                | PointsToStatus::SetupMissing => FactConfidence::Low,
+            };
+            let metadata = fact_meta_from_stable_key(
+                &interner,
+                "polint.solver",
+                precision,
+                confidence,
+                edge.stable_key,
+                stable_parts([
+                    ("status", format!("{:?}", edge.status)),
+                    ("precision", format!("{:?}", edge.precision)),
+                    (
+                        "provenance",
+                        serde_json::to_string(&edge.provenance.stable_payload(&interner))
+                            .expect("solver provenance stable payload serializes"),
+                    ),
+                ]),
+            );
+            self.record_fact_meta(FactFamily::SolverDerivedEdge, edge.id.0, metadata);
+        }
+        self.finish_fact_meta_insertions(&[FactFamily::SolverDerivedEdge]);
+    }
+
+    fn refresh_semantic_graph_metadata(&mut self) {
+        self.fact_meta.remove_family(FactFamily::SemanticGraph);
+        let interner = self.stable_key_interner();
+        let mut stable_keys = self
+            .semantic_nodes()
+            .iter()
+            .map(|row| {
+                format!(
+                    "node|{}|{}|{}",
+                    interner.resolve(row.stable_key),
+                    row.kind.as_str(),
+                    row.precision.as_str()
+                )
+            })
+            .collect::<Vec<_>>();
+        stable_keys.extend(self.semantic_edges().iter().map(|row| {
+            format!(
+                "edge|{}|{}|{}",
+                interner.resolve(row.stable_key),
+                row.kind.as_str(),
+                row.precision.as_str()
+            )
+        }));
+        stable_keys.extend(self.semantic_constraints().iter().map(|row| {
+            format!(
+                "constraint|{}|{}|{:?}|{:?}",
+                interner.resolve(row.stable_key),
+                row.kind.as_str(),
+                row.status,
+                row.precision
+            )
+        }));
+        stable_keys.sort();
+        let aggregate_text = stable_key_text_from_parts(
+            &interner,
+            FactFamily::SemanticGraph,
+            &[("rows", stable_keys.join("\n"))],
+        );
+        let aggregate_key = interner.intern(aggregate_text);
+        let metadata = fact_meta_from_stable_key(
+            &interner,
+            "polint.semantic_graph",
+            FactPrecision::Heuristic,
+            FactConfidence::Medium,
+            aggregate_key,
+            stable_parts([
+                ("nodes", self.semantic_nodes().len().to_string()),
+                ("edges", self.semantic_edges().len().to_string()),
+                ("constraints", self.semantic_constraints().len().to_string()),
+                ("stable_rows", stable_keys.join("\n")),
+            ]),
+        );
+        self.record_fact_meta(FactFamily::SemanticGraph, 0, metadata);
+        self.finish_fact_meta_insertions(&[FactFamily::SemanticGraph]);
+    }
+}
+
+impl polint_analysis::AnalysisHost for AnalysisDb {
+    fn replace_summary_facts(&mut self, output: SummaryOutput) {
+        AnalysisDb::replace_summary_facts(self, output);
+    }
+
+    fn replace_call_facts(&mut self, output: CallOutput) -> Result<(), AnalysisError> {
+        AnalysisDb::replace_call_facts(self, output)
+    }
+
+    fn replace_cfg_facts(&mut self, output: CfgOutput) -> Result<(), AnalysisError> {
+        AnalysisDb::replace_cfg_facts(self, output)
+    }
+
+    fn replace_semantic_mir(&mut self, output: MirOutput) -> Result<(), AnalysisError> {
+        AnalysisDb::replace_semantic_mir(self, output)
+    }
+
+    fn replace_refined_call_facts(
+        &mut self,
+        output: RefinedCallOutput,
+    ) -> Result<(), AnalysisError> {
+        AnalysisDb::replace_refined_call_facts(self, output)
+    }
+
+    fn replace_entrypoint_facts(&mut self, output: EntrypointOutput) -> Result<(), AnalysisError> {
+        AnalysisDb::replace_entrypoint_facts(self, output)
+    }
+
+    fn replace_abstract_domain_facts(&mut self, output: DomainOutput) {
+        AnalysisDb::replace_abstract_domain_facts(self, output);
+    }
+
+    fn replace_data_flow_facts(&mut self, output: DataFlowOutput) -> Result<(), AnalysisError> {
+        AnalysisDb::replace_data_flow_facts(self, output)
+    }
+
+    fn replace_evidence_facts(&mut self, output: EvidenceOutput) -> Result<(), AnalysisError> {
+        AnalysisDb::replace_evidence_facts(self, output)
+    }
+
+    fn replace_reachability_facts(
+        &mut self,
+        output: ReachabilityProviderOutput,
+    ) -> Result<(), AnalysisError> {
+        AnalysisDb::replace_reachability_facts(self, output)
+    }
+
+    fn replace_solver_facts(&mut self, output: SolverOutput) -> Result<(), AnalysisError> {
+        AnalysisDb::replace_solver_facts(self, output)
+    }
+
+    fn replace_type_value_alias_facts(&mut self, output: TypeValueAliasOutput) {
+        AnalysisDb::replace_type_value_alias_facts(self, output);
+    }
+
+    fn replace_extension_facts(&mut self, output: ExtensionOutput) {
+        AnalysisDb::replace_extension_facts(self, output);
+    }
+
+    fn replace_semantic_graph_facts(
+        &mut self,
+        output: SemanticGraphOutput,
+    ) -> Result<(), AnalysisError> {
+        AnalysisDb::replace_semantic_graph_facts(self, output)
+    }
+
+    fn replace_identity_facts(
+        &mut self,
+        output: IdentityProviderOutput,
+    ) -> Result<(), AnalysisError> {
+        AnalysisDb::replace_identity_facts(self, output)
+    }
+
+    fn replace_normalized_type_value_alias_facts(&mut self, output: TypeValueAliasOutput) {
+        AnalysisDb::replace_normalized_type_value_alias_facts(self, output);
+    }
 }

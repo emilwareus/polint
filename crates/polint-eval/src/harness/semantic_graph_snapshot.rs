@@ -67,7 +67,22 @@ fn provider_output_digest(output: &KernelOutput, provider_id: &str) -> Digest {
     assert_eq!(
         outcome.status,
         crate::analysis_kernel::ProviderOutcomeStatus::Succeeded,
-        "provider {provider_id} must succeed"
+        "provider {provider_id} must succeed; stage={:?} reason={:?} blockers={:?}; outcomes={:?}",
+        outcome.failure_stage,
+        outcome.failure_reason,
+        outcome.blockers,
+        output
+            .run_report
+            .provider_outcomes
+            .iter()
+            .map(|row| (
+                &row.provider_id,
+                row.status,
+                row.failure_stage,
+                row.failure_reason,
+                &row.blockers
+            ))
+            .collect::<Vec<_>>()
     );
     outcome
         .output_identity

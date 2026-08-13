@@ -1023,6 +1023,73 @@ mod tests {
     }
 
     #[test]
+    fn scheduled_deep_provider_stack_has_complete_valid_metadata() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        std::fs::write(
+            temp.path().join("main.go"),
+            "package main\n\nfunc main() { println(\"hello\") }\n",
+        )
+        .expect("write Go source");
+        std::fs::write(
+            temp.path().join("app.ts"),
+            "export function app(value: string) { return value; }\napp(\"hello\");\n",
+        )
+        .expect("write TypeScript source");
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let cache = Cache::new("", false);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["dataflow"]);
+
+        let output = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("scheduled deep provider stack should run");
+
+        for provider_id in [
+            "polint.semantic_mir",
+            "polint.cfg",
+            "polint.calls",
+            "polint.identity",
+            "polint.abstract_domains",
+            "polint.entrypoints",
+            "polint.reachability",
+            "polint.semantic_graph",
+            "polint.solver",
+            "polint.refined_calls",
+            "polint.data_flow",
+            "polint.evidence",
+        ] {
+            let outcome = output
+                .run_report
+                .provider_outcomes
+                .iter()
+                .find(|row| row.provider_id == provider_id)
+                .unwrap_or_else(|| panic!("missing scheduled provider outcome {provider_id}"));
+            assert_eq!(
+                outcome.status,
+                ProviderOutcomeStatus::Succeeded,
+                "scheduled provider {provider_id} did not succeed: {outcome:?}"
+            );
+        }
+
+        let missing = AnalysisKernel::missing_fact_metadata_for_test(&output.db);
+        assert!(
+            missing.is_empty(),
+            "unexpected missing metadata: {missing:?}"
+        );
+
+        let report = validation::validate_fact_metadata(&output.db, provider::provider_manifests());
+        assert!(
+            report.is_empty(),
+            "unexpected metadata diagnostics: {report:#?}"
+        );
+    }
+
+    #[test]
     fn kernel_run_respects_fact_metadata_validation_gate() {
         let temp = tempfile::tempdir().expect("temp directory");
         let loaded = load_config(temp.path()).expect("default config loads");
@@ -1188,7 +1255,7 @@ mod tests {
                 (
                     StoreMode::Future,
                     StoreStatus::Skipped(store::StoreSkipReason::FutureSchema {
-                        found: 2,
+                        found: store::CURRENT_SCHEMA_VERSION_FOR_TEST + 1,
                         supported: store::CURRENT_SCHEMA_VERSION_FOR_TEST,
                     }),
                 ),

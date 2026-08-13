@@ -62,6 +62,7 @@ use crate::fact_store::{
 use crate::identity::facts::IdentityRecord;
 use crate::identity::store::{IdentityProviderOutput, IdentityStore};
 use crate::ids::CallSiteId;
+use crate::local_db::LocalAnalysisDb;
 use crate::mir_body::MirOutput;
 use crate::mir_body::{MirBlock, MirBody};
 use crate::mir_body::{MirStatement, MirTerminator};
@@ -638,7 +639,7 @@ pub trait AnalysisHost: FactDatabase {
     }
 }
 
-impl<T: FactDatabase + ?Sized> AnalysisHost for T {}
+impl AnalysisHost for LocalAnalysisDb {}
 
 fn host_fact_meta(
     producer_id: &'static str,
