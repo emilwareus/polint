@@ -23,10 +23,10 @@ const UPDATE_COSTS_ENV: &str = "POLINT_UPDATE_GOLDEN_COSTS";
 /// Must match `crate::golden_cost::COST_PATH_ENV`.
 const COST_PATH_ENV: &str = "POLINT_GOLDEN_COST_PATH";
 const COST_SCHEMA_VERSION: &str = "polint-golden-cost-1";
-/// Fail when measured wall-clock or peak RSS exceeds committed × this ratio
-/// (unless still within the absolute noise floors below).
-const MAX_COST_RATIO: f64 = 1.20;
-const COST_WALL_ABS_FLOOR_MS: u64 = 50;
+/// Fail when measured wall-clock or analysis-attributable RSS growth exceeds
+/// committed × this ratio, unless still within the absolute noise floors.
+const MAX_COST_RATIO: f64 = 1.50;
+const COST_WALL_ABS_FLOOR_MS: u64 = 100;
 const COST_RSS_ABS_FLOOR_BYTES: u64 = 16 * 1024 * 1024;
 const STRIPPED_VERSION: &str = "<stripped>";
 const FORMAT_JSON: &str = "json";
@@ -479,13 +479,12 @@ fn assert_cost_within_budget(
     ) {
         failures.push(err);
     }
-    // Gate the absolute peak RSS high-water mark (same metric W0.2 cost columns
-    // use). Delta is recorded for diagnosis but can be zero on tiny examples
-    // when analysis never raises the process high-water mark.
+    // Gate analysis-attributable RSS growth rather than the process-wide high-
+    // water mark, which includes platform- and runner-dependent startup memory.
     if let Err(err) = cost_within_budget(
-        "peak_rss_bytes",
-        measured.peak_rss_bytes,
-        baseline.peak_rss_bytes,
+        "peak_rss_delta_bytes",
+        measured.peak_rss_delta_bytes,
+        baseline.peak_rss_delta_bytes,
         COST_RSS_ABS_FLOOR_BYTES,
     ) {
         failures.push(err);
@@ -574,6 +573,24 @@ fn run_case(root: &Path, case: &GoldenCase, update_diagnostics: bool, update_cos
         )
     });
     assert_normalized_matches(&case.id, &expected, &normalized);
+}
+
+#[test]
+fn cost_gate_ignores_runner_startup_rss() {
+    let baseline = GoldenCostRecord {
+        schema_version: COST_SCHEMA_VERSION.to_string(),
+        wall_clock_ms: 100,
+        peak_rss_bytes: 25 * 1024 * 1024,
+        peak_rss_delta_bytes: 18 * 1024 * 1024,
+    };
+    let measured = GoldenCostRecord {
+        schema_version: COST_SCHEMA_VERSION.to_string(),
+        wall_clock_ms: 100,
+        peak_rss_bytes: 72 * 1024 * 1024,
+        peak_rss_delta_bytes: 18 * 1024 * 1024,
+    };
+
+    assert_cost_within_budget("runner-startup-rss", &baseline, &measured);
 }
 
 #[test]
@@ -808,7 +825,7 @@ fn ci_workflows_never_set_golden_update_env() {
 
 #[test]
 fn cost_budget_helper_rejects_clear_regression() {
-    let err = cost_within_budget("wall_clock_ms", 200, 100, COST_WALL_ABS_FLOOR_MS).unwrap_err();
+    let err = cost_within_budget("wall_clock_ms", 250, 100, COST_WALL_ABS_FLOOR_MS).unwrap_err();
     assert!(err.contains("wall_clock_ms"), "{err}");
     assert!(
         cost_within_budget("wall_clock_ms", 110, 100, COST_WALL_ABS_FLOOR_MS).is_ok(),

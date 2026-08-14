@@ -555,6 +555,8 @@ fn make_binary_private_executable(path: &Path) -> Result<(), GoSemanticProcessEr
             ))
         })?;
     }
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
 

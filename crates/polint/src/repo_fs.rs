@@ -21,9 +21,13 @@ pub(crate) struct RepoFileIdentity {
     #[cfg(unix)]
     inode: u64,
     #[cfg(windows)]
-    volume_serial_number: Option<u32>,
+    file_attributes: u32,
     #[cfg(windows)]
-    file_index: Option<u64>,
+    creation_time: u64,
+    #[cfg(windows)]
+    last_write_time: u64,
+    #[cfg(windows)]
+    file_size: u64,
     #[cfg(not(any(unix, windows)))]
     length: u64,
     #[cfg(not(any(unix, windows)))]
@@ -370,8 +374,10 @@ fn metadata_identity(metadata: &fs::Metadata) -> RepoFileIdentity {
     #[cfg(windows)]
     {
         RepoFileIdentity {
-            volume_serial_number: metadata.volume_serial_number(),
-            file_index: metadata.file_index(),
+            file_attributes: metadata.file_attributes(),
+            creation_time: metadata.creation_time(),
+            last_write_time: metadata.last_write_time(),
+            file_size: metadata.file_size(),
         }
     }
     #[cfg(not(any(unix, windows)))]
