@@ -7,7 +7,9 @@ use std::time::Duration;
 
 #[cfg(unix)]
 use crate::go::embedded_cache::write_private_file;
-use crate::go::embedded_cache::{materialize_embedded_sources, read_verified_private_file};
+use crate::go::embedded_cache::{
+    materialize_embedded_sources, read_verified_private_file, verify_private_file,
+};
 use crate::go::lifecycle;
 use crate::go::process_runner::{GO_SUBPROCESS_TIMEOUT, GoProcessError, run_bounded};
 use crate::go::semantic::protocol::GO_SEMANTIC_SCHEMA;
@@ -443,7 +445,10 @@ fn lock_frontend_binary_cache(
             lock_path.display()
         ))
     })?;
-    read_verified_private_file(&lock_path).map_err(|reason| {
+    // Do not read the lock through a second handle: on Windows an existing
+    // byte-range lock rejects that read with ERROR_LOCK_VIOLATION. The lock's
+    // contents are irrelevant; only its private regular-file identity matters.
+    verify_private_file(&lock_path).map_err(|reason| {
         GoSemanticProcessError::CommandFailed(format!(
             "refusing untrusted embedded frontend binary cache lock `{}`: {reason}",
             lock_path.display()

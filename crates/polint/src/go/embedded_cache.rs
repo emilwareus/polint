@@ -266,10 +266,14 @@ pub(crate) fn write_private_file(path: &Path, contents: &[u8]) -> Result<(), Str
     })
 }
 
-pub(crate) fn read_verified_private_file(path: &Path) -> Result<Vec<u8>, String> {
+pub(crate) fn verify_private_file(path: &Path) -> Result<(), String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| format!("failed to inspect `{}`: {error}", path.display()))?;
-    verify_private_metadata(path, &metadata, false)?;
+    verify_private_metadata(path, &metadata, false)
+}
+
+pub(crate) fn read_verified_private_file(path: &Path) -> Result<Vec<u8>, String> {
+    verify_private_file(path)?;
     fs::read(path).map_err(|error| format!("failed to read `{}`: {error}", path.display()))
 }
 

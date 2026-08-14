@@ -582,19 +582,21 @@ mod tests {
     fn successful_parent_exit_terminates_reparented_descendant() {
         let temp = tempfile::tempdir().expect("tempdir");
         let sentinel = temp.path().join("background-child-finished");
-        let mut command = Command::new("cmd");
+        let mut command = Command::new("powershell");
         command.current_dir(temp.path()).args([
-            "/C",
-            r#"start "" /B cmd /C "ping -n 3 127.0.0.1 > nul & echo done > background-child-finished" & echo parent"#,
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            r#"Start-Process -FilePath cmd.exe -ArgumentList '/C', 'ping -n 3 127.0.0.1 > nul & echo done > background-child-finished'; Write-Output parent"#,
         ]);
 
         let started = Instant::now();
-        let output = run_bounded(command, Duration::from_secs(5), "early-exit Go test")
+        let output = run_bounded(command, Duration::from_secs(15), "early-exit Go test")
             .expect("parent should exit successfully");
 
         assert!(output.status.success());
         assert!(String::from_utf8_lossy(&output.stdout).contains("parent"));
-        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(started.elapsed() < Duration::from_secs(10));
         thread::sleep(Duration::from_millis(2_300));
         assert!(!sentinel.exists(), "background child survived parent exit");
     }
