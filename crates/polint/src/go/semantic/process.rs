@@ -343,7 +343,7 @@ where
     #[cfg(not(unix))]
     {
         after_binary_publish();
-        return Ok(staging);
+        Ok(staging)
     }
 
     #[cfg(unix)]

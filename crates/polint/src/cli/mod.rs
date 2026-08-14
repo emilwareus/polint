@@ -4468,9 +4468,11 @@ mod tests {
     use clap::CommandFactory;
 
     use super::{
-        Cli, FactsListReport, LocalRuleHostProfile, ScaffoldWrite, commit_new_rule_scaffold_with,
-        enabled_language_features, explain_derived_edge_provenance, public_fact_view,
+        Cli, FactsListReport, LocalRuleHostProfile, enabled_language_features,
+        explain_derived_edge_provenance, public_fact_view,
     };
+    #[cfg(unix)]
+    use super::{ScaffoldWrite, commit_new_rule_scaffold_with};
 
     #[test]
     fn rule_host_dependency_features_match_the_cli_build() {
@@ -4482,6 +4484,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn new_rule_transaction_rolls_back_failure_at_every_write_boundary() {
         let sentinel = b"fn main() { polint::runner::run_cli(vec![]) }\n";
@@ -4569,6 +4572,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn new_rule_rollback_preserves_concurrent_destination_replacement() {
         let repo = tempfile::tempdir().expect("repo");
@@ -4630,6 +4634,7 @@ mod tests {
         assert!(!repo.path().join(".polint/rules/src/demo.rs").exists());
     }
 
+    #[cfg(unix)]
     #[test]
     fn new_rule_rollback_does_not_delete_concurrently_replaced_created_file() {
         let repo = tempfile::tempdir().expect("repo");

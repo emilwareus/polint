@@ -289,6 +289,16 @@ impl ProcessTreeGuard {
                 "Windows Job Object assignment failed; process-tree cleanup will use taskkill"
             );
         }
+        if let Err(error) = resume_suspended_process(child) {
+            // Dropping an assigned job terminates the still-suspended child;
+            // without assignment the ordinary cleanup path can kill it by PID.
+            self.job.take();
+            tracing::debug!(
+                process_id = child.id(),
+                %error,
+                "failed to resume suspended Windows child"
+            );
+        }
     }
 }
 
@@ -347,6 +357,55 @@ fn assign_process_to_job(
     Ok(())
 }
 
+#[cfg(windows)]
+#[allow(unsafe_code)]
+fn resume_suspended_process(child: &Child) -> std::io::Result<()> {
+    use std::os::windows::io::{FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
+    };
+    use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME};
+
+    // SAFETY: snapshot and thread handles are checked before being wrapped in
+    // OwnedHandle. THREADENTRY32 advertises its exact size to the ToolHelp API.
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+        if snapshot == INVALID_HANDLE_VALUE {
+            return Err(std::io::Error::last_os_error());
+        }
+        let _snapshot = OwnedHandle::from_raw_handle(snapshot);
+        let mut entry = THREADENTRY32 {
+            dwSize: u32::try_from(std::mem::size_of::<THREADENTRY32>())
+                .map_err(|_| std::io::Error::other("Windows thread entry is too large"))?,
+            ..THREADENTRY32::default()
+        };
+        if Thread32First(snapshot, &raw mut entry) == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        loop {
+            if entry.th32OwnerProcessID == child.id() {
+                let thread = OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID);
+                if thread.is_null() {
+                    return Err(std::io::Error::last_os_error());
+                }
+                let _thread = OwnedHandle::from_raw_handle(thread);
+                if ResumeThread(thread) == u32::MAX {
+                    return Err(std::io::Error::last_os_error());
+                }
+                return Ok(());
+            }
+            if Thread32Next(snapshot, &raw mut entry) == 0 {
+                break;
+            }
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "suspended Windows child thread was not found",
+    ))
+}
+
 #[cfg(not(windows))]
 struct ProcessTreeGuard;
 
@@ -369,7 +428,15 @@ fn configure_child_process_group(command: &mut Command) {
     command.process_group(0);
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn configure_child_process_group(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    use windows_sys::Win32::System::Threading::CREATE_SUSPENDED;
+
+    command.creation_flags(CREATE_SUSPENDED);
+}
+
+#[cfg(not(any(unix, windows)))]
 fn configure_child_process_group(_command: &mut Command) {}
 
 #[cfg(unix)]

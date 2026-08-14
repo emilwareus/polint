@@ -21,13 +21,7 @@ pub(crate) struct RepoFileIdentity {
     #[cfg(unix)]
     inode: u64,
     #[cfg(windows)]
-    file_attributes: u32,
-    #[cfg(windows)]
     creation_time: u64,
-    #[cfg(windows)]
-    last_write_time: u64,
-    #[cfg(windows)]
-    file_size: u64,
     #[cfg(not(any(unix, windows)))]
     length: u64,
     #[cfg(not(any(unix, windows)))]
@@ -374,10 +368,7 @@ fn metadata_identity(metadata: &fs::Metadata) -> RepoFileIdentity {
     #[cfg(windows)]
     {
         RepoFileIdentity {
-            file_attributes: metadata.file_attributes(),
             creation_time: metadata.creation_time(),
-            last_write_time: metadata.last_write_time(),
-            file_size: metadata.file_size(),
         }
     }
     #[cfg(not(any(unix, windows)))]
@@ -641,7 +632,7 @@ pub(crate) fn write_repo_file_atomic(
     write_repo_file_atomic_impl(root, relative_path, contents, false, None).map(|_| ())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn write_repo_file_atomic_noclobber(
     root: &Path,
     relative_path: impl AsRef<Path>,
@@ -1783,6 +1774,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn tracked_write_receipt_identifies_the_committed_file() {
         let repo = tempfile::tempdir().expect("repo");
