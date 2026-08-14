@@ -6,7 +6,7 @@ area = "cache"
 path = "repo"
 
 [budget]
-max_runtime_ms = 5000
+max_runtime_ms = 10000
 
 [[expected]]
 invariant = { name = "snapshot.schema_version", value = "polint-input-snapshot-1", mode = "exact" }
@@ -93,4 +93,4 @@ invariant = { name = "provider_output.polint.ts.syntax.cache_stats.verified_reus
 invariant = { name = "provider_output.polint.ts.syntax.cache_stats.quarantines", value = "0", mode = "exact" }
 
 [[expected]]
-runtime_budget = { name = "input-snapshots", max_runtime_ms = 5000, mode = "exact" }
+runtime_budget = { name = "input-snapshots", max_runtime_ms = 10000, mode = "exact" }

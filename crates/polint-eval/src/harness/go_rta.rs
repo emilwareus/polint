@@ -642,7 +642,12 @@ fn polyglot_go_ts_canary_resolves_go_edges_without_ts_interference() {
         .iter()
         .find(|(qualified, _)| qualified.contains("Dog") && qualified.ends_with(".Speak"))
         .map(|(_, node)| *node)
-        .expect("(Dog).Speak must have a semantic node in the polyglot repo");
+        .unwrap_or_else(|| {
+            panic!(
+                "(Dog).Speak must have a semantic node in the polyglot repo; diagnostics: {:#?}",
+                output.diagnostics
+            )
+        });
     assert!(
         solver_output
             .derived_edges

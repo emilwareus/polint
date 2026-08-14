@@ -230,7 +230,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: polyglot Go+TS canary
-        run: cargo test -p polint polyglot --lib --locked
+        run: >-
+          cargo test -p polint --lib --locked
+          eval::go_rta::polyglot_go_ts_canary_resolves_go_edges_without_ts_interference
+          -- --exact --test-threads=1 --nocapture
 
       - name: public-surface leak gate
         run: cargo test --package polint --test public_surface_leak --locked

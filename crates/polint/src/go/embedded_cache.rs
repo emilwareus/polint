@@ -61,25 +61,25 @@ fn create_private_child(parent: &Path, name: &str) -> Result<PathBuf, String> {
     let child = parent.join(name);
     if !child.exists() {
         #[cfg(unix)]
-        {
+        let creation = {
             use std::os::unix::fs::DirBuilderExt;
             let mut builder = fs::DirBuilder::new();
             builder.mode(0o700);
-            builder.create(&child).map_err(|error| {
-                format!(
-                    "failed to create private cache `{}`: {error}",
-                    child.display()
-                )
-            })?;
-        }
+            builder.create(&child)
+        };
         #[cfg(not(unix))]
-        fs::create_dir(&child).map_err(|error| {
-            format!(
+        let creation = fs::create_dir(&child);
+        if let Err(error) = creation
+            && error.kind() != std::io::ErrorKind::AlreadyExists
+        {
+            return Err(format!(
                 "failed to create private cache `{}`: {error}",
                 child.display()
-            )
-        })?;
+            ));
+        }
     }
+    // A concurrent trusted creator may win after the existence check. Verify
+    // the resulting directory instead of treating that race as a setup gap.
     verify_private_dir(&child)?;
     Ok(child)
 }
@@ -282,24 +282,22 @@ fn create_private_dir_all(path: &Path) -> Result<(), String> {
         return verify_private_dir(path);
     }
     #[cfg(unix)]
-    {
+    let creation = {
         use std::os::unix::fs::DirBuilderExt;
         let mut builder = fs::DirBuilder::new();
         builder.recursive(true).mode(0o700);
-        builder.create(path).map_err(|error| {
-            format!(
-                "failed to create private cache `{}`: {error}",
-                path.display()
-            )
-        })?;
-    }
+        builder.create(path)
+    };
     #[cfg(not(unix))]
-    fs::create_dir_all(path).map_err(|error| {
-        format!(
+    let creation = fs::create_dir_all(path);
+    if let Err(error) = creation
+        && error.kind() != std::io::ErrorKind::AlreadyExists
+    {
+        return Err(format!(
             "failed to create private cache `{}`: {error}",
             path.display()
-        )
-    })?;
+        ));
+    }
     verify_private_dir(path)
 }
 
@@ -395,6 +393,35 @@ mod tests {
     use super::*;
 
     const FILES: &[(&str, &str)] = &[("go.mod", "module test\n"), ("main.go", "package main\n")];
+
+    #[test]
+    fn concurrent_private_cache_creation_converges_on_verified_directories() {
+        use std::sync::{Arc, Barrier};
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = Arc::new(temp.path().join("cache").join("nested"));
+        let barrier = Arc::new(Barrier::new(32));
+        let threads = (0..32)
+            .map(|_| {
+                let root = Arc::clone(&root);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    create_private_dir_all(&root)?;
+                    let sidecars = create_private_child(&root, "go-sidecars")?;
+                    create_private_child(&sidecars, "semantic")
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for thread in threads {
+            let semantic = thread
+                .join()
+                .expect("cache creator thread")
+                .expect("cache creation");
+            verify_private_dir(&semantic).expect("verified semantic cache");
+        }
+    }
 
     #[test]
     fn preseeded_completion_marker_does_not_authorize_changed_source() {
