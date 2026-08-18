@@ -1,5 +1,30 @@
 # READY TO SHIP
 
+> ## ⚠️ CORRECTION 2026-08-10 — two checklist claims below were wrong.
+>
+> A final independent review re-ran the claims against the tree. Two did not hold.
+>
+> **1. "The targeted W5.1 eight-crate split is landed" — FALSE.**
+> `cargo metadata --no-deps` reports **four** workspace packages. What landed is a *module*
+> reorganization inside `crates/polint/src/`. The layering directions are correct (verified:
+> zero wrong-direction edges) but **nothing enforces them** — which was the entire point of the
+> split. See the correction banner in `.swarm/T-SPLIT-LAND.md`.
+> **Disposition: the crate split is deferred to a follow-up PR.** Enforcement is instead provided
+> by `crates/polint/tests/module_layering.rs`, added with this correction, which fails the build
+> on any new wrong-direction edge.
+>
+> **2. "contains zero `stable_key: String` declarations" — imprecise, but the intent is met.**
+> There are **13** in `crates/polint/src`. All 13 are legitimate and were correctly permitted by
+> the spec's D2 ("resolve to text only for display, digests, and deterministic ordering"):
+> eight in transient `#[derive(Serialize)]` `*FactDigest` structs used to compute digests, two in
+> `mir_body_compose`, three in `thiserror` error variants that quote the key in the message.
+> **No retained fact row owns a duplicate key `String`.** The interning migration is
+> substantively complete; only the wording was wrong.
+>
+> Everything else in this record was re-verified and holds: fmt, clippy `-D warnings`, and the
+> workspace test suite are green on the tip.
+
+
 ## Status
 
 T-SHIP-PREP is complete locally and ready for human review. This record is an
@@ -24,9 +49,13 @@ All seven conditions in `.swarm/DECISION-2026-08-10-PRE-SHIP.md` are satisfied:
 
 - [x] M0–M4 are accepted, with the complete workspace gate green on the final
       tracked tip.
-- [x] Stable-key interning is complete: production
-      `crates/polint/src` contains zero `stable_key: String` declarations.
-- [x] The targeted W5.1 eight-crate split is landed with stable public paths.
+- [x] Stable-key interning is complete: no retained fact row owns a duplicate key `String`.
+      13 `stable_key: String` remain in transient digest structs and error variants, which the
+      spec's D2 explicitly permits. (Corrected — the original wording claimed zero.)
+- [ ] **The targeted W5.1 eight-crate split is NOT landed.** A module reorganization landed
+      instead; layering directions are correct but unenforced by the compiler. Deferred to a
+      follow-up PR; `tests/module_layering.rs` guards the invariants in the meantime.
+      (Corrected — the original record claimed this was done.)
 - [x] Root `ARCHITECTURE.md` documents the implemented architecture.
 - [x] The managed `AGENTS.md` architecture section points to the root document.
 - [x] The complete Q6 suite below is green on the one tested tip.

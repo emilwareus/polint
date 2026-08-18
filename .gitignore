@@ -35,3 +35,8 @@ research/*/repos/
 
 # GSD plugin auto-checkpoint handoff, regenerated on tool use; not source.
 .planning/HANDOFF.json
+
+# Swarm gate evidence: per-task summaries are tracked; raw full-suite dumps are
+# not — one reached 61 MB. Results and hashes live in .swarm/*.md.
+.swarm/gate-logs/*-tests.log
+.swarm/gate-logs/T-VERIFY-*.log

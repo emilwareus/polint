@@ -86,8 +86,9 @@ toml.workspace = true
 # single audited `getrusage` FFI in src/measure.rs can opt in via a
 # per-item `#[allow(unsafe_code)]`. Every workspace lint is mirrored verbatim;
 # ONLY `unsafe_code` is downgraded `forbid` -> `deny`, so unsafe stays denied
-# crate-wide and any use must carry an explicit, greppable allow. See
-# 63-01-SUMMARY.md "Deviations from Plan".
+# crate-wide and any use must carry an explicit, greppable allow. The only
+# unsafe in this crate is platform FFI: process containment, non-blocking fds,
+# and RSS measurement.
 [lints.rust]
 unsafe_code = "deny"
 unreachable_pub = "deny"

@@ -1,0 +1,42 @@
+### NEW LAYERING GUARD
+   Compiling polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 24.35s
+     Running tests/module_layering.rs (target/debug/deps/module_layering-209c967ff19b7df4)
+
+running 1 test
+test module_layering_has_no_wrong_direction_edges ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+
+### LEAK
+test probe_crate_compiles_against_prelude_only ... ok
+test prelude_structs_and_language_are_non_exhaustive ... ok
+test semantic_store_markers_do_not_leak_into_supported_public_surfaces ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.84s
+
+
+### GOLDEN
+test scale_cases_are_optional_and_discovered ... ok
+test example_golden_cases_cover_inventory_rule_packs ... ok
+test characterization_goldens_match_cli ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 28.20s
+
+
+### DETERMINISM
+test eval::determinism_gate::go_reachable_fixture_is_byte_identical_under_ten_seeded_permutations ... ok
+test eval::determinism_gate::ts_tokens_fixture_is_byte_identical_under_ten_seeded_permutations ... ok
+test eval::determinism_gate::go_rta_fixture_is_byte_identical_under_ten_seeded_permutations ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 2368 filtered out; finished in 7.51s
+
+
+### POLYGLOT
+test analysis::provider::semantic_mir_provider::real_polyglot_provider_separates_equal_legacy_call_site_coordinates ... ok
+test eval::go_rta::polyglot_go_ts_canary_resolves_go_edges_without_ts_interference ... ok
+test eval::fixtures::eval_native_fixture_runner_tests::eval_native_fixture_polyglot_canary_go_ts_passes ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 2377 filtered out; finished in 4.35s
+

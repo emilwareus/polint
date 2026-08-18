@@ -1,0 +1,18 @@
+### DOC
+ Documenting polint-example-ts-design-tokens-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/examples/ts-design-tokens/.polint/rules)
+ Documenting polint-example-go-test-quality-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/examples/go-test-quality/.polint/rules)
+ Documenting polint-example-go-import-boundaries-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/examples/go-import-boundaries/.polint/rules)
+ Documenting polint-example-ts-complexity-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/examples/ts-complexity/.polint/rules)
+ Documenting polint-bench v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint-bench)
+ Documenting polint-example-ts-no-raw-api-calls-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/examples/ts-no-raw-api-calls/.polint/rules)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 11.46s
+   Generated /Users/emilwareus/conductor/workspaces/exlint/biarritz/target/doc/polint/index.html and 20 other files
+
+### DENY
+error: unexpected argument '--all-features' found
+
+  tip: to pass '--all-features' as a value, use '-- --all-features'
+
+Usage: cargo-deny check [OPTIONS] [WHICH]...
+
+For more information, try '--help'.

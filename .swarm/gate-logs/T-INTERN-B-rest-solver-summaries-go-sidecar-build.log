@@ -1,0 +1,3 @@
+internal/symbols/emit.go:16:2: golang.org/x/mod@v0.36.0: Get "https://proxy.golang.org/golang.org/x/mod/@v/v0.36.0.mod": dial tcp: lookup proxy.golang.org: no such host
+internal/symbols/emit.go:17:2: golang.org/x/mod@v0.36.0: Get "https://proxy.golang.org/golang.org/x/mod/@v/v0.36.0.mod": dial tcp: lookup proxy.golang.org: no such host
+internal/symbols/emit.go:18:2: golang.org/x/mod@v0.36.0: Get "https://proxy.golang.org/golang.org/x/mod/@v/v0.36.0.mod": dial tcp: lookup proxy.golang.org: no such host

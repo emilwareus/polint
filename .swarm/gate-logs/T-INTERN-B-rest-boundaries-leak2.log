@@ -1,0 +1,150 @@
+   Compiling cfg-if v1.0.4
+   Compiling allocator-api2 v0.2.21
+   Compiling foldhash v0.2.0
+   Compiling itoa v1.0.18
+   Compiling memchr v2.8.0
+   Compiling equivalent v1.0.2
+   Compiling stable_deref_trait v1.2.1
+   Compiling siphasher v1.0.3
+   Compiling ryu v1.0.23
+   Compiling bitflags v2.11.1
+   Compiling libc v0.2.186
+   Compiling serde_core v1.0.228
+   Compiling num-traits v0.2.19
+   Compiling thiserror v2.0.18
+   Compiling zerofrom v0.1.7
+   Compiling castaway v0.2.4
+   Compiling static_assertions v1.1.0
+   Compiling regex-syntax v0.8.10
+   Compiling unicode-linebreak v0.1.5
+   Compiling unicode-width v0.2.2
+   Compiling yoke v0.8.2
+   Compiling phf_shared v0.13.1
+   Compiling smawk v0.3.2
+   Compiling rustc-hash v2.1.2
+   Compiling compact_str v0.9.0
+   Compiling owo-colors v4.3.0
+   Compiling oxc_data_structures v0.129.0
+   Compiling unicode-segmentation v1.13.2
+   Compiling percent-encoding v2.3.2
+   Compiling oxc_estree v0.129.0
+   Compiling textwrap v0.16.2
+   Compiling phf_generator v0.13.1
+   Compiling phf v0.13.1
+   Compiling once_cell v1.21.4
+   Compiling hashbrown v0.17.0
+   Compiling litemap v0.8.2
+   Compiling aho-corasick v1.1.4
+   Compiling oxc_ast_macros v0.129.0
+   Compiling phf_macros v0.13.1
+   Compiling writeable v0.6.3
+   Compiling cow-utils v0.1.3
+   Compiling nonmax v0.5.5
+   Compiling utf8_iter v1.0.4
+   Compiling unicode-id-start v1.4.0
+   Compiling smallvec v1.15.1
+   Compiling zmij v1.0.21
+   Compiling dragonbox_ecma v0.1.12
+   Compiling oxc-miette v2.7.1
+   Compiling zerovec v0.11.6
+   Compiling zerotrie v0.2.4
+   Compiling oxc_allocator v0.129.0
+   Compiling errno v0.3.14
+   Compiling crossbeam-utils v0.8.21
+   Compiling icu_properties_data v2.2.0
+   Compiling icu_normalizer_data v2.2.0
+   Compiling float-cmp v0.10.0
+   Compiling anstyle v1.0.14
+   Compiling rustix v1.1.4
+   Compiling indexmap v2.14.0
+   Compiling getrandom v0.4.2
+   Compiling num-integer v0.1.46
+   Compiling tracing-core v0.1.36
+   Compiling hashbrown v0.16.1
+   Compiling log v0.4.29
+   Compiling fastrand v2.4.1
+   Compiling oxc_str v0.129.0
+   Compiling crossbeam-epoch v0.9.20
+   Compiling utf8parse v0.2.2
+   Compiling anstyle-parse v1.0.0
+   Compiling num-bigint v0.4.6
+   Compiling regex-automata v0.4.14
+   Compiling getrandom v0.3.4
+   Compiling crossbeam-deque v0.8.6
+   Compiling halfbrown v0.4.0
+   Compiling serde_json v1.0.149
+   Compiling tempfile v3.27.0
+   Compiling anstyle-query v1.1.5
+   Compiling colorchoice v1.0.5
+   Compiling serde v1.0.228
+   Compiling either v1.15.0
+   Compiling pin-project-lite v0.2.17
+   Compiling oxc_span v0.129.0
+   Compiling oxc_diagnostics v0.129.0
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling anstream v1.0.0
+   Compiling tracing v0.1.44
+   Compiling tinystr v0.8.3
+   Compiling potential_utf v0.1.5
+   Compiling oxc_index v4.1.0
+   Compiling value-trait v0.12.1
+   Compiling rand_core v0.9.5
+   Compiling libsqlite3-sys v0.38.1
+   Compiling icu_collections v2.2.0
+   Compiling tree-sitter-language v0.1.7
+   Compiling icu_locale_core v2.2.0
+   Compiling seize v0.5.1
+   Compiling form_urlencoded v1.2.2
+   Compiling arrayvec v0.7.6
+   Compiling strsim v0.11.1
+   Compiling foldhash v0.1.5
+   Compiling winnow v1.0.2
+   Compiling clap_lex v1.1.0
+   Compiling lazy_static v1.5.0
+   Compiling same-file v1.0.6
+   Compiling self_cell v1.2.2
+   Compiling simdutf8 v0.1.5
+   Compiling walkdir v2.5.0
+   Compiling clap_builder v4.6.0
+   Compiling fast-glob v1.0.1
+   Compiling sharded-slab v0.1.7
+   Compiling hashbrown v0.15.5
+   Compiling toml_parser v1.1.2+spec-1.1.0
+   Compiling simd-json v0.17.0
+   Compiling papaya v0.2.4
+   Compiling rayon-core v1.13.0
+   Compiling zerocopy v0.8.48
+   Compiling itertools v0.14.0
+   Compiling tree-sitter v0.26.8
+   Compiling icu_provider v2.2.0
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling serde_spanned v1.1.1
+   Compiling oxc_syntax v0.129.0
+   Compiling oxc_regular_expression v0.129.0
+   Compiling icu_normalizer v2.2.0
+   Compiling icu_properties v2.2.0
+   Compiling bstr v1.12.1
+   Compiling regex v1.12.3
+   Compiling matchers v0.2.0
+error: failed to run custom build command for `libsqlite3-sys v0.38.1`
+
+Caused by:
+  process didn't exit successfully: `/var/folders/29/pcyz866953x2yj32jdbd6wbc0000gn/T/cursor-sandbox-cache/149637df1813e725cec4e7f0a18d2ca2/cargo-target/debug/build/libsqlite3-sys-bffe9ff2328f1529/build-script-build` (exit status: 101)
+  --- stdout
+  cargo:rerun-if-env-changed=LIBSQLITE3_SYS_USE_PKG_CONFIG
+
+  --- stderr
+
+  thread 'main' (36891380) panicked at /Users/emilwareus/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libsqlite3-sys-0.38.1/build.rs:39:35:
+  Could not copy bindings to output directory: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+warning: build failed, waiting for other jobs to finish...
+error: failed to run custom build command for `tree-sitter v0.26.8`
+
+Caused by:
+  process didn't exit successfully: `/var/folders/29/pcyz866953x2yj32jdbd6wbc0000gn/T/cursor-sandbox-cache/149637df1813e725cec4e7f0a18d2ca2/cargo-target/debug/build/tree-sitter-3d38dbf0549af37e/build-script-build` (exit status: 101)
+  --- stderr
+
+  thread 'main' (36891740) panicked at /Users/emilwareus/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-0.26.8/binding_rust/build.rs:14:6:
+  called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

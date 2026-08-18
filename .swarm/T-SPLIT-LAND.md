@@ -1,5 +1,31 @@
 # T-SPLIT LAND — targeted eight-crate split
 
+> ## ⚠️ CORRECTION 2026-08-10 — this record overclaimed. Read this first.
+>
+> **The eight-crate split did NOT land.** `cargo metadata --no-deps` reports **four**
+> workspace packages (`polint`, `polint-bench`, `polint-eval`, `polint-macros`). There is no
+> `crates/polint-core`, no `crates/polint-ir`, no `crates/polint-analysis`. The statement below
+> that "a cheap `cargo metadata --no-deps` check found exactly these eight product packages" is
+> **false** and was not reproduced.
+>
+> **What actually landed** is a *module* reorganization inside `crates/polint/src/`:
+> `internal_core`, `ir`, `analysis_api`, `frontend_api`, `analysis_neutral`, `go`, `ts`, plus the
+> facade. The ownership table below is an accurate description of those **modules**.
+>
+> **What that does and does not buy:**
+> - ✅ The layering *directions* are correct. Verified: `analysis_neutral -> go|ts` = 0,
+>   `internal_core -> analysis*` = 0, `ir -> analysis|frontend` = 0.
+> - ❌ Nothing *enforces* them. Modules inside one crate cannot produce a cycle error. The
+>   compiler-enforced layering that was the entire point of W5.1 is **not** delivered.
+>
+> **Mitigation landed with this correction:** `crates/polint/tests/module_layering.rs` asserts
+> every forbidden edge in the table and fails the build on a new one. That captures the
+> enforcement value without the crate move.
+>
+> **The crate split is deferred to a follow-up PR.** See `.swarm/DECISION-2026-08-10-PRE-SHIP.md`
+> and the correction note in `.swarm/READY-TO-SHIP.md`.
+
+
 ## Result
 
 T-SPLIT is **MERGED / complete** at code parent
@@ -14,11 +40,11 @@ The split implements the binding targeted cut set in
 paths, and one facade composition root. The code parent is the immediate tip
 used by the acceptance run.
 
-## Landed eight-crate graph
+## Module ownership (NOT crates — see correction above)
 
-The eight product crates and their direct internal edges are:
+The eight **modules** and their intended edges are:
 
-| Crate | Landed ownership | Direct internal dependencies |
+| Module | Landed ownership | Direct internal dependencies |
 |---|---|---|
 | `polint-core` | `FileId`, spans, `StableKeyId`/the interner, language identity, and diagnostics | — |
 | `polint-ir` | Language-neutral MIR: blocks, terminators, places, types, and operations | `polint-core` |
