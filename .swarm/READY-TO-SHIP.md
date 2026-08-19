@@ -281,3 +281,47 @@ The final gate log is committed at
 The ship-preparation record contains the ownership proof, structural checks,
 recorded non-gate measurements, and the exact local evidence ordering. No
 remote action is included; human review controls any later publication.
+
+---
+
+## ⛔ RELEASE BLOCKER — this release must be `0.2.0`, not `0.1.18`
+
+**Merging is safe. Publishing as a patch is not.**
+
+Verified compatibility of this branch against `main`'s consumer code:
+
+| Surface | Result |
+|---|---|
+| All 8 of `main`'s example rule packs, compiled against this polint | **compile unchanged** |
+| SDK prelude | **purely additive** — nothing removed; `StructuredEvidenceV1` added |
+| CLI subcommands | **identical** (13, none added or removed) |
+| JSON schemas in `docs/schemas/` | **identical set** |
+| Cargo features | new `lang-go` / `lang-typescript`, both in `default` — an existing pin gets both |
+
+So typical rule code is unaffected. **But two narrow patterns now fail to compile**, verified with
+probe crates:
+
+1. **Exhaustive `match`** on `Severity`, `Language`, `OutputFormat`, `ColorChoice` → `E0004`.
+   These gained `#[non_exhaustive]`. A consumer's `match severity { Error =>, Warn =>, Info => }`
+   was valid against 0.1.17 and now needs a `_ =>` arm.
+2. **Struct-literal construction** of `RuleId`, `Span`, `TextRange`, `PolintReport`,
+   `JsonReportMeta`, `PolintToolInfo`, `RenderOpts` → `E0639` / `E0423`. `RuleId("x".into())` in
+   particular was a public tuple struct and is now unconstructable by literal.
+
+**Why that is a release hazard rather than a merge hazard:** `polint init` generates
+`polint = "0.1.17"`, and for a `0.1.x` crate a caret requirement means `>=0.1.17, <0.2.0`.
+`release.yml` patch-bumps by default, so shipping this as **0.1.18 would reach every existing user
+on their next `cargo update`** and break any of them using the two patterns above.
+
+**Required action at release time:**
+
+```bash
+python3 scripts/bump-workspace-version.py --minor   # 0.1.17 -> 0.2.0
+```
+
+`--minor` / `--major` support was added for exactly this; the script still defaults to patch, so
+nothing else changes. `^0.1.17` does not match `0.2.0`, so existing users stay where they are until
+they deliberately upgrade.
+
+Also worth stating in the release notes: the two breaking patterns above, and their one-line fixes
+(add a `_ =>` arm; use the constructor functions instead of struct literals).
