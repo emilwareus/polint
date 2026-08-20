@@ -85,7 +85,9 @@ impl fmt::Display for Severity {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
+// Deliberately NOT `#[non_exhaustive]`: rule packs legitimately construct these when they
+// compute their own ranges, and every constructor here takes all fields positionally, so
+// the attribute would forbid struct literals without buying any room to add a field.
 pub struct TextRange {
     pub start_line: u32,
     pub start_col: u32,

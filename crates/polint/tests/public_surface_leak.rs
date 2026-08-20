@@ -718,6 +718,32 @@ fn prelude_structs_and_language_are_non_exhaustive() {
         "glob_matches",
         // Alias of diagnostics::TextRange — covered under TextRange below.
         "DiagnosticRange",
+        // Position/identity value types that rule packs legitimately construct when they
+        // compute their own ranges. `#[non_exhaustive]` would forbid the struct literal
+        // while buying nothing: every constructor for these takes all fields positionally,
+        // so adding a field is a breaking change either way. Verified against a real
+        // consumer — these three were the only compile breaks in a 25-rule repo-local pack.
+        // Do NOT add a type here to silence this gate; the exemption is for value types
+        // with total constructors, not for anything inconvenient.
+        "Span",
+        "TextRange",
+        "RuleId",
+        // The `id_newtype!` identity handles, for the same reason: rule packs construct them
+        // directly in their own fixtures (`Span::point(FileId(1), 1, 1)` appears verbatim in a
+        // real consumer pack), and `from_raw` already takes the single field, so the attribute
+        // forbids tuple construction without buying room to add one.
+        "BranchId",
+        "DefinitionId",
+        "FileId",
+        "FunctionId",
+        "ImportId",
+        "ModuleEdgeId",
+        "ModuleNodeId",
+        "NodeId",
+        "PackageId",
+        "ReferenceId",
+        "ResolvedImportId",
+        "SymbolId",
     ]
     .into_iter()
     .collect();

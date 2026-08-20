@@ -5,7 +5,9 @@ macro_rules! id_newtype {
         #[derive(
             Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
         )]
-        #[non_exhaustive]
+        // Deliberately NOT `#[non_exhaustive]`: rule packs construct these directly (e.g.
+        // `FileId(1)` in their fixtures), and `from_raw` already takes the single field, so
+        // the attribute would forbid tuple construction without buying room to add one.
         pub struct $name(pub $ty);
 
         impl $name {
@@ -36,7 +38,8 @@ id_newtype!(DefinitionId, u64);
 id_newtype!(ReferenceId, u64);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[non_exhaustive]
+// Deliberately NOT `#[non_exhaustive]`: this is a public newtype over its only field, so the
+// attribute would forbid `RuleId(s)` in rule packs while buying nothing.
 pub struct RuleId(pub String);
 
 impl RuleId {
