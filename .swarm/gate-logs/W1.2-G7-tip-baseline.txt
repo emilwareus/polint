@@ -1,0 +1,23 @@
+   Compiling polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 14s
+     Running tests/golden.rs (target/debug/deps/golden-0b79c88cdf5488ee)
+
+running 1 test
+test characterization_goldens_match_cli has been running for over 60 seconds
+
+thread 'characterization_goldens_match_cli' (4672959) panicked at crates/polint/tests/golden.rs:494:9:
+golden cost budget breached for `examples/basic/json`:
+  wall_clock_ms: measured 112 exceeds budget (baseline 20, ratio 5.6000, max 1.2, abs floor +50)
+baseline=GoldenCostRecord { schema_version: "polint-golden-cost-1", wall_clock_ms: 20, peak_rss_bytes: 25116672, peak_rss_delta_bytes: 18038784 }
+measured=GoldenCostRecord { schema_version: "polint-golden-cost-1", wall_clock_ms: 112, peak_rss_bytes: 25231360, peak_rss_delta_bytes: 18153472 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test characterization_goldens_match_cli ... FAILED
+
+failures:
+
+failures:
+    characterization_goldens_match_cli
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 275.18s
+
+error: test failed, to rerun pass `-p polint --test golden`

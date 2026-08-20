@@ -1,0 +1,78 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.2/crates/polint)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 00s
+     Running tests/public_surface_leak.rs (target/debug/deps/public_surface_leak-18657f7a71d52b19)
+
+running 8 tests
+test semantic_store_marker_scanner_negative_controls_cover_every_family ... ok
+test allowlist_has_no_duplicates_and_expected_count ... ok
+test parser_self_test_detects_synthetic_leak ... ok
+test allowlist_matches_prelude_source ... ok
+test ensure_no_private_namespace_in_probe ... ok
+test prelude_structs_and_language_are_non_exhaustive ... FAILED
+test semantic_store_markers_do_not_leak_into_supported_public_surfaces ... ok
+test probe_crate_compiles_against_prelude_only has been running for over 60 seconds
+test probe_crate_compiles_against_prelude_only ... ok
+
+failures:
+
+---- prelude_structs_and_language_are_non_exhaustive stdout ----
+
+thread 'prelude_structs_and_language_are_non_exhaustive' (8402805) panicked at crates/polint/tests/public_surface_leak.rs:714:5:
+prelude-exported structs/enums must be #[non_exhaustive] (Language included).
+Missing:
+  BranchId: definition not found in SDK source scan
+  BranchObligation: definition not found in SDK source scan
+  ComplexityMetricFact: definition not found in SDK source scan
+  CoverageFact: definition not found in SDK source scan
+  DefinitionFact: definition not found in SDK source scan
+  DefinitionId: definition not found in SDK source scan
+  DefinitionKind: definition not found in SDK source scan
+  FileId: definition not found in SDK source scan
+  FileMetricFact: definition not found in SDK source scan
+  FunctionFact: definition not found in SDK source scan
+  FunctionId: definition not found in SDK source scan
+  FunctionMetricFact: definition not found in SDK source scan
+  ImportFact: definition not found in SDK source scan
+  ImportId: definition not found in SDK source scan
+  JsxAttributeFact: definition not found in SDK source scan
+  Language: definition not found in SDK source scan
+  ModuleEdge: definition not found in SDK source scan
+  ModuleEdgeId: definition not found in SDK source scan
+  ModuleEdgeKind: definition not found in SDK source scan
+  ModuleNode: definition not found in SDK source scan
+  ModuleNodeId: definition not found in SDK source scan
+  ModuleNodeKind: definition not found in SDK source scan
+  NodeId: definition not found in SDK source scan
+  PackageFact: definition not found in SDK source scan
+  PackageId: definition not found in SDK source scan
+  ReferenceFact: definition not found in SDK source scan
+  ReferenceId: definition not found in SDK source scan
+  ReferenceKind: definition not found in SDK source scan
+  ResolutionPrecision: definition not found in SDK source scan
+  ResolutionStatus: definition not found in SDK source scan
+  ResolvedImportFact: definition not found in SDK source scan
+  ResolvedImportId: definition not found in SDK source scan
+  RuleId: definition not found in SDK source scan
+  SourceFile: definition not found in SDK source scan
+  Span: definition not found in SDK source scan
+  StringLiteralFact: definition not found in SDK source scan
+  SymbolFact: definition not found in SDK source scan
+  SymbolId: definition not found in SDK source scan
+  SymbolKind: definition not found in SDK source scan
+  SymbolNamespace: definition not found in SDK source scan
+  SymbolPrecision: definition not found in SDK source scan
+  SymbolResolutionStatus: definition not found in SDK source scan
+  TestFact: definition not found in SDK source scan
+  TsClassFact: definition not found in SDK source scan
+  TsComponentFact: definition not found in SDK source scan
+  UnresolvedReason: definition not found in SDK source scan
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    prelude_structs_and_language_are_non_exhaustive
+
+test result: FAILED. 7 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 197.53s
+
+error: test failed, to rerun pass `-p polint --test public_surface_leak`

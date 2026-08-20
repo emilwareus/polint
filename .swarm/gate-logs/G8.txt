@@ -1,0 +1,35 @@
+    Checking regex-syntax v0.8.10
+    Checking bstr v1.12.1
+ Documenting polint-macros v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint-macros)
+    Checking regex-automata v0.4.14
+    Checking matchers v0.2.0
+    Checking globset v0.4.18
+    Checking regex v1.12.3
+    Checking tracing-subscriber v0.3.23
+    Checking ignore v0.4.25
+    Checking tree-sitter v0.26.8
+    Checking polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint)
+ Documenting polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint)
+ Documenting polint-example-comment-ignores-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/examples/comment-ignores/.polint/rules)
+ Documenting polint-example-go-test-quality-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/examples/go-test-quality/.polint/rules)
+ Documenting polint-example-go-sensitive-writes-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/examples/go-sensitive-writes/.polint/rules)
+ Documenting polint-example-config-denied-literal-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/examples/config-denied-literal/.polint/rules)
+ Documenting polint-example-code-quality-metrics-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/examples/code-quality-metrics/.polint/rules)
+ Documenting polint-example-basic-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/examples/basic/.polint/rules)
+ Documenting polint-example-ts-no-raw-api-calls-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/examples/ts-no-raw-api-calls/.polint/rules)
+ Documenting polint-example-custom-go-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/examples/custom-rule-go/.polint/rules)
+ Documenting polint-example-ts-design-tokens-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/examples/ts-design-tokens/.polint/rules)
+ Documenting polint-example-custom-ts-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/examples/custom-rule-ts/.polint/rules)
+ Documenting polint-example-review-rules v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/examples/review-rules/.polint/rules)
+ Documenting polint-example-gorm-review-indexes v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/examples/gorm-review-indexes/.polint/rules)
+ Documenting polint-example-go-branch-obligations-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/examples/go-branch-obligations/.polint/rules)
+ Documenting polint-example-multiple-rules v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/examples/multiple-rules/.polint/rules)
+ Documenting polint-example-ts-complexity-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/examples/ts-complexity/.polint/rules)
+ Documenting polint-example-go-complexity-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/examples/go-complexity/.polint/rules)
+ Documenting polint-bench v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint-bench)
+ Documenting polint-example-go-import-boundaries-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/examples/go-import-boundaries/.polint/rules)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 14.66s
+   Generated /Users/emilwareus/conductor/workspaces/exlint/biarritz/target/doc/polint/index.html and 19 other files
+real 14.69
+user 23.77
+sys 3.16

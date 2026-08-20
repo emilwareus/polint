@@ -1,5 +1,4 @@
 mod change_set;
-mod demand;
 mod dependency_index;
 mod digest;
 mod input_snapshot;
@@ -15,6 +14,23 @@ mod stats;
     test,
     allow(
         unused_imports,
+        reason = "Unit tests exercise only selected re-exported demand query vocabulary terms."
+    )
+)]
+#[cfg_attr(
+    not(test),
+    expect(
+        unused_imports,
+        reason = "Demand query engine infrastructure is established before Plan 04 wires real demand-driven consumers."
+    )
+)]
+pub(crate) use crate::analysis_neutral::demand::{
+    DemandQueryEngine, DemandQueryResult, DemandQueryTrace, DemandQueryTraceEntry,
+};
+#[cfg_attr(
+    test,
+    allow(
+        unused_imports,
         reason = "Unit tests exercise only selected re-exported cache vocabulary terms."
     )
 )]
@@ -26,23 +42,6 @@ mod stats;
     )
 )]
 pub(crate) use change_set::{ChangeKind, ChangeSet, ChangeSetRow};
-#[cfg_attr(
-    test,
-    allow(
-        unused_imports,
-        reason = "Unit tests exercise only selected re-exported demand query vocabulary terms."
-    )
-)]
-#[cfg_attr(
-    not(test),
-    expect(
-        unused_imports,
-        reason = "Demand query engine infrastructure is established before Plan 04 wires real demand-driven consumers."
-    )
-)]
-pub(crate) use demand::{
-    DemandQueryEngine, DemandQueryResult, DemandQueryTrace, DemandQueryTraceEntry,
-};
 #[cfg_attr(
     test,
     allow(
@@ -75,6 +74,7 @@ pub(crate) use digest::{Digest, DigestBuilder, DigestKind};
 pub(crate) use input_snapshot::{
     FileSnapshot, GoLifecycleSnapshot, INPUT_SNAPSHOT_SCHEMA_VERSION, InputComponent,
     InputComponentStatus, InputSnapshot, ProviderSchemaSnapshot, TsJsLifecycleSnapshot,
+    input_snapshot_from_run_inputs,
 };
 #[cfg_attr(
     test,
@@ -141,6 +141,7 @@ pub(crate) use run_manifest::{
     EncodedRunManifest, EncodedRunManifestSource, RunManifest, RunManifestError, RunManifestInputs,
 };
 pub(crate) use run_report::{
-    KernelRunReport, provider_output_digest_from_manifest, provider_output_identity_from_manifest,
+    KernelRunReport, provider_output_digest_from_manifest, provider_output_from_manifest,
+    provider_output_identity_from_manifest,
 };
-pub(crate) use stats::{CacheStats, ProviderTelemetry};
+pub(crate) use stats::{CacheStats, ProviderOutputMeta, ProviderTelemetry};

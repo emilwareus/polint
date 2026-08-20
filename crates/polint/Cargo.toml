@@ -9,9 +9,19 @@ version.workspace = true
 description = "Multi-language repo-local static-analysis rules (Go and TypeScript/JavaScript today)"
 
 [features]
-default = []
+default = ["lang-go", "lang-typescript"]
+all-languages = ["lang-go", "lang-typescript"]
+lang-go = ["dep:tree-sitter", "dep:tree-sitter-go"]
+lang-typescript = [
+    "dep:oxc_allocator",
+    "dep:oxc_ast",
+    "dep:oxc_parser",
+    "dep:oxc_resolver",
+    "dep:oxc_semantic",
+    "dep:oxc_span",
+]
 # Exposes `polint::_bench::*` for the internal `polint-bench` crate only.
-bench = []
+bench = ["all-languages"]
 
 [dependencies]
 anyhow.workspace = true
@@ -19,12 +29,12 @@ clap.workspace = true
 globset.workspace = true
 ignore.workspace = true
 json-strip-comments.workspace = true
-oxc_allocator.workspace = true
-oxc_ast.workspace = true
-oxc_parser.workspace = true
-oxc_resolver.workspace = true
-oxc_semantic.workspace = true
-oxc_span.workspace = true
+oxc_allocator = { workspace = true, optional = true }
+oxc_ast = { workspace = true, optional = true }
+oxc_parser = { workspace = true, optional = true }
+oxc_resolver = { workspace = true, optional = true }
+oxc_semantic = { workspace = true, optional = true }
+oxc_span = { workspace = true, optional = true }
 petgraph.workspace = true
 polint-macros = { path = "../polint-macros", version = "0.1.7" }
 rayon.workspace = true
@@ -37,14 +47,25 @@ thiserror.workspace = true
 toml.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-tree-sitter.workspace = true
-tree-sitter-go.workspace = true
+tree-sitter = { workspace = true, optional = true }
+tree-sitter-go = { workspace = true, optional = true }
 
-# Unix-only: src/eval/bench/measure.rs reads getrusage(RUSAGE_SELF).ru_maxrss for
+# Unix-only: src/measure.rs reads getrusage(RUSAGE_SELF).ru_maxrss for
 # peak RSS. Windows uses K32GetProcessMemoryInfo (kernel32) with no crate dependency.
 # Direct promotion of an already-vetted transitive dep (present in Cargo.lock).
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
+rustix.workspace = true
+
+# Windows-only: Job Objects keep spawned Go process trees contained after the
+# direct process exits or the runner reaches its timeout.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
 
 [lib]
 path = "src/lib.rs"
@@ -59,13 +80,15 @@ insta.workspace = true
 predicates.workspace = true
 proptest.workspace = true
 tempfile.workspace = true
+toml.workspace = true
 
 # polint owns its lint table (instead of `[lints] workspace = true`) so that the
-# single audited `getrusage` FFI in src/eval/bench/measure.rs can opt in via a
+# single audited `getrusage` FFI in src/measure.rs can opt in via a
 # per-item `#[allow(unsafe_code)]`. Every workspace lint is mirrored verbatim;
 # ONLY `unsafe_code` is downgraded `forbid` -> `deny`, so unsafe stays denied
-# crate-wide and any use must carry an explicit, greppable allow. See
-# 63-01-SUMMARY.md "Deviations from Plan".
+# crate-wide and any use must carry an explicit, greppable allow. The only
+# unsafe in this crate is platform FFI: process containment, non-blocking fds,
+# and RSS measurement.
 [lints.rust]
 unsafe_code = "deny"
 unreachable_pub = "deny"

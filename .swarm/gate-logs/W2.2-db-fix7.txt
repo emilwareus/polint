@@ -1,0 +1,1421 @@
+    Checking polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.2/crates/polint)
+warning: unused imports: `DefinitionKind`, `ModuleEdgeKind`, `ModuleNodeKind`, `ReferenceKind`, `ResolutionPrecision`, `ResolutionStatus`, `SymbolKind`, `SymbolNamespace`, `SymbolPrecision`, `SymbolResolutionStatus`, and `UnresolvedReason`
+   --> crates/polint/src/core/db.rs:104:75
+    |
+104 |     BranchObligation, ComplexityMetricFact, CoverageFact, DefinitionFact, DefinitionKind,
+    |                                                                           ^^^^^^^^^^^^^^
+105 |     FileMetricFact, FunctionFact, FunctionMetricFact, ImportFact, JsxAttributeFact, ModuleEdge,
+106 |     ModuleEdgeKind, ModuleNode, ModuleNodeKind, PackageFact, ReferenceFact, ReferenceKind,
+    |     ^^^^^^^^^^^^^^              ^^^^^^^^^^^^^^                              ^^^^^^^^^^^^^
+107 |     ResolutionPrecision, ResolutionStatus, ResolvedImportFact, SourceFile, StringLiteralFact,
+    |     ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^
+108 |     SymbolFact, SymbolKind, SymbolNamespace, SymbolPrecision, SymbolResolutionStatus, TestFact,
+    |                 ^^^^^^^^^^  ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^
+109 |     TsClassFact, TsComponentFact, UnresolvedReason,
+    |                                   ^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `CachedFileAnalysis`, `TS_JS_MODULE_FUNCTION_NAME`, and `is_synthetic_ts_js_module_function`
+   --> crates/polint/src/core/db.rs:112:5
+    |
+112 |     CachedFileAnalysis, CachedFileFacts, TS_JS_MODULE_FUNCTION_NAME,
+    |     ^^^^^^^^^^^^^^^^^^                   ^^^^^^^^^^^^^^^^^^^^^^^^^^
+113 |     is_synthetic_ts_js_module_function,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0252]: the name `CallSiteId` is defined multiple times
+   --> crates/polint/src/core/mod.rs:112:32
+    |
+111 |     use crate::analysis::ids::CallSiteId;
+    |         -------------------------------- previous import of the type `CallSiteId` here
+112 |     use crate::analysis::ids::{CallSiteId, MirBodyId, MirOpId, PlaceId, UnsupportedId};
+    |                                ^^^^^^^^^^--
+    |                                |
+    |                                `CallSiteId` reimported here
+    |                                help: remove unnecessary import
+    |
+    = note: `CallSiteId` must be defined only once in the type namespace of this module
+
+error[E0252]: the name `MirBody` is defined multiple times
+   --> crates/polint/src/core/mod.rs:114:38
+    |
+113 |     use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
+    |                                      ------- previous import of the type `MirBody` here
+114 |     use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
+    |                                      ^^^^^^^--
+    |                                      |
+    |                                      `MirBody` reimported here
+    |                                      help: remove unnecessary import
+    |
+    = note: `MirBody` must be defined only once in the type namespace of this module
+
+error[E0252]: the name `MirOutput` is defined multiple times
+   --> crates/polint/src/core/mod.rs:114:47
+    |
+113 |     use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
+    |                                               --------- previous import of the type `MirOutput` here
+114 |     use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
+    |                                               ^^^^^^^^^--
+    |                                               |
+    |                                               `MirOutput` reimported here
+    |                                               help: remove unnecessary import
+    |
+    = note: `MirOutput` must be defined only once in the type namespace of this module
+
+error[E0252]: the name `MirStatus` is defined multiple times
+   --> crates/polint/src/core/mod.rs:114:58
+    |
+113 |     use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
+    |                                                          --------- previous import of the type `MirStatus` here
+114 |     use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
+    |                                                          ^^^^^^^^^ `MirStatus` reimported here
+    |
+    = note: `MirStatus` must be defined only once in the type namespace of this module
+
+error[E0252]: the name `MirOperation` is defined multiple times
+   --> crates/polint/src/core/mod.rs:119:36
+    |
+116 |         AssignMode, ConservativeAction, MirOperation, MirOperationKind, MirValue,
+    |                                         ------------ previous import of the type `MirOperation` here
+...
+119 |     use crate::analysis::mir::op::{MirOperation, UnsupportedSemanticFact};
+    |                                    ^^^^^^^^^^^^--
+    |                                    |
+    |                                    `MirOperation` reimported here
+    |                                    help: remove unnecessary import
+    |
+    = note: `MirOperation` must be defined only once in the type namespace of this module
+
+error[E0252]: the name `UnsupportedSemanticFact` is defined multiple times
+   --> crates/polint/src/core/mod.rs:119:50
+    |
+117 |         UnsupportedDomain, UnsupportedPrecision, UnsupportedSemanticFact,
+    |                                                  ----------------------- previous import of the type `UnsupportedSemanticFact` here
+118 |     };
+119 |     use crate::analysis::mir::op::{MirOperation, UnsupportedSemanticFact};
+    |                                                  ^^^^^^^^^^^^^^^^^^^^^^^ `UnsupportedSemanticFact` reimported here
+    |
+    = note: `UnsupportedSemanticFact` must be defined only once in the type namespace of this module
+
+error[E0252]: the name `PlaceFact` is defined multiple times
+   --> crates/polint/src/core/mod.rs:121:35
+    |
+120 |     use crate::analysis::places::{PlaceFact, PlaceRoot, PlaceStatus};
+    |                                   --------- previous import of the type `PlaceFact` here
+121 |     use crate::analysis::places::{PlaceFact, PlaceStatus};
+    |                                   ^^^^^^^^^--
+    |                                   |
+    |                                   `PlaceFact` reimported here
+    |                                   help: remove unnecessary import
+    |
+    = note: `PlaceFact` must be defined only once in the type namespace of this module
+
+error[E0252]: the name `PlaceStatus` is defined multiple times
+   --> crates/polint/src/core/mod.rs:121:46
+    |
+120 |     use crate::analysis::places::{PlaceFact, PlaceRoot, PlaceStatus};
+    |                                                         ----------- previous import of the type `PlaceStatus` here
+121 |     use crate::analysis::places::{PlaceFact, PlaceStatus};
+    |                                              ^^^^^^^^^^^ `PlaceStatus` reimported here
+    |
+    = note: `PlaceStatus` must be defined only once in the type namespace of this module
+
+error[E0252]: the name `FactConfidence` is defined multiple times
+   --> crates/polint/src/core/mod.rs:149:9
+    |
+144 |         FactConfidence, FactFamily, FactMeta, FactMetaStore, FactPrecision, FactRef,
+    |         -------------- previous import of the type `FactConfidence` here
+...
+149 |         FactConfidence, FactFamily, FactPrecision, FactRef, ValidationStatus,
+    |         ^^^^^^^^^^^^^^--
+    |         |
+    |         `FactConfidence` reimported here
+    |         help: remove unnecessary import
+    |
+    = note: `FactConfidence` must be defined only once in the type namespace of this module
+
+error[E0252]: the name `FactFamily` is defined multiple times
+   --> crates/polint/src/core/mod.rs:149:25
+    |
+144 |         FactConfidence, FactFamily, FactMeta, FactMetaStore, FactPrecision, FactRef,
+    |                         ---------- previous import of the type `FactFamily` here
+...
+149 |         FactConfidence, FactFamily, FactPrecision, FactRef, ValidationStatus,
+    |                         ^^^^^^^^^^--
+    |                         |
+    |                         `FactFamily` reimported here
+    |                         help: remove unnecessary import
+    |
+    = note: `FactFamily` must be defined only once in the type namespace of this module
+
+error[E0252]: the name `FactPrecision` is defined multiple times
+   --> crates/polint/src/core/mod.rs:149:37
+    |
+144 |         FactConfidence, FactFamily, FactMeta, FactMetaStore, FactPrecision, FactRef,
+    |                                                              ------------- previous import of the type `FactPrecision` here
+...
+149 |         FactConfidence, FactFamily, FactPrecision, FactRef, ValidationStatus,
+    |                                     ^^^^^^^^^^^^^--
+    |                                     |
+    |                                     `FactPrecision` reimported here
+    |                                     help: remove unnecessary import
+    |
+    = note: `FactPrecision` must be defined only once in the type namespace of this module
+
+error[E0252]: the name `FactRef` is defined multiple times
+   --> crates/polint/src/core/mod.rs:149:52
+    |
+144 |         FactConfidence, FactFamily, FactMeta, FactMetaStore, FactPrecision, FactRef,
+    |                                                                             ------- previous import of the type `FactRef` here
+...
+149 |         FactConfidence, FactFamily, FactPrecision, FactRef, ValidationStatus,
+    |                                                    ^^^^^^^--
+    |                                                    |
+    |                                                    `FactRef` reimported here
+    |                                                    help: remove unnecessary import
+    |
+    = note: `FactRef` must be defined only once in the type namespace of this module
+
+error[E0252]: the name `ValidationStatus` is defined multiple times
+   --> crates/polint/src/core/mod.rs:149:61
+    |
+145 |         MissingFactMeta, ValidationStatus, resolution_metadata, resolution_status_metadata,
+    |                          ---------------- previous import of the type `ValidationStatus` here
+...
+149 |         FactConfidence, FactFamily, FactPrecision, FactRef, ValidationStatus,
+    |                                                             ^^^^^^^^^^^^^^^^-
+    |                                                             |
+    |                                                             `ValidationStatus` reimported here
+    |                                                             help: remove unnecessary import
+    |
+    = note: `ValidationStatus` must be defined only once in the type namespace of this module
+
+error[E0252]: the name `AliasFact` is defined multiple times
+   --> crates/polint/src/core/mod.rs:177:9
+    |
+172 |         AliasFact, AliasId, ExportFact, ExportId, GeneratedSymbolFact, GeneratedSymbolId,
+    |         --------- previous import of the type `AliasFact` here
+...
+177 |         AliasFact, ExportFact, GeneratedSymbolFact, ResolutionFact, ScopeFact, ScopeId, ScopeKind,
+    |         ^^^^^^^^^--
+    |         |
+    |         `AliasFact` reimported here
+    |         help: remove unnecessary import
+    |
+    = note: `AliasFact` must be defined only once in the type namespace of this module
+
+error[E0252]: the name `ExportFact` is defined multiple times
+   --> crates/polint/src/core/mod.rs:177:20
+    |
+172 |         AliasFact, AliasId, ExportFact, ExportId, GeneratedSymbolFact, GeneratedSymbolId,
+    |                             ---------- previous import of the type `ExportFact` here
+...
+177 |         AliasFact, ExportFact, GeneratedSymbolFact, ResolutionFact, ScopeFact, ScopeId, ScopeKind,
+    |                    ^^^^^^^^^^--
+    |                    |
+    |                    `ExportFact` reimported here
+    |                    help: remove unnecessary import
+    |
+    = note: `ExportFact` must be defined only once in the type namespace of this module
+
+error[E0252]: the name `GeneratedSymbolFact` is defined multiple times
+   --> crates/polint/src/core/mod.rs:177:32
+    |
+172 |         AliasFact, AliasId, ExportFact, ExportId, GeneratedSymbolFact, GeneratedSymbolId,
+    |                                                   ------------------- previous import of the type `GeneratedSymbolFact` here
+...
+177 |         AliasFact, ExportFact, GeneratedSymbolFact, ResolutionFact, ScopeFact, ScopeId, ScopeKind,
+    |                                ^^^^^^^^^^^^^^^^^^^--
+    |                                |
+    |                                `GeneratedSymbolFact` reimported here
+    |                                help: remove unnecessary import
+    |
+    = note: `GeneratedSymbolFact` must be defined only once in the type namespace of this module
+
+error[E0252]: the name `ResolutionFact` is defined multiple times
+   --> crates/polint/src/core/mod.rs:177:53
+    |
+173 |         ResolutionFact, ResolutionId, ScopeFact, ScopeId, SemanticImportFact, SemanticImportId,
+    |         -------------- previous import of the type `ResolutionFact` here
+...
+177 |         AliasFact, ExportFact, GeneratedSymbolFact, ResolutionFact, ScopeFact, ScopeId, ScopeKind,
+    |                                                     ^^^^^^^^^^^^^^--
+    |                                                     |
+    |                                                     `ResolutionFact` reimported here
+    |                                                     help: remove unnecessary import
+    |
+    = note: `ResolutionFact` must be defined only once in the type namespace of this module
+
+error[E0252]: the name `ScopeFact` is defined multiple times
+   --> crates/polint/src/core/mod.rs:177:69
+    |
+173 |         ResolutionFact, ResolutionId, ScopeFact, ScopeId, SemanticImportFact, SemanticImportId,
+    |                                       --------- previous import of the type `ScopeFact` here
+...
+177 |         AliasFact, ExportFact, GeneratedSymbolFact, ResolutionFact, ScopeFact, ScopeId, ScopeKind,
+    |                                                                     ^^^^^^^^^--
+    |                                                                     |
+    |                                                                     `ScopeFact` reimported here
+    |                                                                     help: remove unnecessary import
+    |
+    = note: `ScopeFact` must be defined only once in the type namespace of this module
+
+error[E0252]: the name `ScopeId` is defined multiple times
+   --> crates/polint/src/core/mod.rs:177:80
+    |
+173 |         ResolutionFact, ResolutionId, ScopeFact, ScopeId, SemanticImportFact, SemanticImportId,
+    |                                                  ------- previous import of the type `ScopeId` here
+...
+177 |         AliasFact, ExportFact, GeneratedSymbolFact, ResolutionFact, ScopeFact, ScopeId, ScopeKind,
+    |                                                                                ^^^^^^^--
+    |                                                                                |
+    |                                                                                `ScopeId` reimported here
+    |                                                                                help: remove unnecessary import
+    |
+    = note: `ScopeId` must be defined only once in the type namespace of this module
+
+error[E0252]: the name `SemanticImportFact` is defined multiple times
+   --> crates/polint/src/core/mod.rs:178:9
+    |
+173 |         ResolutionFact, ResolutionId, ScopeFact, ScopeId, SemanticImportFact, SemanticImportId,
+    |                                                           ------------------ previous import of the type `SemanticImportFact` here
+...
+178 |         SemanticImportFact, SemanticStatus, StableExportIdentity,
+    |         ^^^^^^^^^^^^^^^^^^--
+    |         |
+    |         `SemanticImportFact` reimported here
+    |         help: remove unnecessary import
+    |
+    = note: `SemanticImportFact` must be defined only once in the type namespace of this module
+
+error[E0252]: the name `SemanticStatus` is defined multiple times
+   --> crates/polint/src/core/mod.rs:178:29
+    |
+174 |         SemanticStatus, StableExportId, StableExportIdentity,
+    |         -------------- previous import of the type `SemanticStatus` here
+...
+178 |         SemanticImportFact, SemanticStatus, StableExportIdentity,
+    |                             ^^^^^^^^^^^^^^--
+    |                             |
+    |                             `SemanticStatus` reimported here
+    |                             help: remove unnecessary import
+    |
+    = note: `SemanticStatus` must be defined only once in the type namespace of this module
+
+error[E0252]: the name `StableExportIdentity` is defined multiple times
+   --> crates/polint/src/core/mod.rs:178:45
+    |
+174 |         SemanticStatus, StableExportId, StableExportIdentity,
+    |                                         -------------------- previous import of the type `StableExportIdentity` here
+...
+178 |         SemanticImportFact, SemanticStatus, StableExportIdentity,
+    |                                             ^^^^^^^^^^^^^^^^^^^^-
+    |                                             |
+    |                                             `StableExportIdentity` reimported here
+    |                                             help: remove unnecessary import
+    |
+    = note: `StableExportIdentity` must be defined only once in the type namespace of this module
+
+error[E0432]: unresolved import `super::rule`
+    --> crates/polint/src/core/db.rs:5311:16
+     |
+5311 |     use super::rule::line_col;
+     |                ^^^^ could not find `rule` in `super`
+
+error[E0425]: cannot find type `Capabilities` in this scope
+    --> crates/polint/src/core/db.rs:5353:23
+     |
+5353 |         capabilities: Capabilities,
+     |                       ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this struct through its public re-export
+     |
+5311 +     use crate::core::Capabilities;
+     |
+
+error[E0433]: cannot find type `Capabilities` in this scope
+    --> crates/polint/src/core/db.rs:5390:31
+     |
+5390 |                 capabilities: Capabilities::new().syntax(),
+     |                               ^^^^^^^^^^^^ use of undeclared type `Capabilities`
+     |
+help: consider importing this struct through its public re-export
+     |
+5311 +     use crate::core::Capabilities;
+     |
+
+error[E0425]: cannot find type `Capabilities` in this scope
+    --> crates/polint/src/core/db.rs:5399:54
+     |
+5399 |         fn with_capabilities(mut self, capabilities: Capabilities) -> Self {
+     |                                                      ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this struct through its public re-export
+     |
+5311 +     use crate::core::Capabilities;
+     |
+
+error[E0433]: cannot find type `Capabilities` in this scope
+    --> crates/polint/src/core/db.rs:5417:31
+     |
+5417 |                 capabilities: Capabilities::new(),
+     |                               ^^^^^^^^^^^^ use of undeclared type `Capabilities`
+     |
+help: consider importing this struct through its public re-export
+     |
+5311 +     use crate::core::Capabilities;
+     |
+
+error[E0433]: cannot find type `Capabilities` in this scope
+    --> crates/polint/src/core/db.rs:5429:31
+     |
+5429 |                 capabilities: Capabilities::new(),
+     |                               ^^^^^^^^^^^^ use of undeclared type `Capabilities`
+     |
+help: consider importing this struct through its public re-export
+     |
+5311 +     use crate::core::Capabilities;
+     |
+
+error[E0433]: cannot find type `Capabilities` in this scope
+    --> crates/polint/src/core/db.rs:5441:31
+     |
+5441 |                 capabilities: Capabilities::new(),
+     |                               ^^^^^^^^^^^^ use of undeclared type `Capabilities`
+     |
+help: consider importing this struct through its public re-export
+     |
+5311 +     use crate::core::Capabilities;
+     |
+
+error[E0425]: cannot find type `Rule` in this scope
+    --> crates/polint/src/core/db.rs:5450:31
+     |
+5450 |         fn into_rule(self) -> Rule {
+     |                               ^^^^ not found in this scope
+     |
+help: consider importing this struct through its public re-export
+     |
+5311 +     use crate::core::Rule;
+     |
+
+error[E0433]: cannot find type `Rule` in this scope
+    --> crates/polint/src/core/db.rs:5454:13
+     |
+5454 |             Rule::from_parts(
+     |             ^^^^ use of undeclared type `Rule`
+     |
+help: consider importing this struct through its public re-export
+     |
+5311 +     use crate::core::Rule;
+     |
+
+error[E0425]: cannot find type `RuleMeta` in this scope
+    --> crates/polint/src/core/db.rs:5461:26
+     |
+5461 |         fn meta(self) -> RuleMeta {
+     |                          ^^^^^^^^ not found in this scope
+     |
+help: consider importing this struct through its public re-export
+     |
+5311 +     use crate::core::RuleMeta;
+     |
+
+error[E0422]: cannot find struct, variant or union type `RuleMeta` in this scope
+    --> crates/polint/src/core/db.rs:5466:13
+     |
+5466 |             RuleMeta {
+     |             ^^^^^^^^ not found in this scope
+     |
+help: consider importing this struct through its public re-export
+     |
+5311 +     use crate::core::RuleMeta;
+     |
+
+error[E0433]: cannot find type `RuleKind` in this scope
+    --> crates/polint/src/core/db.rs:5470:23
+     |
+5470 |                 kind: RuleKind::Check,
+     |                       ^^^^^^^^ use of undeclared type `RuleKind`
+     |
+help: consider importing this enum through its public re-export
+     |
+5311 +     use crate::core::RuleKind;
+     |
+
+error[E0425]: cannot find type `RuleCtx` in this scope
+    --> crates/polint/src/core/db.rs:5474:32
+     |
+5474 |         fn run(self, ctx: &mut RuleCtx<'_>) -> RuleResult {
+     |                                ^^^^^^^ not found in this scope
+     |
+help: consider importing this struct through its public re-export
+     |
+5311 +     use crate::core::RuleCtx;
+     |
+
+error[E0433]: cannot find type `CapabilitySupportView` in this scope
+    --> crates/polint/src/core/db.rs:6975:20
+     |
+6975 |         let view = CapabilitySupportView::new(vec![CapabilitySupport {
+     |                    ^^^^^^^^^^^^^^^^^^^^^ use of undeclared type `CapabilitySupportView`
+     |
+help: consider importing this struct through its public re-export
+     |
+5311 +     use crate::core::CapabilitySupportView;
+     |
+
+error[E0422]: cannot find struct, variant or union type `CapabilitySupport` in this scope
+    --> crates/polint/src/core/db.rs:6975:52
+     |
+6975 |         let view = CapabilitySupportView::new(vec![CapabilitySupport {
+     |                                                    ^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this struct through its public re-export
+     |
+5311 +     use crate::core::CapabilitySupport;
+     |
+
+error[E0433]: cannot find type `CapabilitySupportStatus` in this scope
+    --> crates/polint/src/core/db.rs:6978:21
+     |
+6978 |             status: CapabilitySupportStatus::Supported,
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^ use of undeclared type `CapabilitySupportStatus`
+     |
+help: consider importing this enum through its public re-export
+     |
+5311 +     use crate::core::CapabilitySupportStatus;
+     |
+
+error[E0433]: cannot find type `CapabilitySupportStatus` in this scope
+    --> crates/polint/src/core/db.rs:6987:18
+     |
+6987 |             Some(CapabilitySupportStatus::Supported)
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^ use of undeclared type `CapabilitySupportStatus`
+     |
+help: consider importing this enum through its public re-export
+     |
+5311 +     use crate::core::CapabilitySupportStatus;
+     |
+
+error[E0433]: cannot find type `RuleCtx` in this scope
+    --> crates/polint/src/core/db.rs:6996:19
+     |
+6996 |         let ctx = RuleCtx::new(
+     |                   ^^^^^^^ use of undeclared type `RuleCtx`
+     |
+help: consider importing this struct through its public re-export
+     |
+5311 +     use crate::core::RuleCtx;
+     |
+
+error[E0422]: cannot find struct, variant or union type `RuleMeta` in this scope
+    --> crates/polint/src/core/db.rs:6998:13
+     |
+6998 |             RuleMeta {
+     |             ^^^^^^^^ not found in this scope
+     |
+help: consider importing this struct through its public re-export
+     |
+5311 +     use crate::core::RuleMeta;
+     |
+
+error[E0433]: cannot find type `RuleKind` in this scope
+    --> crates/polint/src/core/db.rs:7002:23
+     |
+7002 |                 kind: RuleKind::Check,
+     |                       ^^^^^^^^ use of undeclared type `RuleKind`
+     |
+help: consider importing this enum through its public re-export
+     |
+5311 +     use crate::core::RuleKind;
+     |
+
+error[E0433]: cannot find type `RuleOptions` in this scope
+    --> crates/polint/src/core/db.rs:7004:13
+     |
+7004 |             RuleOptions::default(),
+     |             ^^^^^^^^^^^ use of undeclared type `RuleOptions`
+     |
+help: consider importing this struct through its public re-export
+     |
+5311 +     use crate::core::RuleOptions;
+     |
+
+error[E0433]: cannot find type `Capabilities` in this scope
+    --> crates/polint/src/core/db.rs:7012:28
+     |
+7012 |         let capabilities = Capabilities::new()
+     |                            ^^^^^^^^^^^^ use of undeclared type `Capabilities`
+     |
+help: consider importing this struct through its public re-export
+     |
+5311 +     use crate::core::Capabilities;
+     |
+
+error[E0433]: cannot find type `Rule` in this scope
+    --> crates/polint/src/core/db.rs:7035:20
+     |
+7035 |         let rule = Rule::from_parts(
+     |                    ^^^^ use of undeclared type `Rule`
+     |
+help: consider importing this struct through its public re-export
+     |
+5311 +     use crate::core::Rule;
+     |
+
+error[E0422]: cannot find struct, variant or union type `RuleMeta` in this scope
+    --> crates/polint/src/core/db.rs:7036:16
+     |
+7036 |             || RuleMeta {
+     |                ^^^^^^^^ not found in this scope
+     |
+help: consider importing this struct through its public re-export
+     |
+5311 +     use crate::core::RuleMeta;
+     |
+
+error[E0433]: cannot find type `RuleKind` in this scope
+    --> crates/polint/src/core/db.rs:7040:23
+     |
+7040 |                 kind: RuleKind::Check,
+     |                       ^^^^^^^^ use of undeclared type `RuleKind`
+     |
+help: consider importing this enum through its public re-export
+     |
+5311 +     use crate::core::RuleKind;
+     |
+
+error[E0433]: cannot find type `Capabilities` in this scope
+    --> crates/polint/src/core/db.rs:7042:16
+     |
+7042 |             || Capabilities::new().imports(),
+     |                ^^^^^^^^^^^^ use of undeclared type `Capabilities`
+     |
+help: consider importing this struct through its public re-export
+     |
+5311 +     use crate::core::Capabilities;
+     |
+
+error[E0433]: cannot find type `CapabilitySupportStatus` in this scope
+    --> crates/polint/src/core/db.rs:7045:29
+     |
+7045 |                     == Some(CapabilitySupportStatus::Supported)
+     |                             ^^^^^^^^^^^^^^^^^^^^^^^ use of undeclared type `CapabilitySupportStatus`
+     |
+help: consider importing this enum through its public re-export
+     |
+5311 +     use crate::core::CapabilitySupportStatus;
+     |
+
+error[E0433]: cannot find type `CapabilitySupportView` in this scope
+    --> crates/polint/src/core/db.rs:7060:28
+     |
+7060 |         let support_view = CapabilitySupportView::new(vec![CapabilitySupport {
+     |                            ^^^^^^^^^^^^^^^^^^^^^ use of undeclared type `CapabilitySupportView`
+     |
+help: consider importing this struct through its public re-export
+     |
+5311 +     use crate::core::CapabilitySupportView;
+     |
+
+error[E0422]: cannot find struct, variant or union type `CapabilitySupport` in this scope
+    --> crates/polint/src/core/db.rs:7060:60
+     |
+7060 |         let support_view = CapabilitySupportView::new(vec![CapabilitySupport {
+     |                                                            ^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this struct through its public re-export
+     |
+5311 +     use crate::core::CapabilitySupport;
+     |
+
+error[E0433]: cannot find type `CapabilitySupportStatus` in this scope
+    --> crates/polint/src/core/db.rs:7063:21
+     |
+7063 |             status: CapabilitySupportStatus::Supported,
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^ use of undeclared type `CapabilitySupportStatus`
+     |
+help: consider importing this enum through its public re-export
+     |
+5311 +     use crate::core::CapabilitySupportStatus;
+     |
+
+error[E0425]: cannot find function `run_rules_with_capability_support` in this scope
+    --> crates/polint/src/core/db.rs:7070:27
+     |
+7070 |         let diagnostics = run_rules_with_capability_support(
+     |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function through its public re-export
+     |
+5311 +     use crate::core::run_rules_with_capability_support;
+     |
+
+error[E0433]: cannot find type `Capabilities` in this scope
+    --> crates/polint/src/core/db.rs:7088:36
+     |
+7088 |                 .with_capabilities(Capabilities::new().cfg())
+     |                                    ^^^^^^^^^^^^ use of undeclared type `Capabilities`
+     |
+help: consider importing this struct through its public re-export
+     |
+5311 +     use crate::core::Capabilities;
+     |
+
+error[E0433]: cannot find type `Capabilities` in this scope
+    --> crates/polint/src/core/db.rs:7091:36
+     |
+7091 |                 .with_capabilities(Capabilities::new().dataflow())
+     |                                    ^^^^^^^^^^^^ use of undeclared type `Capabilities`
+     |
+help: consider importing this struct through its public re-export
+     |
+5311 +     use crate::core::Capabilities;
+     |
+
+error[E0433]: cannot find type `Capabilities` in this scope
+    --> crates/polint/src/core/db.rs:7094:36
+     |
+7094 |                 .with_capabilities(Capabilities::new().imports())
+     |                                    ^^^^^^^^^^^^ use of undeclared type `Capabilities`
+     |
+help: consider importing this struct through its public re-export
+     |
+5311 +     use crate::core::Capabilities;
+     |
+
+error[E0433]: cannot find type `CapabilitySupportView` in this scope
+    --> crates/polint/src/core/db.rs:7097:28
+     |
+7097 |         let support_view = CapabilitySupportView::new(vec![
+     |                            ^^^^^^^^^^^^^^^^^^^^^ use of undeclared type `CapabilitySupportView`
+     |
+help: consider importing this struct through its public re-export
+     |
+5311 +     use crate::core::CapabilitySupportView;
+     |
+
+error[E0422]: cannot find struct, variant or union type `CapabilitySupport` in this scope
+    --> crates/polint/src/core/db.rs:7098:13
+     |
+7098 |             CapabilitySupport {
+     |             ^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this struct through its public re-export
+     |
+5311 +     use crate::core::CapabilitySupport;
+     |
+
+error[E0433]: cannot find type `CapabilitySupportStatus` in this scope
+    --> crates/polint/src/core/db.rs:7101:25
+     |
+7101 |                 status: CapabilitySupportStatus::Unsupported,
+     |                         ^^^^^^^^^^^^^^^^^^^^^^^ use of undeclared type `CapabilitySupportStatus`
+     |
+help: consider importing this enum through its public re-export
+     |
+5311 +     use crate::core::CapabilitySupportStatus;
+     |
+
+error[E0422]: cannot find struct, variant or union type `CapabilitySupport` in this scope
+    --> crates/polint/src/core/db.rs:7107:13
+     |
+7107 |             CapabilitySupport {
+     |             ^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this struct through its public re-export
+     |
+5311 +     use crate::core::CapabilitySupport;
+     |
+
+error[E0433]: cannot find type `CapabilitySupportStatus` in this scope
+    --> crates/polint/src/core/db.rs:7110:25
+     |
+7110 |                 status: CapabilitySupportStatus::SetupMissing,
+     |                         ^^^^^^^^^^^^^^^^^^^^^^^ use of undeclared type `CapabilitySupportStatus`
+     |
+help: consider importing this enum through its public re-export
+     |
+5311 +     use crate::core::CapabilitySupportStatus;
+     |
+
+error[E0422]: cannot find struct, variant or union type `CapabilitySupport` in this scope
+    --> crates/polint/src/core/db.rs:7116:13
+     |
+7116 |             CapabilitySupport {
+     |             ^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this struct through its public re-export
+     |
+5311 +     use crate::core::CapabilitySupport;
+     |
+
+error[E0433]: cannot find type `CapabilitySupportStatus` in this scope
+    --> crates/polint/src/core/db.rs:7119:25
+     |
+7119 |                 status: CapabilitySupportStatus::Supported,
+     |                         ^^^^^^^^^^^^^^^^^^^^^^^ use of undeclared type `CapabilitySupportStatus`
+     |
+help: consider importing this enum through its public re-export
+     |
+5311 +     use crate::core::CapabilitySupportStatus;
+     |
+
+error[E0425]: cannot find function `run_rules_with_capability_support` in this scope
+    --> crates/polint/src/core/db.rs:7127:27
+     |
+7127 |         let diagnostics = run_rules_with_capability_support(
+     |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function through its public re-export
+     |
+5311 +     use crate::core::run_rules_with_capability_support;
+     |
+
+error[E0433]: cannot find type `Capabilities` in this scope
+    --> crates/polint/src/core/db.rs:7616:18
+     |
+7616 |         assert!(!Capabilities::new().ts_classes);
+     |                  ^^^^^^^^^^^^ use of undeclared type `Capabilities`
+     |
+help: consider importing this struct through its public re-export
+     |
+5311 +     use crate::core::Capabilities;
+     |
+
+error[E0433]: cannot find type `Capabilities` in this scope
+    --> crates/polint/src/core/db.rs:7617:28
+     |
+7617 |         let capabilities = Capabilities::new().ts_classes();
+     |                            ^^^^^^^^^^^^ use of undeclared type `Capabilities`
+     |
+help: consider importing this struct through its public re-export
+     |
+5311 +     use crate::core::Capabilities;
+     |
+
+error[E0433]: cannot find type `RuleRegistry` in this scope
+    --> crates/polint/src/core/db.rs:7642:28
+     |
+7642 |         let mut registry = RuleRegistry::new();
+     |                            ^^^^^^^^^^^^ use of undeclared type `RuleRegistry`
+     |
+help: consider importing this struct through its public re-export
+     |
+5311 +     use crate::core::RuleRegistry;
+     |
+
+error[E0433]: cannot find type `Capabilities` in this scope
+    --> crates/polint/src/core/db.rs:7645:36
+     |
+7645 |                 .with_capabilities(Capabilities::new().imports().coverage_facts())
+     |                                    ^^^^^^^^^^^^ use of undeclared type `Capabilities`
+     |
+help: consider importing this struct through its public re-export
+     |
+5311 +     use crate::core::Capabilities;
+     |
+
+error[E0422]: cannot find struct, variant or union type `RuleOptions` in this scope
+    --> crates/polint/src/core/db.rs:7666:13
+     |
+7666 |             RuleOptions {
+     |             ^^^^^^^^^^^ not found in this scope
+     |
+note: these variants exist but are inaccessible
+    --> crates/polint/src/analysis_kernel/incremental/dependency_index.rs:51:5
+     |
+  51 |     RuleOptions,
+     |     ^^^^^^^^^^^ `crate::symbol_graph::semantic_layer_payload::ShapeKind::RuleOptions`: not accessible
+     |
+    ::: crates/polint/src/analysis_kernel/incremental/digest.rs:18:5
+     |
+  18 |     RuleOptions,
+     |     ^^^^^^^^^^^ `crate::symbol_graph::semantic_layer_payload::DigestKind::RuleOptions`: not accessible
+help: consider importing one of these items
+     |
+5311 +     use crate::analysis_kernel::incremental::ChangeKind::RuleOptions;
+     |
+5311 +     use crate::core::RuleOptions;
+     |
+
+error[E0433]: cannot find type `RuleOptions` in this scope
+    --> crates/polint/src/core/db.rs:7668:19
+     |
+7668 |                 ..RuleOptions::default()
+     |                   ^^^^^^^^^^^ use of undeclared type `RuleOptions`
+     |
+help: consider importing this struct through its public re-export
+     |
+5311 +     use crate::core::RuleOptions;
+     |
+
+error[E0425]: cannot find function `run_rules` in this scope
+    --> crates/polint/src/core/db.rs:7673:27
+     |
+7673 |         let diagnostics = run_rules(&db, &rules, &options, Some(&enabled), false);
+     |                           ^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function through its public re-export
+     |
+5311 +     use crate::core::run_rules;
+     |
+
+error[E0425]: cannot find function `run_rules` in this scope
+    --> crates/polint/src/core/db.rs:7688:19
+     |
+7688 |         let all = run_rules(&db, &rules, &BTreeMap::new(), None, false);
+     |                   ^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function through its public re-export
+     |
+5311 +     use crate::core::run_rules;
+     |
+
+error[E0425]: cannot find function `run_rules` in this scope
+    --> crates/polint/src/core/db.rs:7692:20
+     |
+7692 |         let none = run_rules(&db, &rules, &BTreeMap::new(), Some(&empty), false);
+     |                    ^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function through its public re-export
+     |
+5311 +     use crate::core::run_rules;
+     |
+
+error[E0425]: cannot find function `run_rules` in this scope
+    --> crates/polint/src/core/db.rs:7704:27
+     |
+7704 |         let diagnostics = run_rules(&db, &rules, &BTreeMap::new(), None, false);
+     |                           ^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function through its public re-export
+     |
+5311 +     use crate::core::run_rules;
+     |
+
+error[E0425]: cannot find function `run_rules` in this scope
+    --> crates/polint/src/core/db.rs:7735:27
+     |
+7735 |         let diagnostics = run_rules(&db, &rules, &BTreeMap::new(), None, false);
+     |                           ^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function through its public re-export
+     |
+5311 +     use crate::core::run_rules;
+     |
+
+error[E0425]: cannot find function `run_rules` in this scope
+    --> crates/polint/src/core/db.rs:7756:26
+     |
+7756 |         let sequential = run_rules(&db, &rules, &BTreeMap::new(), None, false);
+     |                          ^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function through its public re-export
+     |
+5311 +     use crate::core::run_rules;
+     |
+
+error[E0425]: cannot find function `run_rules` in this scope
+    --> crates/polint/src/core/db.rs:7757:24
+     |
+7757 |         let parallel = run_rules(&db, &rules, &BTreeMap::new(), None, true);
+     |                        ^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function through its public re-export
+     |
+5311 +     use crate::core::run_rules;
+     |
+
+error[E0425]: cannot find function `run_rules` in this scope
+    --> crates/polint/src/core/db.rs:7772:27
+     |
+7772 |         let diagnostics = run_rules(&db, &rules, &BTreeMap::new(), None, false);
+     |                           ^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function through its public re-export
+     |
+5311 +     use crate::core::run_rules;
+     |
+
+error[E0433]: cannot find type `Capabilities` in this scope
+    --> crates/polint/src/core/db.rs:8340:28
+     |
+8340 |         let capabilities = Capabilities::new().references();
+     |                            ^^^^^^^^^^^^ use of undeclared type `Capabilities`
+     |
+help: consider importing this struct through its public re-export
+     |
+5311 +     use crate::core::Capabilities;
+     |
+
+error[E0425]: cannot find function `span_from_byte_range` in this scope
+    --> crates/polint/src/core/db.rs:8510:20
+     |
+8510 |         let utf8 = span_from_byte_range(file, source, 1, 3);
+     |                    ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function through its public re-export
+     |
+5311 +     use crate::core::span_from_byte_range;
+     |
+
+error[E0425]: cannot find function `span_from_byte_range` in this scope
+    --> crates/polint/src/core/db.rs:8513:23
+     |
+8513 |         let newline = span_from_byte_range(file, source, 3, 4);
+     |                       ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function through its public re-export
+     |
+5311 +     use crate::core::span_from_byte_range;
+     |
+
+error[E0425]: cannot find function `span_from_byte_range` in this scope
+    --> crates/polint/src/core/db.rs:8516:21
+     |
+8516 |         let empty = span_from_byte_range(file, source, 4, 4);
+     |                     ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function through its public re-export
+     |
+5311 +     use crate::core::span_from_byte_range;
+     |
+
+error[E0425]: cannot find function `span_from_byte_range` in this scope
+    --> crates/polint/src/core/db.rs:8519:23
+     |
+8519 |         let clamped = span_from_byte_range(file, source, source.len() + 10, source.len() + 20);
+     |                       ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function through its public re-export
+     |
+5311 +     use crate::core::span_from_byte_range;
+     |
+
+error[E0425]: cannot find function `rule_id_matches` in this scope
+    --> crates/polint/src/core/db.rs:8527:17
+     |
+8527 |         assert!(rule_id_matches("examples/*", "examples/ts-no-raw-colors"));
+     |                 ^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function through its public re-export
+     |
+5311 +     use crate::core::rule_id_matches;
+     |
+
+error[E0425]: cannot find function `rule_id_matches` in this scope
+    --> crates/polint/src/core/db.rs:8528:18
+     |
+8528 |         assert!(!rule_id_matches("custom/*", "examples/ts-no-raw-colors"));
+     |                  ^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function through its public re-export
+     |
+5311 +     use crate::core::rule_id_matches;
+     |
+
+error[E0425]: cannot find function `span_from_byte_range` in this scope
+    --> crates/polint/src/core/db.rs:8625:32
+     |
+8625 |                     let span = span_from_byte_range(FileId(0), &source, *start, *end);
+     |                                ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function through its public re-export
+     |
+5311 +     use crate::core::span_from_byte_range;
+     |
+
+warning: unused imports: `TS_JS_MODULE_FUNCTION_NAME` and `is_synthetic_ts_js_module_function`
+   --> crates/polint/src/core/db.rs:112:42
+    |
+112 |     CachedFileAnalysis, CachedFileFacts, TS_JS_MODULE_FUNCTION_NAME,
+    |                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^
+113 |     is_synthetic_ts_js_module_function,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `super::labels::*`
+  --> crates/polint/src/core/mod.rs:62:9
+   |
+62 |     use super::labels::*;
+   |         ^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::access_paths::facts::AccessPathFact`
+  --> crates/polint/src/core/mod.rs:66:9
+   |
+66 |     use crate::analysis::access_paths::facts::AccessPathFact;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::access_paths::store::AccessPathStore`
+  --> crates/polint/src/core/mod.rs:67:9
+   |
+67 |     use crate::analysis::access_paths::store::AccessPathStore;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `AcceptedModelFact` and `RejectedModelFact`
+  --> crates/polint/src/core/mod.rs:68:46
+   |
+68 |     use crate::analysis::adaptation::facts::{AcceptedModelFact, RejectedModelFact};
+   |                                              ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::aliases::facts::AliasAnswerFact`
+  --> crates/polint/src/core/mod.rs:69:9
+   |
+69 |     use crate::analysis::aliases::facts::AliasAnswerFact;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::aliases::store::AliasStore`
+  --> crates/polint/src/core/mod.rs:70:9
+   |
+70 |     use crate::analysis::aliases::store::AliasStore;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `CallSiteFact`, `CallTargetFact`, `CallTargetStatus`, `UnresolvedCallFact`, and `UnresolvedCallReason`
+  --> crates/polint/src/core/mod.rs:72:9
+   |
+72 |         CallSiteFact, CallTargetFact, CallTargetStatus, UnresolvedCallFact, UnresolvedCallReason,
+   |         ^^^^^^^^^^^^  ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `CallOutput` and `CallStore`
+  --> crates/polint/src/core/mod.rs:74:41
+   |
+74 |     use crate::analysis::calls::store::{CallOutput, CallStore};
+   |                                         ^^^^^^^^^^  ^^^^^^^^^
+
+warning: unused imports: `BasicBlockFact`, `CfgEdgeFact`, `CfgFunctionFact`, `CfgNodeFact`, `ControlDependenceFact`, `DominatorFact`, `PostDominatorFact`, `ReachabilityFact`, and `UnsupportedControlFlowFact`
+  --> crates/polint/src/core/mod.rs:76:9
+   |
+76 |         BasicBlockFact, CfgEdgeFact, CfgFunctionFact, CfgNodeFact, ControlDependenceFact,
+   |         ^^^^^^^^^^^^^^  ^^^^^^^^^^^  ^^^^^^^^^^^^^^^  ^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^
+77 |         DominatorFact, PostDominatorFact, ReachabilityFact, UnsupportedControlFlowFact,
+   |         ^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::cfg::store::CfgOutput`
+  --> crates/polint/src/core/mod.rs:79:9
+   |
+79 |     use crate::analysis::cfg::store::CfgOutput;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `DataFlowBudgetFact` and `DataFlowEdgeFact`
+  --> crates/polint/src/core/mod.rs:81:9
+   |
+81 |         DataFlowBudgetFact, DataFlowConfidence, DataFlowEdgeFact, DataFlowModelFact,
+   |         ^^^^^^^^^^^^^^^^^^                      ^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::data_flow::provider::DATA_FLOW_PROVIDER_ID`
+  --> crates/polint/src/core/mod.rs:84:9
+   |
+84 |     use crate::analysis::data_flow::provider::DATA_FLOW_PROVIDER_ID;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `DataFlowStore`
+  --> crates/polint/src/core/mod.rs:85:61
+   |
+85 |     use crate::analysis::data_flow::store::{DataFlowOutput, DataFlowStore};
+   |                                                             ^^^^^^^^^^^^^
+
+warning: unused imports: `DomainEventFact` and `DomainObservationFact`
+  --> crates/polint/src/core/mod.rs:86:43
+   |
+86 |     use crate::analysis::domains::facts::{DomainEventFact, DomainObservationFact};
+   |                                           ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `DomainOutput` and `DomainStore`
+  --> crates/polint/src/core/mod.rs:87:43
+   |
+87 |     use crate::analysis::domains::store::{DomainOutput, DomainStore};
+   |                                           ^^^^^^^^^^^^  ^^^^^^^^^^^
+
+warning: unused imports: `EntrypointFact`, `EntrypointStatus`, `FrameworkDispatchEdgeFact`, `TrustBoundaryFact`, and `UnresolvedFrameworkFact`
+  --> crates/polint/src/core/mod.rs:89:9
+   |
+89 |         EntrypointFact, EntrypointStatus, FrameworkDispatchEdgeFact, TrustBoundaryFact,
+   |         ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^
+90 |         UnresolvedFrameworkFact,
+   |         ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `EntrypointOutput` and `EntrypointStore`
+  --> crates/polint/src/core/mod.rs:92:47
+   |
+92 |     use crate::analysis::entrypoints::store::{EntrypointOutput, EntrypointStore};
+   |                                               ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::error::AnalysisError`
+  --> crates/polint/src/core/mod.rs:93:9
+   |
+93 |     use crate::analysis::error::AnalysisError;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `EvidenceBundleFact`, `EvidenceEdgeFact`, `EvidenceOmittedRegionFact`, `EvidencePathFact`, `EvidenceReplayKeyFact`, `EvidenceSliceFact`, and `EvidenceUnknownFact`
+  --> crates/polint/src/core/mod.rs:95:9
+   |
+95 |         EvidenceBundleFact, EvidenceEdgeFact, EvidenceNodeFact, EvidenceOmittedRegionFact,
+   |         ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^                    ^^^^^^^^^^^^^^^^^^^^^^^^^
+96 |         EvidencePathFact, EvidencePrecision, EvidenceReplayKeyFact, EvidenceSliceFact,
+   |         ^^^^^^^^^^^^^^^^                     ^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^
+97 |         EvidenceUnknownFact,
+   |         ^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::evidence::provider::EVIDENCE_PROVIDER_ID`
+   --> crates/polint/src/core/mod.rs:102:9
+    |
+102 |     use crate::analysis::evidence::provider::EVIDENCE_PROVIDER_ID;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `EvidenceOutput` and `EvidenceStore`
+   --> crates/polint/src/core/mod.rs:103:44
+    |
+103 |     use crate::analysis::evidence::store::{EvidenceOutput, EvidenceStore};
+    |                                            ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::identity::facts::IdentityRecord`
+   --> crates/polint/src/core/mod.rs:108:9
+    |
+108 |     use crate::analysis::identity::facts::IdentityRecord;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::identity::provider::valid_call_site_ids`
+   --> crates/polint/src/core/mod.rs:109:9
+    |
+109 |     use crate::analysis::identity::provider::valid_call_site_ids;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `IdentityProviderOutput` and `IdentityStore`
+   --> crates/polint/src/core/mod.rs:110:44
+    |
+110 |     use crate::analysis::identity::store::{IdentityProviderOutput, IdentityStore};
+    |                                            ^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^
+
+warning: unused import: `CallSiteId`
+   --> crates/polint/src/core/mod.rs:112:32
+    |
+112 |     use crate::analysis::ids::{CallSiteId, MirBodyId, MirOpId, PlaceId, UnsupportedId};
+    |                                ^^^^^^^^^^
+
+warning: unused imports: `MirBody`, `MirOutput`, and `MirStatus`
+   --> crates/polint/src/core/mod.rs:114:38
+    |
+114 |     use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
+    |                                      ^^^^^^^  ^^^^^^^^^  ^^^^^^^^^
+
+warning: unused imports: `MirOperation` and `UnsupportedSemanticFact`
+   --> crates/polint/src/core/mod.rs:119:36
+    |
+119 |     use crate::analysis::mir::op::{MirOperation, UnsupportedSemanticFact};
+    |                                    ^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `PlaceFact` and `PlaceStatus`
+   --> crates/polint/src/core/mod.rs:121:35
+    |
+121 |     use crate::analysis::places::{PlaceFact, PlaceStatus};
+    |                                   ^^^^^^^^^  ^^^^^^^^^^^
+
+warning: unused imports: `PointsToConstraintFact` and `PointsToSetFact`
+   --> crates/polint/src/core/mod.rs:122:45
+    |
+122 |     use crate::analysis::points_to::facts::{PointsToConstraintFact, PointsToSetFact};
+    |                                             ^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::points_to::store::PointsToStore`
+   --> crates/polint/src/core/mod.rs:123:9
+    |
+123 |     use crate::analysis::points_to::store::PointsToStore;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `CallReachabilityFact` and `ReachabilityRootFact`
+   --> crates/polint/src/core/mod.rs:124:48
+    |
+124 |     use crate::analysis::reachability::facts::{CallReachabilityFact, ReachabilityRootFact};
+    |                                                ^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `ReachabilityProviderOutput` and `ReachabilityStore`
+   --> crates/polint/src/core/mod.rs:125:48
+    |
+125 |     use crate::analysis::reachability::store::{ReachabilityProviderOutput, ReachabilityStore};
+    |                                                ^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::refined_calls::facts::RefinedCallEdgeFact`
+   --> crates/polint/src/core/mod.rs:126:9
+    |
+126 |     use crate::analysis::refined_calls::facts::RefinedCallEdgeFact;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::refined_calls::provider::REFINED_CALLS_PROVIDER_ID`
+   --> crates/polint/src/core/mod.rs:127:9
+    |
+127 |     use crate::analysis::refined_calls::provider::REFINED_CALLS_PROVIDER_ID;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `RefinedCallOutput` and `RefinedCallStore`
+   --> crates/polint/src/core/mod.rs:128:49
+    |
+128 |     use crate::analysis::refined_calls::store::{RefinedCallOutput, RefinedCallStore};
+    |                                                 ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::semantic_graph::constraints::ConstraintFact`
+   --> crates/polint/src/core/mod.rs:129:9
+    |
+129 |     use crate::analysis::semantic_graph::constraints::ConstraintFact;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `SemanticEdgeFact` and `SemanticNodeFact`
+   --> crates/polint/src/core/mod.rs:130:50
+    |
+130 |     use crate::analysis::semantic_graph::facts::{SemanticEdgeFact, SemanticNodeFact};
+    |                                                  ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::semantic_graph::store::SemanticGraphOutput`
+   --> crates/polint/src/core/mod.rs:131:9
+    |
+131 |     use crate::analysis::semantic_graph::store::SemanticGraphOutput;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::solver::facts::DerivedEdgeFact`
+   --> crates/polint/src/core/mod.rs:133:9
+    |
+133 |     use crate::analysis::solver::facts::DerivedEdgeFact;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `SolverStore`
+   --> crates/polint/src/core/mod.rs:134:56
+    |
+134 |     use crate::analysis::solver::store::{SolverOutput, SolverStore};
+    |                                                        ^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::store::SemanticStore`
+   --> crates/polint/src/core/mod.rs:135:9
+    |
+135 |     use crate::analysis::store::SemanticStore;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `SummaryOutput` and `SummaryStore`
+   --> crates/polint/src/core/mod.rs:137:45
+    |
+137 |     use crate::analysis::summaries::store::{SummaryOutput, SummaryStore};
+    |                                             ^^^^^^^^^^^^^  ^^^^^^^^^^^^
+
+warning: unused imports: `NarrowedTypeFact` and `TypeFact`
+   --> crates/polint/src/core/mod.rs:138:41
+    |
+138 |     use crate::analysis::types::facts::{NarrowedTypeFact, TypeFact};
+    |                                         ^^^^^^^^^^^^^^^^  ^^^^^^^^
+
+warning: unused import: `crate::analysis::types::provider::TYPE_VALUE_ALIAS_PROVIDER_ID`
+   --> crates/polint/src/core/mod.rs:139:9
+    |
+139 |     use crate::analysis::types::provider::TYPE_VALUE_ALIAS_PROVIDER_ID;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `TypeStore`
+   --> crates/polint/src/core/mod.rs:140:41
+    |
+140 |     use crate::analysis::types::store::{TypeStore, TypeValueAliasOutput};
+    |                                         ^^^^^^^^^
+
+warning: unused import: `AllocationTokenFact`
+   --> crates/polint/src/core/mod.rs:141:42
+    |
+141 |     use crate::analysis::values::facts::{AllocationTokenFact, ValueFact};
+    |                                          ^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::values::store::ValueStore`
+   --> crates/polint/src/core/mod.rs:142:9
+    |
+142 |     use crate::analysis::values::store::ValueStore;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `FactMetaStore`, `FactMeta`, `resolution_metadata`, `resolution_status_metadata`, `stable_key_from_parts`, and `symbol_metadata`
+   --> crates/polint/src/core/mod.rs:144:37
+    |
+144 |         FactConfidence, FactFamily, FactMeta, FactMetaStore, FactPrecision, FactRef,
+    |                                     ^^^^^^^^  ^^^^^^^^^^^^^
+145 |         MissingFactMeta, ValidationStatus, resolution_metadata, resolution_status_metadata,
+    |                                            ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+146 |         stable_key_from_parts, symbol_metadata,
+    |         ^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^
+
+warning: unused imports: `FactConfidence`, `FactFamily`, `FactPrecision`, `FactRef`, and `ValidationStatus`
+   --> crates/polint/src/core/mod.rs:149:9
+    |
+149 |         FactConfidence, FactFamily, FactPrecision, FactRef, ValidationStatus,
+    |         ^^^^^^^^^^^^^^  ^^^^^^^^^^  ^^^^^^^^^^^^^  ^^^^^^^  ^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::diagnostics::fingerprint`
+   --> crates/polint/src/core/mod.rs:151:9
+    |
+151 |     use crate::diagnostics::fingerprint;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `GoSemanticAddressTakenFact`, `GoSemanticCallsiteFact`, `GoSemanticDynamicDispatchFact`, `GoSemanticFunctionFact`, `GoSemanticInstantiatedTypeFact`, `GoSemanticMethodSetFact`, `GoSemanticPackageErrorFact`, `GoSemanticPackageFact`, and `GoSemanticRtaEdgeFact`
+   --> crates/polint/src/core/mod.rs:154:9
+    |
+154 |         GoSemanticAddressTakenFact, GoSemanticCallsiteFact, GoSemanticDynamicDispatchFact,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+155 |         GoSemanticFunctionFact, GoSemanticInstantiatedTypeFact, GoSemanticMethodSetFact,
+    |         ^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^
+156 |         GoSemanticPackageErrorFact, GoSemanticPackageFact, GoSemanticRtaEdgeFact,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `GoSemanticFactsOutput`, `GoSemanticStoreReport`, and `GoSemanticStore`
+   --> crates/polint/src/core/mod.rs:159:9
+    |
+159 |         GoSemanticFactsOutput, GoSemanticStore, GoSemanticStoreReport,
+    |         ^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `DependencyRequirementFact`, `ImportToPackageFact`, `RepoTopologyOverlayFact`, `ResolvedDependencyEdgeFact`, `SourceSetFact`, `TopologyOutput`, `TopologyPackageFact`, `TopologyPrecision`, and `WorkspaceRootFact`
+   --> crates/polint/src/core/mod.rs:162:9
+    |
+162 |         DependencyRequirementFact, ImportToPackageFact, RepoTopologyOverlayFact,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^
+163 |         ResolvedDependencyEdgeFact, SourceSetFact, TopologyOutput, TopologyPackageFact,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^  ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^
+164 |         TopologyPrecision, WorkspaceRootFact,
+    |         ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `AliasId`, `ExportId`, `GeneratedSymbolId`, `ResolutionId`, `SemanticImportId`, and `StableExportId`
+   --> crates/polint/src/core/mod.rs:172:20
+    |
+172 |         AliasFact, AliasId, ExportFact, ExportId, GeneratedSymbolFact, GeneratedSymbolId,
+    |                    ^^^^^^^              ^^^^^^^^                       ^^^^^^^^^^^^^^^^^
+173 |         ResolutionFact, ResolutionId, ScopeFact, ScopeId, SemanticImportFact, SemanticImportId,
+    |                         ^^^^^^^^^^^^                                          ^^^^^^^^^^^^^^^^
+174 |         SemanticStatus, StableExportId, StableExportIdentity,
+    |                         ^^^^^^^^^^^^^^
+
+warning: unused imports: `AliasFact`, `ExportFact`, `GeneratedSymbolFact`, `ResolutionFact`, `ScopeFact`, `ScopeId`, `SemanticImportFact`, `SemanticStatus`, and `StableExportIdentity`
+   --> crates/polint/src/core/mod.rs:177:9
+    |
+177 |         AliasFact, ExportFact, GeneratedSymbolFact, ResolutionFact, ScopeFact, ScopeId, ScopeKind,
+    |         ^^^^^^^^^  ^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^  ^^^^^^^^^  ^^^^^^^
+178 |         SemanticImportFact, SemanticStatus, StableExportIdentity,
+    |         ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `TsObjectAllocationFact`, `TsPropertyReadFact`, `TsPropertyWriteFact`, `TsPrototypeLinkFact`, and `TsReceiverBindingFact`
+   --> crates/polint/src/core/mod.rs:181:9
+    |
+181 |         TsObjectAllocationFact, TsPropertyReadFact, TsPropertyWriteFact, TsPrototypeLinkFact,
+    |         ^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^
+182 |         TsReceiverBindingFact,
+    |         ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `TsObjectModelOutput` and `TsObjectModelStore`
+   --> crates/polint/src/core/mod.rs:184:42
+    |
+184 |     use crate::ts::object_model::store::{TsObjectModelOutput, TsObjectModelStore};
+    |                                          ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Deserialize` and `Serialize`
+   --> crates/polint/src/core/mod.rs:187:17
+    |
+187 |     use serde::{Deserialize, Serialize};
+    |                 ^^^^^^^^^^^  ^^^^^^^^^
+
+warning: `polint` (lib) generated 2 warnings (run `cargo fix --lib -p polint` to apply 2 suggestions)
+Some errors have detailed explanations: E0252, E0422, E0425, E0432, E0433.
+For more information about an error, try `rustc --explain E0252`.
+warning: `polint` (lib test) generated 59 warnings
+error: could not compile `polint` (lib test) due to 86 previous errors; 59 warnings emitted

@@ -80,13 +80,6 @@ impl CanonicalGoSyntaxInputs {
         validate_inputs(&sources)?;
         Ok(Self { sources })
     }
-
-    pub(crate) fn source_digests(&self) -> Vec<Digest> {
-        self.sources
-            .iter()
-            .map(CanonicalGoSyntaxSource::digest)
-            .collect()
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -619,23 +612,23 @@ mod tests {
 
     #[rustfmt::skip] fn literal_digest(path: &str, value: &str, line: u32, language: Language, count: usize) -> Result<Digest, GoSyntaxProjectionError> {
         let mut db = AnalysisDb::new(); let file = db.add_file(path.into(), path.into(), "first\nsecond\n".into());
-        for _ in 0..count { db.push_string_literal(crate::core::StringLiteralFact { file, value: value.into(), span: Span::point(file, line, 1), language }); }
+        for _ in 0..count { db.push_string_literal(crate::core::StringLiteralFact::new(file, value.into(), Span::point(file, line, 1), language)); }
         Ok(CanonicalGoSyntaxOutput::from_db(&db, &[])?.digest())
     }
     #[derive(Clone, Copy, Debug)] #[rustfmt::skip]
     enum RelatedFact { Test, Branch }
     #[derive(Clone, Copy, Debug, PartialEq, Eq)] #[rustfmt::skip]
     enum RelationshipMutation { Valid, Missing, Dangling, CrossFile, Span }
-    #[rustfmt::skip] fn span(file: FileId, start: u32, end: u32) -> Span { Span { file, start_byte: start, end_byte: end, start_line: 1, start_col: start + 1, end_line: 1, end_col: end + 1 } }
-    #[rustfmt::skip] fn function_fact(file: FileId, name: String, span: Span) -> FunctionFact { FunctionFact { id: FunctionId(0), file, name, span, language: Language::Go, is_test: true, is_exported: true, cyclomatic_complexity: 1, calls: Vec::new() } }
+    #[rustfmt::skip] fn span(file: FileId, start: u32, end: u32) -> Span { Span::new(file, start, end, 1, start + 1, 1, end + 1) }
+    #[rustfmt::skip] fn function_fact(file: FileId, name: String, span: Span) -> FunctionFact { FunctionFact::new(FunctionId::from_raw(0), file, name, span, Language::Go, true, true, 1, Vec::new()) }
     #[rustfmt::skip] fn relationship_projection(family: RelatedFact, mutation: RelationshipMutation) -> Result<CanonicalGoSyntaxOutput, GoSyntaxProjectionError> {
         let mut db = AnalysisDb::new(); let source = "012345678901234567890123456789012345678901234567890123456789\n";
         let file = db.add_file("a_test.go".into(), "a_test.go".into(), source.into()); let other_file = db.add_file("b_test.go".into(), "b_test.go".into(), source.into()); let function_span = span(file, 5, 40);
         let function = db.push_function(function_fact(file, "TestA".into(), function_span.clone())); let other = db.push_function(function_fact(other_file, "TestB".into(), span(other_file, 5, 40)));
-        let function = match mutation { RelationshipMutation::Missing => None, RelationshipMutation::Dangling => Some(FunctionId(99)), RelationshipMutation::CrossFile => Some(other), _ => Some(function) };
+        let function = match mutation { RelationshipMutation::Missing => None, RelationshipMutation::Dangling => Some(FunctionId::from_raw(99)), RelationshipMutation::CrossFile => Some(other), _ => Some(function) };
         match family {
-            RelatedFact::Test => db.push_test(TestFact { file, function, name: "TestA".into(), span: if mutation == RelationshipMutation::Span { span(file, 6, 39) } else { function_span }, evidence_terms: Vec::new(), assertion_count: 0, subtest_count: 0, subtest_names: Vec::new(), table_rows: 0 }),
-            RelatedFact::Branch => { db.push_branch(BranchObligation { id: BranchId(0), function, file, decision_span: if mutation == RelationshipMutation::Span { span(file, 45, 46) } else { span(file, 20, 21) }, condition_text: "condition".into(), edge_label: "true".into(), is_error_path: false, stable_fingerprint: "fingerprint".into() }); }
+            RelatedFact::Test => db.push_test(TestFact::new(file, function, "TestA".into(), if mutation == RelationshipMutation::Span { span(file, 6, 39) } else { function_span }, Vec::new(), 0, 0, Vec::new(), 0)),
+            RelatedFact::Branch => { db.push_branch(BranchObligation::new(BranchId::from_raw(0), function, file, if mutation == RelationshipMutation::Span { span(file, 45, 46) } else { span(file, 20, 21) }, "condition".into(), "true".into(), false, "fingerprint".into())); }
         }
         CanonicalGoSyntaxOutput::from_db(&db, &[])
     }
@@ -663,8 +656,43 @@ mod tests {
         let mut go = AnalysisDb::new(); go.add_file("a.go".into(), "a.go".into(), "package a\n".into());
         let expected = (CanonicalGoSyntaxInputs::from_db(&go).unwrap(), CanonicalGoSyntaxOutput::from_db(&go, &[]).unwrap());
         let mut mixed = go.clone(); mixed.add_file("unrelated.ts".into(), "unrelated.ts".into(), "import value from 'pkg'; export function pick(flag: boolean) { return flag ? 'yes' : value; }\n".into());
-        let mut diagnostics = crate::ts::analyze(&mut mixed);
-        diagnostics.push(Diagnostic::warning("parser/ts", "unrelated.ts", TextRange::point(1, 1), "unrelated"));
+        let ts_file = mixed
+            .files()
+            .iter()
+            .find(|file| file.relative_path == "unrelated.ts")
+            .map(|file| file.id)
+            .expect("mixed TypeScript file");
+        mixed.push_function(crate::core::FunctionFact::new(
+            crate::core::FunctionId::from_raw(100),
+            ts_file,
+            "pick".into(),
+            Span::point(ts_file, 1, 1),
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
+        mixed.push_import(crate::core::ImportFact::new(
+            crate::core::ImportId::from_raw(100),
+            ts_file,
+            Some("pkg".into()),
+            "pkg".into(),
+            Span::point(ts_file, 1, 1),
+            Language::TypeScript,
+        ));
+        mixed.push_string_literal(crate::core::StringLiteralFact::new(
+            ts_file,
+            "yes".into(),
+            Span::point(ts_file, 1, 1),
+            Language::TypeScript,
+        ));
+        let diagnostics = vec![Diagnostic::warning(
+            "parser/ts",
+            "unrelated.ts",
+            TextRange::point(1, 1),
+            "unrelated",
+        )];
         assert!(!mixed.functions().is_empty() && !mixed.imports().is_empty() && !mixed.string_literals().is_empty());
         assert_eq!((CanonicalGoSyntaxInputs::from_db(&mixed).unwrap(), CanonicalGoSyntaxOutput::from_db(&mixed, &diagnostics).unwrap()), expected);
         let mut selected = 0;

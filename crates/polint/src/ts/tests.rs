@@ -1,8 +1,7 @@
 use super::*;
-use crate::analysis_plan::AnalysisPlan;
-use crate::core::{AnalysisDb, TS_JS_MODULE_FUNCTION_NAME};
-use crate::diagnostics::Diagnostic;
-use crate::graph::ImportGraph;
+use crate::analysis_api::{FactDatabase, TS_JS_MODULE_FUNCTION_NAME};
+use crate::internal_core::Diagnostic;
+use crate::ts::local_db::LocalFactDb;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -10,15 +9,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static CACHE_ROOT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-fn analyze_source(path: &str, source: &str) -> (AnalysisDb, Vec<Diagnostic>) {
-    let mut db = AnalysisDb::new();
+fn analyze_source(path: &str, source: &str) -> (LocalFactDb, Vec<Diagnostic>) {
+    let mut db = LocalFactDb::new();
     db.add_file(PathBuf::from(path), path.to_string(), source.to_string());
     let diagnostics = analyze(&mut db);
     (db, diagnostics)
 }
 
-fn db_with_ts_file(path: &str, source: &str) -> AnalysisDb {
-    let mut db = AnalysisDb::new();
+fn db_with_ts_file(path: &str, source: &str) -> LocalFactDb {
+    let mut db = LocalFactDb::new();
     db.add_file(PathBuf::from(path), path.to_string(), source.to_string());
     db
 }
@@ -97,7 +96,7 @@ fn assert_no_parser_diagnostics(diagnostics: &[Diagnostic]) {
 #[test]
 fn cache_writes_and_restores_ts_facts() {
     let cache_root = unique_cache_root();
-    let cache = crate::cache::Cache::new(&cache_root, true);
+    let cache = crate::ts::test_cache::FsAnalysisCache::new(&cache_root, true);
     let source = r##"
 import { token } from "./tokens";
 
@@ -142,8 +141,7 @@ export function Button() {
 #[test]
 fn ts_syntax_layer_cache_cold_warm() {
     let cache_root = unique_cache_root();
-    let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
-    let plan = AnalysisPlan::empty();
+    let cache = crate::ts::test_cache::FsAnalysisCache::new(cache_root.join("analysis"), true);
     let source = r#"
 export function Button() {
   return "ok";
@@ -151,9 +149,8 @@ export function Button() {
 "#;
     let mut first = db_with_ts_file("component.ts", source);
 
-    let first_result = analyze_with_plan_options_and_cache_stats(
-        &mut first, &cache, "config", "rule", &plan, false,
-    );
+    let first_result =
+        analyze_with_plan_options_and_cache_stats(&mut first, &cache, "config", "rule", "", false);
 
     assert_no_parser_diagnostics(&first_result.diagnostics);
     assert_eq!(first_result.cache_stats.misses, 1);
@@ -164,14 +161,8 @@ export function Button() {
     assert!(cache_root.join("layers").exists());
 
     let mut second = db_with_ts_file("component.ts", source);
-    let second_result = analyze_with_plan_options_and_cache_stats(
-        &mut second,
-        &cache,
-        "config",
-        "rule",
-        &plan,
-        false,
-    );
+    let second_result =
+        analyze_with_plan_options_and_cache_stats(&mut second, &cache, "config", "rule", "", false);
 
     assert_no_parser_diagnostics(&second_result.diagnostics);
     assert_eq!(second_result.cache_stats.hits, 1);
@@ -185,14 +176,12 @@ export function Button() {
 #[test]
 fn ts_syntax_layer_cache_corrupt() {
     let cache_root = unique_cache_root();
-    let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
-    let plan = AnalysisPlan::empty();
+    let cache = crate::ts::test_cache::FsAnalysisCache::new(cache_root.join("analysis"), true);
     let source = "// console.log('secret')\nexport function main() { return 'ok'; }\n";
     let mut first = db_with_ts_file("main.ts", source);
 
-    let first_result = analyze_with_plan_options_and_cache_stats(
-        &mut first, &cache, "config", "rule", &plan, false,
-    );
+    let first_result =
+        analyze_with_plan_options_and_cache_stats(&mut first, &cache, "config", "rule", "", false);
     assert_no_parser_diagnostics(&first_result.diagnostics);
 
     let payload = first_layer_file(&cache_root, "blobs");
@@ -204,7 +193,7 @@ fn ts_syntax_layer_cache_corrupt() {
         &cache,
         "config",
         "changed-rule",
-        &plan,
+        "",
         false,
     );
 
@@ -219,26 +208,18 @@ fn ts_syntax_layer_cache_corrupt() {
 #[test]
 fn ts_syntax_layer_cache_output_digest_mismatch_recomputes() {
     let cache_root = unique_cache_root();
-    let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
-    let plan = AnalysisPlan::empty();
+    let cache = crate::ts::test_cache::FsAnalysisCache::new(cache_root.join("analysis"), true);
     let source = "// console.log('secret')\nexport function main() { return 'ok'; }\n";
     let mut first = db_with_ts_file("main.ts", source);
 
-    let first_result = analyze_with_plan_options_and_cache_stats(
-        &mut first, &cache, "config", "rule", &plan, false,
-    );
+    let first_result =
+        analyze_with_plan_options_and_cache_stats(&mut first, &cache, "config", "rule", "", false);
     assert_no_parser_diagnostics(&first_result.diagnostics);
     corrupt_first_manifest_output_digest(&cache_root);
 
     let mut second = db_with_ts_file("main.ts", source);
-    let second_result = analyze_with_plan_options_and_cache_stats(
-        &mut second,
-        &cache,
-        "config",
-        "rule",
-        &plan,
-        false,
-    );
+    let second_result =
+        analyze_with_plan_options_and_cache_stats(&mut second, &cache, "config", "rule", "", false);
 
     assert_no_parser_diagnostics(&second_result.diagnostics);
     assert_eq!(second_result.cache_stats.invalid_evicted_reads, 1);
@@ -251,9 +232,8 @@ fn ts_syntax_layer_cache_output_digest_mismatch_recomputes() {
 #[test]
 fn ts_syntax_layer_cache_disabled_bypass() {
     let cache_root = unique_cache_root();
-    let cache = crate::cache::Cache::new(cache_root.join("analysis"), false);
-    let plan = AnalysisPlan::empty();
-    let mut db = AnalysisDb::new();
+    let cache = crate::ts::test_cache::FsAnalysisCache::new(cache_root.join("analysis"), false);
+    let mut db = LocalFactDb::new();
     db.add_file(
         PathBuf::from("first.ts"),
         "first.ts".to_string(),
@@ -266,7 +246,7 @@ fn ts_syntax_layer_cache_disabled_bypass() {
     );
 
     let result =
-        analyze_with_plan_options_and_cache_stats(&mut db, &cache, "config", "rule", &plan, false);
+        analyze_with_plan_options_and_cache_stats(&mut db, &cache, "config", "rule", "", false);
 
     assert_no_parser_diagnostics(&result.diagnostics);
     assert_eq!(result.cache_stats.bypasses_disabled, 1);
@@ -278,13 +258,12 @@ fn ts_syntax_layer_cache_disabled_bypass() {
 #[test]
 fn ts_syntax_layer_cache_payload_excludes_source_and_temp_paths() {
     let cache_root = unique_cache_root();
-    let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
-    let plan = AnalysisPlan::empty();
+    let cache = crate::ts::test_cache::FsAnalysisCache::new(cache_root.join("analysis"), true);
     let source = "// console.log('secret')\nexport function main() { return 'ok'; }\n";
     let mut db = db_with_ts_file("main.ts", source);
 
     let result =
-        analyze_with_plan_options_and_cache_stats(&mut db, &cache, "config", "rule", &plan, false);
+        analyze_with_plan_options_and_cache_stats(&mut db, &cache, "config", "rule", "", false);
 
     assert_no_parser_diagnostics(&result.diagnostics);
     assert!(
@@ -307,7 +286,7 @@ export function Button() {
   return <div data-color="#ff00aa">{token}</div>;
 }
 "##;
-    let cache = crate::cache::Cache::new("", false);
+    let cache = crate::ts::test_cache::FsAnalysisCache::new("", false);
     let mut sequential = db_with_ts_file("component.tsx", source);
     let mut parallel = db_with_ts_file("component.tsx", source);
 
@@ -670,28 +649,28 @@ fn parses_ts_source_from_shared_arc_without_full_source_clone() {
     let production_only = include_str!("adapter.rs");
     assert!(
         production_only.contains("Arc::clone(&file.source)"),
-        "parse_ts_file should refcount Arc<str> (O(1)) instead of copying the buffer"
+        "extract_ts_file_facts should refcount Arc<str> (O(1)) instead of copying the buffer"
     );
     let forbidden = concat!("file.source", ".to_string()");
     assert!(
         !production_only.contains(forbidden),
-        "parse_ts_file should not allocate a full String copy of the source"
+        "extract_ts_file_facts should not allocate a full String copy of the source"
     );
 }
 
 #[test]
 fn source_type_comes_from_file_path_for_ts_family() {
-    let production_source = include_str!("adapter.rs");
-    let helper_signature = ["fn parse_source_type", "(path: &Path) -> SourceType"].concat();
+    let production_source = include_str!("parse.rs");
+    let helper_signature = ["fn source_type", "(path: &Path) -> SourceType"].concat();
     let source_type_from_path = ["SourceType::from_path", "(path).unwrap_or_default()"].concat();
 
     assert!(
         production_source.contains(&helper_signature),
-        "expected parse_source_type helper"
+        "expected crate::ts::source_type helper"
     );
     assert!(
         production_source.contains(&source_type_from_path),
-        "parse_source_type should derive SourceType from the file path"
+        "source_type should derive SourceType from the file path"
     );
 }
 
@@ -777,42 +756,19 @@ const unsafePrefix = /^unsafe-/i;
 
 #[test]
 fn denied_literal_rules_can_see_regex_literal_text() {
-    use crate::core::{RuleCtx, RuleKind, RuleMeta, RuleOptions};
-    use crate::diagnostics::Severity;
-    use crate::sdk::facts::{FactView, StringLiterals};
-
     let source = r#"
 const allowed = /legacy-testid/;
 const denied = /^unsafe-/i;
 "#;
     let (db, diagnostics) = analyze_source("regex-deny.ts", source);
     assert_no_parser_diagnostics(&diagnostics);
-    let ctx = RuleCtx::new(
-        &db,
-        RuleMeta {
-            id: "examples/config-query-no-literal".to_string(),
-            description: "Deny configured syntax-level literals.".to_string(),
-            severity: Severity::Error,
-            kind: RuleKind::Check,
-        },
-        RuleOptions {
-            deny: vec!["unsafe".to_string()],
-            ..RuleOptions::default()
-        },
-    );
-
-    let literals = StringLiterals::build(&db);
-    let denied = literals
+    let deny = ["unsafe".to_string()];
+    let denied = db
+        .string_literals()
         .iter()
-        .filter(|literal| {
-            ctx.options()
-                .deny
-                .iter()
-                .any(|deny| literal.value.contains(deny))
-        })
+        .filter(|literal| deny.iter().any(|needle| literal.value.contains(needle)))
         .map(|literal| literal.value.as_str())
         .collect::<Vec<_>>();
-
     assert_eq!(denied, vec!["/^unsafe-/i"]);
 }
 
@@ -1122,8 +1078,11 @@ export function renderView() {
 "#;
     let (db, diagnostics) = analyze_source("src/view.ts", source);
     assert_no_parser_diagnostics(&diagnostics);
-
-    let dot = ImportGraph::from_db(&db).to_dot();
-    assert!(dot.contains("src/view.ts"), "{dot}");
-    assert!(dot.contains("./tokens"), "{dot}");
+    assert!(
+        db.imports()
+            .iter()
+            .any(|import| import.path == "./tokens" && import.file == db.files()[0].id),
+        "expected ./tokens import fact, got {:?}",
+        db.imports()
+    );
 }

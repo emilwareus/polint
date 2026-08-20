@@ -1,0 +1,70 @@
+    Checking polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint)
+error: using `clone` on type `StableKeyId` which implements the `Copy` trait
+   --> crates/polint/src/analysis/solver/go_rta/dispatch.rs:238:36
+    |
+238 |             contributing_keys.push(key.clone());
+    |                                    ^^^^^^^^^^^ help: try dereferencing it: `*key`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#clone_on_copy
+    = note: `-D clippy::clone-on-copy` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::clone_on_copy)]`
+
+error: using `clone` on type `StableKeyId` which implements the `Copy` trait
+   --> crates/polint/src/analysis/solver/go_rta/inputs.rs:391:36
+    |
+391 |             contributing_keys.push(key.clone());
+    |                                    ^^^^^^^^^^^ help: try dereferencing it: `*key`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#clone_on_copy
+
+error: using `clone` on type `StableKeyId` which implements the `Copy` trait
+   --> crates/polint/src/analysis/solver/go_rta/inputs.rs:394:36
+    |
+394 |             contributing_keys.push(key.clone());
+    |                                    ^^^^^^^^^^^ help: try dereferencing it: `*key`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#clone_on_copy
+
+error: this function has too many arguments (8/7)
+   --> crates/polint/src/analysis/solver/provider.rs:158:1
+    |
+158 | / fn solver_output_digest(
+159 | |     interner: &crate::core::StableKeyInterner,
+160 | |     manifest: &ProviderManifest,
+161 | |     _input_snapshot: &InputSnapshot,
+...   |
+166 | |     output: &SolverOutput,
+167 | | ) -> Digest {
+    | |___________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#too_many_arguments
+    = note: `-D clippy::too-many-arguments` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::too_many_arguments)]`
+
+error: could not compile `polint` (lib) due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: using `clone` on type `StableKeyId` which implements the `Copy` trait
+   --> crates/polint/src/analysis/solver/go_rta/dispatch.rs:452:44
+    |
+452 |                     contributing_keys.push(key.clone());
+    |                                            ^^^^^^^^^^^ help: try dereferencing it: `*key`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#clone_on_copy
+
+error: using `clone` on type `StableKeyId` which implements the `Copy` trait
+   --> crates/polint/src/analysis/solver/go_rta/dispatch.rs:455:44
+    |
+455 |                     contributing_keys.push(key.clone());
+    |                                            ^^^^^^^^^^^ help: try dereferencing it: `*key`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#clone_on_copy
+
+error: using `clone` on type `StableKeyId` which implements the `Copy` trait
+   --> crates/polint/src/analysis/solver/go_rta/fixpoint.rs:758:28
+    |
+758 |         let baseline_key = edge.stable_key.clone();
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^ help: try removing the `clone` call: `edge.stable_key`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#clone_on_copy
+
+error: could not compile `polint` (lib test) due to 7 previous errors

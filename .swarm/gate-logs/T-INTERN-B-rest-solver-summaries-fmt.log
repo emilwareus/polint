@@ -1,0 +1,595 @@
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/data_flow/summary_edges.rs:329:
+         FactFamily::DataFlowNode,
+         &[
+             ("kind", format!("{kind:?}")),
+-            ("summary_event", interner.resolve(event.stable_key).to_string()),
++            (
++                "summary_event",
++                interner.resolve(event.stable_key).to_string(),
++            ),
+             ("role", role.to_string()),
+         ],
+     );
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/data_flow/summary_edges.rs:407:
+     use super::*;
+     use crate::analysis::ids::{SummaryEventId, SummaryId};
+     use crate::analysis::summaries::facts::SummaryProvenance;
+-    use crate::core::stable_key_for_test;
+     use crate::core::FunctionId;
++    use crate::core::stable_key_for_test;
+ 
+     #[test]
+     fn data_flow_tito_summary_produces_projected_edge() {
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/refined_calls/ts_js.rs:101:
+     db.solver_derived_edges().iter().any(|edge| {
+         edge.status == PointsToStatus::Present
+             && edge.provenance.constraint_kind == "call_constraint"
+-            && edge
+-                .provenance
+-                .contributing_facts
+-                .iter()
+-                .any(|fact| {
+-                    constraint_keys.contains(db.resolve_stable_key(fact.stable_key).as_ref())
+-                })
++            && edge.provenance.contributing_facts.iter().any(|fact| {
++                constraint_keys.contains(db.resolve_stable_key(fact.stable_key).as_ref())
++            })
+     })
+ }
+ 
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/slicing/interprocedural.rs:154:
+     }
+ 
+     paths.sort_by(|left, right| {
+-        compare_scores(left.score, right.score).then_with(|| left.stable_key_text.cmp(&right.stable_key_text))
++        compare_scores(left.score, right.score)
++            .then_with(|| left.stable_key_text.cmp(&right.stable_key_text))
+     });
+     let status = if !omitted_regions.is_empty() {
+         EvidenceStatus::BudgetExceeded
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/slicing/paths.rs:196:
+     }
+ 
+     paths.sort_by(|left, right| {
+-        compare_scores(left.score, right.score).then_with(|| left.stable_key_text.cmp(&right.stable_key_text))
++        compare_scores(left.score, right.score)
++            .then_with(|| left.stable_key_text.cmp(&right.stable_key_text))
+     });
+     let status = if !omitted_regions.is_empty() {
+         EvidenceStatus::BudgetExceeded
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/slicing/paths.rs:372:
+ 
+             assert_eq!(steps.len(), 1);
+             assert_eq!(steps[0].summary_stable_key_text, "summary:tito");
+-            assert_eq!(steps[0].callable_stable_key_text.as_deref(), Some("callable:fn"));
++            assert_eq!(
++                steps[0].callable_stable_key_text.as_deref(),
++                Some("callable:fn")
++            );
+             assert_eq!(steps[0].domain.as_deref(), Some("data_flow_tito"));
+             assert_eq!(steps[0].input_endpoint, EvidenceNodeId(0));
+             assert_eq!(steps[0].output_endpoint, EvidenceNodeId(1));
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/solver/engine.rs:410:
+             }
+             let provenance = DerivedEdgeProvenance::new(
+                 interner,
+-                meta.keys.iter().map(|&key| ContributingFact {
+-                    stable_key: key,
+-                }),
++                meta.keys
++                    .iter()
++                    .map(|&key| ContributingFact { stable_key: key }),
+                 &ConstraintKind::CopyEdge {
+                     dst: crate::analysis::ids::SemanticNodeId(node),
+                     src: crate::analysis::ids::SemanticNodeId(start),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/solver/engine.rs:964:
+         assert_eq!(edge.provenance.contributing_len(), 1);
+         let interner = crate::core::test_stable_key_interner();
+         assert_eq!(
+-            interner.resolve(edge.provenance.contributing_facts[0].stable_key).as_ref(),
++            interner
++                .resolve(edge.provenance.contributing_facts[0].stable_key)
++                .as_ref(),
+             "model|register"
+         );
+         assert!(interner.resolve(edge.stable_key).contains("model_edge"));
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/solver/go_rta/fixpoint.rs:339:
+         let mut instantiated_keys = BTreeMap::new();
+         for type_name in instantiated_types {
+             instantiated.insert((*type_name).to_string());
+-            instantiated_keys.insert((*type_name).to_string(), interner.intern(format!("inst|{type_name}")));
++            instantiated_keys.insert(
++                (*type_name).to_string(),
++                interner.intern(format!("inst|{type_name}")),
++            );
+         }
+ 
+         GoRtaInputs {
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/solver/go_rta/fixpoint.rs:893:
+ 
+         let mut budget = SolverBudget::default();
+         budget.go.max_rta_rounds = 1;
+-        let output = solve_go_rta(
+-            &crate::core::test_stable_key_interner(),
+-            &inputs,
+-            &budget,
+-        );
++        let output = solve_go_rta(&crate::core::test_stable_key_interner(), &inputs, &budget);
+         // The cap is hit before the second round resolves A.Step's callsite, so the
+         // run latches BudgetExceeded honestly rather than looping.
+         assert_eq!(output.budget_status, BudgetStatus::BudgetExceeded);
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/solver/go_rta/fixpoint.rs:986:
+ 
+         let mut budget = SolverBudget::default();
+         budget.go.address_taken_threshold = 1;
+-        let output = solve_go_rta(
+-            &crate::core::test_stable_key_interner(),
+-            &inputs,
+-            &budget,
+-        );
++        let output = solve_go_rta(&crate::core::test_stable_key_interner(), &inputs, &budget);
+ 
+         // Interface dispatch still resolves despite the large address-taken set.
+         assert!(
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/solver/go_rta/fixpoint.rs:1043:
+ 
+         let mut budget = SolverBudget::default();
+         budget.go.address_taken_threshold = 1;
+-        let output = solve_go_rta(
+-            &crate::core::test_stable_key_interner(),
+-            &inputs,
+-            &budget,
+-        );
++        let output = solve_go_rta(&crate::core::test_stable_key_interner(), &inputs, &budget);
+ 
+         // Interface dispatch still resolves: main(1) -> (pkg.File).Read(3).
+         assert!(
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/solver/go_rta/fixpoint.rs:1197:
+ 
+         let mut budget = SolverBudget::default();
+         budget.go.max_rta_rounds = 1;
+-        let output = solve_go_rta(
+-            &crate::core::test_stable_key_interner(),
+-            &inputs,
+-            &budget,
+-        );
++        let output = solve_go_rta(&crate::core::test_stable_key_interner(), &inputs, &budget);
+         // The single resolvable edge is derived AND the run is WithinBudget (converged at
+         // the boundary, no pending work the cap prevented).
+         assert!(
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/solver/go_rta/fixpoint.rs:1272:
+         let mut budget = SolverBudget::default();
+         budget.go.max_rta_rounds = 1;
+ 
+-        let output = solve_go_rta(
+-            &crate::core::test_stable_key_interner(),
+-            &inputs,
+-            &budget,
+-        );
++        let output = solve_go_rta(&crate::core::test_stable_key_interner(), &inputs, &budget);
+ 
+         assert!(
+             output
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/solver/go_rta/fixpoint.rs:1341:
+             let type_name = format!("pkg.S{i}");
+             let method = format!("M{i}");
+             method_sets.insert(type_name.clone(), BTreeSet::from([method.clone()]));
+-            method_set_keys.insert(type_name.clone(), interner.intern(format!("ms|{type_name}")));
++            method_set_keys.insert(
++                type_name.clone(),
++                interner.intern(format!("ms|{type_name}")),
++            );
+             methods_by_receiver.insert(
+                 type_name.clone(),
+                 vec![GoRtaMethod {
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/solver/go_rta/fixpoint.rs:1351:
+                 }],
+             );
+             instantiated.insert(type_name.clone());
+-            instantiated_keys.insert(type_name.clone(), interner.intern(format!("inst|{type_name}")));
++            instantiated_keys.insert(
++                type_name.clone(),
++                interner.intern(format!("inst|{type_name}")),
++            );
+         }
+         // Caller step.i (for i in 0..CHAIN) invokes M{i+1}, reaching step.{i+1}.
+         for i in 0..CHAIN {
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/solver/go_rta/fixpoint.rs:1391:
+             budget.max_outer_iterations
+         );
+ 
+-        let output = solve_go_rta(
+-            &crate::core::test_stable_key_interner(),
+-            &inputs,
+-            &budget,
+-        );
++        let output = solve_go_rta(&crate::core::test_stable_key_interner(), &inputs, &budget);
+ 
+         // The fixpoint converges honestly — NOT a spurious BudgetExceeded.
+         assert_eq!(
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/solver/go_rta/fixpoint.rs:1500:
+         // chain truncates and the run latches BudgetExceeded honestly.
+         let mut budget = SolverBudget::default();
+         budget.go.max_worklist_steps = 1;
+-        let output = solve_go_rta(
+-            &crate::core::test_stable_key_interner(),
+-            &inputs,
+-            &budget,
+-        );
++        let output = solve_go_rta(&crate::core::test_stable_key_interner(), &inputs, &budget);
+         assert_eq!(output.budget_status, BudgetStatus::BudgetExceeded);
+     }
+ }
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/solver/policy.rs:215:
+     use crate::analysis::solver::facts::DerivedEdgeFact;
+     use crate::analysis::solver::provenance::{ContributingFact, DerivedEdgeProvenance};
+     use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
+-    use crate::core::StableKeyId;
+     use crate::core::AnalysisDb;
++    use crate::core::StableKeyId;
+ 
+     #[derive(Debug, Clone, PartialEq, Eq)]
+     pub(crate) struct TsPointsToCallsite {
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/solver/policy.rs:495:
+     fn ts_policy_id_is_stable() {
+         let budget = SolverBudget::default();
+         let ts = TsPointsToPolicy::new(TsPointsToInputs::default());
+-        let ts_outcome = ts.solve(
+-            &crate::core::test_stable_key_interner(),
+-            &budget,
+-        );
++        let ts_outcome = ts.solve(&crate::core::test_stable_key_interner(), &budget);
+         assert_eq!(ts.id(), "ts_points_to");
+         assert!(ts_outcome.points_to.is_none());
+         assert!(ts_outcome.derived_edges.is_empty());
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/solver/provenance.rs:203:
+     #[test]
+     fn provenance_captures_constraint_kind_label_and_step() {
+         let interner = crate::core::test_stable_key_interner();
+-        let provenance = DerivedEdgeProvenance::new(&interner, vec![fact("copy")], &copy_edge(), 42);
++        let provenance =
++            DerivedEdgeProvenance::new(&interner, vec![fact("copy")], &copy_edge(), 42);
+         assert_eq!(provenance.constraint_kind, "copy_edge");
+         assert_eq!(provenance.solver_step, 42);
+     }
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/solver/store.rs:265:
+         let normalized = sample_output().normalized(&crate::core::test_stable_key_interner());
+         // "edge|copy_edge|a" < "edge|copy_edge|b", so it sorts first and gets dense
+         // id 0 regardless of its larger pre-sort id (9).
+-        assert_eq!(normalized.derived_edges[0].stable_key, crate::core::stable_key_for_test("edge|copy_edge|a"));
++        assert_eq!(
++            normalized.derived_edges[0].stable_key,
++            crate::core::stable_key_for_test("edge|copy_edge|a")
++        );
+         assert_eq!(normalized.derived_edges[0].id, DerivedEdgeId(0));
+-        assert_eq!(normalized.derived_edges[1].stable_key, crate::core::stable_key_for_test("edge|copy_edge|b"));
++        assert_eq!(
++            normalized.derived_edges[1].stable_key,
++            crate::core::stable_key_for_test("edge|copy_edge|b")
++        );
+         assert_eq!(normalized.derived_edges[1].id, DerivedEdgeId(1));
+     }
+ 
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/solver/store.rs:295:
+ 
+     #[test]
+     fn from_output_builds_constraint_kind_index() {
+-        let store = SolverStore::from_output(sample_output(), &crate::core::test_stable_key_interner()).expect("store");
++        let store =
++            SolverStore::from_output(sample_output(), &crate::core::test_stable_key_interner())
++                .expect("store");
+         assert_eq!(store.derived_edges().len(), 2);
+         assert_eq!(store.budget_status(), BudgetStatus::WithinBudget);
+         assert!(store.budget_reasons().is_empty());
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/solver/store.rs:313:
+             ..SolverOutput::default()
+         };
+ 
+-        let store = SolverStore::from_output(output, &crate::core::test_stable_key_interner()).expect("store");
++        let store = SolverStore::from_output(output, &crate::core::test_stable_key_interner())
++            .expect("store");
+ 
+         assert!(store.derived_edges().is_empty());
+         assert_eq!(store.budget_status(), BudgetStatus::BudgetExceeded);
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/solver/store.rs:331:
+             ..SolverOutput::default()
+         };
+ 
+-        let error = SolverStore::from_output(output, &crate::core::test_stable_key_interner()).expect_err("inconsistent budget rejected");
++        let error = SolverStore::from_output(output, &crate::core::test_stable_key_interner())
++            .expect_err("inconsistent budget rejected");
+ 
+         assert!(
+             error
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/solver/store.rs:348:
+             ..SolverOutput::default()
+         };
+ 
+-        let store = SolverStore::from_output(output, &crate::core::test_stable_key_interner()).expect("not-run store");
++        let store = SolverStore::from_output(output, &crate::core::test_stable_key_interner())
++            .expect("not-run store");
+ 
+         assert_eq!(store.budget_status(), BudgetStatus::NotRun);
+         assert!(store.budget_reasons().is_empty());
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/solver/store.rs:368:
+             ..SolverOutput::default()
+         };
+ 
+-        let error = SolverStore::from_output(output, &crate::core::test_stable_key_interner()).expect_err("not-run edge rejected");
++        let error = SolverStore::from_output(output, &crate::core::test_stable_key_interner())
++            .expect_err("not-run edge rejected");
+ 
+         assert!(
+             error
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/solver/store.rs:385:
+             ..SolverOutput::default()
+         };
+ 
+-        let error = SolverStore::from_output(output, &crate::core::test_stable_key_interner()).expect_err("missing budget reason rejected");
++        let error = SolverStore::from_output(output, &crate::core::test_stable_key_interner())
++            .expect_err("missing budget reason rejected");
+ 
+         assert!(
+             error
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/solver/store.rs:403:
+             ..SolverOutput::default()
+         };
+ 
+-        let error = SolverStore::from_output(output, &crate::core::test_stable_key_interner()).expect_err("unknown reason rejected");
++        let error = SolverStore::from_output(output, &crate::core::test_stable_key_interner())
++            .expect_err("unknown reason rejected");
+ 
+         assert!(
+             error
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/solver/store.rs:422:
+             ],
+             ..SolverOutput::default()
+         };
+-        let error = SolverStore::from_output(output, &crate::core::test_stable_key_interner()).expect_err("duplicate rejected");
++        let error = SolverStore::from_output(output, &crate::core::test_stable_key_interner())
++            .expect_err("duplicate rejected");
+         assert!(
+             error
+                 .to_string()
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/solver/store.rs:437:
+         // `derived_edge_precision_ceiling` never returns Exact for any
+         // PointsToPrecision, we assert the validation path holds for all variants by
+         // checking the honest mapping directly (the store accepts every legal edge).
+-        let store = SolverStore::from_output(sample_output(), &crate::core::test_stable_key_interner()).expect("store");
++        let store =
++            SolverStore::from_output(sample_output(), &crate::core::test_stable_key_interner())
++                .expect("store");
+         assert!(
+             store
+                 .derived_edges()
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/solver/validate.rs:416:
+             [SemanticNodeId(0), SemanticNodeId(1)].into_iter().collect();
+         let edges = vec![edge(0, 0, 1, "edge|copy_edge|a")];
+         let mut diagnostics = Vec::new();
+-        validate_derived_edges(&crate::core::test_stable_key_interner(), &edges, &node_ids, &mut diagnostics);
++        validate_derived_edges(
++            &crate::core::test_stable_key_interner(),
++            &edges,
++            &node_ids,
++            &mut diagnostics,
++        );
+         assert!(diagnostics.is_empty(), "{diagnostics:?}");
+     }
+ 
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/solver/validate.rs:436:
+             edge(1, 0, 1, "edge|copy_edge|dup"),
+         ];
+         let mut diagnostics = Vec::new();
+-        validate_derived_edges(&crate::core::test_stable_key_interner(), &edges, &node_ids, &mut diagnostics);
++        validate_derived_edges(
++            &crate::core::test_stable_key_interner(),
++            &edges,
++            &node_ids,
++            &mut diagnostics,
++        );
+         assert!(
+             diagnostics
+                 .iter()
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/solver/validate.rs:451:
+         // target node 9 is not in the node set.
+         let edges = vec![edge(0, 0, 9, "edge|copy_edge|a")];
+         let mut diagnostics = Vec::new();
+-        validate_derived_edges(&crate::core::test_stable_key_interner(), &edges, &node_ids, &mut diagnostics);
++        validate_derived_edges(
++            &crate::core::test_stable_key_interner(),
++            &edges,
++            &node_ids,
++            &mut diagnostics,
++        );
+         assert!(
+             diagnostics
+                 .iter()
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/solver/validate.rs:467:
+         // id 5 at index 0 — not contiguous.
+         let edges = vec![edge(5, 0, 1, "edge|copy_edge|a")];
+         let mut diagnostics = Vec::new();
+-        validate_derived_edges(&crate::core::test_stable_key_interner(), &edges, &node_ids, &mut diagnostics);
++        validate_derived_edges(
++            &crate::core::test_stable_key_interner(),
++            &edges,
++            &node_ids,
++            &mut diagnostics,
++        );
+         assert!(
+             diagnostics
+                 .iter()
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/summaries/builder.rs:325:
+                     ),
+                 });
+             }
+-
+         }
+ 
+         SummaryOutput { summaries, events }
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/summaries/builder.rs:908:
+         ],
+     )
+ }
+-
+ 
+ trait DigestAndClassify {
+     fn stable_digest_parts(&self) -> Vec<String>;
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/summaries/closure.rs:9:
+ use super::scc::{Scc, SccSchedule};
+ use crate::analysis::calls::facts::CallTargetStatus;
+ use crate::analysis::ids::{SummaryEventId, SummaryId};
++use crate::analysis::summaries::scc::resolved_member_keys;
+ use crate::analysis_kernel::FactFamily;
+ use crate::analysis_kernel::incremental::{
+     DemandQueryEngine, DemandQueryResult, Digest, DigestKind, PrecisionTier, QueryKey,
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/summaries/closure.rs:15:
+ };
+ use crate::analysis_kernel::stable_key_from_parts;
+-use crate::analysis::summaries::scc::resolved_member_keys;
+ use crate::core::{AnalysisDb, FunctionId, StableKeyId};
+ 
+ // ---------------------------------------------------------------------------
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/summaries/closure.rs:179:
+                 .insert(member_key_texts.clone(), scc_digest.clone());
+ 
+             // Record demand query entry
+-            record_scc_demand_query(demand_engine, &member_key_texts, &scc_digest, 1, was_backdated);
++            record_scc_demand_query(
++                demand_engine,
++                &member_key_texts,
++                &scc_digest,
++                1,
++                was_backdated,
++            );
+         }
+     }
+ 
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/summaries/closure.rs:732:
+     iterations: u32,
+     was_backdated: bool,
+ ) {
+-    let param_parts: Vec<String> = member_keys
+-        .iter()
+-        .map(|k| format!("member:{k}"))
+-        .collect();
++    let param_parts: Vec<String> = member_keys.iter().map(|k| format!("member:{k}")).collect();
+     let param_refs: Vec<&str> = param_parts.iter().map(|s| s.as_str()).collect();
+ 
+     let parameter_digest =
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/summaries/closure.rs:828:
+             provenance: SummaryProvenance::NativeLocal,
+             payload_digest: format!("digest:{callable_key}:{}", domain.as_str()),
+             tito_flows: Vec::new(),
+-            stable_key: stable_key_for_test(&format!(
+-                "summary:{}:{callable_key}",
+-                domain.as_str()
+-            )),
++            stable_key: stable_key_for_test(&format!("summary:{}:{callable_key}", domain.as_str())),
+         }
+     }
+ 
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/summaries/scc.rs:191:
+             .iter()
+             .map(|&node_idx| {
+                 let func_id = graph[node_idx];
+-                let stable_key = function_stable_keys.get(&func_id).copied().unwrap_or_else(|| {
+-                    interner.intern(format!("<unknown:{}>", func_id.0))
+-                });
++                let stable_key = function_stable_keys
++                    .get(&func_id)
++                    .copied()
++                    .unwrap_or_else(|| interner.intern(format!("<unknown:{}>", func_id.0)));
+                 (
+                     interner.resolve(stable_key).to_string(),
+                     stable_key,
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/summaries/scc.rs:491:
+         let scc = &schedule.sccs[0];
+         assert!(scc.is_recursive);
+         assert_eq!(scc.size, 1);
+-        assert_eq!(
+-            member_texts(&interner, scc),
+-            vec!["func::recursive"]
+-        );
++        assert_eq!(member_texts(&interner, scc), vec!["func::recursive"]);
+     }
+ 
+     // -----------------------------------------------------------------------
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/summaries/store.rs:326:
+ 
+         // Sorted by stable key
+         assert_eq!(
+-            interner.resolve(store.all_summaries()[0].stable_key).as_ref(),
++            interner
++                .resolve(store.all_summaries()[0].stable_key)
++                .as_ref(),
+             "summary:a-control"
+         );
+         assert_eq!(
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/summaries/store.rs:333:
+-            interner.resolve(store.all_summaries()[1].stable_key).as_ref(),
++            interner
++                .resolve(store.all_summaries()[1].stable_key)
++                .as_ref(),
+             "summary:a-memory"
+         );
+         assert_eq!(
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/summaries/store.rs:337:
+-            interner.resolve(store.all_summaries()[2].stable_key).as_ref(),
++            interner
++                .resolve(store.all_summaries()[2].stable_key)
++                .as_ref(),
+             "summary:b-control"
+         );
+     }
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/summaries/store.rs:501:
+         });
+         assert_eq!(db.summary_facts().len(), 1);
+         assert_eq!(
+-            db.resolve_stable_key(db.summary_facts()[0].stable_key).as_ref(),
++            db.resolve_stable_key(db.summary_facts()[0].stable_key)
++                .as_ref(),
+             "summary:second"
+         );
+         assert!(db.summary_events().is_empty());
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/summaries/validate.rs:252:
+         );
+     }
+ 
+-    if interner.resolve(event.callable_stable_key).trim().is_empty() {
++    if interner
++        .resolve(event.callable_stable_key)
++        .trim()
++        .is_empty()
++    {
+         push_summary_diagnostic(
+             diagnostics,
+             "SummaryEvent",
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/summaries/validate.rs:410:
+     use crate::analysis_kernel::{
+         FactConfidence, FactFamily, FactMeta, FactPrecision, FactRef, ValidationStatus,
+     };
+-    use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, Span, stable_key_for_test};
++    use crate::core::{
++        AnalysisDb, FileId, FunctionFact, FunctionId, Language, Span, stable_key_for_test,
++    };
+     use std::path::PathBuf;
+ 
+     fn base_db() -> AnalysisDb {
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/cli/mod.rs:4291:
+             &interner,
+             interner.resolve(transitive.stable_key).as_ref(),
+         )
+-            .expect("provenance surfaced via private plumbing");
++        .expect("provenance surfaced via private plumbing");
+         assert_eq!(view.constraint_kind, "copy_edge");
+         assert_eq!(view.contributing_fact_keys.len(), 2);
+         assert!(view.solver_step > 0);
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/cli/mod.rs:4298:
+         // A missing edge key yields None (no panic, no public surface).
+-        assert!(explain_derived_edge_provenance(&store, &interner, "edge|does|not|exist").is_none());
++        assert!(
++            explain_derived_edge_provenance(&store, &interner, "edge|does|not|exist").is_none()
++        );
+     }
+ 
+     #[test]

@@ -77,6 +77,8 @@ Query methods:
 | `all()` | Returns all symbol facts in deterministic database order. |
 | `iter()` | Iterates all symbol facts. |
 | `get(symbol)` | Returns one `SymbolFact` by stable `SymbolId`. |
+| `stable_key(symbol)` | Resolves debug-safe stable identity text for a symbol. |
+| `definition_stable_key(definition)` | Resolves debug-safe stable identity text for a definition. |
 | `for_file(file)` | Iterates symbols owned by one source file. |
 | `by_name(name)` | Iterates symbols with the exact public name. |
 | `by_kind(kind)` | Iterates symbols with a specific `SymbolKind`. |
@@ -102,7 +104,6 @@ Query methods:
 | `owner` | Owning `SymbolId` when known. |
 | `primary_span` | Primary source span when the symbol has one. |
 | `is_exported` | Whether the provider considers the symbol exported. |
-| `stable_key` | Debug-safe normalized key material used to derive or diagnose stable IDs. |
 | `precision` | `SymbolPrecision` for the symbol identity. |
 
 `DefinitionFact` records where a symbol is declared or defined. Definitions are
@@ -127,7 +128,6 @@ declaration merging.
 | `primary_span` | Source span for this definition when available. |
 | `is_primary` | Whether this is the provider's primary definition for the symbol. |
 | `is_exported` | Whether the definition contributes to an exported symbol. |
-| `stable_key` | Debug-safe normalized key material used to derive or diagnose stable IDs. |
 | `precision` | `SymbolPrecision` for the definition. |
 
 ## References<'_>
@@ -142,6 +142,7 @@ Query methods:
 |--------|---------|
 | `all()` | Returns all reference facts in deterministic database order. |
 | `iter()` | Iterates all reference facts. |
+| `stable_key(reference)` | Resolves debug-safe stable identity text for a reference. |
 | `to(symbol)` | Iterates resolved references to one `SymbolId`. |
 | `for_file(file)` | Iterates references in one source file. |
 | `resolved()` | Iterates references with `Resolved` status. |
@@ -168,7 +169,6 @@ Query methods:
 | `primary_span` | Source span for the reference when available. |
 | `target` | Resolved target `SymbolId`, when exact enough. |
 | `candidates` | Candidate `SymbolId` values for ambiguous references. |
-| `stable_key` | Debug-safe normalized key material used to derive or diagnose stable IDs. |
 | `status` | `SymbolResolutionStatus` for the reference. |
 | `precision` | `SymbolPrecision` for the binding. |
 

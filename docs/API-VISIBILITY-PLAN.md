@@ -183,3 +183,16 @@ diff store) are reachable through `ChangedFiles` methods and are not prelude nam
 (`ChangedFile`/`ReviewChangeset` stay `pub(crate)`; `ChangedFileRef` stays `pub` but
 unexported). The `ALLOWED_PRELUDE` count moved `97 -> 99` for these two additions, with two
 probe witnesses added in the same change.
+
+## Structured evidence promotion (sanctioned prelude addition)
+
+Policy-query diagnostics ship a validated `evidence_v1` envelope. The wrapper type is
+promoted so rule authors and host tooling can name it through the prelude without
+exposing `EvidenceStore` or other `analysis/evidence/` internals.
+
+| Surface | Disposition | Required gates and notes |
+|---|---|---|
+| `StructuredEvidenceV1` | stable | Validated JSON wrapper only (`try_from_value`); field private; appears on `Diagnostic::evidence_v1` for policy-query findings; probe witness `_assert_structuredevidencev1`. |
+
+The `ALLOWED_PRELUDE` count moved `+1` for this addition. Internal evidence store /
+node / edge / bundle facts remain crate-private.

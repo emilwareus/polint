@@ -4,7 +4,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+pub(crate) mod analysis_cache_adapter;
 pub(crate) mod keys;
+
+pub(crate) use analysis_cache_adapter::CacheAnalysisCache;
 
 pub(crate) const CACHE_VERSION: &str = concat!("polint-cache-v1:", env!("CARGO_PKG_VERSION"));
 pub(crate) const POLINT_CACHE_DIR_ENV: &str = "POLINT_CACHE_DIR";
@@ -969,6 +972,7 @@ mod tests {
         assert_eq!(cache.root(), temp.path().join(".polint/cache/analysis"));
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn cache_json_is_written_compactly() {
         let temp = tempfile::tempdir().unwrap();

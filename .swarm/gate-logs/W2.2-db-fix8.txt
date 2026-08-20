@@ -1,0 +1,418 @@
+    Checking polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.2/crates/polint)
+warning: unused imports: `DefinitionKind`, `ModuleEdgeKind`, `ModuleNodeKind`, `ReferenceKind`, `ResolutionPrecision`, `ResolutionStatus`, `SymbolKind`, `SymbolNamespace`, `SymbolPrecision`, `SymbolResolutionStatus`, and `UnresolvedReason`
+   --> crates/polint/src/core/db.rs:104:75
+    |
+104 |     BranchObligation, ComplexityMetricFact, CoverageFact, DefinitionFact, DefinitionKind,
+    |                                                                           ^^^^^^^^^^^^^^
+105 |     FileMetricFact, FunctionFact, FunctionMetricFact, ImportFact, JsxAttributeFact, ModuleEdge,
+106 |     ModuleEdgeKind, ModuleNode, ModuleNodeKind, PackageFact, ReferenceFact, ReferenceKind,
+    |     ^^^^^^^^^^^^^^              ^^^^^^^^^^^^^^                              ^^^^^^^^^^^^^
+107 |     ResolutionPrecision, ResolutionStatus, ResolvedImportFact, SourceFile, StringLiteralFact,
+    |     ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^
+108 |     SymbolFact, SymbolKind, SymbolNamespace, SymbolPrecision, SymbolResolutionStatus, TestFact,
+    |                 ^^^^^^^^^^  ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^
+109 |     TsClassFact, TsComponentFact, UnresolvedReason,
+    |                                   ^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `CachedFileAnalysis`, `TS_JS_MODULE_FUNCTION_NAME`, and `is_synthetic_ts_js_module_function`
+   --> crates/polint/src/core/db.rs:112:5
+    |
+112 |     CachedFileAnalysis, CachedFileFacts, TS_JS_MODULE_FUNCTION_NAME,
+    |     ^^^^^^^^^^^^^^^^^^                   ^^^^^^^^^^^^^^^^^^^^^^^^^^
+113 |     is_synthetic_ts_js_module_function,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0432]: unresolved import `super::labels`
+  --> crates/polint/src/core/mod.rs:61:12
+   |
+61 | use super::labels::*;
+   |            ^^^^^^ unresolved import
+   |
+help: a similar path exists
+   |
+61 | use super::crate::core::tests::semantic_mir_metadata::labels::*;
+   |            +++++++++++++++++++++++++++++++++++++++++++
+
+error[E0432]: unresolved import `super::metadata`
+  --> crates/polint/src/core/mod.rs:63:12
+   |
+63 | use super::metadata::*;
+   |            ^^^^^^^^ unresolved import
+   |
+help: a similar path exists
+   |
+63 | use super::crate::analysis_kernel::metadata::*;
+   |            ++++++++++++++++++++++++
+
+warning: unused imports: `TS_JS_MODULE_FUNCTION_NAME` and `is_synthetic_ts_js_module_function`
+   --> crates/polint/src/core/db.rs:112:42
+    |
+112 |     CachedFileAnalysis, CachedFileFacts, TS_JS_MODULE_FUNCTION_NAME,
+    |                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^
+113 |     is_synthetic_ts_js_module_function,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `crate::analysis::access_paths::facts::AccessPathFact`
+  --> crates/polint/src/core/mod.rs:66:5
+   |
+66 | use crate::analysis::access_paths::facts::AccessPathFact;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::access_paths::store::AccessPathStore`
+  --> crates/polint/src/core/mod.rs:68:5
+   |
+68 | use crate::analysis::access_paths::store::AccessPathStore;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `AcceptedModelFact` and `RejectedModelFact`
+  --> crates/polint/src/core/mod.rs:70:42
+   |
+70 | use crate::analysis::adaptation::facts::{AcceptedModelFact, RejectedModelFact};
+   |                                          ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::aliases::facts::AliasAnswerFact`
+  --> crates/polint/src/core/mod.rs:72:5
+   |
+72 | use crate::analysis::aliases::facts::AliasAnswerFact;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::aliases::store::AliasStore`
+  --> crates/polint/src/core/mod.rs:74:5
+   |
+74 | use crate::analysis::aliases::store::AliasStore;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `CallSiteFact`, `CallTargetFact`, `CallTargetStatus`, `UnresolvedCallFact`, and `UnresolvedCallReason`
+  --> crates/polint/src/core/mod.rs:77:5
+   |
+77 |     CallSiteFact, CallTargetFact, CallTargetStatus, UnresolvedCallFact, UnresolvedCallReason,
+   |     ^^^^^^^^^^^^  ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `CallOutput` and `CallStore`
+  --> crates/polint/src/core/mod.rs:80:37
+   |
+80 | use crate::analysis::calls::store::{CallOutput, CallStore};
+   |                                     ^^^^^^^^^^  ^^^^^^^^^
+
+warning: unused imports: `BasicBlockFact`, `CfgEdgeFact`, `CfgFunctionFact`, `CfgNodeFact`, `ControlDependenceFact`, `DominatorFact`, `PostDominatorFact`, `ReachabilityFact`, and `UnsupportedControlFlowFact`
+  --> crates/polint/src/core/mod.rs:83:5
+   |
+83 |     BasicBlockFact, CfgEdgeFact, CfgFunctionFact, CfgNodeFact, ControlDependenceFact,
+   |     ^^^^^^^^^^^^^^  ^^^^^^^^^^^  ^^^^^^^^^^^^^^^  ^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^
+84 |     DominatorFact, PostDominatorFact, ReachabilityFact, UnsupportedControlFlowFact,
+   |     ^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::cfg::store::CfgOutput`
+  --> crates/polint/src/core/mod.rs:87:5
+   |
+87 | use crate::analysis::cfg::store::CfgOutput;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `DataFlowBudgetFact` and `DataFlowEdgeFact`
+  --> crates/polint/src/core/mod.rs:90:5
+   |
+90 |     DataFlowBudgetFact, DataFlowConfidence, DataFlowEdgeFact, DataFlowModelFact, DataFlowNodeFact,
+   |     ^^^^^^^^^^^^^^^^^^                      ^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::data_flow::provider::DATA_FLOW_PROVIDER_ID`
+  --> crates/polint/src/core/mod.rs:94:5
+   |
+94 | use crate::analysis::data_flow::provider::DATA_FLOW_PROVIDER_ID;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `DataFlowStore`
+  --> crates/polint/src/core/mod.rs:96:57
+   |
+96 | use crate::analysis::data_flow::store::{DataFlowOutput, DataFlowStore};
+   |                                                         ^^^^^^^^^^^^^
+
+warning: unused imports: `DomainEventFact` and `DomainObservationFact`
+  --> crates/polint/src/core/mod.rs:98:39
+   |
+98 | use crate::analysis::domains::facts::{DomainEventFact, DomainObservationFact};
+   |                                       ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `DomainOutput` and `DomainStore`
+   --> crates/polint/src/core/mod.rs:100:39
+    |
+100 | use crate::analysis::domains::store::{DomainOutput, DomainStore};
+    |                                       ^^^^^^^^^^^^  ^^^^^^^^^^^
+
+warning: unused imports: `EntrypointFact`, `EntrypointStatus`, `FrameworkDispatchEdgeFact`, `TrustBoundaryFact`, and `UnresolvedFrameworkFact`
+   --> crates/polint/src/core/mod.rs:103:5
+    |
+103 |     EntrypointFact, EntrypointStatus, FrameworkDispatchEdgeFact, TrustBoundaryFact,
+    |     ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^
+104 |     UnresolvedFrameworkFact,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `EntrypointOutput` and `EntrypointStore`
+   --> crates/polint/src/core/mod.rs:107:43
+    |
+107 | use crate::analysis::entrypoints::store::{EntrypointOutput, EntrypointStore};
+    |                                           ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::error::AnalysisError`
+   --> crates/polint/src/core/mod.rs:109:5
+    |
+109 | use crate::analysis::error::AnalysisError;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `EvidenceBundleFact`, `EvidenceEdgeFact`, `EvidenceOmittedRegionFact`, `EvidencePathFact`, `EvidenceReplayKeyFact`, `EvidenceSliceFact`, and `EvidenceUnknownFact`
+   --> crates/polint/src/core/mod.rs:112:5
+    |
+112 |     EvidenceBundleFact, EvidenceEdgeFact, EvidenceNodeFact, EvidenceOmittedRegionFact,
+    |     ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^                    ^^^^^^^^^^^^^^^^^^^^^^^^^
+113 |     EvidencePathFact, EvidencePrecision, EvidenceReplayKeyFact, EvidenceSliceFact,
+    |     ^^^^^^^^^^^^^^^^                     ^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^
+114 |     EvidenceUnknownFact,
+    |     ^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::evidence::provider::EVIDENCE_PROVIDER_ID`
+   --> crates/polint/src/core/mod.rs:117:5
+    |
+117 | use crate::analysis::evidence::provider::EVIDENCE_PROVIDER_ID;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `EvidenceOutput` and `EvidenceStore`
+   --> crates/polint/src/core/mod.rs:119:40
+    |
+119 | use crate::analysis::evidence::store::{EvidenceOutput, EvidenceStore};
+    |                                        ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::identity::facts::IdentityRecord`
+   --> crates/polint/src/core/mod.rs:125:5
+    |
+125 | use crate::analysis::identity::facts::IdentityRecord;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::identity::provider::valid_call_site_ids`
+   --> crates/polint/src/core/mod.rs:127:5
+    |
+127 | use crate::analysis::identity::provider::valid_call_site_ids;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `IdentityProviderOutput` and `IdentityStore`
+   --> crates/polint/src/core/mod.rs:129:40
+    |
+129 | use crate::analysis::identity::store::{IdentityProviderOutput, IdentityStore};
+    |                                        ^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::ids::CallSiteId`
+   --> crates/polint/src/core/mod.rs:131:5
+    |
+131 | use crate::analysis::ids::CallSiteId;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `MirBody`, `MirOutput`, and `MirStatus`
+   --> crates/polint/src/core/mod.rs:133:34
+    |
+133 | use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
+    |                                  ^^^^^^^  ^^^^^^^^^  ^^^^^^^^^
+
+warning: unused imports: `MirOperation` and `UnsupportedSemanticFact`
+   --> crates/polint/src/core/mod.rs:135:32
+    |
+135 | use crate::analysis::mir::op::{MirOperation, UnsupportedSemanticFact};
+    |                                ^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `PlaceFact` and `PlaceStatus`
+   --> crates/polint/src/core/mod.rs:137:31
+    |
+137 | use crate::analysis::places::{PlaceFact, PlaceStatus};
+    |                               ^^^^^^^^^  ^^^^^^^^^^^
+
+warning: unused imports: `PointsToConstraintFact` and `PointsToSetFact`
+   --> crates/polint/src/core/mod.rs:139:41
+    |
+139 | use crate::analysis::points_to::facts::{PointsToConstraintFact, PointsToSetFact};
+    |                                         ^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::points_to::store::PointsToStore`
+   --> crates/polint/src/core/mod.rs:141:5
+    |
+141 | use crate::analysis::points_to::store::PointsToStore;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `CallReachabilityFact` and `ReachabilityRootFact`
+   --> crates/polint/src/core/mod.rs:143:44
+    |
+143 | use crate::analysis::reachability::facts::{CallReachabilityFact, ReachabilityRootFact};
+    |                                            ^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `ReachabilityProviderOutput` and `ReachabilityStore`
+   --> crates/polint/src/core/mod.rs:145:44
+    |
+145 | use crate::analysis::reachability::store::{ReachabilityProviderOutput, ReachabilityStore};
+    |                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::refined_calls::facts::RefinedCallEdgeFact`
+   --> crates/polint/src/core/mod.rs:147:5
+    |
+147 | use crate::analysis::refined_calls::facts::RefinedCallEdgeFact;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::refined_calls::provider::REFINED_CALLS_PROVIDER_ID`
+   --> crates/polint/src/core/mod.rs:149:5
+    |
+149 | use crate::analysis::refined_calls::provider::REFINED_CALLS_PROVIDER_ID;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `RefinedCallOutput` and `RefinedCallStore`
+   --> crates/polint/src/core/mod.rs:151:45
+    |
+151 | use crate::analysis::refined_calls::store::{RefinedCallOutput, RefinedCallStore};
+    |                                             ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::semantic_graph::constraints::ConstraintFact`
+   --> crates/polint/src/core/mod.rs:153:5
+    |
+153 | use crate::analysis::semantic_graph::constraints::ConstraintFact;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `SemanticEdgeFact` and `SemanticNodeFact`
+   --> crates/polint/src/core/mod.rs:155:46
+    |
+155 | use crate::analysis::semantic_graph::facts::{SemanticEdgeFact, SemanticNodeFact};
+    |                                              ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::semantic_graph::store::SemanticGraphOutput`
+   --> crates/polint/src/core/mod.rs:157:5
+    |
+157 | use crate::analysis::semantic_graph::store::SemanticGraphOutput;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::solver::facts::DerivedEdgeFact`
+   --> crates/polint/src/core/mod.rs:161:5
+    |
+161 | use crate::analysis::solver::facts::DerivedEdgeFact;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `SolverStore`
+   --> crates/polint/src/core/mod.rs:163:52
+    |
+163 | use crate::analysis::solver::store::{SolverOutput, SolverStore};
+    |                                                    ^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::store::SemanticStore`
+   --> crates/polint/src/core/mod.rs:165:5
+    |
+165 | use crate::analysis::store::SemanticStore;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `SummaryOutput` and `SummaryStore`
+   --> crates/polint/src/core/mod.rs:169:41
+    |
+169 | use crate::analysis::summaries::store::{SummaryOutput, SummaryStore};
+    |                                         ^^^^^^^^^^^^^  ^^^^^^^^^^^^
+
+warning: unused imports: `NarrowedTypeFact` and `TypeFact`
+   --> crates/polint/src/core/mod.rs:171:37
+    |
+171 | use crate::analysis::types::facts::{NarrowedTypeFact, TypeFact};
+    |                                     ^^^^^^^^^^^^^^^^  ^^^^^^^^
+
+warning: unused import: `crate::analysis::types::provider::TYPE_VALUE_ALIAS_PROVIDER_ID`
+   --> crates/polint/src/core/mod.rs:173:5
+    |
+173 | use crate::analysis::types::provider::TYPE_VALUE_ALIAS_PROVIDER_ID;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `TypeStore`
+   --> crates/polint/src/core/mod.rs:175:37
+    |
+175 | use crate::analysis::types::store::{TypeStore, TypeValueAliasOutput};
+    |                                     ^^^^^^^^^
+
+warning: unused import: `AllocationTokenFact`
+   --> crates/polint/src/core/mod.rs:177:38
+    |
+177 | use crate::analysis::values::facts::{AllocationTokenFact, ValueFact};
+    |                                      ^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::values::store::ValueStore`
+   --> crates/polint/src/core/mod.rs:179:5
+    |
+179 | use crate::analysis::values::store::ValueStore;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `FactConfidence`, `FactFamily`, `FactMetaStore`, `FactMeta`, `FactPrecision`, `FactRef`, `ValidationStatus`, `resolution_metadata`, `resolution_status_metadata`, `stable_key_from_parts`, and `symbol_metadata`
+   --> crates/polint/src/core/mod.rs:182:5
+    |
+182 |     FactConfidence, FactFamily, FactMeta, FactMetaStore, FactPrecision, FactRef, MissingFactMeta,
+    |     ^^^^^^^^^^^^^^  ^^^^^^^^^^  ^^^^^^^^  ^^^^^^^^^^^^^  ^^^^^^^^^^^^^  ^^^^^^^
+183 |     ValidationStatus, resolution_metadata, resolution_status_metadata, stable_key_from_parts,
+    |     ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^
+184 |     symbol_metadata,
+    |     ^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::diagnostics::fingerprint`
+   --> crates/polint/src/core/mod.rs:187:5
+    |
+187 | use crate::diagnostics::fingerprint;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `GoSemanticAddressTakenFact`, `GoSemanticCallsiteFact`, `GoSemanticDynamicDispatchFact`, `GoSemanticFunctionFact`, `GoSemanticInstantiatedTypeFact`, `GoSemanticMethodSetFact`, `GoSemanticPackageErrorFact`, `GoSemanticPackageFact`, and `GoSemanticRtaEdgeFact`
+   --> crates/polint/src/core/mod.rs:190:5
+    |
+190 |     GoSemanticAddressTakenFact, GoSemanticCallsiteFact, GoSemanticDynamicDispatchFact,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+191 |     GoSemanticFunctionFact, GoSemanticInstantiatedTypeFact, GoSemanticMethodSetFact,
+    |     ^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^
+192 |     GoSemanticPackageErrorFact, GoSemanticPackageFact, GoSemanticRtaEdgeFact,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `GoSemanticFactsOutput`, `GoSemanticStoreReport`, and `GoSemanticStore`
+   --> crates/polint/src/core/mod.rs:195:34
+    |
+195 | use crate::go::semantic::store::{GoSemanticFactsOutput, GoSemanticStore, GoSemanticStoreReport};
+    |                                  ^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `DependencyRequirementFact`, `ImportToPackageFact`, `RepoTopologyOverlayFact`, `ResolvedDependencyEdgeFact`, `SourceSetFact`, `TopologyOutput`, `TopologyPackageFact`, `TopologyPrecision`, and `WorkspaceRootFact`
+   --> crates/polint/src/core/mod.rs:198:5
+    |
+198 |     DependencyRequirementFact, ImportToPackageFact, RepoTopologyOverlayFact,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^
+199 |     ResolvedDependencyEdgeFact, SourceSetFact, TopologyOutput, TopologyPackageFact,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^  ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^
+200 |     TopologyPrecision, WorkspaceRootFact,
+    |     ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `AliasFact`, `AliasId`, `ExportFact`, `ExportId`, `GeneratedSymbolFact`, `GeneratedSymbolId`, `ResolutionFact`, `ResolutionId`, `ScopeFact`, `ScopeId`, `SemanticImportFact`, `SemanticImportId`, `SemanticStatus`, `StableExportId`, and `StableExportIdentity`
+   --> crates/polint/src/core/mod.rs:204:5
+    |
+204 |     AliasFact, AliasId, ExportFact, ExportId, GeneratedSymbolFact, GeneratedSymbolId,
+    |     ^^^^^^^^^  ^^^^^^^  ^^^^^^^^^^  ^^^^^^^^  ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^
+205 |     ResolutionFact, ResolutionId, ScopeFact, ScopeId, SemanticImportFact, SemanticImportId,
+    |     ^^^^^^^^^^^^^^  ^^^^^^^^^^^^  ^^^^^^^^^  ^^^^^^^  ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^
+206 |     SemanticStatus, StableExportId, StableExportIdentity,
+    |     ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `TsObjectAllocationFact`, `TsPropertyReadFact`, `TsPropertyWriteFact`, `TsPrototypeLinkFact`, and `TsReceiverBindingFact`
+   --> crates/polint/src/core/mod.rs:210:5
+    |
+210 |     TsObjectAllocationFact, TsPropertyReadFact, TsPropertyWriteFact, TsPrototypeLinkFact,
+    |     ^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^
+211 |     TsReceiverBindingFact,
+    |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `TsObjectModelOutput` and `TsObjectModelStore`
+   --> crates/polint/src/core/mod.rs:214:38
+    |
+214 | use crate::ts::object_model::store::{TsObjectModelOutput, TsObjectModelStore};
+    |                                      ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Deserialize` and `Serialize`
+   --> crates/polint/src/core/mod.rs:216:13
+    |
+216 | use serde::{Deserialize, Serialize};
+    |             ^^^^^^^^^^^  ^^^^^^^^^
+
+warning: `polint` (lib) generated 2 warnings (run `cargo fix --lib -p polint` to apply 2 suggestions)
+For more information about this error, try `rustc --explain E0432`.
+warning: `polint` (lib test) generated 56 warnings
+error: could not compile `polint` (lib test) due to 2 previous errors; 56 warnings emitted

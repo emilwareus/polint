@@ -1,0 +1,11 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running unittests src/lib.rs (target/debug/deps/polint-af2f858c5d9987a8)
+
+running 1 test
+test cli::skill::tests::checked_in_skills_match_generated_skill_markdown_byte_for_byte ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2510 filtered out; finished in 0.00s
+
+real 0.14
+user 0.06
+sys 0.06

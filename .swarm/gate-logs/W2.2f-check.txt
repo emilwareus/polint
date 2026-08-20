@@ -1,0 +1,3 @@
+    Blocking waiting for file lock on build directory
+    Checking polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.2f/crates/polint)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.51s

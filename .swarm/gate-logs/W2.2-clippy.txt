@@ -1,0 +1,88 @@
+    Checking polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.2/crates/polint)
+error: unused imports: `DefinitionKind`, `ModuleEdgeKind`, `ModuleNodeKind`, `ReferenceKind`, `ResolutionPrecision`, `ResolutionStatus`, `SymbolKind`, `SymbolNamespace`, `SymbolPrecision`, `SymbolResolutionStatus`, and `UnresolvedReason`
+   --> crates/polint/src/core/db.rs:104:75
+    |
+104 |     BranchObligation, ComplexityMetricFact, CoverageFact, DefinitionFact, DefinitionKind,
+    |                                                                           ^^^^^^^^^^^^^^
+105 |     FileMetricFact, FunctionFact, FunctionMetricFact, ImportFact, JsxAttributeFact, ModuleEdge,
+106 |     ModuleEdgeKind, ModuleNode, ModuleNodeKind, PackageFact, ReferenceFact, ReferenceKind,
+    |     ^^^^^^^^^^^^^^              ^^^^^^^^^^^^^^                              ^^^^^^^^^^^^^
+107 |     ResolutionPrecision, ResolutionStatus, ResolvedImportFact, SourceFile, StringLiteralFact,
+    |     ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^
+108 |     SymbolFact, SymbolKind, SymbolNamespace, SymbolPrecision, SymbolResolutionStatus, TestFact,
+    |                 ^^^^^^^^^^  ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^
+109 |     TsClassFact, TsComponentFact, UnresolvedReason,
+    |                                   ^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-imports` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_imports)]`
+
+error: unused imports: `CachedFileAnalysis`, `TS_JS_MODULE_FUNCTION_NAME`, and `is_synthetic_ts_js_module_function`
+   --> crates/polint/src/core/db.rs:112:5
+    |
+112 |     CachedFileAnalysis, CachedFileFacts, TS_JS_MODULE_FUNCTION_NAME,
+    |     ^^^^^^^^^^^^^^^^^^                   ^^^^^^^^^^^^^^^^^^^^^^^^^^
+113 |     is_synthetic_ts_js_module_function,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: unused imports: `RuleRegistry` and `line_col`
+  --> crates/polint/src/core/mod.rs:58:23
+   |
+58 | pub(crate) use rule::{line_col, RuleRegistry};
+   |                       ^^^^^^^^  ^^^^^^^^^^^^
+
+error: fields `mir_bodies_by_id`, `mir_operations_by_id`, and `places_by_id` are never read
+  --> crates/polint/src/analysis/store.rs:16:5
+   |
+11 | pub(crate) struct SemanticStore {
+   |                   ------------- fields in this struct
+...
+16 |     mir_bodies_by_id: BTreeMap<MirBodyId, usize>,
+   |     ^^^^^^^^^^^^^^^^
+17 |     mir_operations_by_id: BTreeMap<MirOpId, usize>,
+   |     ^^^^^^^^^^^^^^^^^^^^
+18 |     places_by_id: BTreeMap<PlaceId, usize>,
+   |     ^^^^^^^^^^^^
+   |
+   = note: `SemanticStore` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+   = note: `-D dead-code` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: methods `mir_body`, `mir_operation`, and `place` are never used
+  --> crates/polint/src/analysis/store.rs:66:19
+   |
+22 | impl SemanticStore {
+   | ------------------ methods in this implementation
+...
+66 |     pub(crate) fn mir_body(&self, id: MirBodyId) -> Option<&MirBody> {
+   |                   ^^^^^^^^
+...
+72 |     pub(crate) fn mir_operation(&self, id: MirOpId) -> Option<&MirOperation> {
+   |                   ^^^^^^^^^^^^^
+...
+78 |     pub(crate) fn place(&self, id: PlaceId) -> Option<&PlaceFact> {
+   |                   ^^^^^
+
+error: struct `RuleRegistry` is never constructed
+   --> crates/polint/src/core/rule.rs:255:19
+    |
+255 | pub(crate) struct RuleRegistry {
+    |                   ^^^^^^^^^^^^
+
+error: associated items `new`, `register`, and `rules` are never used
+   --> crates/polint/src/core/rule.rs:261:19
+    |
+260 | impl RuleRegistry {
+    | ----------------- associated items in this implementation
+261 |     pub(crate) fn new() -> Self {
+    |                   ^^^
+...
+265 |     pub(crate) fn register(&mut self, rule: Rule) {
+    |                   ^^^^^^^^
+...
+269 |     pub(crate) fn rules(&self) -> &[Rule] {
+    |                   ^^^^^
+
+error: could not compile `polint` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `polint` (lib test) due to 7 previous errors

@@ -1,0 +1,16 @@
+   Compiling polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.4/crates/polint)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.95s
+     Running tests/public_surface_leak.rs (target/debug/deps/public_surface_leak-18657f7a71d52b19)
+
+running 8 tests
+test semantic_store_marker_scanner_negative_controls_cover_every_family ... ok
+test allowlist_has_no_duplicates_and_expected_count ... ok
+test parser_self_test_detects_synthetic_leak ... ok
+test allowlist_matches_prelude_source ... ok
+test ensure_no_private_namespace_in_probe ... ok
+test prelude_structs_and_language_are_non_exhaustive ... ok
+test semantic_store_markers_do_not_leak_into_supported_public_surfaces ... ok
+test probe_crate_compiles_against_prelude_only ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.96s
+

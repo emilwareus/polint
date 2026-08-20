@@ -22,28 +22,23 @@ use std::collections::BTreeSet;
 
 use crate::analysis::ids::SemanticNodeId;
 use crate::analysis::solver::budget::{BudgetStatus, SolverBudget};
-use crate::analysis::solver::cache_key::{
-    solver_budget_digest_parts, solver_provider_parameter_digest,
-};
 use crate::analysis::solver::engine::SolverEngine;
-use crate::analysis::solver::go_rta::GoRtaInputs;
-use crate::analysis::solver::policy::{
-    GoRtaPolicy, SolverPolicy, TsObjectModelPolicy, TsTokensPolicy,
-};
+use crate::analysis::solver::policy::{GoRtaPolicy, SolverPolicy, TsPointsToPolicy};
 use crate::analysis::solver::store::{SOLVER_PROVIDER_ID, SolverOutput};
-use crate::analysis::solver::ts_object_model::TsObjectModelInputs;
-use crate::analysis::solver::ts_tokens::TsTokenInputs;
 use crate::analysis::solver::validate::{detect_solver_summary_cycle, validate_derived_edges};
+use crate::analysis_api::{ProviderExecution, ProviderFailureReason, ProviderFailureStage};
 use crate::analysis_kernel::ProviderManifest;
-use crate::analysis_kernel::incremental::{CacheStats, Digest, DigestKind, InputSnapshot};
+use crate::analysis_kernel::incremental::{CacheStats, Digest, InputSnapshot};
 use crate::core::AnalysisDb;
 use crate::diagnostics::{Diagnostic, TextRange};
+use crate::go::rta::GoRtaInputs;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SolverProviderRunOutput {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) cache_stats: CacheStats,
     pub(crate) output_digest: Option<Digest>,
+    pub(crate) execution: ProviderExecution,
 }
 
 /// `polint.solver` provider entry point (D-13).
@@ -69,6 +64,8 @@ pub(crate) fn derive_solver_with_cache_stats(
     type_value_alias_output_digest: Digest,
     go_semantic_output_digest: Digest,
 ) -> SolverProviderRunOutput {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     debug_assert_eq!(manifest.id, SOLVER_PROVIDER_ID);
 
     // Step: drive the unified solver ENGINE over the closed input snapshot (D-02,
@@ -77,21 +74,15 @@ pub(crate) fn derive_solver_with_cache_stats(
     // SolverOutput under one SolverBudget. The build is read-only; the engine
     // normalizes the merged output.
     //
-    // FINDING 3: the production engine does NOT register `PointsToPolicy`. The points-to
-    // edges that enter this output are the step-1 `derive_edges` CopyEdge closure inside
-    // `run_to_solver_output` (over the semantic-graph `CopyEdge` constraints); the
-    // Andersen points-to solve runs in the `type_value_alias` provider and is consumed
-    // here only via its output digest. Registering `PointsToPolicy` here re-ran a full
-    // Andersen solve whose edges were discarded, yet its object/dynamic-var budget
-    // exhaustion polluted the run-level budget_status (a misleading diagnostic + a
-    // spurious solver_output_digest bust, WR-06) — a redundant double-solve with a
-    // harmful side effect. Register only the edge-contributing policies.
+    // The TS policy projects the semantic graph into the shared Andersen domain and
+    // is the only indirect-call resolver for JavaScript and TypeScript.
     let constraints = db.semantic_constraints().to_vec();
     let engine = SolverEngine::new(solver_policies_for_db(db, &budget), budget);
-    let output = engine.run_to_solver_output(&constraints);
+    let output = engine.run_to_solver_output(interner, &constraints);
 
     // Step: digest over the stored stable KEYS + upstream digests + the budget.
     let output_digest = solver_output_digest(
+        interner,
         manifest,
         input_snapshot,
         &budget,
@@ -106,7 +97,7 @@ pub(crate) fn derive_solver_with_cache_stats(
     let mut diagnostics = Vec::new();
     let node_ids: BTreeSet<SemanticNodeId> =
         db.semantic_nodes().iter().map(|node| node.id).collect();
-    validate_derived_edges(&output.derived_edges, &node_ids, &mut diagnostics);
+    validate_derived_edges(interner, &output.derived_edges, &node_ids, &mut diagnostics);
     detect_solver_summary_cycle(&constraints, &mut diagnostics);
     // Surface budget exhaustion as an honest diagnostic (D-06): when the solver
     // truncated any source's closure under the per-source step budget, the run is
@@ -126,6 +117,7 @@ pub(crate) fn derive_solver_with_cache_stats(
             diagnostics,
             cache_stats,
             output_digest: Some(output_digest),
+            execution: Default::default(),
         },
         Err(error) => {
             diagnostics.push(provider_error_diagnostic(error.to_string()));
@@ -133,35 +125,26 @@ pub(crate) fn derive_solver_with_cache_stats(
                 diagnostics,
                 cache_stats,
                 output_digest: None,
+                execution: ProviderExecution::Failed {
+                    stage: ProviderFailureStage::Validation,
+                    reason: ProviderFailureReason::ValidationRejected,
+                },
             }
         }
     }
 }
 
-fn solver_policies_for_db(db: &AnalysisDb, budget: &SolverBudget) -> Vec<Box<dyn SolverPolicy>> {
-    let mut policies: Vec<Box<dyn SolverPolicy>> = vec![
+fn solver_policies_for_db(db: &AnalysisDb, _budget: &SolverBudget) -> Vec<Box<dyn SolverPolicy>> {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
+    let policies: Vec<Box<dyn SolverPolicy>> = vec![
         // The real Go RTA policy (GO-05): contributes resolved call edges.
-        Box::new(GoRtaPolicy::new(GoRtaInputs::from_db(db))),
-        // The TS token policy owns a closed JS/TS snapshot (JS-04).
-        Box::new(TsTokensPolicy::new(TsTokenInputs::from_db(db))),
+        Box::new(GoRtaPolicy::new(GoRtaInputs::from_db(interner, db))),
+        Box::new(TsPointsToPolicy::new(
+            super::policy::ts_points_to_inputs_from_db(db),
+        )),
     ];
-    register_ts_object_model_policy_if_enabled(&mut policies, db, budget);
     policies
-}
-
-fn register_ts_object_model_policy_if_enabled(
-    policies: &mut Vec<Box<dyn SolverPolicy>>,
-    db: &AnalysisDb,
-    budget: &SolverBudget,
-) -> bool {
-    if !budget.object_model_enabled {
-        return false;
-    }
-
-    policies.push(Box::new(TsObjectModelPolicy::new(
-        TsObjectModelInputs::from_db(db),
-    )));
-    true
 }
 
 /// Output digest over stable KEYS + upstream digests + budget (D-15), never dense
@@ -176,7 +159,9 @@ fn register_ts_object_model_policy_if_enabled(
 /// parameter digest so a budget change is unmissable, D-15), and (d) per-row stable
 /// keys + status/precision + provenance fragment, then `parts.sort()` +
 /// `Digest::from_parts`.
+#[allow(clippy::too_many_arguments)]
 fn solver_output_digest(
+    interner: &crate::core::StableKeyInterner,
     manifest: &ProviderManifest,
     _input_snapshot: &InputSnapshot,
     budget: &SolverBudget,
@@ -185,51 +170,15 @@ fn solver_output_digest(
     go_semantic_output_digest: &Digest,
     output: &SolverOutput,
 ) -> Digest {
-    let mut parts = vec![
-        format!("provider_id={}", manifest.id),
-        format!("provider_version={}", manifest.provider_version()),
-        format!("schema={}", manifest.primary_schema_label()),
-        format!("parameters={}", solver_provider_parameter_digest(budget)),
-        format!("semantic_graph_output={semantic_graph_output_digest}"),
-        format!("type_value_alias_output={type_value_alias_output_digest}"),
-        // The Go RTA policy reads the stored `polint.go.semantic` RTA-signal families
-        // (instantiated_types / address_taken / dynamic_dispatch / method_sets) to resolve
-        // dynamic dispatch, so a Go edit touching ONLY those families changes the resolved
-        // edges and MUST invalidate the solver cache (FIX 4). Fold the go.semantic output
-        // digest like the other consumed upstream digests.
-        format!("go_semantic_output={go_semantic_output_digest}"),
-        // Run-level budget status (WR-06): two runs over the same inputs that produce
-        // the same SURVIVING edge set but differ in whether the budget was exhausted
-        // (WithinBudget vs BudgetExceeded) must NOT share an output digest. A fixpoint
-        // that aborted BEFORE reaching an edge leaves no per-edge trace, so the
-        // run-level status is the only carrier of the truncation signal — fold it in so
-        // a cache hit can never serve a truncated result under a complete run's digest.
-        format!("budget_status={}", output.budget_status.as_str()),
-    ];
-    parts.extend(solver_budget_digest_parts(budget));
-
-    parts.extend(output.derived_edges.iter().map(|edge| {
-        format!(
-            "edge={}|status={:?}|prec={:?}|prov={}",
-            edge.stable_key,
-            edge.status,
-            edge.precision,
-            edge.provenance.stable_key_fragment(),
-        )
-    }));
-    if output.derived_edges.is_empty() {
-        parts.push("solver_output=empty".to_string());
-    }
-    parts.extend(
-        output
-            .budget_reasons
-            .iter()
-            .map(|reason| format!("budget_exceeded_reason={reason}")),
-    );
-
-    parts.sort();
-    let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
-    Digest::from_parts(DigestKind::ProviderOutput, "solver_output", &refs)
+    crate::analysis_neutral::solver::digest::solver_output_digest(
+        interner,
+        manifest,
+        budget,
+        semantic_graph_output_digest,
+        type_value_alias_output_digest,
+        go_semantic_output_digest,
+        output,
+    )
 }
 
 /// Honest budget-exhaustion signal (D-06): emitted when the solver truncated a
@@ -274,7 +223,7 @@ mod tests {
     use crate::analysis::semantic_graph::provider::derive_semantic_graph_with_cache_stats;
     use crate::analysis::semantic_graph::store::SEMANTIC_GRAPH_PROVIDER_ID;
     use crate::analysis::semantic_graph::store::SemanticGraphOutput;
-    use crate::analysis::solver::budget::{BudgetReason, JsObjectModelSubBudget, SolverBudget};
+    use crate::analysis::solver::budget::{BudgetReason, SolverBudget};
     use crate::analysis_kernel::AnalysisKernel;
     use crate::analysis_kernel::incremental::{Digest, DigestKind};
     use crate::analysis_plan::AnalysisPlan;
@@ -309,7 +258,7 @@ mod tests {
     }
 
     fn snapshot_from_loaded(db: &AnalysisDb, loaded: &LoadedConfig) -> InputSnapshot {
-        InputSnapshot::from_run_inputs(
+        crate::analysis_kernel::incremental::input_snapshot_from_run_inputs(
             loaded,
             db,
             "config-a",
@@ -322,9 +271,6 @@ mod tests {
     fn solver_budget_from_loaded(loaded: &LoadedConfig) -> SolverBudget {
         SolverBudget {
             go: loaded.config.solver.to_go_sub_budget(),
-            js: loaded.config.solver.to_js_sub_budget(),
-            object_model_enabled: loaded.config.solver.js_object_model_enabled(),
-            object: loaded.config.solver.to_js_object_sub_budget(),
             ..SolverBudget::default()
         }
     }
@@ -360,16 +306,25 @@ mod tests {
         Digest::absent(DigestKind::ProviderOutput, kind)
     }
 
-    fn node(id: u64, stable_key: &str) -> SemanticNodeFact {
+    fn node(
+        interner: &crate::core::StableKeyInterner,
+        id: u64,
+        stable_key: &str,
+    ) -> SemanticNodeFact {
         SemanticNodeFact {
             id: SemanticNodeId(id),
-            kind: NodeKind::Function(FunctionId(id)),
+            kind: NodeKind::Function(FunctionId::from_raw(id)),
             precision: SemanticPrecision::Conservative,
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key),
         }
     }
 
-    fn copy(src: u64, dst: u64, stable_key: &str) -> ConstraintFact {
+    fn copy(
+        interner: &crate::core::StableKeyInterner,
+        src: u64,
+        dst: u64,
+        stable_key: &str,
+    ) -> ConstraintFact {
         ConstraintFact {
             id: SemanticConstraintId(0),
             kind: ConstraintKind::CopyEdge {
@@ -378,7 +333,7 @@ mod tests {
             },
             status: PointsToStatus::Present,
             precision: PointsToPrecision::FlowInsensitive,
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key),
         }
     }
 
@@ -386,16 +341,17 @@ mod tests {
     /// derives the transitive edge a -> c.
     fn db_with_copy_chain() -> AnalysisDb {
         let mut db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
         let graph = SemanticGraphOutput {
             nodes: vec![
-                node(0, "node|function|a"),
-                node(1, "node|function|b"),
-                node(2, "node|function|c"),
+                node(&interner, 0, "node|function|a"),
+                node(&interner, 1, "node|function|b"),
+                node(&interner, 2, "node|function|c"),
             ],
             edges: Vec::new(),
             constraints: vec![
-                copy(0, 1, "constraint|copy|a-b"),
-                copy(1, 2, "constraint|copy|b-c"),
+                copy(&interner, 0, 1, "constraint|copy|a-b"),
+                copy(&interner, 1, 2, "constraint|copy|b-c"),
             ],
         };
         db.replace_semantic_graph_facts(graph)
@@ -507,14 +463,14 @@ mod tests {
 
         assert_ne!(base, changed);
 
-        let mut bumped_js = SolverBudget::default();
-        bumped_js.js.max_tokens_per_var += 1;
+        let mut bumped_points_to = SolverBudget::default();
+        bumped_points_to.points_to.max_objects_per_var += 1;
         let mut db_c = db_with_copy_chain();
-        let js_changed = derive_solver_with_cache_stats(
+        let points_to_changed = derive_solver_with_cache_stats(
             &mut db_c,
             &snapshot,
             manifest(),
-            bumped_js,
+            bumped_points_to,
             absent("polint.semantic_graph"),
             absent("polint.type_value_alias"),
             absent("polint.go.semantic"),
@@ -522,8 +478,8 @@ mod tests {
         .output_digest;
 
         assert_ne!(
-            base, js_changed,
-            "changing a JS token budget knob must invalidate the solver output digest"
+            base, points_to_changed,
+            "changing the TS points-to budget must invalidate the solver output digest"
         );
     }
 
@@ -600,60 +556,6 @@ mod tests {
         .output_digest;
 
         assert_ne!(base, changed);
-    }
-
-    #[test]
-    fn inactive_budget_knobs_do_not_invalidate_output_digest() {
-        let mut db_a = db_with_copy_chain();
-        let snapshot = snapshot(&db_a);
-        let base = derive_solver_with_cache_stats(
-            &mut db_a,
-            &snapshot,
-            manifest(),
-            SolverBudget::default(),
-            absent("polint.semantic_graph"),
-            absent("polint.type_value_alias"),
-            absent("polint.go.semantic"),
-        )
-        .output_digest;
-
-        let mut bumped_points_to = SolverBudget::default();
-        bumped_points_to.points_to.max_objects_per_var += 1;
-        let mut db_b = db_with_copy_chain();
-        let changed_points_to = derive_solver_with_cache_stats(
-            &mut db_b,
-            &snapshot,
-            manifest(),
-            bumped_points_to,
-            absent("polint.semantic_graph"),
-            absent("polint.type_value_alias"),
-            absent("polint.go.semantic"),
-        )
-        .output_digest;
-
-        assert_eq!(
-            base, changed_points_to,
-            "changing inactive points-to knobs must not invalidate solver output"
-        );
-
-        let mut bumped_object = SolverBudget::default();
-        bumped_object.object.max_receiver_candidates_per_callsite += 1;
-        let mut db_c = db_with_copy_chain();
-        let changed_object = derive_solver_with_cache_stats(
-            &mut db_c,
-            &snapshot,
-            manifest(),
-            bumped_object,
-            absent("polint.semantic_graph"),
-            absent("polint.type_value_alias"),
-            absent("polint.go.semantic"),
-        )
-        .output_digest;
-
-        assert_eq!(
-            base, changed_object,
-            "changing disabled object-model knobs must not invalidate solver output"
-        );
     }
 
     #[test]
@@ -757,160 +659,17 @@ max_object_receiver_candidates_per_callsite = 127
     }
 
     #[test]
-    fn default_budget_does_not_register_ts_object_model_policy() {
+    fn production_registers_one_ts_points_to_policy() {
         let db = AnalysisDb::new();
-        let mut policies = solver_policies_for_db(&db, &SolverBudget::default());
+        let policies = solver_policies_for_db(&db, &SolverBudget::default());
 
         assert_eq!(policies.len(), 2);
-        assert!(!register_ts_object_model_policy_if_enabled(
-            &mut policies,
-            &db,
-            &SolverBudget::default()
-        ));
         assert_eq!(
             policies
                 .iter()
                 .map(|policy| policy.id())
                 .collect::<Vec<_>>(),
-            vec!["go_rta", "ts_tokens"]
-        );
-    }
-
-    #[test]
-    fn enabled_budget_registers_ts_object_model_policy() {
-        let db = AnalysisDb::new();
-        let policies = solver_policies_for_db(
-            &db,
-            &SolverBudget {
-                object_model_enabled: true,
-                ..SolverBudget::default()
-            },
-        );
-
-        assert_eq!(
-            policies
-                .iter()
-                .map(|policy| policy.id())
-                .collect::<Vec<_>>(),
-            vec!["go_rta", "ts_tokens", "ts_object_model"]
-        );
-    }
-
-    #[test]
-    fn enabled_registration_helper_pushes_ts_object_model_policy() {
-        let db = AnalysisDb::new();
-        let mut policies = solver_policies_for_db(&db, &SolverBudget::default());
-        assert!(register_ts_object_model_policy_if_enabled(
-            &mut policies,
-            &db,
-            &SolverBudget {
-                object_model_enabled: true,
-                ..SolverBudget::default()
-            }
-        ));
-        assert_eq!(
-            policies
-                .iter()
-                .map(|policy| policy.id())
-                .collect::<Vec<_>>(),
-            vec!["go_rta", "ts_tokens", "ts_object_model"]
-        );
-    }
-
-    #[test]
-    fn object_model_flag_invalidates_output_digest_without_placeholder_edges() {
-        let mut db_a = db_with_copy_chain();
-        let snapshot = snapshot(&db_a);
-        let base = derive_solver_with_cache_stats(
-            &mut db_a,
-            &snapshot,
-            manifest(),
-            SolverBudget::default(),
-            absent("polint.semantic_graph"),
-            absent("polint.type_value_alias"),
-            absent("polint.go.semantic"),
-        )
-        .output_digest;
-
-        let mut db_b = db_with_copy_chain();
-        let changed = derive_solver_with_cache_stats(
-            &mut db_b,
-            &snapshot,
-            manifest(),
-            SolverBudget {
-                object_model_enabled: true,
-                ..SolverBudget::default()
-            },
-            absent("polint.semantic_graph"),
-            absent("polint.type_value_alias"),
-            absent("polint.go.semantic"),
-        )
-        .output_digest;
-
-        assert_ne!(
-            base, changed,
-            "toggling object-model enablement must invalidate solver output"
-        );
-        let base_edges = db_a
-            .solver_derived_edges()
-            .iter()
-            .map(|edge| edge.stable_key.as_str())
-            .collect::<Vec<_>>();
-        let changed_edges = db_b
-            .solver_derived_edges()
-            .iter()
-            .map(|edge| edge.stable_key.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            changed_edges, base_edges,
-            "enabling object model over an input without object facts must not add edges"
-        );
-    }
-
-    #[test]
-    fn object_model_budget_change_invalidates_output_digest() {
-        let mut db_a = db_with_copy_chain();
-        let snapshot = snapshot(&db_a);
-        let base = derive_solver_with_cache_stats(
-            &mut db_a,
-            &snapshot,
-            manifest(),
-            SolverBudget {
-                object_model_enabled: true,
-                ..SolverBudget::default()
-            },
-            absent("polint.semantic_graph"),
-            absent("polint.type_value_alias"),
-            absent("polint.go.semantic"),
-        )
-        .output_digest;
-
-        let bumped = SolverBudget {
-            object_model_enabled: true,
-            object: JsObjectModelSubBudget {
-                max_receiver_candidates_per_callsite: SolverBudget::default()
-                    .object
-                    .max_receiver_candidates_per_callsite
-                    + 1,
-                ..JsObjectModelSubBudget::default()
-            },
-            ..SolverBudget::default()
-        };
-        let mut db_b = db_with_copy_chain();
-        let changed = derive_solver_with_cache_stats(
-            &mut db_b,
-            &snapshot,
-            manifest(),
-            bumped,
-            absent("polint.semantic_graph"),
-            absent("polint.type_value_alias"),
-            absent("polint.go.semantic"),
-        )
-        .output_digest;
-
-        assert_ne!(
-            base, changed,
-            "changing an enabled object-model budget knob must invalidate solver output"
+            vec!["go_rta", "ts_points_to"]
         );
     }
 
@@ -977,7 +736,9 @@ max_object_receiver_candidates_per_callsite = 127
             budget_reasons: BTreeSet::from([BudgetReason::SolverMaxSteps.as_str().to_string()]),
         };
 
+        let interner = crate::core::test_stable_key_interner();
         let within_digest = solver_output_digest(
+            &interner,
             manifest(),
             &snapshot,
             &budget,
@@ -987,6 +748,7 @@ max_object_receiver_candidates_per_callsite = 127
             &within,
         );
         let exceeded_digest = solver_output_digest(
+            &interner,
             manifest(),
             &snapshot,
             &budget,

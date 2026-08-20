@@ -1,0 +1,16 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/golden.rs (target/debug/deps/golden-0b79c88cdf5488ee)
+
+running 8 tests
+test cost_budget_helper_rejects_clear_regression ... ok
+test golden_updates_require_explicit_env_flag ... ok
+test diagnostic_set_diff_names_lost_fingerprints ... ok
+test normalize_sorts_diagnostics_by_stable_fingerprint ... ok
+test ci_workflows_never_set_golden_update_env ... ok
+test scale_cases_are_optional_and_discovered ... ok
+test example_golden_cases_cover_inventory_rule_packs ... ok
+test characterization_goldens_match_cli has been running for over 60 seconds
+test characterization_goldens_match_cli ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 75.59s
+

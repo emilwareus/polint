@@ -375,6 +375,7 @@ fn language_label(language: Language) -> Result<&'static str, RunManifestError> 
         Language::JavaScript => Ok("javascript"),
         Language::Jsx => Ok("jsx"),
         Language::Unknown => Err(RunManifestError::UnsupportedLanguage),
+        _ => Err(RunManifestError::UnsupportedLanguage),
     }
 }
 

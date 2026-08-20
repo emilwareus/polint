@@ -1,0 +1,27 @@
+polint: 3 diagnostics across 2 rules. Full JSON: .polint/output/latest.json
+
+By rule
+  error local/no-raw-colors: 2
+  error local/go-import-boundaries: 1
+
+Examples, max 10
+  error[local/no-raw-colors]: Raw color literal `#ff00aa` should use a design token.
+    --> Button.tsx:5:18-5:38
+    evidence literal: #ff00aa
+    evidence source: jsx-attribute
+    help: Move this value to a theme/design-token file or use an existing token.
+    fingerprint: 3156dcbd2b842f0b
+
+  error[local/go-import-boundaries]: Go import `net/http` violates the local import boundary.
+    --> handler.go:6:8-6:18
+    evidence import: net/http
+    help: Move this dependency behind an allowed interface or update the local boundary config.
+    fingerprint: aff5e098c6863323
+
+
+JSON format: versioned object with `summary`, `examples`, and `diagnostics`.
+Do not read the whole file into an AI prompt. Query it with bounded commands:
+  jq '.summary.by_rule' .polint/output/latest.json
+  jq '.summary.rules[] | select(.diagnostics_emitted == 0)' .polint/output/latest.json
+  jq '[.diagnostics[] | select(.rule_id=="local/no-raw-colors")][0:20]' .polint/output/latest.json
+  jq '.diagnostics[] | select(.file=="Button.tsx") | {rule_id, range, message}' .polint/output/latest.json | head -c 12000

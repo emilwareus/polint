@@ -1,0 +1,1084 @@
+    Checking polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint)
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/calls/extract.rs:486:13
+    |
+486 | /             db.files()
+487 | |                 .iter()
+488 | |                 .find(|source_file| source_file.id == file)
+489 | |                 .map(|source_file| source_file.relative_path.replace('\\', "/"))
+    | |________________________________________________________________________________^ expected `Option<StableKeyId>`, found `Option<String>`
+    |
+    = note: expected enum `std::option::Option<StableKeyId>`
+               found enum `std::option::Option<std::string::String>`
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/calls/extract.rs:491:28
+    |
+491 |         .unwrap_or_else(|| format!("<missing-file:{}>", file.0))
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `StableKeyId`, found `String`
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/calls/extract.rs:483:5
+    |
+482 |   fn file_key(db: &AnalysisDb, file: FileId) -> String {
+    |                                                 ------ expected `std::string::String` because of return type
+483 | /     db.metadata_for(FactRef::new(FactFamily::SourceFile, u64::from(file.0)))
+484 | |         .map(|metadata| metadata.stable_key.clone())
+485 | |         .or_else(|| {
+486 | |             db.files()
+...   |
+490 | |         })
+491 | |         .unwrap_or_else(|| format!("<missing-file:{}>", file.0))
+    | |________________________________________________________________^ expected `String`, found `StableKeyId`
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/calls/extract.rs:497:28
+    |
+497 |         .unwrap_or_else(|| format!("<missing-function:{}>", function.0))
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `StableKeyId`, found `String`
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/calls/extract.rs:495:5
+    |
+494 |   fn caller_key(db: &AnalysisDb, function: FunctionId) -> String {
+    |                                                           ------ expected `std::string::String` because of return type
+495 | /     db.metadata_for(FactRef::new(FactFamily::Function, function.0))
+496 | |         .map(|metadata| metadata.stable_key.clone())
+497 | |         .unwrap_or_else(|| format!("<missing-function:{}>", function.0))
+    | |________________________________________________________________________^ expected `String`, found `StableKeyId`
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/calls/provider.rs:208:13
+    |
+208 | /             format!(
+209 | |                 "{}:{}:{}",
+210 | |                 db.path_for(function.file),
+211 | |                 function.name,
+212 | |                 span_part(&function.span)
+213 | |             )
+    | |_____________^ expected `StableKeyId`, found `String`
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/calls/provider.rs:205:5
+    |
+204 |   fn function_key(db: &AnalysisDb, function: &FunctionFact) -> String {
+    |                                                                ------ expected `std::string::String` because of return type
+205 | /     db.metadata_for(FactRef::new(FactFamily::Function, function.id.0))
+206 | |         .map(|metadata| metadata.stable_key.clone())
+207 | |         .unwrap_or_else(|| {
+208 | |             format!(
+...   |
+214 | |         })
+    | |__________^ expected `String`, found `StableKeyId`
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/calls/provider.rs:227:28
+    |
+227 |         .unwrap_or_else(|| db.resolve_stable_key(symbol.stable_key).to_string())
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `StableKeyId`, found `String`
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/calls/provider.rs:225:5
+    |
+224 |   fn symbol_key(db: &AnalysisDb, symbol: &SymbolFact) -> String {
+    |                                                          ------ expected `std::string::String` because of return type
+225 | /     db.metadata_for(FactRef::new(FactFamily::Symbol, symbol.id.0))
+226 | |         .map(|metadata| metadata.stable_key.clone())
+227 | |         .unwrap_or_else(|| db.resolve_stable_key(symbol.stable_key).to_string())
+    | |________________________________________________________________________________^ expected `String`, found `StableKeyId`
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/calls/validate.rs:286:21
+    |
+283 |                 push_call_diagnostic(
+    |                 -------------------- arguments to this function are incorrect
+...
+286 |                     &metadata.stable_key,
+    |                     ^^^^^^^^^^^^^^^^^^^^ expected `&str`, found `&StableKeyId`
+    |
+    = note: expected reference `&str`
+               found reference `&StableKeyId`
+note: function defined here
+   --> crates/polint/src/analysis/calls/validate.rs:339:4
+    |
+339 | fn push_call_diagnostic(
+    |    ^^^^^^^^^^^^^^^^^^^^
+...
+342 |     stable_key: &str,
+    |     ----------------
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/data_flow/local.rs:648:33
+    |
+648 |                     &[("place", metadata.stable_key.clone())],
+    |                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `String`, found `StableKeyId`
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/domains/validate.rs:62:21
+    |
+ 59 |                 push_domain_diagnostic(
+    |                 ---------------------- arguments to this function are incorrect
+...
+ 62 |                     &metadata.stable_key,
+    |                     ^^^^^^^^^^^^^^^^^^^^ expected `&str`, found `&StableKeyId`
+    |
+    = note: expected reference `&str`
+               found reference `&StableKeyId`
+note: function defined here
+   --> crates/polint/src/analysis/domains/validate.rs:455:4
+    |
+455 | fn push_domain_diagnostic(
+    |    ^^^^^^^^^^^^^^^^^^^^^^
+...
+458 |     stable_key: &str,
+    |     ----------------
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/domains/validate.rs:296:31
+    |
+296 |     if metadata.stable_key != stable_key {
+    |        -------------------    ^^^^^^^^^^ expected `StableKeyId`, found `&str`
+    |        |
+    |        expected because this is `StableKeyId`
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/entrypoints/recognizers_go.rs:940:13
+    |
+940 | /             db.files()
+941 | |                 .iter()
+942 | |                 .find(|source_file| source_file.id == file)
+943 | |                 .map(|source_file| source_file.relative_path.replace('\\', "/"))
+    | |________________________________________________________________________________^ expected `Option<StableKeyId>`, found `Option<String>`
+    |
+    = note: expected enum `std::option::Option<StableKeyId>`
+               found enum `std::option::Option<std::string::String>`
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/entrypoints/recognizers_go.rs:945:28
+    |
+945 |         .unwrap_or_else(|| format!("<missing-file:{}>", file.0))
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `StableKeyId`, found `String`
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/entrypoints/recognizers_go.rs:937:5
+    |
+936 |   fn file_stable_key(db: &AnalysisDb, file: FileId) -> String {
+    |                                                        ------ expected `std::string::String` because of return type
+937 | /     db.metadata_for(FactRef::new(FactFamily::SourceFile, u64::from(file.0)))
+938 | |         .map(|metadata| metadata.stable_key.clone())
+939 | |         .or_else(|| {
+940 | |             db.files()
+...   |
+944 | |         })
+945 | |         .unwrap_or_else(|| format!("<missing-file:{}>", file.0))
+    | |________________________________________________________________^ expected `String`, found `StableKeyId`
+
+error[E0308]: mismatched types
+    --> crates/polint/src/analysis/entrypoints/recognizers_ts.rs:1614:13
+     |
+1614 | /             db.files()
+1615 | |                 .iter()
+1616 | |                 .find(|source_file| source_file.id == file)
+1617 | |                 .map(|source_file| source_file.relative_path.replace('\\', "/"))
+     | |________________________________________________________________________________^ expected `Option<StableKeyId>`, found `Option<String>`
+     |
+     = note: expected enum `std::option::Option<StableKeyId>`
+                found enum `std::option::Option<std::string::String>`
+
+error[E0308]: mismatched types
+    --> crates/polint/src/analysis/entrypoints/recognizers_ts.rs:1619:28
+     |
+1619 |         .unwrap_or_else(|| format!("<missing-file:{}>", file.0))
+     |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `StableKeyId`, found `String`
+
+error[E0308]: mismatched types
+    --> crates/polint/src/analysis/entrypoints/recognizers_ts.rs:1611:5
+     |
+1610 |   fn file_stable_key(db: &AnalysisDb, file: FileId) -> String {
+     |                                                        ------ expected `std::string::String` because of return type
+1611 | /     db.metadata_for(FactRef::new(FactFamily::SourceFile, u64::from(file.0)))
+1612 | |         .map(|metadata| metadata.stable_key.clone())
+1613 | |         .or_else(|| {
+1614 | |             db.files()
+...    |
+1618 | |         })
+1619 | |         .unwrap_or_else(|| format!("<missing-file:{}>", file.0))
+     | |________________________________________________________________^ expected `String`, found `StableKeyId`
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/entrypoints/validate.rs:229:21
+    |
+226 |                 push_entrypoint_diagnostic(
+    |                 -------------------------- arguments to this function are incorrect
+...
+229 |                     &metadata.stable_key,
+    |                     ^^^^^^^^^^^^^^^^^^^^ expected `&str`, found `&StableKeyId`
+    |
+    = note: expected reference `&str`
+               found reference `&StableKeyId`
+note: function defined here
+   --> crates/polint/src/analysis/entrypoints/validate.rs:300:4
+    |
+300 | fn push_entrypoint_diagnostic(
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+303 |     stable_key: &str,
+    |     ----------------
+
+error[E0277]: a value of type `BTreeSet<std::string::String>` cannot be built from an iterator over elements of type `StableKeyId`
+   --> crates/polint/src/analysis/extensions/provider.rs:361:10
+    |
+361 |         .collect()
+    |          ^^^^^^^ value of type `BTreeSet<std::string::String>` cannot be built from `std::iter::Iterator<Item=StableKeyId>`
+    |
+help: the trait `FromIterator<StableKeyId>` is not implemented for `BTreeSet<std::string::String>`
+      but trait `FromIterator<std::string::String>` is implemented for it
+   --> /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/alloc/src/collections/btree/set.rs:1468:0
+    = help: for that trait implementation, expected `std::string::String`, found `StableKeyId`
+note: the method call chain might not have had the expected associated types
+   --> crates/polint/src/analysis/extensions/provider.rs:360:10
+    |
+357 |     db.fact_meta()
+    |     -- this expression has type `&AnalysisDb`
+358 |         .rows()
+    |          ------ `Iterator::Item` is `(FactRef, &FactMeta)` here
+359 |         .filter(|(_reference, metadata)| !metadata.producer_id.starts_with("polint.extension."))
+    |          --------------------------------------------------------------------------------------- `Iterator::Item` remains `(FactRef, &FactMeta)` here
+360 |         .map(|(_reference, metadata)| metadata.stable_key.clone())
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Iterator::Item` changed to `StableKeyId` here
+note: required by a bound in `std::iter::Iterator::collect`
+   --> /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/iter/traits/iterator.rs:2051:4
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/refined_calls/framework.rs:238:28
+    |
+238 |         .unwrap_or_else(|| fallback.to_string())
+    |                            ^^^^^^^^^^^^^^^^^^^^ expected `StableKeyId`, found `String`
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/refined_calls/framework.rs:236:5
+    |
+235 |   fn metadata_key(db: &AnalysisDb, family: FactFamily, run_id: u64, fallback: &str) -> String {
+    |                                                                                        ------ expected `std::string::String` because of return type
+236 | /     db.metadata_for(FactRef::new(family, run_id))
+237 | |         .map(|metadata| metadata.stable_key.clone())
+238 | |         .unwrap_or_else(|| fallback.to_string())
+    | |________________________________________________^ expected `String`, found `StableKeyId`
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/refined_calls/go.rs:359:28
+    |
+359 |         .unwrap_or_else(|| db.resolve_stable_key(fallback).to_string())
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `StableKeyId`, found `String`
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/refined_calls/go.rs:357:5
+    |
+356 |   ) -> String {
+    |        ------ expected `std::string::String` because of return type
+357 | /     db.metadata_for(FactRef::new(family, run_id))
+358 | |         .map(|metadata| metadata.stable_key.clone())
+359 | |         .unwrap_or_else(|| db.resolve_stable_key(fallback).to_string())
+    | |_______________________________________________________________________^ expected `String`, found `StableKeyId`
+
+error[E0308]: mismatched types
+  --> crates/polint/src/analysis/refined_calls/provider.rs:60:32
+   |
+60 |             .unwrap_or_else(|| interner.resolve(target.stable_key).to_string());
+   |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `StableKeyId`, found `String`
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/refined_calls/provider.rs:70:13
+    |
+ 61 |         output.edges.push(refined_edge_from_base_target(
+    |                           ----------------------------- arguments to this function are incorrect
+...
+ 70 |             base_target_key,
+    |             ^^^^^^^^^^^^^^^ expected `String`, found `StableKeyId`
+    |
+note: function defined here
+   --> crates/polint/src/analysis/refined_calls/provider.rs:131:4
+    |
+131 | fn refined_edge_from_base_target(
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+137 |     base_target_key: String,
+    |     -----------------------
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/refined_calls/summaries.rs:126:28
+    |
+126 |         .unwrap_or_else(|| fallback.to_string())
+    |                            ^^^^^^^^^^^^^^^^^^^^ expected `StableKeyId`, found `String`
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/refined_calls/summaries.rs:124:5
+    |
+123 |   fn metadata_key(db: &AnalysisDb, family: FactFamily, run_id: u64, fallback: &str) -> String {
+    |                                                                                        ------ expected `std::string::String` because of return type
+124 | /     db.metadata_for(FactRef::new(family, run_id))
+125 | |         .map(|metadata| metadata.stable_key.clone())
+126 | |         .unwrap_or_else(|| fallback.to_string())
+    | |________________________________________________^ expected `String`, found `StableKeyId`
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/summaries/validate.rs:84:21
+    |
+ 81 |                 push_summary_diagnostic(
+    |                 ----------------------- arguments to this function are incorrect
+...
+ 84 |                     &metadata.stable_key,
+    |                     ^^^^^^^^^^^^^^^^^^^^ expected `&str`, found `&StableKeyId`
+    |
+    = note: expected reference `&str`
+               found reference `&StableKeyId`
+note: function defined here
+   --> crates/polint/src/analysis/summaries/validate.rs:377:4
+    |
+377 | fn push_summary_diagnostic(
+    |    ^^^^^^^^^^^^^^^^^^^^^^^
+...
+380 |     stable_key: &str,
+    |     ----------------
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/summaries/validate.rs:329:31
+    |
+329 |     if metadata.stable_key != stable_key {
+    |        -------------------    ^^^^^^^^^^ expected `StableKeyId`, found `&str`
+    |        |
+    |        expected because this is `StableKeyId`
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/unknown_taxonomy/collect.rs:659:5
+    |
+658 |   fn stable_key_for(db: &AnalysisDb, family: FactFamily, run_id: u64) -> Option<String> {
+    |                                                                          -------------- expected `std::option::Option<std::string::String>` because of return type
+659 | /     db.metadata_for(FactRef::new(family, run_id))
+660 | |         .map(|metadata| metadata.stable_key.clone())
+    | |____________________________________________________^ expected `Option<String>`, found `Option<StableKeyId>`
+    |
+    = note: expected enum `std::option::Option<std::string::String>`
+               found enum `std::option::Option<StableKeyId>`
+
+error[E0599]: no method named `as_str` found for struct `StableKeyId` in the current scope
+   --> crates/polint/src/analysis/validate.rs:546:33
+    |
+546 |             metadata.stable_key.as_str(),
+    |                                 ^^^^^^ method not found in `StableKeyId`
+    |
+   ::: crates/polint/src/core/stable_key.rs:7:1
+    |
+  7 | pub(crate) struct StableKeyId(pub(crate) u32);
+    | ----------------------------- method `as_str` not found for this struct
+    |
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `as_str`, perhaps you need to implement one of them:
+            candidate #1: `rustix::path::arg::Arg`
+            candidate #2: `value_trait::base::ValueAsScalar`
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<StableKeyId>` is not satisfied
+    --> crates/polint/src/analysis_kernel/validation.rs:3442:42
+     |
+3442 |             .with_evidence("stable_key", conflict.stable_key.clone())
+     |              -------------               ^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::convert::From<StableKeyId>` is not implemented for `std::string::String`
+     |              |
+     |              required by a bound introduced by this call
+     |
+     = help: the following other types implement trait `std::convert::From<T>`:
+               `std::string::String` implements `std::convert::From<&mut str>`
+               `std::string::String` implements `std::convert::From<&std::string::String>`
+               `std::string::String` implements `std::convert::From<&str>`
+               `std::string::String` implements `std::convert::From<Cow<'_, str>>`
+               `std::string::String` implements `std::convert::From<char>`
+               `std::string::String` implements `std::convert::From<clap::Id>`
+               `std::string::String` implements `std::convert::From<clap::builder::Str>`
+               `std::string::String` implements `std::convert::From<compact_str::CompactString>`
+             and 4 others
+     = note: required for `StableKeyId` to implement `Into<std::string::String>`
+note: required by a bound in `Diagnostic::with_evidence`
+    --> crates/polint/src/diagnostics/mod.rs:922:74
+     |
+ 922 |     pub fn with_evidence(mut self, label: impl Into<String>, value: impl Into<String>) -> Self {
+     |                                                                          ^^^^^^^^^^^^ required by this bound in `Diagnostic::with_evidence`
+help: consider removing this method call, as the receiver has type `StableKeyId` and `StableKeyId: std::convert::From<StableKeyId>` trivially holds
+     |
+3442 -             .with_evidence("stable_key", conflict.stable_key.clone())
+3442 +             .with_evidence("stable_key", conflict.stable_key)
+     |
+
+error[E0599]: no method named `as_str` found for struct `StableKeyId` in the current scope
+    --> crates/polint/src/analysis_kernel/validation.rs:4538:37
+     |
+4538 |                 metadata.stable_key.as_str(),
+     |                                     ^^^^^^ method not found in `StableKeyId`
+     |
+    ::: crates/polint/src/core/stable_key.rs:7:1
+     |
+   7 | pub(crate) struct StableKeyId(pub(crate) u32);
+     | ----------------------------- method `as_str` not found for this struct
+     |
+     = help: items from traits can only be used if the trait is implemented and in scope
+     = note: the following traits define an item `as_str`, perhaps you need to implement one of them:
+             candidate #1: `rustix::path::arg::Arg`
+             candidate #2: `value_trait::base::ValueAsScalar`
+
+error[E0277]: `StableKeyId` doesn't implement `std::fmt::Display`
+   --> crates/polint/src/analysis_kernel/mod.rs:425:42
+    |
+425 |                 format!("stable_key={}", metadata.stable_key),
+    |                                     --   ^^^^^^^^^^^^^^^^^^^ `StableKeyId` cannot be formatted with the default formatter
+    |                                     |
+    |                                     required by this formatting parameter
+    |
+help: the trait `std::fmt::Display` is not implemented for `StableKeyId`
+   --> crates/polint/src/core/stable_key.rs:7:1
+    |
+  7 | pub(crate) struct StableKeyId(pub(crate) u32);
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: in format strings you may be able to use `{:?}` (or {:#?} for pretty-print) instead
+
+error[E0308]: mismatched types
+    --> crates/polint/src/core/db.rs:2503:25
+     |
+2502 |                     topology_fact_metadata(
+     |                     ---------------------- arguments to this function are incorrect
+2503 |                         interner,
+     |                         ^^^^^^^^ expected `&StableKeyInterner`, found `StableKeyInterner`
+     |
+note: function defined here
+    --> crates/polint/src/core/metadata.rs:306:15
+     |
+ 306 | pub(super) fn topology_fact_metadata(
+     |               ^^^^^^^^^^^^^^^^^^^^^^
+ 307 |     interner: &crate::core::StableKeyInterner,
+     |     -----------------------------------------
+help: consider borrowing here
+     |
+2503 |                         &interner,
+     |                         +
+
+error[E0308]: mismatched types
+    --> crates/polint/src/core/db.rs:2523:25
+     |
+2522 |                     topology_fact_metadata(
+     |                     ---------------------- arguments to this function are incorrect
+2523 |                         interner,
+     |                         ^^^^^^^^ expected `&StableKeyInterner`, found `StableKeyInterner`
+     |
+note: function defined here
+    --> crates/polint/src/core/metadata.rs:306:15
+     |
+ 306 | pub(super) fn topology_fact_metadata(
+     |               ^^^^^^^^^^^^^^^^^^^^^^
+ 307 |     interner: &crate::core::StableKeyInterner,
+     |     -----------------------------------------
+help: consider borrowing here
+     |
+2523 |                         &interner,
+     |                         +
+
+error[E0308]: mismatched types
+    --> crates/polint/src/core/db.rs:2543:25
+     |
+2542 |                     topology_fact_metadata(
+     |                     ---------------------- arguments to this function are incorrect
+2543 |                         interner,
+     |                         ^^^^^^^^ expected `&StableKeyInterner`, found `StableKeyInterner`
+     |
+note: function defined here
+    --> crates/polint/src/core/metadata.rs:306:15
+     |
+ 306 | pub(super) fn topology_fact_metadata(
+     |               ^^^^^^^^^^^^^^^^^^^^^^
+ 307 |     interner: &crate::core::StableKeyInterner,
+     |     -----------------------------------------
+help: consider borrowing here
+     |
+2543 |                         &interner,
+     |                         +
+
+error[E0308]: mismatched types
+    --> crates/polint/src/core/db.rs:2563:25
+     |
+2562 |                     topology_fact_metadata(
+     |                     ---------------------- arguments to this function are incorrect
+2563 |                         interner,
+     |                         ^^^^^^^^ expected `&StableKeyInterner`, found `StableKeyInterner`
+     |
+note: function defined here
+    --> crates/polint/src/core/metadata.rs:306:15
+     |
+ 306 | pub(super) fn topology_fact_metadata(
+     |               ^^^^^^^^^^^^^^^^^^^^^^
+ 307 |     interner: &crate::core::StableKeyInterner,
+     |     -----------------------------------------
+help: consider borrowing here
+     |
+2563 |                         &interner,
+     |                         +
+
+error[E0308]: mismatched types
+    --> crates/polint/src/core/db.rs:2583:25
+     |
+2582 |                     topology_fact_metadata(
+     |                     ---------------------- arguments to this function are incorrect
+2583 |                         interner,
+     |                         ^^^^^^^^ expected `&StableKeyInterner`, found `StableKeyInterner`
+     |
+note: function defined here
+    --> crates/polint/src/core/metadata.rs:306:15
+     |
+ 306 | pub(super) fn topology_fact_metadata(
+     |               ^^^^^^^^^^^^^^^^^^^^^^
+ 307 |     interner: &crate::core::StableKeyInterner,
+     |     -----------------------------------------
+help: consider borrowing here
+     |
+2583 |                         &interner,
+     |                         +
+
+error[E0308]: mismatched types
+    --> crates/polint/src/core/db.rs:2603:25
+     |
+2602 |                     topology_fact_metadata(
+     |                     ---------------------- arguments to this function are incorrect
+2603 |                         interner,
+     |                         ^^^^^^^^ expected `&StableKeyInterner`, found `StableKeyInterner`
+     |
+note: function defined here
+    --> crates/polint/src/core/metadata.rs:306:15
+     |
+ 306 | pub(super) fn topology_fact_metadata(
+     |               ^^^^^^^^^^^^^^^^^^^^^^
+ 307 |     interner: &crate::core::StableKeyInterner,
+     |     -----------------------------------------
+help: consider borrowing here
+     |
+2603 |                         &interner,
+     |                         +
+
+error[E0308]: mismatched types
+    --> crates/polint/src/core/db.rs:2636:25
+     |
+2635 |                     topology_fact_metadata(
+     |                     ---------------------- arguments to this function are incorrect
+2636 |                         interner,
+     |                         ^^^^^^^^ expected `&StableKeyInterner`, found `StableKeyInterner`
+     |
+note: function defined here
+    --> crates/polint/src/core/metadata.rs:306:15
+     |
+ 306 | pub(super) fn topology_fact_metadata(
+     |               ^^^^^^^^^^^^^^^^^^^^^^
+ 307 |     interner: &crate::core::StableKeyInterner,
+     |     -----------------------------------------
+help: consider borrowing here
+     |
+2636 |                         &interner,
+     |                         +
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/calls/extract.rs:486:13
+    |
+486 | /             db.files()
+487 | |                 .iter()
+488 | |                 .find(|source_file| source_file.id == file)
+489 | |                 .map(|source_file| source_file.relative_path.replace('\\', "/"))
+    | |________________________________________________________________________________^ expected `Option<StableKeyId>`, found `Option<String>`
+    |
+    = note: expected enum `std::option::Option<core::stable_key::StableKeyId>`
+               found enum `std::option::Option<std::string::String>`
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/calls/validate.rs:286:21
+    |
+283 |                 push_call_diagnostic(
+    |                 -------------------- arguments to this function are incorrect
+...
+286 |                     &metadata.stable_key,
+    |                     ^^^^^^^^^^^^^^^^^^^^ expected `&str`, found `&StableKeyId`
+    |
+    = note: expected reference `&str`
+               found reference `&core::stable_key::StableKeyId`
+note: function defined here
+   --> crates/polint/src/analysis/calls/validate.rs:339:4
+    |
+339 | fn push_call_diagnostic(
+    |    ^^^^^^^^^^^^^^^^^^^^
+...
+342 |     stable_key: &str,
+    |     ----------------
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/calls/validate.rs:523:29
+    |
+523 |                 stable_key: "call-site:ok".to_string(),
+    |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `StableKeyId`, found `String`
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/domains/validate.rs:62:21
+    |
+ 59 |                 push_domain_diagnostic(
+    |                 ---------------------- arguments to this function are incorrect
+...
+ 62 |                     &metadata.stable_key,
+    |                     ^^^^^^^^^^^^^^^^^^^^ expected `&str`, found `&StableKeyId`
+    |
+    = note: expected reference `&str`
+               found reference `&core::stable_key::StableKeyId`
+note: function defined here
+   --> crates/polint/src/analysis/domains/validate.rs:455:4
+    |
+455 | fn push_domain_diagnostic(
+    |    ^^^^^^^^^^^^^^^^^^^^^^
+...
+458 |     stable_key: &str,
+    |     ----------------
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/domains/validate.rs:296:31
+    |
+296 |     if metadata.stable_key != stable_key {
+    |        -------------------    ^^^^^^^^^^ expected `StableKeyId`, found `&str`
+    |        |
+    |        expected because this is `core::stable_key::StableKeyId`
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/domains/validate.rs:498:29
+    |
+498 |                 stable_key: stable_key.to_string(),
+    |                             ^^^^^^^^^^^^^^^^^^^^^^ expected `StableKeyId`, found `String`
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/entrypoints/recognizers_go.rs:940:13
+    |
+940 | /             db.files()
+941 | |                 .iter()
+942 | |                 .find(|source_file| source_file.id == file)
+943 | |                 .map(|source_file| source_file.relative_path.replace('\\', "/"))
+    | |________________________________________________________________________________^ expected `Option<StableKeyId>`, found `Option<String>`
+    |
+    = note: expected enum `std::option::Option<core::stable_key::StableKeyId>`
+               found enum `std::option::Option<std::string::String>`
+
+error[E0308]: mismatched types
+    --> crates/polint/src/analysis/entrypoints/recognizers_ts.rs:1614:13
+     |
+1614 | /             db.files()
+1615 | |                 .iter()
+1616 | |                 .find(|source_file| source_file.id == file)
+1617 | |                 .map(|source_file| source_file.relative_path.replace('\\', "/"))
+     | |________________________________________________________________________________^ expected `Option<StableKeyId>`, found `Option<String>`
+     |
+     = note: expected enum `std::option::Option<core::stable_key::StableKeyId>`
+                found enum `std::option::Option<std::string::String>`
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/entrypoints/validate.rs:229:21
+    |
+226 |                 push_entrypoint_diagnostic(
+    |                 -------------------------- arguments to this function are incorrect
+...
+229 |                     &metadata.stable_key,
+    |                     ^^^^^^^^^^^^^^^^^^^^ expected `&str`, found `&StableKeyId`
+    |
+    = note: expected reference `&str`
+               found reference `&core::stable_key::StableKeyId`
+note: function defined here
+   --> crates/polint/src/analysis/entrypoints/validate.rs:300:4
+    |
+300 | fn push_entrypoint_diagnostic(
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+303 |     stable_key: &str,
+    |     ----------------
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/entrypoints/validate.rs:480:29
+    |
+480 |                 stable_key: "ep:exact".to_string(),
+    |                             ^^^^^^^^^^^^^^^^^^^^^^ expected `StableKeyId`, found `String`
+
+error[E0277]: a value of type `std::collections::BTreeSet<std::string::String>` cannot be built from an iterator over elements of type `core::stable_key::StableKeyId`
+   --> crates/polint/src/analysis/extensions/provider.rs:361:10
+    |
+361 |         .collect()
+    |          ^^^^^^^ value of type `std::collections::BTreeSet<std::string::String>` cannot be built from `std::iter::Iterator<Item=core::stable_key::StableKeyId>`
+    |
+help: the trait `FromIterator<core::stable_key::StableKeyId>` is not implemented for `std::collections::BTreeSet<std::string::String>`
+      but trait `FromIterator<std::string::String>` is implemented for it
+   --> /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/alloc/src/collections/btree/set.rs:1468:0
+    = help: for that trait implementation, expected `std::string::String`, found `core::stable_key::StableKeyId`
+note: the method call chain might not have had the expected associated types
+   --> crates/polint/src/analysis/extensions/provider.rs:360:10
+    |
+357 |     db.fact_meta()
+    |     -- this expression has type `&AnalysisDb`
+358 |         .rows()
+    |          ------ `Iterator::Item` is `(FactRef, &FactMeta)` here
+359 |         .filter(|(_reference, metadata)| !metadata.producer_id.starts_with("polint.extension."))
+    |          --------------------------------------------------------------------------------------- `Iterator::Item` remains `(FactRef, &FactMeta)` here
+360 |         .map(|(_reference, metadata)| metadata.stable_key.clone())
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Iterator::Item` changed to `StableKeyId` here
+note: required by a bound in `std::iter::Iterator::collect`
+   --> /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/iter/traits/iterator.rs:2051:4
+
+error[E0308]: mismatched types
+  --> crates/polint/src/analysis/refined_calls/debug.rs:35:30
+   |
+35 |               site_stable_key: db
+   |  ______________________________^
+36 | |                 .metadata_for(FactRef::new(FactFamily::CallSite, edge.site.0))
+37 | |                 .map(|metadata| metadata.stable_key.clone()),
+   | |____________________________________________________________^ expected `Option<String>`, found `Option<StableKeyId>`
+   |
+   = note: expected enum `std::option::Option<std::string::String>`
+              found enum `std::option::Option<core::stable_key::StableKeyId>`
+
+error[E0308]: mismatched types
+  --> crates/polint/src/analysis/refined_calls/debug.rs:38:37
+   |
+38 |               base_target_stable_key: edge.base_target.and_then(|target| {
+   |  _____________________________________^
+39 | |                 db.metadata_for(FactRef::new(FactFamily::CallTarget, target.0))
+40 | |                     .map(|metadata| metadata.stable_key.clone())
+41 | |             }),
+   | |______________^ expected `Option<String>`, found `Option<StableKeyId>`
+   |
+   = note: expected enum `std::option::Option<std::string::String>`
+              found enum `std::option::Option<core::stable_key::StableKeyId>`
+
+error[E0308]: mismatched types
+  --> crates/polint/src/analysis/refined_calls/debug.rs:42:32
+   |
+42 |               caller_stable_key: db
+   |  ________________________________^
+43 | |                 .metadata_for(FactRef::new(FactFamily::Function, edge.caller.0))
+44 | |                 .map(|metadata| metadata.stable_key.clone()),
+   | |____________________________________________________________^ expected `Option<String>`, found `Option<StableKeyId>`
+   |
+   = note: expected enum `std::option::Option<std::string::String>`
+              found enum `std::option::Option<core::stable_key::StableKeyId>`
+
+error[E0308]: mismatched types
+  --> crates/polint/src/analysis/refined_calls/debug.rs:45:41
+   |
+45 |               target_function_stable_key: edge.target_function.and_then(|function| {
+   |  _________________________________________^
+46 | |                 db.metadata_for(FactRef::new(FactFamily::Function, function.0))
+47 | |                     .map(|metadata| metadata.stable_key.clone())
+48 | |             }),
+   | |______________^ expected `Option<String>`, found `Option<StableKeyId>`
+   |
+   = note: expected enum `std::option::Option<std::string::String>`
+              found enum `std::option::Option<core::stable_key::StableKeyId>`
+
+error[E0308]: mismatched types
+  --> crates/polint/src/analysis/refined_calls/debug.rs:49:39
+   |
+49 |               target_symbol_stable_key: edge.target_symbol.and_then(|symbol| {
+   |  _______________________________________^
+50 | |                 db.metadata_for(FactRef::new(FactFamily::Symbol, symbol.0))
+51 | |                     .map(|metadata| metadata.stable_key.clone())
+52 | |             }),
+   | |______________^ expected `Option<String>`, found `Option<StableKeyId>`
+   |
+   = note: expected enum `std::option::Option<std::string::String>`
+              found enum `std::option::Option<core::stable_key::StableKeyId>`
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/summaries/validate.rs:84:21
+    |
+ 81 |                 push_summary_diagnostic(
+    |                 ----------------------- arguments to this function are incorrect
+...
+ 84 |                     &metadata.stable_key,
+    |                     ^^^^^^^^^^^^^^^^^^^^ expected `&str`, found `&StableKeyId`
+    |
+    = note: expected reference `&str`
+               found reference `&core::stable_key::StableKeyId`
+note: function defined here
+   --> crates/polint/src/analysis/summaries/validate.rs:377:4
+    |
+377 | fn push_summary_diagnostic(
+    |    ^^^^^^^^^^^^^^^^^^^^^^^
+...
+380 |     stable_key: &str,
+    |     ----------------
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/summaries/validate.rs:329:31
+    |
+329 |     if metadata.stable_key != stable_key {
+    |        -------------------    ^^^^^^^^^^ expected `StableKeyId`, found `&str`
+    |        |
+    |        expected because this is `core::stable_key::StableKeyId`
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/summaries/validate.rs:599:29
+    |
+599 |                 stable_key: "summary:exact".to_string(),
+    |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `StableKeyId`, found `String`
+
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/summaries/validate.rs:709:29
+    |
+709 |                 stable_key: "summary:scc-exact".to_string(),
+    |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `StableKeyId`, found `String`
+
+Some errors have detailed explanations: E0277, E0308, E0599.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `polint` (lib) due to 43 previous errors
+warning: build failed, waiting for other jobs to finish...
+error[E0308]: mismatched types
+   --> crates/polint/src/analysis/unknown_taxonomy/collect.rs:659:5
+    |
+658 |   fn stable_key_for(db: &AnalysisDb, family: FactFamily, run_id: u64) -> Option<String> {
+    |                                                                          -------------- expected `std::option::Option<std::string::String>` because of return type
+659 | /     db.metadata_for(FactRef::new(family, run_id))
+660 | |         .map(|metadata| metadata.stable_key.clone())
+    | |____________________________________________________^ expected `Option<String>`, found `Option<StableKeyId>`
+    |
+    = note: expected enum `std::option::Option<std::string::String>`
+               found enum `std::option::Option<core::stable_key::StableKeyId>`
+
+error[E0599]: no method named `as_str` found for struct `core::stable_key::StableKeyId` in the current scope
+   --> crates/polint/src/analysis/validate.rs:546:33
+    |
+546 |             metadata.stable_key.as_str(),
+    |                                 ^^^^^^ method not found in `core::stable_key::StableKeyId`
+    |
+   ::: crates/polint/src/core/stable_key.rs:7:1
+    |
+  7 | pub(crate) struct StableKeyId(pub(crate) u32);
+    | ----------------------------- method `as_str` not found for this struct
+    |
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `as_str`, perhaps you need to implement one of them:
+            candidate #1: `rustix::path::arg::Arg`
+            candidate #2: `similar::text::abstraction::DiffableStr`
+            candidate #3: `value_trait::base::ValueAsScalar`
+
+error[E0308]: mismatched types
+    --> crates/polint/src/analysis_kernel/debug.rs:1630:5
+     |
+1629 |   fn stable_key_for(db: &AnalysisDb, family: FactFamily, run_id: u64) -> Option<String> {
+     |                                                                          -------------- expected `std::option::Option<std::string::String>` because of return type
+1630 | /     db.metadata_for(FactRef::new(family, run_id))
+1631 | |         .map(|metadata| metadata.stable_key.clone())
+     | |____________________________________________________^ expected `Option<String>`, found `Option<StableKeyId>`
+     |
+     = note: expected enum `std::option::Option<std::string::String>`
+                found enum `std::option::Option<core::stable_key::StableKeyId>`
+
+error[E0599]: no method named `as_str` found for struct `core::stable_key::StableKeyId` in the current scope
+    --> crates/polint/src/analysis_kernel/debug.rs:2119:37
+     |
+2119 |         stable_key: meta.stable_key.as_str(),
+     |                                     ^^^^^^ method not found in `core::stable_key::StableKeyId`
+     |
+    ::: crates/polint/src/core/stable_key.rs:7:1
+     |
+   7 | pub(crate) struct StableKeyId(pub(crate) u32);
+     | ----------------------------- method `as_str` not found for this struct
+     |
+     = help: items from traits can only be used if the trait is implemented and in scope
+     = note: the following traits define an item `as_str`, perhaps you need to implement one of them:
+             candidate #1: `rustix::path::arg::Arg`
+             candidate #2: `similar::text::abstraction::DiffableStr`
+             candidate #3: `value_trait::base::ValueAsScalar`
+
+error[E0308]: mismatched types
+    --> crates/polint/src/analysis_kernel/validation.rs:1241:29
+     |
+1241 |                 stable_key: "domain:exact-local-payload".to_string(),
+     |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `StableKeyId`, found `String`
+
+error[E0308]: mismatched types
+    --> crates/polint/src/analysis_kernel/validation.rs:1846:29
+     |
+1846 |                 stable_key: "body:ok".to_string(),
+     |                             ^^^^^^^^^^^^^^^^^^^^^ expected `StableKeyId`, found `String`
+
+error[E0308]: mismatched types
+    --> crates/polint/src/analysis_kernel/validation.rs:2186:29
+     |
+2186 |                 stable_key: "cfg:function:ok".to_string(),
+     |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `StableKeyId`, found `String`
+
+error[E0308]: mismatched types
+    --> crates/polint/src/analysis_kernel/validation.rs:2515:29
+     |
+2515 |                 stable_key: "call-site:ok".to_string(),
+     |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `StableKeyId`, found `String`
+
+error[E0308]: mismatched types
+    --> crates/polint/src/analysis_kernel/validation.rs:2837:29
+     |
+2837 |                 stable_key: "generated:answer".to_string(),
+     |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `StableKeyId`, found `String`
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<core::stable_key::StableKeyId>` is not satisfied
+    --> crates/polint/src/analysis_kernel/validation.rs:3442:42
+     |
+3442 |             .with_evidence("stable_key", conflict.stable_key.clone())
+     |              -------------               ^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::convert::From<core::stable_key::StableKeyId>` is not implemented for `std::string::String`
+     |              |
+     |              required by a bound introduced by this call
+     |
+     = help: the following other types implement trait `std::convert::From<T>`:
+               `std::string::String` implements `std::convert::From<&mut str>`
+               `std::string::String` implements `std::convert::From<&std::string::String>`
+               `std::string::String` implements `std::convert::From<&str>`
+               `std::string::String` implements `std::convert::From<Cow<'_, str>>`
+               `std::string::String` implements `std::convert::From<char>`
+               `std::string::String` implements `std::convert::From<clap::Id>`
+               `std::string::String` implements `std::convert::From<clap::builder::Str>`
+               `std::string::String` implements `std::convert::From<compact_str::CompactString>`
+             and 4 others
+     = note: required for `core::stable_key::StableKeyId` to implement `Into<std::string::String>`
+note: required by a bound in `diagnostics::Diagnostic::with_evidence`
+    --> crates/polint/src/diagnostics/mod.rs:922:74
+     |
+ 922 |     pub fn with_evidence(mut self, label: impl Into<String>, value: impl Into<String>) -> Self {
+     |                                                                          ^^^^^^^^^^^^ required by this bound in `Diagnostic::with_evidence`
+help: consider removing this method call, as the receiver has type `core::stable_key::StableKeyId` and `core::stable_key::StableKeyId: std::convert::From<core::stable_key::StableKeyId>` trivially holds
+     |
+3442 -             .with_evidence("stable_key", conflict.stable_key.clone())
+3442 +             .with_evidence("stable_key", conflict.stable_key)
+     |
+
+error[E0599]: no method named `as_str` found for struct `core::stable_key::StableKeyId` in the current scope
+    --> crates/polint/src/analysis_kernel/validation.rs:4538:37
+     |
+4538 |                 metadata.stable_key.as_str(),
+     |                                     ^^^^^^ method not found in `core::stable_key::StableKeyId`
+     |
+    ::: crates/polint/src/core/stable_key.rs:7:1
+     |
+   7 | pub(crate) struct StableKeyId(pub(crate) u32);
+     | ----------------------------- method `as_str` not found for this struct
+     |
+     = help: items from traits can only be used if the trait is implemented and in scope
+     = note: the following traits define an item `as_str`, perhaps you need to implement one of them:
+             candidate #1: `rustix::path::arg::Arg`
+             candidate #2: `similar::text::abstraction::DiffableStr`
+             candidate #3: `value_trait::base::ValueAsScalar`
+
+error[E0308]: mismatched types
+    --> crates/polint/src/analysis_kernel/validation.rs:5776:29
+     |
+5776 |                 stable_key: "metric:key".to_string(),
+     |                             ^^^^^^^^^^^^^^^^^^^^^^^^ expected `StableKeyId`, found `String`
+
+error[E0308]: mismatched types
+    --> crates/polint/src/analysis_kernel/validation.rs:5806:29
+     |
+5806 |                 stable_key: "metric:key".to_string(),
+     |                             ^^^^^^^^^^^^^^^^^^^^^^^^ expected `StableKeyId`, found `String`
+
+error[E0308]: mismatched types
+    --> crates/polint/src/analysis_kernel/validation.rs:5877:25
+     |
+5877 |             stable_key: stable_key.to_string(),
+     |                         ^^^^^^^^^^^^^^^^^^^^^^ expected `StableKeyId`, found `String`
+
+error[E0277]: `core::stable_key::StableKeyId` doesn't implement `std::fmt::Display`
+   --> crates/polint/src/analysis_kernel/mod.rs:425:42
+    |
+425 |                 format!("stable_key={}", metadata.stable_key),
+    |                                     --   ^^^^^^^^^^^^^^^^^^^ `core::stable_key::StableKeyId` cannot be formatted with the default formatter
+    |                                     |
+    |                                     required by this formatting parameter
+    |
+help: the trait `std::fmt::Display` is not implemented for `core::stable_key::StableKeyId`
+   --> crates/polint/src/core/stable_key.rs:7:1
+    |
+  7 | pub(crate) struct StableKeyId(pub(crate) u32);
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: in format strings you may be able to use `{:?}` (or {:#?} for pretty-print) instead
+
+error[E0308]: mismatched types
+   --> crates/polint/src/metrics.rs:933:49
+    |
+933 |         assert!(file_metric.stable_key.contains(&file_key));
+    |                                        -------- ^^^^^^^^^ expected `&str`, found `&StableKeyId`
+    |                                        |
+    |                                        arguments to this method are incorrect
+    |
+    = note: expected reference `&str`
+               found reference `&core::stable_key::StableKeyId`
+note: method defined here
+   --> crates/polint/src/core/stable_key.rs:11:19
+    |
+ 11 |     pub(crate) fn contains(self, needle: &str) -> bool {
+    |                   ^^^^^^^^       ------------
+
+error[E0308]: mismatched types
+   --> crates/polint/src/metrics.rs:934:53
+    |
+934 |         assert!(function_metric.stable_key.contains(&function_key));
+    |                                            -------- ^^^^^^^^^^^^^ expected `&str`, found `&StableKeyId`
+    |                                            |
+    |                                            arguments to this method are incorrect
+    |
+    = note: expected reference `&str`
+               found reference `&core::stable_key::StableKeyId`
+note: method defined here
+   --> crates/polint/src/core/stable_key.rs:11:19
+    |
+ 11 |     pub(crate) fn contains(self, needle: &str) -> bool {
+    |                   ^^^^^^^^       ------------
+
+error[E0308]: mismatched types
+   --> crates/polint/src/metrics.rs:937:55
+    |
+937 |         assert!(complexity_metric.stable_key.contains(&function_key));
+    |                                              -------- ^^^^^^^^^^^^^ expected `&str`, found `&StableKeyId`
+    |                                              |
+    |                                              arguments to this method are incorrect
+    |
+    = note: expected reference `&str`
+               found reference `&core::stable_key::StableKeyId`
+note: method defined here
+   --> crates/polint/src/core/stable_key.rs:11:19
+    |
+ 11 |     pub(crate) fn contains(self, needle: &str) -> bool {
+    |                   ^^^^^^^^       ------------
+
+error[E0308]: mismatched types
+    --> crates/polint/src/module_graph/mod.rs:3266:46
+     |
+3266 |         assert!(resolved.stable_key.contains(&import_key));
+     |                                     -------- ^^^^^^^^^^^ expected `&str`, found `&StableKeyId`
+     |                                     |
+     |                                     arguments to this method are incorrect
+     |
+     = note: expected reference `&str`
+                found reference `&core::stable_key::StableKeyId`
+note: method defined here
+    --> crates/polint/src/core/stable_key.rs:11:19
+     |
+  11 |     pub(crate) fn contains(self, needle: &str) -> bool {
+     |                   ^^^^^^^^       ------------
+
+error[E0308]: mismatched types
+    --> crates/polint/src/symbol_graph/mod.rs:1532:44
+     |
+1532 |         assert_eq!(symbol_meta.stable_key, "symbol:key:value");
+     |                                            ^^^^^^^^^^^^^^^^^^ expected `StableKeyId`, found `&str`
+
+error[E0308]: mismatched types
+    --> crates/polint/src/symbol_graph/mod.rs:1533:48
+     |
+1533 |         assert_eq!(definition_meta.stable_key, "definition:key:value");
+     |                                                ^^^^^^^^^^^^^^^^^^^^^^ expected `StableKeyId`, found `&str`
+
+error[E0308]: mismatched types
+    --> crates/polint/src/symbol_graph/mod.rs:1534:47
+     |
+1534 |         assert_eq!(reference_meta.stable_key, "reference:key:value");
+     |                                               ^^^^^^^^^^^^^^^^^^^^^ expected `StableKeyId`, found `&str`
+
+error: could not compile `polint` (lib test) due to 70 previous errors

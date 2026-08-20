@@ -1,0 +1,14 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running unittests src/lib.rs (target/debug/deps/polint-af2f858c5d9987a8)
+
+running 4 tests
+test eval::ts_tokens::polyglot_canary_has_intra_ts_token_edge_without_cross_language_edge ... ok
+test eval::go_rta::polyglot_go_ts_canary_resolves_go_edges_without_ts_interference ... ok
+test eval::ts_object_model::polyglot_canary_has_intra_ts_object_edge_without_cross_language_edge ... ok
+test eval::fixtures::eval_native_fixture_runner_tests::eval_native_fixture_polyglot_canary_go_ts_passes ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 2500 filtered out; finished in 3.13s
+
+real 3.43
+user 8.77
+sys 3.46

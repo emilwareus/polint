@@ -1,5 +1,3 @@
-#![allow(dead_code, reason = "kept for private internal consumers")]
-
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::PathBuf;

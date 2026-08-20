@@ -1,8 +1,7 @@
 use std::collections::BTreeMap;
 
-use crate::analysis::stable_key::semantic_stable_key;
-use crate::analysis_kernel::FactFamily;
-use crate::core::{AnalysisDb, FileId, Language, Span};
+use crate::analysis_api::FactDatabase;
+use crate::analysis_api::FactFamily;
 use crate::go::semantic::facts::{
     GoSemanticAddressTakenFact, GoSemanticAddressTakenId, GoSemanticCallStatus,
     GoSemanticCallsiteFact, GoSemanticCallsiteId, GoSemanticDynamicDispatchFact,
@@ -15,6 +14,8 @@ use crate::go::semantic::facts::{
 use crate::go::semantic::protocol::{GoSemanticOutput, GoSemanticRawFrame, GoSemanticSpan};
 use crate::go::semantic::store::GoSemanticFactsOutput;
 use crate::go::semantic::validate::validate_relative_path;
+use crate::go::stable_key::semantic_stable_key;
+use crate::internal_core::{FileId, Language, Span};
 
 struct LoweredLocation {
     relative_file: Option<String>,
@@ -38,9 +39,11 @@ impl std::fmt::Display for GoSemanticLowerError {
 impl std::error::Error for GoSemanticLowerError {}
 
 pub(crate) fn lower_go_semantic(
-    db: &AnalysisDb,
+    db: &dyn FactDatabase,
     output: &GoSemanticOutput,
 ) -> Result<GoSemanticFactsOutput, GoSemanticLowerError> {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let files = db
         .files()
         .iter()
@@ -51,30 +54,41 @@ pub(crate) fn lower_go_semantic(
 
     for row in &output.rows {
         match row.kind.as_str() {
-            "package" => lowered.packages.push(lower_package(row, &files)?),
+            "package" => lowered.packages.push(lower_package(interner, row, &files)?),
             "function" | "method" | "init_function" => {
-                lowered.functions.push(lower_function(row, &files)?);
+                lowered
+                    .functions
+                    .push(lower_function(interner, row, &files)?);
             }
-            "callsite" => lowered.callsites.push(lower_callsite(row, &files)?),
-            "method_set" => lowered.method_sets.push(lower_method_set(row)),
-            "address_taken" => lowered.address_taken.push(lower_address_taken(row)),
+            "callsite" => lowered
+                .callsites
+                .push(lower_callsite(interner, row, &files)?),
+            "method_set" => lowered.method_sets.push(lower_method_set(interner, row)),
+            "address_taken" => lowered
+                .address_taken
+                .push(lower_address_taken(interner, row)),
             "instantiated_type" => {
                 lowered
                     .instantiated_types
-                    .push(lower_instantiated_type(row));
+                    .push(lower_instantiated_type(interner, row));
             }
-            "dynamic_dispatch" => lowered.dynamic_dispatch.push(lower_dynamic_dispatch(row)),
-            "rta_edge" => lowered.rta_edges.push(lower_rta_edge(row)),
-            "package_error" => lowered.package_errors.push(lower_package_error(row)),
+            "dynamic_dispatch" => lowered
+                .dynamic_dispatch
+                .push(lower_dynamic_dispatch(interner, row)),
+            "rta_edge" => lowered.rta_edges.push(lower_rta_edge(interner, row)),
+            "package_error" => lowered
+                .package_errors
+                .push(lower_package_error(interner, row)),
             "receiver_type" | "unsupported" | "type_fact" => {}
             _ => {}
         }
     }
 
-    Ok(lowered.normalized())
+    Ok(lowered.normalized(interner))
 }
 
 fn lower_package(
+    interner: &crate::internal_core::StableKeyInterner,
     row: &GoSemanticRawFrame,
     files: &BTreeMap<&str, FileId>,
 ) -> Result<GoSemanticPackageFact, GoSemanticLowerError> {
@@ -89,7 +103,7 @@ fn lower_package(
     }
     Ok(GoSemanticPackageFact {
         id: GoSemanticPackageId(0),
-        stable_key: row_stable_key(row, "package"),
+        stable_key: row_stable_key(interner, row, "package"),
         package_id: row.package_id.clone(),
         package_path: row.package_path.clone(),
         package_name: row.package_name.clone(),
@@ -99,13 +113,14 @@ fn lower_package(
 }
 
 fn lower_function(
+    interner: &crate::internal_core::StableKeyInterner,
     row: &GoSemanticRawFrame,
     files: &BTreeMap<&str, FileId>,
 ) -> Result<GoSemanticFunctionFact, GoSemanticLowerError> {
     let location = lower_optional_file_span(row, files)?;
     Ok(GoSemanticFunctionFact {
         id: GoSemanticFunctionId(0),
-        stable_key: row_stable_key(row, row.kind.as_str()),
+        stable_key: row_stable_key(interner, row, row.kind.as_str()),
         package_id: row.package_id.clone(),
         package_path: row.package_path.clone(),
         name: row.name.clone(),
@@ -124,13 +139,14 @@ fn lower_function(
 }
 
 fn lower_callsite(
+    interner: &crate::internal_core::StableKeyInterner,
     row: &GoSemanticRawFrame,
     files: &BTreeMap<&str, FileId>,
 ) -> Result<GoSemanticCallsiteFact, GoSemanticLowerError> {
     let location = lower_optional_file_span(row, files)?;
     Ok(GoSemanticCallsiteFact {
         id: GoSemanticCallsiteId(0),
-        stable_key: row_stable_key(row, "callsite"),
+        stable_key: row_stable_key(interner, row, "callsite"),
         package_id: row.package_id.clone(),
         package_path: row.package_path.clone(),
         caller: row.caller.clone(),
@@ -147,7 +163,10 @@ fn lower_callsite(
     })
 }
 
-fn lower_method_set(row: &GoSemanticRawFrame) -> GoSemanticMethodSetFact {
+fn lower_method_set(
+    interner: &crate::internal_core::StableKeyInterner,
+    row: &GoSemanticRawFrame,
+) -> GoSemanticMethodSetFact {
     GoSemanticMethodSetFact {
         id: GoSemanticMethodSetId(0),
         // FINDING C: a `method_set` row's identity is its `type_name`, which is ABSENT from
@@ -155,7 +174,7 @@ fn lower_method_set(row: &GoSemanticRawFrame) -> GoSemanticMethodSetFact {
         // package's types to one key (WR-03). Use the sidecar-provided stable_key VERBATIM
         // (no fabricated fallback); a stable-key-less harvest row is dropped at the store
         // boundary (`drop_invalid_harvest_rows`), not fatal (FINDING B).
-        stable_key: harvest_stable_key(row),
+        stable_key: harvest_stable_key(interner, row),
         package_id: row.package_id.clone(),
         package_path: row.package_path.clone(),
         type_name: row.type_name.clone(),
@@ -163,44 +182,56 @@ fn lower_method_set(row: &GoSemanticRawFrame) -> GoSemanticMethodSetFact {
     }
 }
 
-fn lower_address_taken(row: &GoSemanticRawFrame) -> GoSemanticAddressTakenFact {
+fn lower_address_taken(
+    interner: &crate::internal_core::StableKeyInterner,
+    row: &GoSemanticRawFrame,
+) -> GoSemanticAddressTakenFact {
     GoSemanticAddressTakenFact {
         id: GoSemanticAddressTakenId(0),
-        stable_key: harvest_stable_key(row),
+        stable_key: harvest_stable_key(interner, row),
         package_id: row.package_id.clone(),
         package_path: row.package_path.clone(),
         function: row.function.clone(),
     }
 }
 
-fn lower_instantiated_type(row: &GoSemanticRawFrame) -> GoSemanticInstantiatedTypeFact {
+fn lower_instantiated_type(
+    interner: &crate::internal_core::StableKeyInterner,
+    row: &GoSemanticRawFrame,
+) -> GoSemanticInstantiatedTypeFact {
     GoSemanticInstantiatedTypeFact {
         id: GoSemanticInstantiatedTypeId(0),
-        stable_key: harvest_stable_key(row),
+        stable_key: harvest_stable_key(interner, row),
         package_id: row.package_id.clone(),
         package_path: row.package_path.clone(),
         type_name: row.type_name.clone(),
     }
 }
 
-fn lower_dynamic_dispatch(row: &GoSemanticRawFrame) -> GoSemanticDynamicDispatchFact {
+fn lower_dynamic_dispatch(
+    interner: &crate::internal_core::StableKeyInterner,
+    row: &GoSemanticRawFrame,
+) -> GoSemanticDynamicDispatchFact {
     GoSemanticDynamicDispatchFact {
         id: GoSemanticDynamicDispatchId(0),
-        stable_key: harvest_stable_key(row),
+        stable_key: harvest_stable_key(interner, row),
         package_id: row.package_id.clone(),
         package_path: row.package_path.clone(),
         caller: row.caller.clone(),
-        callsite_stable_key: row.callsite_stable_key.clone(),
+        callsite_stable_key: interner.intern(row.callsite_stable_key_text.clone()),
         interface_type: non_empty(row.interface_type.as_str()),
         method: non_empty(row.method.as_str()),
         signature: non_empty(row.signature.as_str()),
     }
 }
 
-fn lower_rta_edge(row: &GoSemanticRawFrame) -> GoSemanticRtaEdgeFact {
+fn lower_rta_edge(
+    interner: &crate::internal_core::StableKeyInterner,
+    row: &GoSemanticRawFrame,
+) -> GoSemanticRtaEdgeFact {
     GoSemanticRtaEdgeFact {
         id: GoSemanticRtaEdgeId(0),
-        stable_key: harvest_stable_key(row),
+        stable_key: harvest_stable_key(interner, row),
         package_id: row.package_id.clone(),
         package_path: row.package_path.clone(),
         caller: row.caller.clone(),
@@ -209,10 +240,13 @@ fn lower_rta_edge(row: &GoSemanticRawFrame) -> GoSemanticRtaEdgeFact {
     }
 }
 
-fn lower_package_error(row: &GoSemanticRawFrame) -> GoSemanticPackageErrorFact {
+fn lower_package_error(
+    interner: &crate::internal_core::StableKeyInterner,
+    row: &GoSemanticRawFrame,
+) -> GoSemanticPackageErrorFact {
     GoSemanticPackageErrorFact {
         id: GoSemanticPackageErrorId(0),
-        stable_key: row_stable_key(row, "package_error"),
+        stable_key: row_stable_key(interner, row, "package_error"),
         package_id: row.package_id.clone(),
         package_path: row.package_path.clone(),
         message: row.message.clone(),
@@ -247,15 +281,15 @@ fn lower_optional_file_span(
 }
 
 fn to_span(file: FileId, span: &GoSemanticSpan) -> Span {
-    Span {
+    Span::new(
         file,
-        start_byte: span.start_byte,
-        end_byte: span.end_byte,
-        start_line: span.start_line,
-        start_col: span.start_col,
-        end_line: span.end_line,
-        end_col: span.end_col,
-    }
+        span.start_byte,
+        span.end_byte,
+        span.start_line,
+        span.start_col,
+        span.end_line,
+        span.end_col,
+    )
 }
 
 /// The sidecar-provided `stable_key` for an RTA-signal harvest row (`method_set` /
@@ -269,26 +303,36 @@ fn to_span(file: FileId, span: &GoSemanticSpan) -> Span {
 /// `drop_invalid_harvest_rows`) — a single malformed harvest row must not nuke the whole Go
 /// fact set (FINDING B), so this returns the (possibly empty) key rather than failing the
 /// entire lowering.
-fn harvest_stable_key(row: &GoSemanticRawFrame) -> String {
-    row.stable_key.clone()
+fn harvest_stable_key(
+    interner: &crate::internal_core::StableKeyInterner,
+    row: &GoSemanticRawFrame,
+) -> crate::internal_core::StableKeyId {
+    interner.intern(row.stable_key_text.clone())
 }
 
-fn row_stable_key(row: &GoSemanticRawFrame, kind: &str) -> String {
-    if !row.stable_key.is_empty() {
-        return row.stable_key.clone();
+fn row_stable_key(
+    interner: &crate::internal_core::StableKeyInterner,
+    row: &GoSemanticRawFrame,
+    kind: &str,
+) -> crate::internal_core::StableKeyId {
+    if !row.stable_key_text.is_empty() {
+        return interner.intern(row.stable_key_text.clone());
     }
-    semantic_stable_key(
-        FactFamily::SemanticImport,
-        &[
-            ("go_kind", kind.to_string()),
-            ("package", row.package_path.clone()),
-            ("name", row.qualified.clone()),
-            ("file", row.file.clone()),
-            ("caller", row.caller.clone()),
-            ("message", row.message.clone()),
-        ],
+    interner.intern(
+        semantic_stable_key(
+            interner,
+            FactFamily::SemanticImport,
+            &[
+                ("go_kind", kind.to_string()),
+                ("package", row.package_path.clone()),
+                ("name", row.qualified.clone()),
+                ("file", row.file.clone()),
+                ("caller", row.caller.clone()),
+                ("message", row.message.clone()),
+            ],
+        )
+        .into_string(),
     )
-    .into_string()
 }
 
 fn non_empty(value: &str) -> Option<String> {
@@ -312,7 +356,7 @@ mod tests {
         )
         .expect("valid protocol");
         let lowered = lower_go_semantic(&db, &output).expect("lowered");
-        assert_eq!(lowered.functions[0].file, Some(FileId(0)));
+        assert_eq!(lowered.functions[0].file, Some(FileId::from_raw(0)));
     }
 
     #[test]
@@ -337,7 +381,12 @@ mod tests {
         );
         assert_eq!(lowered.dynamic_dispatch[0].method.as_deref(), Some("M"));
         assert_eq!(lowered.dynamic_dispatch[0].signature, None);
-        assert_eq!(lowered.dynamic_dispatch[0].callsite_stable_key, "cs");
+        assert_eq!(
+            db.stable_key_interner()
+                .resolve(lowered.dynamic_dispatch[0].callsite_stable_key)
+                .as_ref(),
+            "cs"
+        );
         assert_eq!(lowered.rta_edges[0].caller, "main");
         assert_eq!(lowered.rta_edges[0].callee, "init$1");
         assert_eq!(lowered.rta_edges[0].edge_kind, "dynamic function call");
@@ -362,10 +411,17 @@ mod tests {
         let lowered = lower_go_semantic(&db, &output).expect("lowering does not fail");
         // The row is produced with an empty stable_key (no fabricated fallback).
         assert_eq!(lowered.address_taken.len(), 1);
-        assert!(lowered.address_taken[0].stable_key.is_empty());
+        assert!(
+            db.stable_key_interner()
+                .resolve(lowered.address_taken[0].stable_key)
+                .is_empty()
+        );
         // The store drops it (the bad row) without touching valid facts.
-        let store = crate::go::semantic::store::GoSemanticStore::from_output(lowered)
-            .expect("store drops the bad harvest row");
+        let store = crate::go::semantic::store::GoSemanticStore::from_output(
+            lowered,
+            &db.stable_key_interner(),
+        )
+        .expect("store drops the bad harvest row");
         assert!(store.output().address_taken.is_empty());
     }
 
@@ -382,9 +438,16 @@ mod tests {
         .expect("valid protocol");
         let lowered = lower_go_semantic(&db, &output).expect("lowering does not fail");
         assert_eq!(lowered.instantiated_types.len(), 1);
-        assert!(lowered.instantiated_types[0].stable_key.is_empty());
-        let store = crate::go::semantic::store::GoSemanticStore::from_output(lowered)
-            .expect("store drops the bad harvest row");
+        assert!(
+            db.stable_key_interner()
+                .resolve(lowered.instantiated_types[0].stable_key)
+                .is_empty()
+        );
+        let store = crate::go::semantic::store::GoSemanticStore::from_output(
+            lowered,
+            &db.stable_key_interner(),
+        )
+        .expect("store drops the bad harvest row");
         assert!(store.output().instantiated_types.is_empty());
     }
 
@@ -403,7 +466,12 @@ mod tests {
         .expect("valid protocol");
         let lowered = lower_go_semantic(&db, &output).expect("lowered");
         assert_eq!(lowered.method_sets.len(), 1);
-        assert_eq!(lowered.method_sets[0].stable_key, "ms|example.com/p.T");
+        assert_eq!(
+            db.stable_key_interner()
+                .resolve(lowered.method_sets[0].stable_key)
+                .as_ref(),
+            "ms|example.com/p.T"
+        );
     }
 
     #[test]
@@ -505,8 +573,8 @@ mod tests {
         );
     }
 
-    fn db_with_go_file(path: &str) -> AnalysisDb {
-        let mut db = AnalysisDb::new();
+    fn db_with_go_file(path: &str) -> crate::go::local_db::LocalFactDb {
+        let mut db = crate::go::local_db::LocalFactDb::new();
         db.add_file(
             PathBuf::from(path),
             path.to_string(),

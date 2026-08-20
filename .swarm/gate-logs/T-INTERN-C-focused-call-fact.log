@@ -1,0 +1,11 @@
+   Compiling polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.78s
+     Running unittests src/lib.rs (target/debug/deps/polint-af2f858c5d9987a8)
+
+running 3 tests
+test core::tests::call_fact_metadata::call_metadata_maps_unknown_statuses_to_non_exact_precision ... ok
+test core::tests::call_fact_metadata::replace_call_facts_records_metadata_provider_and_family_labels ... ok
+test core::tests::call_fact_storage::replace_call_facts_removes_stale_rows_from_previous_run ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 2341 filtered out; finished in 0.01s
+

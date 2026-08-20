@@ -2,13 +2,13 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::analysis::ids::{
+use crate::internal_core::{ModuleNodeId, ResolvedImportId, StableKeyId};
+use crate::ts::ids::{
     TsBindingId, TsDirectBindingId, TsInventoryCallsiteId, TsInventoryFunctionId,
 };
-use crate::core::{ModuleNodeId, ResolvedImportId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub(crate) enum TsDirectBindingStatus {
+pub enum TsDirectBindingStatus {
     Resolved,
     Unresolved,
     Unsupported,
@@ -16,7 +16,7 @@ pub(crate) enum TsDirectBindingStatus {
 }
 
 impl TsDirectBindingStatus {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Resolved => "resolved",
             Self::Unresolved => "unresolved",
@@ -27,7 +27,7 @@ impl TsDirectBindingStatus {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub(crate) enum TsDirectBindingReason {
+pub enum TsDirectBindingReason {
     LocalBindingMissing,
     ImportedBindingUnresolved,
     NonStringDynamicImport,
@@ -42,7 +42,7 @@ pub(crate) enum TsDirectBindingReason {
 }
 
 impl TsDirectBindingReason {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::LocalBindingMissing => "local_binding_missing",
             Self::ImportedBindingUnresolved => "imported_binding_unresolved",
@@ -61,13 +61,13 @@ impl TsDirectBindingReason {
     /// Whether this unresolved direct-binding reason is eligible for the
     /// function-token solver handoff. Property/prototype/receiver modeling stays
     /// honestly unresolved until its own analysis family exists.
-    pub(crate) fn is_function_token_handoff(self) -> bool {
+    pub fn is_function_token_handoff(self) -> bool {
         matches!(self, Self::TokenFlowRequired)
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub(crate) enum TsDirectBindingKind {
+pub enum TsDirectBindingKind {
     LocalFunction,
     LocalAlias,
     NamespaceMember,
@@ -78,21 +78,21 @@ pub(crate) enum TsDirectBindingKind {
     CommonJsRequireMember,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct TsDirectBindingFact {
-    pub(crate) id: TsDirectBindingId,
-    pub(crate) callsite: TsInventoryCallsiteId,
-    pub(crate) callsite_stable_key: String,
-    pub(crate) target_function: Option<TsInventoryFunctionId>,
-    pub(crate) target_function_stable_key: Option<String>,
-    pub(crate) scope_binding: Option<TsBindingId>,
-    pub(crate) scope_binding_stable_key: Option<String>,
-    pub(crate) resolved_import: Option<ResolvedImportId>,
-    pub(crate) module_node: Option<ModuleNodeId>,
-    pub(crate) kind: TsDirectBindingKind,
-    pub(crate) status: TsDirectBindingStatus,
-    pub(crate) reason: Option<TsDirectBindingReason>,
-    pub(crate) stable_key: String,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TsDirectBindingFact {
+    pub id: TsDirectBindingId,
+    pub callsite: TsInventoryCallsiteId,
+    pub callsite_stable_key: StableKeyId,
+    pub target_function: Option<TsInventoryFunctionId>,
+    pub target_function_stable_key: Option<StableKeyId>,
+    pub scope_binding: Option<TsBindingId>,
+    pub scope_binding_stable_key: Option<StableKeyId>,
+    pub resolved_import: Option<ResolvedImportId>,
+    pub module_node: Option<ModuleNodeId>,
+    pub kind: TsDirectBindingKind,
+    pub status: TsDirectBindingStatus,
+    pub reason: Option<TsDirectBindingReason>,
+    pub stable_key: StableKeyId,
 }
 
 #[cfg(test)]
@@ -153,24 +153,25 @@ mod tests {
 
     #[test]
     fn binding_fact_references_existing_identities_without_module_payload_copy() {
+        let interner = crate::internal_core::StableKeyInterner::default();
         let fact = TsDirectBindingFact {
             id: TsDirectBindingId(1),
             callsite: TsInventoryCallsiteId(2),
-            callsite_stable_key: "callsite:f".to_string(),
+            callsite_stable_key: interner.intern("callsite:f"),
             target_function: Some(TsInventoryFunctionId(3)),
-            target_function_stable_key: Some("function:f".to_string()),
+            target_function_stable_key: Some(interner.intern("function:f")),
             scope_binding: Some(TsBindingId(4)),
-            scope_binding_stable_key: Some("binding:f".to_string()),
-            resolved_import: Some(ResolvedImportId(5)),
-            module_node: Some(ModuleNodeId(6)),
+            scope_binding_stable_key: Some(interner.intern("binding:f")),
+            resolved_import: Some(ResolvedImportId::from_raw(5)),
+            module_node: Some(ModuleNodeId::from_raw(6)),
             kind: TsDirectBindingKind::ImportedNamed,
             status: TsDirectBindingStatus::Resolved,
             reason: None,
-            stable_key: "direct:f".to_string(),
+            stable_key: interner.intern("direct:f"),
         };
 
-        assert_eq!(fact.resolved_import, Some(ResolvedImportId(5)));
-        assert_eq!(fact.module_node, Some(ModuleNodeId(6)));
+        assert_eq!(fact.resolved_import, Some(ResolvedImportId::from_raw(5)));
+        assert_eq!(fact.module_node, Some(ModuleNodeId::from_raw(6)));
         assert_eq!(fact.status.as_str(), "resolved");
     }
 }

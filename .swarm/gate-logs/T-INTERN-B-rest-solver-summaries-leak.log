@@ -1,0 +1,60 @@
+    Blocking waiting for file lock on artifact directory
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.37s
+     Running tests/public_surface_leak.rs (target/debug/deps/public_surface_leak-18657f7a71d52b19)
+
+running 8 tests
+test semantic_store_marker_scanner_negative_controls_cover_every_family ... ok
+test allowlist_has_no_duplicates_and_expected_count ... ok
+test parser_self_test_detects_synthetic_leak ... ok
+test allowlist_matches_prelude_source ... ok
+test ensure_no_private_namespace_in_probe ... ok
+test prelude_structs_and_language_are_non_exhaustive ... ok
+test semantic_store_markers_do_not_leak_into_supported_public_surfaces ... ok
+test probe_crate_compiles_against_prelude_only ... FAILED
+
+failures:
+
+---- probe_crate_compiles_against_prelude_only stdout ----
+
+thread 'probe_crate_compiles_against_prelude_only' (36730305) panicked at crates/polint/tests/public_surface_leak.rs:367:5:
+leak-gate probe crate FAILED to compile against `polint::sdk::prelude::*`.
+A v1.0–v1.2 allow-listed identifier was likely dropped from the prelude, or the probe was tampered with.
+See crates/polint/tests/public_surface_leak.rs top comment.
+--- cargo stdout ---
+
+--- cargo stderr ---
+   Compiling libsqlite3-sys v0.38.1
+   Compiling oxc_ast v0.129.0
+   Compiling tree-sitter v0.26.9
+error: failed to run custom build command for `libsqlite3-sys v0.38.1`
+
+Caused by:
+  process didn't exit successfully: `/Users/emilwareus/conductor/workspaces/exlint/biarritz/target/debug/build/libsqlite3-sys-1dafccc6f44ff0de/build-script-build` (exit status: 101)
+  --- stdout
+  cargo:rerun-if-env-changed=LIBSQLITE3_SYS_USE_PKG_CONFIG
+
+  --- stderr
+
+  thread 'main' (36730333) panicked at /Users/emilwareus/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libsqlite3-sys-0.38.1/build.rs:39:35:
+  Could not copy bindings to output directory: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+warning: build failed, waiting for other jobs to finish...
+error: failed to run custom build command for `tree-sitter v0.26.9`
+
+Caused by:
+  process didn't exit successfully: `/Users/emilwareus/conductor/workspaces/exlint/biarritz/target/debug/build/tree-sitter-f7084ad5e0de1b21/build-script-build` (exit status: 101)
+  --- stderr
+
+  thread 'main' (36730339) panicked at /Users/emilwareus/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-0.26.9/binding_rust/build.rs:14:6:
+  called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    probe_crate_compiles_against_prelude_only
+
+test result: FAILED. 7 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.60s
+
+error: test failed, to rerun pass `-p polint --test public_surface_leak`

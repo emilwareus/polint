@@ -13,6 +13,7 @@
 /// public surface stays a single `thiserror`-derived type.
 #[derive(Debug, thiserror::Error)]
 #[error(transparent)]
+#[non_exhaustive]
 pub struct RuleError(#[from] anyhow::Error);
 
 /// Convenient [`Result`] alias for rule implementations.

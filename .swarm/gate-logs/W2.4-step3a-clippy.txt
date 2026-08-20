@@ -1,0 +1,17 @@
+    Checking polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.4/crates/polint)
+error: redundant clone
+   --> crates/polint/src/analysis_kernel/mod.rs:309:33
+    |
+309 |             module_output_digest.clone(),
+    |                                 ^^^^^^^^ help: remove this
+    |
+note: this value is dropped without further use
+   --> crates/polint/src/analysis_kernel/mod.rs:309:13
+    |
+309 |             module_output_digest.clone(),
+    |             ^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#redundant_clone
+    = note: `-D clippy::redundant-clone` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::redundant_clone)]`
+
+error: could not compile `polint` (lib) due to 1 previous error

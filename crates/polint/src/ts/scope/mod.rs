@@ -1,12 +1,13 @@
-pub(crate) mod extract;
-pub(crate) mod facts;
-pub(crate) mod store;
+#[cfg(feature = "lang-typescript")]
+pub mod extract;
+pub mod facts;
+pub mod store;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-typescript"))]
 mod direct_binding_boundary {
     use std::path::PathBuf;
 
-    use crate::core::AnalysisDb;
+    use crate::ts::local_db::LocalFactDb;
     use crate::ts::scope::extract::extract_ts_scope;
     use crate::ts::scope::facts::{TsBindingKind, TsBindingStatus};
 
@@ -27,7 +28,8 @@ Box.prototype.extra();
 "#,
         );
 
-        let output = extract_ts_scope(file);
+        let interner = crate::internal_core::StableKeyInterner::default();
+        let output = extract_ts_scope(&interner, file);
         let unsupported = output
             .bindings
             .iter()
@@ -57,7 +59,8 @@ function invoke(cb) {
 "#,
         );
 
-        let output = extract_ts_scope(file);
+        let interner = crate::internal_core::StableKeyInterner::default();
+        let output = extract_ts_scope(&interner, file);
         let callback = output
             .bindings
             .iter()
@@ -72,8 +75,8 @@ function invoke(cb) {
         ));
     }
 
-    fn fixture_file(source: &str) -> &'static crate::core::SourceFile {
-        let mut db = Box::new(AnalysisDb::new());
+    fn fixture_file(source: &str) -> &'static crate::analysis_api::SourceFile {
+        let mut db = Box::new(LocalFactDb::new());
         let file_id = db.add_file(
             PathBuf::from("src/boundary.ts"),
             "src/boundary.ts".to_string(),

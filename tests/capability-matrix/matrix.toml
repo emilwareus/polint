@@ -1,0 +1,322 @@
+# Capability matrix inventory — one cell per (prelude fact view × language).
+# Harness: crates/polint/tests/capability_matrix.rs
+# Do not merge into the golden corpus.
+
+schema = "polint-capability-matrix-1"
+languages = ["go", "typescript"]
+
+# --- Source / syntax ---
+
+[[cell]]
+view = "SourceFiles"
+language = "go"
+status = "supported"
+fixture = "go"
+
+[[cell]]
+view = "SourceFiles"
+language = "typescript"
+status = "supported"
+fixture = "typescript"
+
+[[cell]]
+view = "Packages"
+language = "go"
+status = "supported"
+fixture = "go"
+
+[[cell]]
+view = "Packages"
+language = "typescript"
+status = "unsupported"
+
+[[cell]]
+view = "Functions"
+language = "go"
+status = "supported"
+fixture = "go"
+
+[[cell]]
+view = "Functions"
+language = "typescript"
+status = "supported"
+fixture = "typescript"
+
+# --- Metrics ---
+
+[[cell]]
+view = "FileMetrics"
+language = "go"
+status = "supported"
+fixture = "go"
+
+[[cell]]
+view = "FileMetrics"
+language = "typescript"
+status = "supported"
+fixture = "typescript"
+
+[[cell]]
+view = "FunctionMetrics"
+language = "go"
+status = "supported"
+fixture = "go"
+
+[[cell]]
+view = "FunctionMetrics"
+language = "typescript"
+status = "supported"
+fixture = "typescript"
+
+[[cell]]
+view = "ComplexityMetrics"
+language = "go"
+status = "supported"
+fixture = "go"
+
+[[cell]]
+view = "ComplexityMetrics"
+language = "typescript"
+status = "supported"
+fixture = "typescript"
+
+# --- Imports / module graph ---
+
+[[cell]]
+view = "Imports"
+language = "go"
+status = "supported"
+fixture = "go"
+
+[[cell]]
+view = "Imports"
+language = "typescript"
+status = "supported"
+fixture = "typescript"
+
+[[cell]]
+view = "ResolvedImports"
+language = "go"
+status = "supported"
+fixture = "go"
+
+[[cell]]
+view = "ResolvedImports"
+language = "typescript"
+status = "supported"
+fixture = "typescript"
+
+[[cell]]
+view = "ModuleGraphFacts"
+language = "go"
+status = "supported"
+fixture = "go"
+
+[[cell]]
+view = "ModuleGraphFacts"
+language = "typescript"
+status = "supported"
+fixture = "typescript"
+
+# --- Symbols / references ---
+
+[[cell]]
+view = "Symbols"
+language = "go"
+status = "supported"
+fixture = "go"
+
+[[cell]]
+view = "Symbols"
+language = "typescript"
+status = "supported"
+fixture = "typescript"
+
+[[cell]]
+view = "References"
+language = "go"
+status = "supported"
+fixture = "go"
+
+[[cell]]
+view = "References"
+language = "typescript"
+status = "supported"
+fixture = "typescript"
+
+# --- Go-only ---
+
+[[cell]]
+view = "BranchObligations"
+language = "go"
+status = "supported"
+fixture = "go"
+
+[[cell]]
+view = "BranchObligations"
+language = "typescript"
+status = "unsupported"
+
+[[cell]]
+view = "GoTests"
+language = "go"
+status = "supported"
+fixture = "go"
+
+[[cell]]
+view = "GoTests"
+language = "typescript"
+status = "unsupported"
+
+# --- TypeScript / JSX ---
+
+[[cell]]
+view = "TsComponents"
+language = "go"
+status = "unsupported"
+
+[[cell]]
+view = "TsComponents"
+language = "typescript"
+status = "supported"
+fixture = "typescript"
+
+[[cell]]
+view = "TsClasses"
+language = "go"
+status = "unsupported"
+
+[[cell]]
+view = "TsClasses"
+language = "typescript"
+status = "supported"
+fixture = "typescript"
+
+[[cell]]
+view = "StringLiterals"
+language = "go"
+status = "supported"
+fixture = "go"
+
+[[cell]]
+view = "StringLiterals"
+language = "typescript"
+status = "supported"
+fixture = "typescript"
+
+[[cell]]
+view = "JsxAttributes"
+language = "go"
+status = "unsupported"
+
+[[cell]]
+view = "JsxAttributes"
+language = "typescript"
+status = "supported"
+fixture = "typescript"
+
+# --- Policy preview ---
+
+[[cell]]
+view = "Events"
+language = "go"
+status = "supported"
+fixture = "go"
+
+[[cell]]
+view = "Events"
+language = "typescript"
+status = "supported"
+fixture = "typescript"
+
+[[cell]]
+view = "Calls"
+language = "go"
+status = "supported"
+fixture = "go"
+
+[[cell]]
+view = "Calls"
+language = "typescript"
+status = "supported"
+fixture = "typescript"
+
+[[cell]]
+view = "ControlFlow"
+language = "go"
+status = "supported"
+fixture = "go"
+
+[[cell]]
+view = "ControlFlow"
+language = "typescript"
+status = "supported"
+fixture = "typescript"
+
+[[cell]]
+view = "DataFlow"
+language = "go"
+status = "supported"
+fixture = "go"
+
+[[cell]]
+view = "DataFlow"
+language = "typescript"
+status = "supported"
+fixture = "typescript"
+
+# --- Reserved (no language claims support) ---
+
+[[cell]]
+view = "Cfg"
+language = "go"
+status = "reserved"
+
+[[cell]]
+view = "Cfg"
+language = "typescript"
+status = "reserved"
+
+[[cell]]
+view = "CallGraph"
+language = "go"
+status = "reserved"
+
+[[cell]]
+view = "CallGraph"
+language = "typescript"
+status = "reserved"
+
+[[cell]]
+view = "CoverageFacts"
+language = "go"
+status = "reserved"
+
+[[cell]]
+view = "CoverageFacts"
+language = "typescript"
+status = "reserved"
+
+[[cell]]
+view = "TestSuiteMetrics"
+language = "go"
+status = "reserved"
+
+[[cell]]
+view = "TestSuiteMetrics"
+language = "typescript"
+status = "reserved"
+
+# --- Review-only ---
+
+[[cell]]
+view = "ChangedFiles"
+language = "go"
+status = "review_only"
+fixture = "review"
+
+[[cell]]
+view = "ChangedFiles"
+language = "typescript"
+status = "review_only"
+fixture = "review"

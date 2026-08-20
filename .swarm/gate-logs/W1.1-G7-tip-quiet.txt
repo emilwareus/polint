@@ -1,0 +1,5 @@
+=== tip G7 quiet retry ===
+EXIT:101
+5:test characterization_goldens_match_cli ... FAILED
+12:golden cost budget breached for `examples/basic/json`:
+22:test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 9.41s

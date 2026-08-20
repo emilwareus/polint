@@ -1,4 +1,4 @@
-# One-shot release: bump workspace patch version, push to main, create GitHub tag vX.Y.Z,
+# One-shot release: bump the workspace version, push to main, create GitHub tag vX.Y.Z,
 # optionally publish to crates.io, attach CLI binaries to that tag's release,
 # and move the stable action major tag.
 
@@ -7,6 +7,14 @@ name: Release
 on:
   workflow_dispatch:
     inputs:
+      bump_level:
+        # Below 1.0 a caret requirement on `0.1.x` means `>=0.1.x, <0.2.0`, so a patch
+        # release reaches every existing pin on the next `cargo update`. Choose `minor`
+        # whenever the release removes or narrows anything on the public SDK surface.
+        description: Version bump level (patch keeps existing pins on the upgrade path)
+        type: choice
+        options: [patch, minor, major]
+        default: patch
       publish_crates:
         description: Publish all workspace crates to crates.io (after tag)
         type: boolean
@@ -46,11 +54,14 @@ jobs:
       - name: Sync main
         run: git pull --rebase origin main
 
-      - name: Bump patch version
+      - name: Bump version
         id: bump
+        env:
+          BUMP_LEVEL: ${{ inputs.bump_level }}
         run: |
-          new="$(python3 scripts/bump-workspace-version.py)"
+          new="$(python3 scripts/bump-workspace-version.py "--${BUMP_LEVEL}")"
           echo "version=$new" >> "$GITHUB_OUTPUT"
+          echo "Bumped ${BUMP_LEVEL} -> ${new}"
 
       - name: Refresh Cargo.lock
         run: cargo build --workspace

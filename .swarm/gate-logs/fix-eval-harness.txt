@@ -1,0 +1,42 @@
+   Compiling polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint)
+warning: constant `MAX_COST_RATIO` is never used
+  --> crates/polint/src/golden_cost.rs:25:18
+   |
+25 | pub(crate) const MAX_COST_RATIO: f64 = 1.20;
+   |                  ^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: constant `RUNTIME_ABS_FLOOR_MS` is never used
+  --> crates/polint/src/golden_cost.rs:28:18
+   |
+28 | pub(crate) const RUNTIME_ABS_FLOOR_MS: u64 = 50;
+   |                  ^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `PEAK_RSS_ABS_FLOOR_BYTES` is never used
+  --> crates/polint/src/golden_cost.rs:31:18
+   |
+31 | pub(crate) const PEAK_RSS_ABS_FLOOR_BYTES: u64 = GATE_PEAK_RSS_ABS_FLOOR_BYTES;
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `budget_failure` is never used
+  --> crates/polint/src/golden_cost.rs:97:15
+   |
+97 | pub(crate) fn budget_failure(
+   |               ^^^^^^^^^^^^^^
+
+warning: function `metric_over_budget` is never used
+   --> crates/polint/src/golden_cost.rs:130:4
+    |
+130 | fn metric_over_budget(
+    |    ^^^^^^^^^^^^^^^^^^
+
+warning: `polint` (lib) generated 5 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 39.81s
+     Running tests/cli.rs (target/debug/deps/cli-05cf7bb24a423286)
+
+running 1 test
+test eval_harness_stays_internal ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 165 filtered out; finished in 2.28s
+

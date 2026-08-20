@@ -35,6 +35,18 @@
     "diagnostics": {
       "type": "array",
       "items": { "$ref": "#/$defs/diagnostic" }
+    },
+    "summary": {
+      "type": "object",
+      "description": "Optional rule-execution telemetry (present when the emitter has a rule registry).",
+      "required": ["rules"],
+      "additionalProperties": false,
+      "properties": {
+        "rules": {
+          "type": "array",
+          "items": { "$ref": "polint-ai-friendly-v1.json#/$defs/ruleExecution" }
+        }
+      }
     }
   },
   "$defs": {

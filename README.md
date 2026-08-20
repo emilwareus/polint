@@ -54,6 +54,18 @@ Install polint:
 cargo install polint --locked
 ```
 
+The default build includes Go and TypeScript/JavaScript analysis. Slim installs
+can select one frontend without compiling the other parser family:
+
+```bash
+cargo install polint --no-default-features --features lang-go
+cargo install polint --no-default-features --features lang-typescript
+```
+
+`all-languages` enables both frontends explicitly. If a repository contains a
+language whose feature is disabled, polint reports a `polint/capability`
+diagnostic instead of running rules against placeholder facts. Rule packs scaffolded by that binary inherit the same language-feature selection, so the local rule host does not silently restore excluded parsers. Existing rule packs are not rewritten automatically; when upgrading one, set its `polint` dependency to `default-features = false` and list the same `lang-go` and/or `lang-typescript` features explicitly.
+
 Or from GitHub Releases:
 
 ```bash
@@ -443,6 +455,19 @@ first run can still pay install, build, and analysis costs; repeat runs with the
 same relevant inputs should restore those caches. See the
 [GitHub Action guide](docs/GITHUB-ACTION.md) for inputs, cache keys, and
 pinning options.
+
+## Versions
+
+| Component | Requirement |
+|-----------|-------------|
+| Rust (MSRV) | 1.95 |
+| Go (symbol/reference sidecars) | 1.25+ on `PATH` |
+
+### Minimum Rust version
+
+polint's MSRV is **1.95** (workspace `rust-version` and root `rust-toolchain.toml`).
+`polint init` writes a matching root `rust-toolchain.toml` when missing so
+repo-local rule packs build with a compatible compiler.
 
 ## More
 

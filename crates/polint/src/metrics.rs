@@ -1,47 +1,30 @@
+use crate::analysis_api::ProviderExecution;
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
-    CacheNode, CacheStats, DependencyEdge, DependencyKind, Digest, DigestKind, LayerCacheManifest,
+    CacheNode, CacheStats, DependencyEdge, DependencyKind, Digest, LayerCacheManifest,
     LayerCacheReadStatus, LayerCacheStore, LayerCacheWriteStatus, LayerKey, PrecisionTier,
     ShapeKind,
 };
 use crate::analysis_kernel::metrics_projection::{
     CanonicalMetricsInputs, CanonicalMetricsOutput, MetricsProjectionError,
 };
+use crate::analysis_neutral::metrics::{
+    METRIC_CAPABILITIES, METRICS_LAYER_SCHEMA, MetricsLayerPayload,
+};
 use crate::analysis_plan::AnalysisPlan;
 use crate::cache::Cache;
-use crate::core::{
-    AnalysisDb, ComplexityMetricFact, FileId, FileMetricFact, FunctionMetricFact, Span,
-    is_synthetic_ts_js_module_function,
-};
+use crate::core::AnalysisDb;
 use crate::diagnostics::{Diagnostic, TextRange};
-use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-
-const METRIC_CAPABILITIES: &[&str] = &["file_metrics", "function_metrics", "complexity_metrics"];
-const METRICS_LAYER_SCHEMA: &str = "metrics-facts-v1";
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct MetricsDerivation {
     pub(crate) cache_stats: CacheStats,
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) output_digest: Option<Digest>,
+    pub(crate) execution: ProviderExecution,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct MetricsLayerPayload {
-    schema: String,
-    file_metrics: Vec<FileMetricFact>,
-    function_metrics: Vec<FunctionMetricFact>,
-    complexity_metrics: Vec<ComplexityMetricFact>,
-}
-
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Compatibility wrapper remains for direct in-crate metrics derivation callers while the kernel uses the stats-returning cache path."
-    )
-)]
+#[cfg(test)]
 pub(crate) fn derive_requested_metrics(db: &mut AnalysisDb, plan: &AnalysisPlan) {
     let _ = derive_requested_metrics_uncached(db, plan);
 }
@@ -77,6 +60,7 @@ pub(crate) fn derive_requested_metrics_with_cache_stats(
                 cache_stats,
                 diagnostics: Vec::new(),
                 output_digest: read.output_digest,
+                execution: ProviderExecution::Succeeded,
             }
         }
         LayerCacheReadStatus::BypassedDisabled => {
@@ -131,73 +115,26 @@ fn derive_requested_metrics_uncached(
     db: &mut AnalysisDb,
     plan: &AnalysisPlan,
 ) -> Result<MetricsDerivation, MetricsProjectionError> {
-    if !plan.requests_any_capability(METRIC_CAPABILITIES) {
+    let requested = plan.requests_any_capability(METRIC_CAPABILITIES);
+    if !requested {
         return Ok(MetricsDerivation::default());
     }
 
-    let mut function_counts = BTreeMap::<FileId, u32>::new();
-    for function in db
-        .functions()
-        .iter()
-        .filter(|function| !is_synthetic_ts_js_module_function(function))
+    if let Some(output) = crate::analysis_neutral::metrics::derive_requested_metrics(db, requested)
     {
-        let count = function_counts.entry(function.file).or_default();
-        *count = count.saturating_add(1);
+        db.replace_metric_facts(
+            output.file_metrics,
+            output.function_metrics,
+            output.complexity_metrics,
+        );
     }
-
-    let file_metrics = db
-        .files()
-        .iter()
-        .map(|file| FileMetricFact {
-            file: file.id,
-            language: file.language,
-            line_count: line_count(&file.source),
-            non_empty_line_count: non_empty_line_count(&file.source),
-            byte_count: saturating_u32(file.source.len()),
-            function_count: function_counts.get(&file.id).copied().unwrap_or_default(),
-        })
-        .collect::<Vec<_>>();
-
-    let function_metrics = db
-        .functions()
-        .iter()
-        .filter(|function| !is_synthetic_ts_js_module_function(function))
-        .map(|function| FunctionMetricFact {
-            function: function.id,
-            file: function.file,
-            name: function.name.clone(),
-            span: function.span.clone(),
-            language: function.language,
-            line_count: span_line_count(&function.span),
-            byte_count: function
-                .span
-                .end_byte
-                .saturating_sub(function.span.start_byte),
-        })
-        .collect::<Vec<_>>();
-
-    let complexity_metrics = db
-        .functions()
-        .iter()
-        .filter(|function| !is_synthetic_ts_js_module_function(function))
-        .map(|function| ComplexityMetricFact {
-            function: function.id,
-            file: function.file,
-            name: function.name.clone(),
-            span: function.span.clone(),
-            language: function.language,
-            cyclomatic_complexity: function.cyclomatic_complexity,
-        })
-        .collect::<Vec<_>>();
-
-    db.replace_metric_facts(file_metrics, function_metrics, complexity_metrics);
     Ok(MetricsDerivation {
         cache_stats: CacheStats::default(),
         diagnostics: Vec::new(),
         output_digest: Some(CanonicalMetricsOutput::from_db(db)?.digest()),
+        execution: Default::default(),
     })
 }
-
 fn metrics_layer_dependency_edges(
     inputs: &CanonicalMetricsInputs,
     key: &LayerKey,
@@ -228,41 +165,20 @@ fn metrics_layer_dependency_edges(
 }
 
 fn metrics_parameter_digest() -> Digest {
-    Digest::from_parts(
-        DigestKind::ProviderParameters,
-        "metrics_parameters",
-        &[
-            "output=file_metrics",
-            "output=function_metrics",
-            "output=complexity_metrics",
-        ],
-    )
+    crate::analysis_neutral::metrics::metrics_parameter_digest()
 }
 
 fn metrics_layer_payload(db: &AnalysisDb) -> MetricsLayerPayload {
-    let mut file_metrics = db.file_metrics().to_vec();
-    let mut function_metrics = db.function_metrics().to_vec();
-    let mut complexity_metrics = db.complexity_metrics().to_vec();
-    sort_file_metrics(&mut file_metrics);
-    sort_function_metrics(&mut function_metrics);
-    sort_complexity_metrics(&mut complexity_metrics);
-
-    MetricsLayerPayload {
-        schema: METRICS_LAYER_SCHEMA.to_string(),
-        file_metrics,
-        function_metrics,
-        complexity_metrics,
-    }
+    crate::analysis_neutral::metrics::metrics_layer_payload(db)
 }
 
 fn restore_metrics_layer_payload(db: &mut AnalysisDb, payload: &MetricsLayerPayload) {
-    let mut file_metrics = payload.file_metrics.clone();
-    let mut function_metrics = payload.function_metrics.clone();
-    let mut complexity_metrics = payload.complexity_metrics.clone();
-    sort_file_metrics(&mut file_metrics);
-    sort_function_metrics(&mut function_metrics);
-    sort_complexity_metrics(&mut complexity_metrics);
-    db.replace_metric_facts(file_metrics, function_metrics, complexity_metrics);
+    let output = crate::analysis_neutral::metrics::restore_metrics_layer_payload(payload);
+    db.replace_metric_facts(
+        output.file_metrics,
+        output.function_metrics,
+        output.complexity_metrics,
+    );
 }
 
 fn validate_metrics_layer_payload(
@@ -334,67 +250,6 @@ fn dependency_edge(
         kind,
         required_shape,
     }
-}
-
-fn sort_file_metrics(metrics: &mut [FileMetricFact]) {
-    metrics.sort_by_key(|metric| (metric.file, metric.language));
-}
-
-fn sort_function_metrics(metrics: &mut [FunctionMetricFact]) {
-    metrics.sort_by(|left, right| {
-        metric_order_key(left.file, left.function, &left.name, &left.span).cmp(&metric_order_key(
-            right.file,
-            right.function,
-            &right.name,
-            &right.span,
-        ))
-    });
-}
-
-fn sort_complexity_metrics(metrics: &mut [ComplexityMetricFact]) {
-    metrics.sort_by(|left, right| {
-        metric_order_key(left.file, left.function, &left.name, &left.span).cmp(&metric_order_key(
-            right.file,
-            right.function,
-            &right.name,
-            &right.span,
-        ))
-    });
-}
-
-fn metric_order_key<'a>(
-    file: FileId,
-    function: crate::core::FunctionId,
-    name: &'a str,
-    span: &Span,
-) -> (FileId, u64, u32, u32, &'a str) {
-    (file, function.0, span.start_byte, span.end_byte, name)
-}
-
-fn line_count(source: &str) -> u32 {
-    saturating_u32(source.lines().count())
-}
-
-fn non_empty_line_count(source: &str) -> u32 {
-    saturating_u32(
-        source
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .count(),
-    )
-}
-
-fn span_line_count(span: &crate::core::Span) -> u32 {
-    if span.end_line < span.start_line {
-        return 0;
-    }
-    span.end_line
-        .saturating_sub(span.start_line)
-        .saturating_add(1)
-}
-
-fn saturating_u32(value: usize) -> u32 {
-    u32::try_from(value).unwrap_or(u32::MAX)
 }
 
 #[cfg(test)]
@@ -485,25 +340,25 @@ mod tests {
         source: &str,
     ) -> FunctionId {
         let start = source.find(function_name).unwrap_or(0);
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: function_name.to_string(),
-            span: Span {
+            function_name.to_string(),
+            Span::new(
                 file,
-                start_byte: start as u32,
-                end_byte: source.len() as u32,
-                start_line: 1,
-                start_col: (start + 1) as u32,
-                end_line: source.lines().count() as u32,
-                end_col: 1,
-            },
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 2,
-            calls: Vec::new(),
-        })
+                start as u32,
+                source.len() as u32,
+                1,
+                (start + 1) as u32,
+                source.lines().count() as u32,
+                1,
+            ),
+            Language::TypeScript,
+            false,
+            true,
+            2,
+            Vec::new(),
+        ))
     }
 
     #[test]
@@ -530,45 +385,29 @@ mod tests {
             "src/app.ts".to_string(),
             "export function handler() {\n  if (ok) return 1;\n  return 0;\n}\n".to_string(),
         );
-        let span = Span {
+        let span = Span::new(file, 0, 62, 1, 1, 4, 2);
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            start_byte: 0,
-            end_byte: 62,
-            start_line: 1,
-            start_col: 1,
-            end_line: 4,
-            end_col: 2,
-        };
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
+            TS_JS_MODULE_FUNCTION_NAME.to_string(),
+            Span::new(file, 0, 63, 1, 1, 5, 1),
+            Language::TypeScript,
+            false,
+            false,
+            1,
+            Vec::new(),
+        ));
+        let function = db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: TS_JS_MODULE_FUNCTION_NAME.to_string(),
-            span: Span {
-                file,
-                start_byte: 0,
-                end_byte: 63,
-                start_line: 1,
-                start_col: 1,
-                end_line: 5,
-                end_col: 1,
-            },
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: false,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
-        let function = db.push_function(FunctionFact {
-            id: FunctionId(0),
-            file,
-            name: "handler".to_string(),
+            "handler".to_string(),
             span,
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 2,
-            calls: Vec::new(),
-        });
+            Language::TypeScript,
+            false,
+            true,
+            2,
+            Vec::new(),
+        ));
         let plan = AnalysisPlan::from_capability_names_for_test(&["file_metrics"]);
 
         derive_requested_metrics(&mut db, &plan);
@@ -601,26 +440,18 @@ mod tests {
             "src/app.ts".to_string(),
             "export function handler() { return 1; }\n".to_string(),
         );
-        let span = Span {
+        let span = Span::new(file, 0, 37, 1, 1, 1, 38);
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            start_byte: 0,
-            end_byte: 37,
-            start_line: 1,
-            start_col: 1,
-            end_line: 1,
-            end_col: 38,
-        };
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
-            file,
-            name: "handler".to_string(),
+            "handler".to_string(),
             span,
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
 
         derive_requested_metrics(&mut db, &AnalysisPlan::empty());
 
@@ -664,36 +495,32 @@ mod tests {
             "src/app.ts".to_string(),
             "export function handler() {\n  return 1;\n}\n".to_string(),
         );
-        let span = Span {
+        let span = Span::new(file, 0, 40, 1, 1, 3, 2);
+        let function = db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            start_byte: 0,
-            end_byte: 40,
-            start_line: 1,
-            start_col: 1,
-            end_line: 3,
-            end_col: 2,
-        };
-        let function = db.push_function(FunctionFact {
-            id: FunctionId(0),
-            file,
-            name: "handler".to_string(),
+            "handler".to_string(),
             span,
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
         let file_key = db
-            .metadata_for(FactRef::new(FactFamily::SourceFile, u64::from(file.0)))
-            .expect("source metadata should exist")
-            .stable_key
-            .clone();
+            .resolve_stable_key(
+                db.metadata_for(FactRef::new(FactFamily::SourceFile, u64::from(file.0)))
+                    .expect("source metadata should exist")
+                    .stable_key,
+            )
+            .to_string();
         let function_key = db
-            .metadata_for(FactRef::new(FactFamily::Function, function.0))
-            .expect("function metadata should exist")
-            .stable_key
-            .clone();
+            .resolve_stable_key(
+                db.metadata_for(FactRef::new(FactFamily::Function, function.0))
+                    .expect("function metadata should exist")
+                    .stable_key,
+            )
+            .to_string();
 
         derive_requested_metrics(
             &mut db,
@@ -715,15 +542,32 @@ mod tests {
         assert_eq!(file_metric.precision, FactPrecision::Syntax);
         assert_eq!(file_metric.confidence, FactConfidence::High);
         assert_eq!(file_metric.validation, ValidationStatus::NativeTrusted);
-        assert!(file_metric.stable_key.contains(&file_key));
-        assert!(function_metric.stable_key.contains(&function_key));
-        assert!(function_metric.stable_key.contains("metric_name"));
-        assert!(function_metric.stable_key.contains("function_size"));
-        assert!(complexity_metric.stable_key.contains(&function_key));
-        assert!(complexity_metric.stable_key.contains("metric_name"));
         assert!(
-            complexity_metric
-                .stable_key
+            db.resolve_stable_key(file_metric.stable_key)
+                .contains(&file_key)
+        );
+        assert!(
+            db.resolve_stable_key(function_metric.stable_key)
+                .contains(&function_key)
+        );
+        assert!(
+            db.resolve_stable_key(function_metric.stable_key)
+                .contains("metric_name")
+        );
+        assert!(
+            db.resolve_stable_key(function_metric.stable_key)
+                .contains("function_size")
+        );
+        assert!(
+            db.resolve_stable_key(complexity_metric.stable_key)
+                .contains(&function_key)
+        );
+        assert!(
+            db.resolve_stable_key(complexity_metric.stable_key)
+                .contains("metric_name")
+        );
+        assert!(
+            db.resolve_stable_key(complexity_metric.stable_key)
                 .contains("cyclomatic_complexity")
         );
     }

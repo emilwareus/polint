@@ -1,12 +1,10 @@
-pub(crate) mod cache_key;
-pub(crate) mod direct_calls;
-pub(crate) mod facts;
-pub(crate) mod local;
-pub(crate) mod provider;
-pub(crate) mod query;
-pub(crate) mod store;
-pub(crate) mod summary_edges;
-pub(crate) mod validate;
-
-#[cfg(test)]
-pub(crate) mod debug;
+#![allow(unused_imports)]
+pub(crate) use crate::analysis_neutral::data_flow::cache_key;
+pub(crate) use crate::analysis_neutral::data_flow::debug;
+pub(crate) use crate::analysis_neutral::data_flow::direct_calls;
+pub(crate) use crate::analysis_neutral::data_flow::facts;
+pub(crate) use crate::analysis_neutral::data_flow::local;
+pub(crate) use crate::analysis_neutral::data_flow::provider;
+pub(crate) use crate::analysis_neutral::data_flow::store;
+pub(crate) use crate::analysis_neutral::data_flow::summary_edges;
+pub(crate) use crate::analysis_neutral::data_flow::validate;

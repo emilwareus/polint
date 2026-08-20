@@ -1,0 +1,9 @@
+   Compiling polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.2/crates/polint)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.41s
+     Running tests/public_surface_leak.rs (target/debug/deps/public_surface_leak-18657f7a71d52b19)
+
+running 1 test
+test prelude_structs_and_language_are_non_exhaustive ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.01s
+

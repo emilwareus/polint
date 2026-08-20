@@ -1,0 +1,16 @@
+   Compiling polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.2/crates/polint)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.44s
+     Running tests/golden.rs (target/debug/deps/golden-0b79c88cdf5488ee)
+
+running 8 tests
+test characterization_goldens_match_cli ... ok
+test ci_workflows_never_set_golden_update_env ... ok
+test cost_budget_helper_rejects_clear_regression ... ok
+test diagnostic_set_diff_names_lost_fingerprints ... ok
+test example_golden_cases_cover_inventory_rule_packs ... ok
+test golden_updates_require_explicit_env_flag ... ok
+test normalize_sorts_diagnostics_by_stable_fingerprint ... ok
+test scale_cases_are_optional_and_discovered ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 49.46s
+

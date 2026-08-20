@@ -217,13 +217,21 @@ into your prompt; query it with bounded commands:
 
 ```bash
 jq '.summary.by_rule' .polint/output/latest.json
+jq '.summary.rules[] | select(.diagnostics_emitted == 0)' .polint/output/latest.json
 jq '[.diagnostics[] | select(.rule_id=="local/no-raw-colors")][0:20]' .polint/output/latest.json
 jq '.diagnostics[] | select(.file=="src/Button.tsx") | {{rule_id, range, message}}' .polint/output/latest.json | head -c 12000
 ```
 
+`summary.rules` lists every registered rule for the run, including rules that
+matched nothing or were skipped for capability reasons. Use
+`.diagnostics_emitted == 0` to find silent rules; `files_in_scope` and
+`skipped_reason` explain why.
+
 Use `polint check --format json` when another program needs the full report on
 stdout. JSON is a versioned report object with a `diagnostics` array (not a bare
-array at the root); the schema lives in `docs/schemas/polint-report-v1.json` in
+array at the root); when a rule host ran, `summary.rules` carries the same
+per-rule execution telemetry as ai-friendly output. The schema lives in
+`docs/schemas/polint-report-v1.json` in
 the polint repo. Human output uses ANSI colors on a TTY unless `NO_COLOR` is set;
 use `--color never` for plain text. Use `polint check --format sarif` for CI
 upload paths. Use `--fail-on warn`, `error`, or `none` to control the exit
@@ -282,8 +290,9 @@ Repo-local rules live in **one** Rust package under `.polint/rules/`:
 ```
 
 `polint new-rule <lang> <name>` adds `src/<name_with_underscores>.rs`, wires it
-into `src/main.rs`, and creates positive and negative fixture cases under
-`.polint/tests/rules/<name_with_underscores>/`. For v1.4 policy-query starters,
+into `src/main.rs`, and creates clean and violating fixture cases under
+`.polint/tests/rules/<name_with_underscores>/` (`clean` expects no diagnostic;
+`violating` expects the rule to fire). For v1.4 policy-query starters,
 use `--template <id>` with TypeScript for `request-to-shell`, `secret-to-log`,
 `pii-to-analytics`, `sensitive-write-guard`, `transaction-cleanup`,
 `raw-reachable-api`, `ssrf`, `dangerous-html`, `unsafe-deserialization`, or
@@ -502,4 +511,35 @@ fn display_relative(root: &Path, path: &Path) -> String {
         .unwrap_or(path)
         .to_string_lossy()
         .replace('\\', "/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn repo_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    #[test]
+    fn checked_in_skills_match_generated_skill_markdown_byte_for_byte() {
+        let claude_path = repo_root().join(".claude/skills/polint/SKILL.md");
+        let codex_path = repo_root().join(".agents/skills/polint/SKILL.md");
+        let checked_in_claude = fs::read_to_string(&claude_path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", claude_path.display()));
+        let checked_in_codex = fs::read_to_string(&codex_path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", codex_path.display()));
+        assert_eq!(
+            checked_in_claude,
+            skill_markdown(SkillAgent::Claude),
+            "{} must match skill_markdown(Claude) byte-for-byte",
+            claude_path.display()
+        );
+        assert_eq!(
+            checked_in_codex,
+            skill_markdown(SkillAgent::Codex),
+            "{} must match skill_markdown(Codex) byte-for-byte",
+            codex_path.display()
+        );
+    }
 }

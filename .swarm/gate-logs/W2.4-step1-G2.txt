@@ -1,0 +1,60 @@
+    Checking regex-syntax v0.8.10
+   Compiling polint-macros v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.4/crates/polint-macros)
+   Compiling getrandom v0.3.4
+   Compiling zerocopy v0.8.48
+    Checking wait-timeout v0.2.1
+    Checking predicates-core v1.0.10
+    Checking bit-vec v0.8.0
+    Checking difflib v0.4.0
+    Checking normalize-line-endings v0.3.0
+   Compiling assert_cmd v2.2.1
+    Checking quick-error v1.2.3
+    Checking termtree v0.5.1
+    Checking fnv v1.0.7
+    Checking console v0.16.3
+    Checking similar v2.7.0
+    Checking unarray v0.1.4
+    Checking unicode-ident v1.0.24
+    Checking polint-eval v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.4/crates/polint-eval)
+    Checking predicates-tree v1.0.13
+    Checking rusty-fork v0.3.1
+    Checking bit-set v0.8.0
+    Checking proc-macro2 v1.0.106
+    Checking insta v1.47.2
+    Checking quote v1.0.45
+    Checking syn v2.0.117
+    Checking rand_core v0.9.5
+    Checking rand_xorshift v0.4.0
+    Checking rand v0.9.4
+    Checking regex-automata v0.4.14
+    Checking regex v1.12.3
+    Checking bstr v1.12.1
+    Checking matchers v0.2.0
+    Checking tracing-subscriber v0.3.23
+    Checking tree-sitter v0.26.8
+    Checking predicates v3.1.4
+    Checking globset v0.4.18
+    Checking ignore v0.4.25
+    Checking polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.4/crates/polint)
+    Checking ppv-lite86 v0.2.21
+    Checking rand_chacha v0.9.0
+    Checking proptest v1.11.0
+    Checking polint-bench v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.4/crates/polint-bench)
+    Checking polint-example-comment-ignores-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.4/examples/comment-ignores/.polint/rules)
+    Checking polint-example-ts-design-tokens-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.4/examples/ts-design-tokens/.polint/rules)
+    Checking polint-example-custom-go-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.4/examples/custom-rule-go/.polint/rules)
+    Checking polint-example-gorm-review-indexes v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.4/examples/gorm-review-indexes/.polint/rules)
+    Checking polint-example-go-import-boundaries-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.4/examples/go-import-boundaries/.polint/rules)
+    Checking polint-example-basic-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.4/examples/basic/.polint/rules)
+    Checking polint-example-ts-no-raw-api-calls-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.4/examples/ts-no-raw-api-calls/.polint/rules)
+    Checking polint-example-go-sensitive-writes-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.4/examples/go-sensitive-writes/.polint/rules)
+    Checking polint-example-custom-ts-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.4/examples/custom-rule-ts/.polint/rules)
+    Checking polint-example-go-complexity-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.4/examples/go-complexity/.polint/rules)
+    Checking polint-example-multiple-rules v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.4/examples/multiple-rules/.polint/rules)
+    Checking polint-example-review-rules v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.4/examples/review-rules/.polint/rules)
+    Checking polint-example-go-test-quality-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.4/examples/go-test-quality/.polint/rules)
+    Checking polint-example-code-quality-metrics-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.4/examples/code-quality-metrics/.polint/rules)
+    Checking polint-example-config-denied-literal-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.4/examples/config-denied-literal/.polint/rules)
+    Checking polint-example-go-branch-obligations-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.4/examples/go-branch-obligations/.polint/rules)
+    Checking polint-example-ts-complexity-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.4/examples/ts-complexity/.polint/rules)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 26.94s

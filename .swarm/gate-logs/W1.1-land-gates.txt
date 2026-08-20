@@ -1,0 +1,102 @@
+=== G1 W1.1 2026-08-08T13:18:34+02:00 ===
+G1_EXIT=0
+=== G2 W1.1 ===
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Checking polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.1/crates/polint)
+    Checking polint-bench v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.1/crates/polint-bench)
+    Checking polint-example-go-import-boundaries-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.1/examples/go-import-boundaries/.polint/rules)
+    Checking polint-example-go-test-quality-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.1/examples/go-test-quality/.polint/rules)
+    Checking polint-example-comment-ignores-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.1/examples/comment-ignores/.polint/rules)
+    Checking polint-example-review-rules v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.1/examples/review-rules/.polint/rules)
+    Checking polint-example-ts-no-raw-api-calls-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.1/examples/ts-no-raw-api-calls/.polint/rules)
+    Checking polint-example-go-complexity-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.1/examples/go-complexity/.polint/rules)
+    Checking polint-example-ts-design-tokens-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.1/examples/ts-design-tokens/.polint/rules)
+    Checking polint-example-multiple-rules v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.1/examples/multiple-rules/.polint/rules)
+    Checking polint-example-ts-complexity-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.1/examples/ts-complexity/.polint/rules)
+    Checking polint-example-go-branch-obligations-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.1/examples/go-branch-obligations/.polint/rules)
+    Checking polint-example-code-quality-metrics-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.1/examples/code-quality-metrics/.polint/rules)
+    Checking polint-example-config-denied-literal-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.1/examples/config-denied-literal/.polint/rules)
+    Checking polint-example-custom-go-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.1/examples/custom-rule-go/.polint/rules)
+    Checking polint-example-gorm-review-indexes v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.1/examples/gorm-review-indexes/.polint/rules)
+    Checking polint-example-go-sensitive-writes-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.1/examples/go-sensitive-writes/.polint/rules)
+    Checking polint-example-basic-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.1/examples/basic/.polint/rules)
+    Checking polint-example-custom-ts-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.1/examples/custom-rule-ts/.polint/rules)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 25.97s
+G2_EXIT=0
+=== G4 W1.1 ===
+   Compiling polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.1/crates/polint)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.10s
+     Running tests/public_surface_leak.rs (target/debug/deps/public_surface_leak-18657f7a71d52b19)
+
+running 8 tests
+test semantic_store_marker_scanner_negative_controls_cover_every_family ... ok
+test allowlist_has_no_duplicates_and_expected_count ... ok
+test parser_self_test_detects_synthetic_leak ... ok
+test allowlist_matches_prelude_source ... ok
+test ensure_no_private_namespace_in_probe ... ok
+test prelude_structs_and_language_are_non_exhaustive ... ok
+test semantic_store_markers_do_not_leak_into_supported_public_surfaces ... ok
+test probe_crate_compiles_against_prelude_only has been running for over 60 seconds
+test probe_crate_compiles_against_prelude_only ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 73.27s
+
+G4_EXIT=0
+=== G5 W1.1 ===
+   Compiling polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.1/crates/polint)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 17s
+     Running unittests src/lib.rs (target/debug/deps/polint-af2f858c5d9987a8)
+
+running 13 tests
+test eval::determinism_gate::permutation_seeds_are_distinct_and_not_all_identity ... ok
+test eval::determinism_gate::shuffled_provider_count_equals_manifest_count ... ok
+test eval::determinism_gate::ts_object_model_solver_output_is_byte_identical_under_permuted_inputs ... ok
+test eval::determinism_gate::ts_reachable_fixture_exercises_reachable_graph_marking ... ok
+test eval::determinism_gate::ts_tokens_solver_output_is_byte_identical_under_permuted_inputs ... ok
+test eval::determinism_gate::go_reachable_fixture_exercises_reachable_graph_marking ... ok
+test eval::determinism_gate::go_rta_fixture_exercises_reachable_graph_marking ... ok
+test eval::determinism_gate::go_rta_solver_output_is_byte_identical_under_permuted_fact_insertion_order ... ok
+test eval::determinism_gate::ts_object_model_fixture_is_byte_identical_under_ten_seeded_permutations ... ok
+test eval::determinism_gate::ts_reachable_fixture_is_byte_identical_under_ten_seeded_permutations ... ok
+test eval::determinism_gate::go_reachable_fixture_is_byte_identical_under_ten_seeded_permutations ... ok
+test eval::determinism_gate::ts_tokens_fixture_is_byte_identical_under_ten_seeded_permutations ... ok
+test eval::determinism_gate::go_rta_fixture_is_byte_identical_under_ten_seeded_permutations ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 2507 filtered out; finished in 31.82s
+
+G5_EXIT=0
+=== G7 W1.1 ===
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
+     Running tests/golden.rs (target/debug/deps/golden-0b79c88cdf5488ee)
+
+running 8 tests
+test golden_updates_require_explicit_env_flag ... ok
+test cost_budget_helper_rejects_clear_regression ... ok
+test diagnostic_set_diff_names_lost_fingerprints ... ok
+test normalize_sorts_diagnostics_by_stable_fingerprint ... ok
+test ci_workflows_never_set_golden_update_env ... ok
+test scale_cases_are_optional_and_discovered ... ok
+test example_golden_cases_cover_inventory_rule_packs ... ok
+test characterization_goldens_match_cli ... FAILED
+
+failures:
+
+---- characterization_goldens_match_cli stdout ----
+
+thread 'characterization_goldens_match_cli' (4984827) panicked at crates/polint/tests/golden.rs:494:9:
+golden cost budget breached for `examples/go-import-boundaries/json`:
+  wall_clock_ms: measured 82 exceeds budget (baseline 17, ratio 4.8235, max 1.2, abs floor +50)
+baseline=GoldenCostRecord { schema_version: "polint-golden-cost-1", wall_clock_ms: 17, peak_rss_bytes: 24068096, peak_rss_delta_bytes: 17186816 }
+measured=GoldenCostRecord { schema_version: "polint-golden-cost-1", wall_clock_ms: 82, peak_rss_bytes: 24150016, peak_rss_delta_bytes: 17268736 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    characterization_goldens_match_cli
+
+test result: FAILED. 7 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 43.23s
+
+error: test failed, to rerun pass `-p polint --test golden`
+G7_EXIT=101
+=== DONE W1.1 2026-08-08T13:23:04+02:00 ===

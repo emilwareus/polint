@@ -1,10 +1,9 @@
-pub(crate) mod cache_key;
-pub(crate) mod dedup;
-pub(crate) mod facts;
+#![allow(unused_imports)]
 pub(crate) mod provider;
-pub(crate) mod render;
-// Placed after `render` per Plan 42-03 BLOCKER #3 sequencing (Wave 3 adds the
-// categorize submodule after the Plan 02 render submodule).
-pub(crate) mod categorize;
-pub(crate) mod store;
-pub(crate) mod validate;
+pub(crate) use crate::analysis_neutral::identity::cache_key;
+pub(crate) use crate::analysis_neutral::identity::categorize;
+pub(crate) use crate::analysis_neutral::identity::dedup;
+pub(crate) use crate::analysis_neutral::identity::facts;
+pub(crate) use crate::analysis_neutral::identity::render;
+pub(crate) use crate::analysis_neutral::identity::store;
+pub(crate) use crate::analysis_neutral::identity::validate;

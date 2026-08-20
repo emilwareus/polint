@@ -1,0 +1,9 @@
+=== evidence 2026-08-08T14:35:34+02:00 ===
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/polint-af2f858c5d9987a8)
+
+running 1 test
+test policy_queries::tests::policy_query_findings_carry_replayable_evidence ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2522 filtered out; finished in 0.00s
+

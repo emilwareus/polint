@@ -1,0 +1,39 @@
+=== R7 mutation test (expect FAIL) ===
+   Compiling polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.1/crates/polint)
+warning: unreachable statement
+  --> crates/polint/src/analysis/mir/lower_ts.rs:82:13
+   |
+81 |               continue;
+   |               -------- any code following this expression is unreachable
+82 | /             let span = match (error.start_byte, error.end_byte) {
+83 | |                 (Some(start), Some(end)) => {
+84 | |                     crate::core::span_from_byte_range(file.id, file.source.as_ref(), start, end)
+...  |
+87 | |             };
+   | |______________^ unreachable statement
+   |
+   = note: `#[warn(unreachable_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `polint` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.38s
+     Running unittests src/lib.rs (target/debug/deps/polint-af2f858c5d9987a8)
+
+running 1 test
+test analysis::mir::lower_ts::places::a_recoverable_syntax_error_is_recorded_as_unsupported_not_ignored ... FAILED
+
+failures:
+
+---- analysis::mir::lower_ts::places::a_recoverable_syntax_error_is_recorded_as_unsupported_not_ignored stdout ----
+
+thread 'analysis::mir::lower_ts::places::a_recoverable_syntax_error_is_recorded_as_unsupported_not_ignored' (4792527) panicked at crates/polint/src/analysis/mir/lower_ts.rs:3176:9:
+inspect unknowns must surface parser-recovery unsupported rows: []
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    analysis::mir::lower_ts::places::a_recoverable_syntax_error_is_recorded_as_unsupported_not_ignored
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2516 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `-p polint --lib`
+R7_TEST_EXIT= (non-zero means wired/PASS)

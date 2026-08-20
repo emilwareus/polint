@@ -14,12 +14,12 @@ use super::digest::{Digest, DigestKind};
 use crate::analysis_kernel::ProviderManifest;
 use crate::cache::{CACHE_VERSION, CacheKey};
 use crate::core::AnalysisDb;
-use crate::module_graph::formats::pnpm_workspace::parse_pnpm_workspace_packages;
-use crate::module_graph::paths::{
+use crate::repo_fs::{
     TOPOLOGY_LOCKFILE_MAX_BYTES, TOPOLOGY_MANIFEST_MAX_BYTES, normalize_repo_relative,
     normalize_repo_relative_input, read_repo_file_to_string_with_limit, read_repo_file_with_limit,
     repo_dir_path, repo_file_exists, repo_file_path, repo_relative_existing_path,
 };
+use crate::ts::module_graph::parse_pnpm_workspace_packages;
 
 pub(crate) const MODULE_GRAPH_TOPOLOGY_INPUT_FILE_NAMES: &[&str] = &[
     "go.mod",
@@ -35,33 +35,9 @@ pub(crate) const MODULE_GRAPH_TOPOLOGY_INPUT_FILE_NAMES: &[&str] = &[
     "tsconfig.json",
 ];
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum LayerKind {
-    SourceFiles,
-    GoSyntax,
-    TsSyntax,
-    ModuleGraph,
-    SymbolGraph,
-    ModuleTopology,
-    SemanticMir,
-    Cfg,
-    Calls,
-    AbstractDomains,
-    DirectSummaries,
-    TypeValueAlias,
-    DemandQuery,
-    Metrics,
-    Extension,
-}
+pub(crate) use crate::analysis_api::LayerKind;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum PrecisionTier {
-    Syntax,
-    SetupAware,
-    Exact,
-}
+pub(crate) use crate::analysis_api::PrecisionTier;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) struct LayerKey {
@@ -78,19 +54,12 @@ pub(crate) struct LayerKey {
     pub(crate) extension_digests: Arc<Vec<Digest>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub(crate) struct QueryKey {
-    pub(crate) query_kind: String,
-    pub(crate) query_version: String,
-    pub(crate) parameter_digest: Digest,
-    pub(crate) layer_digests: Vec<Digest>,
-    pub(crate) budget_digest: Digest,
-    pub(crate) precision_tier: PrecisionTier,
-}
+pub(crate) use crate::analysis_api::QueryKey;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) struct SummaryKey {
-    pub(crate) callable_stable_key: String,
+    #[serde(rename = "callable_stable_key")]
+    pub(crate) callable_stable_key_text: String,
     pub(crate) summary_domain: String,
     pub(crate) summary_version: String,
     pub(crate) body_shape_digest: Digest,
@@ -602,76 +571,6 @@ impl LayerKey {
         )
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "Abstract-domain identity must keep MIR, CFG, calls, lifecycle, policy, and future model inputs explicit."
-    )]
-    pub(crate) fn abstract_domains_layer_key(
-        manifest: &ProviderManifest,
-        source_function_digests: Vec<Digest>,
-        config_digest: Digest,
-        go_lifecycle_digest: Digest,
-        ts_js_lifecycle_digest: Digest,
-        upstream_syntax_output_digests: Vec<Digest>,
-        semantic_mir_output_digest: Digest,
-        cfg_output_digest: Digest,
-        calls_output_digest: Digest,
-        symbol_graph_output_digest: Digest,
-        module_topology_output_digest: Digest,
-        abstract_domains_parameter_digest: Digest,
-    ) -> Self {
-        debug_assert_eq!(
-            manifest.id, "polint.abstract_domains",
-            "abstract-domain layer keys require the abstract domains provider manifest"
-        );
-
-        let lifecycle_digest = Digest::from_unordered(
-            DigestKind::ProviderParameters,
-            "abstract_domains_lifecycle_inputs",
-            vec![go_lifecycle_digest.clone(), ts_js_lifecycle_digest.clone()],
-        );
-        let parameter_digest = Digest::from_unordered(
-            DigestKind::ProviderParameters,
-            "abstract_domains_parameters",
-            vec![abstract_domains_parameter_digest.clone()],
-        );
-        let mut input_digests = Vec::with_capacity(3 + source_function_digests.len());
-        input_digests.push(go_lifecycle_digest);
-        input_digests.push(ts_js_lifecycle_digest);
-        input_digests.push(abstract_domains_parameter_digest);
-        input_digests.extend(source_function_digests);
-
-        let mut dependency_layer_digests =
-            Vec::with_capacity(5 + upstream_syntax_output_digests.len());
-        dependency_layer_digests.extend(
-            upstream_syntax_output_digests
-                .into_iter()
-                .map(dependency_layer_digest),
-        );
-        dependency_layer_digests.push(dependency_layer_digest(semantic_mir_output_digest));
-        dependency_layer_digests.push(dependency_layer_digest(cfg_output_digest));
-        dependency_layer_digests.push(dependency_layer_digest(calls_output_digest));
-        dependency_layer_digests.push(dependency_layer_digest(symbol_graph_output_digest));
-        dependency_layer_digests.push(dependency_layer_digest(module_topology_output_digest));
-
-        Self::new(
-            LayerKind::AbstractDomains,
-            manifest.id,
-            manifest.provider_version(),
-            manifest.primary_schema_label(),
-            parameter_digest,
-            lifecycle_digest,
-            config_digest,
-            Digest::absent(DigestKind::ToolInvocation, "abstract_domains_toolchain"),
-            input_digests,
-            dependency_layer_digests,
-            vec![
-                Digest::absent(DigestKind::ExtensionCode, "extension_digest_absent"),
-                Digest::absent(DigestKind::ModelFile, "model_digest_absent"),
-            ],
-        )
-    }
-
     // Layer cache reuse for direct summaries supports demand queries and SCC caching.
     #[expect(dead_code, reason = "kept for private internal consumers")]
     #[expect(
@@ -813,29 +712,9 @@ impl LayerKey {
     }
 }
 
-impl QueryKey {
-    pub(crate) fn new(
-        query_kind: impl Into<String>,
-        query_version: impl Into<String>,
-        parameter_digest: Digest,
-        layer_digests: Vec<Digest>,
-        budget_digest: Digest,
-        precision_tier: PrecisionTier,
-    ) -> Self {
-        Self {
-            query_kind: query_kind.into(),
-            query_version: query_version.into(),
-            parameter_digest,
-            layer_digests: sorted_digests(layer_digests),
-            budget_digest,
-            precision_tier,
-        }
-    }
-}
-
 impl SummaryKey {
     pub(crate) fn new(
-        callable_stable_key: impl Into<String>,
+        callable_stable_key_text: impl Into<String>,
         summary_domain: impl Into<String>,
         summary_version: impl Into<String>,
         body_shape_digest: Digest,
@@ -843,7 +722,7 @@ impl SummaryKey {
         extension_digest: Digest,
     ) -> Self {
         Self {
-            callable_stable_key: callable_stable_key.into(),
+            callable_stable_key_text: callable_stable_key_text.into(),
             summary_domain: summary_domain.into(),
             summary_version: summary_version.into(),
             body_shape_digest,
@@ -2179,7 +2058,7 @@ mod tests {
                 Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["base"]),
-                crate::analysis::cache_key::semantic_mir_provider_parameter_digest(),
+                crate::analysis_neutral::cache_key::semantic_mir_provider_parameter_digest(),
             );
 
             let changed_source = semantic_mir_key(
@@ -2194,7 +2073,7 @@ mod tests {
                 Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["base"]),
-                crate::analysis::cache_key::semantic_mir_provider_parameter_digest(),
+                crate::analysis_neutral::cache_key::semantic_mir_provider_parameter_digest(),
             );
             let changed_config = semantic_mir_key(
                 Digest::from_parts(
@@ -2208,7 +2087,7 @@ mod tests {
                 Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["base"]),
-                crate::analysis::cache_key::semantic_mir_provider_parameter_digest(),
+                crate::analysis_neutral::cache_key::semantic_mir_provider_parameter_digest(),
             );
             let changed_go_lifecycle = semantic_mir_key(
                 Digest::from_parts(
@@ -2222,7 +2101,7 @@ mod tests {
                 Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["base"]),
-                crate::analysis::cache_key::semantic_mir_provider_parameter_digest(),
+                crate::analysis_neutral::cache_key::semantic_mir_provider_parameter_digest(),
             );
             let changed_ts_lifecycle = semantic_mir_key(
                 Digest::from_parts(
@@ -2236,7 +2115,7 @@ mod tests {
                 Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["base"]),
-                crate::analysis::cache_key::semantic_mir_provider_parameter_digest(),
+                crate::analysis_neutral::cache_key::semantic_mir_provider_parameter_digest(),
             );
             let changed_syntax = semantic_mir_key(
                 Digest::from_parts(
@@ -2250,7 +2129,7 @@ mod tests {
                 Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["changed"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["base"]),
-                crate::analysis::cache_key::semantic_mir_provider_parameter_digest(),
+                crate::analysis_neutral::cache_key::semantic_mir_provider_parameter_digest(),
             );
             let changed_symbol = semantic_mir_key(
                 Digest::from_parts(
@@ -2264,7 +2143,7 @@ mod tests {
                 Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["changed"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["base"]),
-                crate::analysis::cache_key::semantic_mir_provider_parameter_digest(),
+                crate::analysis_neutral::cache_key::semantic_mir_provider_parameter_digest(),
             );
             let changed_topology = semantic_mir_key(
                 Digest::from_parts(
@@ -2278,7 +2157,7 @@ mod tests {
                 Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["changed"]),
-                crate::analysis::cache_key::semantic_mir_provider_parameter_digest(),
+                crate::analysis_neutral::cache_key::semantic_mir_provider_parameter_digest(),
             );
             let changed_parameters = semantic_mir_key(
                 Digest::from_parts(
@@ -2323,7 +2202,7 @@ mod tests {
                 Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["base"]),
-                crate::analysis::cache_key::semantic_mir_provider_parameter_digest(),
+                crate::analysis_neutral::cache_key::semantic_mir_provider_parameter_digest(),
             );
             let rule_code = Digest::from_parts(DigestKind::RuleCode, "rule", &["changed"]);
 
@@ -2816,7 +2695,7 @@ mod symbol_graph_semantic_layer_key {
 #[cfg(test)]
 mod cfg_layer_key {
     use super::*;
-    use crate::analysis::cfg::cache_key::cfg_provider_parameter_digest;
+    use crate::analysis_neutral::cfg::cache_key::cfg_provider_parameter_digest;
 
     fn manifest() -> &'static crate::analysis_kernel::ProviderManifest {
         crate::analysis_kernel::AnalysisKernel::provider_manifests()
@@ -3022,7 +2901,7 @@ mod cfg_layer_key {
 #[cfg(test)]
 mod calls_layer_key {
     use super::*;
-    use crate::analysis::calls::cache_key::calls_provider_parameter_digest;
+    use crate::analysis_neutral::calls::cache_key::calls_provider_parameter_digest;
 
     fn manifest() -> &'static crate::analysis_kernel::ProviderManifest {
         crate::analysis_kernel::AnalysisKernel::provider_manifests()

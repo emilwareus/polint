@@ -1,0 +1,1298 @@
+{
+  "tasks": {
+    "W0.1": {
+      "state": "MERGED",
+      "branch": "swarm/W0.1",
+      "commit": "3c4904e815e2d9a8d07a266d37dc099ac4b1b548",
+      "merged_at": "2026-08-08T09:05:00+02:00"
+    },
+    "W0.2": {
+      "state": "MERGED",
+      "branch": "swarm/W0.2-reconcile",
+      "worktree": "/Users/emilwareus/conductor/workspaces/exlint/swarm-W0.2-reconcile",
+      "source_commit": "11fd518767ef02b2fb1a0f66d10c546bdda046c4",
+      "commit": "c3f6a040db8acec65fd6e483b568399d2e09cee3",
+      "merged_at": "2026-08-08T10:52:00+02:00",
+      "note": "Reconciled with W0.1: F1 gate + cost-column asserts in one path; baseline keeps measured F1 with null cost columns until regenerator fills them",
+      "gates": {
+        "R1-R6": "PASS",
+        "G1": "PASS",
+        "G2": "PASS",
+        "cost_columns_unit": "PASS",
+        "committed_accuracy_baseline": "PASS"
+      }
+    },
+    "W0.3": {
+      "state": "MERGED-NOOP",
+      "merged_at": "2026-08-08T10:58:00+02:00",
+      "commit": "13faad28",
+      "note": "Deferred: no Rust frontend; see docs/architecture-review/W0.3-MERGED-NOOP.md and HANDOFF §5"
+    },
+    "W0.A1": {
+      "state": "MERGED",
+      "branch": "swarm/W0.A1",
+      "commit": "63cf7da8532626003efa3b6966b8efd04b73009e"
+    },
+    "W0.A2": {
+      "state": "MERGED",
+      "branch": "swarm/W0.A2",
+      "worktree": "/Users/emilwareus/conductor/workspaces/exlint/swarm-W0.A2",
+      "commit": "cc93090daa6684920fe4927c9db270ea4db21afd",
+      "merged_at": "2026-08-08T10:48:00+02:00",
+      "note": "Example self-pairs × json only; eval-fixtures out; scale optional loud-skip",
+      "gates": {
+        "R1-R6": "PASS",
+        "G1": "PASS",
+        "G2": "prior",
+        "G7": "PASS",
+        "G7_s": 47.65
+      }
+    },
+    "W0.A3": {
+      "state": "MERGED",
+      "branch": "swarm/W0.A3",
+      "commit": "d4dea160f4710dc7a70c6dcbb988a9d6899f3f71"
+    },
+    "W0.A4": {
+      "state": "MERGED",
+      "deps": [
+        "W0.A2"
+      ],
+      "branch": "swarm/W0.A4",
+      "worktree": "/Users/emilwareus/conductor/workspaces/exlint/swarm-W0.A4",
+      "commit": "6b093f0ed0e4d12b6ca4081fb3570dfa16c28b2b",
+      "merged_at": "2026-08-08T11:15:09+02:00",
+      "note": "Per-golden cost; gate-close follow-up db0dd36d moved wrapper off runner surface + refreshed sidecars",
+      "gates": {
+        "R1-R6": "PASS",
+        "G7": "PASS"
+      }
+    },
+    "W0.A5": {
+      "state": "MERGED",
+      "commit": "13faad28",
+      "merged_at": "2026-08-08T10:58:00+02:00",
+      "note": "POLINT_UPDATE_GOLDENS opt-in + CI workflow scan"
+    },
+    "W0.4": {
+      "state": "MERGED",
+      "branch": "swarm/W0.4-land",
+      "commit": "a6962302de698cc6637fec45b020716b9410ad59",
+      "merged_at": "2026-08-08T10:56:00+02:00"
+    },
+    "W0.5": {
+      "state": "MERGED",
+      "branch": "swarm/W0.5",
+      "commit": "b93413ca7ed221d8b1cb743ac165d9aed615d7d9",
+      "merged_at": "2026-08-08T11:12:00+02:00"
+    },
+    "W1.1": {
+      "state": "MERGED",
+      "deps": [],
+      "branch": "swarm/W1.1",
+      "worktree": "/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.1",
+      "source_commit": "7abad5a44eb3709c7a84f976d124dbd9d95904b2",
+      "worker_reported": "f0752c6e2c26cd42dff882b5b0a8343b5cdcccd7",
+      "commit": "acdcb1ad1be98757edf10bd39e20b4e719b51681",
+      "attempts": 1,
+      "merged_at": "2026-08-08T13:21:32+02:00",
+      "done_at": "2026-08-08T13:21:32+02:00",
+      "note": "MERGED FF onto integration after rebase onto W1.3 golden tip f22f312b; diagnostic set unchanged (no golden lock); G7 cost budget red matches tip pre-existing baselines; R7 wiring PASS",
+      "gates": {
+        "R1-R6": "PASS",
+        "G1": "PASS",
+        "G2": "PASS",
+        "G4": "PASS",
+        "G5": "PASS",
+        "G7_diagnostics": "PASS",
+        "G7_cost": "TIP_PREEXISTING_FAIL",
+        "UNIT_parse_recovery": "PASS",
+        "R7": "PASS",
+        "Parser_new_sanity": "PASS"
+      }
+    },
+    "W1.2": {
+      "state": "MERGED",
+      "deps": [],
+      "note": "MERGED FF onto integration after rebase onto acdcb1ad (post W1.1/W1.3); resolved telemetry×evidence conflict in diagnostics_and_rule_execution_from_public_json_report; R1-R6 PASS; R7 mutation FAIL→wired; G1/G2/G4(116)/G5/UNIT PASS; G7 cost flake under load (tip same); cost sidecars refreshed in follow-up 0873e17f",
+      "attempts": 1,
+      "branch": "swarm/W1.2",
+      "worktree": "/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.2",
+      "commit": "3891f90afc45fab02e635f94214fea78921adef4",
+      "merged_at": "2026-08-08T13:38:22+02:00",
+      "done_at": "2026-08-08T13:38:22+02:00",
+      "gates": {
+        "R1-R6": "PASS",
+        "R7": "PASS",
+        "G1": "PASS",
+        "G2": "PASS",
+        "G4": "PASS",
+        "G5": "PASS",
+        "G7": "PASS_after_cost_refresh",
+        "UNIT": "PASS"
+      },
+      "source_commit": "7c6f919043bfbce1031bd3072546eb5ed8369c17"
+    },
+    "W1.3": {
+      "state": "MERGED",
+      "deps": [],
+      "note": "MERGED FF impl 82040a3c; sanctioned golden regen ff704506 (summary.rules additive, diagnostic set unchanged); restored pre-regen cost baselines f22f312b; G1/G2/G4/G5/G7 PASS",
+      "attempts": 1,
+      "branch": "swarm/W1.3",
+      "commit": "f22f312b4db5d71ea08eb453e93938078a6bf2a3",
+      "merged_at": "2026-08-08T13:19:10+02:00",
+      "done_at": "2026-08-08T13:19:10+02:00",
+      "gates": {
+        "R1-R6": "PASS",
+        "G1": "PASS",
+        "G2": "PASS",
+        "G4": "PASS",
+        "G5": "PASS",
+        "G7": "PASS",
+        "G7_pre_regen": "FAIL_expected_summary_rules"
+      },
+      "worktree": "/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.3",
+      "source_commit": "82040a3c50704304744c59099d0e87d376623f64",
+      "impl_commit": "82040a3c50704304744c59099d0e87d376623f64",
+      "regen_commit": "ff7045068089099dee4dbab35699d365a8885aea",
+      "cost_baseline_restore": "f22f312b4db5d71ea08eb453e93938078a6bf2a3"
+    },
+    "W1.4": {
+      "state": "MERGED",
+      "deps": [],
+      "branch": "swarm/W1.4",
+      "worktree": "/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.4",
+      "source_commit": "db0dd36db7c6ae76a1c6d5dacdc26462a3cb74dc",
+      "dispatched_at": "2026-08-08T11:52:30+02:00",
+      "attempts": 1,
+      "worker": "cc614c64-03ee-4eee-98ab-6fceb989a5ca",
+      "note": "MERGED FF onto integration; O(F) path index + db.file(); G2+G7 PASS on branch",
+      "commit": "494e3ba060d2f3db917acb30e3390ac1e184a664",
+      "done_at": "2026-08-08T12:08:00+02:00",
+      "merged_at": "2026-08-08T12:15:00+02:00"
+    },
+    "W1.5": {
+      "state": "MERGED-NOOP",
+      "deps": [
+        "W0.A4"
+      ],
+      "note": "MERGED-NOOP: escalate not-worth-doing; parse ~6.23% of run (max ~10.51%), ~1 parse/file; measurement docs only — instrumentation on swarm/W1.5 abandoned; see docs/architecture-review/W1.5-STEP1-MEASUREMENT.md",
+      "attempts": 1,
+      "branch": "swarm/W1.5",
+      "worktree": "/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.5",
+      "source_commit": "87f905cefd148c70f58c04072a542d9a9c09a983",
+      "worker": "8fb55ac2-c9b8-4f23-96b4-477552909de9",
+      "commit": "f9a7992d2600dcd6cd99aad2839667b4f8b0ba79",
+      "merged_at": "2026-08-08T13:09:00+02:00",
+      "done_at": "2026-08-08T13:09:00+02:00"
+    },
+    "W1.6": {
+      "state": "MERGED",
+      "deps": [],
+      "branch": "swarm/W1.6",
+      "worktree": "/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.6",
+      "source_commit": "db0dd36db7c6ae76a1c6d5dacdc26462a3cb74dc",
+      "dispatched_at": "2026-08-08T11:52:30+02:00",
+      "attempts": 1,
+      "worker": "50110b39-d85e-43ca-85a2-316b4c44f0b6",
+      "note": "MERGED FF onto integration; gate validate_fact_metadata behind debug_assertions||POLINT_VALIDATE_FACTS; G1/G2/G7/G4/G5 PASS",
+      "commit": "7799a972af6959be74078dfc3cb3d6f84dc821e5",
+      "merged_at": "2026-08-08T12:30:05+02:00",
+      "done_at": "2026-08-08T12:30:05+02:00",
+      "gates": {
+        "G1": "PASS",
+        "G2": "PASS",
+        "G7": "PASS",
+        "G4": "PASS",
+        "G5": "PASS",
+        "UNIT": "PASS"
+      }
+    },
+    "W1.7": {
+      "state": "MERGED",
+      "deps": [],
+      "branch": "swarm/W1.7",
+      "worktree": "/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.7",
+      "source_commit": "db0dd36db7c6ae76a1c6d5dacdc26462a3cb74dc",
+      "dispatched_at": "2026-08-08T11:52:30+02:00",
+      "attempts": 1,
+      "worker": "8c85d207-0613-4bbe-ab7e-1209f626921f",
+      "note": "MERGED FF onto integration after W1.6; bound source reads via repo_fs 16MiB → polint/capability; G1/G2/G7/G4/G5 PASS",
+      "commit": "ed760c5563e3661f852794fb16da31f4223a1496",
+      "merged_at": "2026-08-08T12:30:05+02:00",
+      "done_at": "2026-08-08T12:30:05+02:00",
+      "gates": {
+        "G1": "PASS",
+        "G2": "PASS",
+        "G7": "PASS",
+        "G4": "PASS",
+        "G5": "PASS",
+        "UNIT": "PASS"
+      }
+    },
+    "W1.8": {
+      "state": "MERGED",
+      "deps": [],
+      "branch": "swarm/W1.8",
+      "worktree": "/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.8",
+      "source_commit": "db0dd36db7c6ae76a1c6d5dacdc26462a3cb74dc",
+      "dispatched_at": "2026-08-08T11:52:30+02:00",
+      "attempts": 1,
+      "worker": "d6354ace-f8c7-4603-8495-822b8290f9ec",
+      "commit": "9506c58d28023fdcb756ef6a7bce07f76bd520bf",
+      "merged_at": "2026-08-08T12:10:00+02:00",
+      "note": "MERGED FF onto integration before W1.4; #[non_exhaustive] Language + prelude + leak-gate",
+      "gates": {
+        "R1-R6": "PASS",
+        "G1": "PASS",
+        "G2": "PASS",
+        "G4": "PASS"
+      },
+      "done_at": "2026-08-08T12:05:00+02:00"
+    },
+    "W1.9": {
+      "state": "MERGED",
+      "deps": [],
+      "note": "MERGED FF onto integration after W1.6+W1.7; SKILL.md byte-equality + clean/violating fixtures + README anchors; R1-R6/G1/G2/skill-byte-eq/new_rule-fixture/G4/G5/G7 PASS on 7abad5a4 (re-verified after tip moved past 494e3ba0)",
+      "branch": "swarm/W1.9",
+      "worktree": "/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.9",
+      "source_commit": "ed760c5563e3661f852794fb16da31f4223a1496",
+      "commit": "7abad5a44eb3709c7a84f976d124dbd9d95904b2",
+      "merged_at": "2026-08-08T12:34:41+02:00",
+      "done_at": "2026-08-08T12:34:41+02:00",
+      "gates": {
+        "G1": "PASS",
+        "G2": "PASS",
+        "G7": "PASS",
+        "G4": "PASS",
+        "G5": "PASS",
+        "UNIT": "PASS",
+        "R1-R6": "PASS",
+        "skill_byte_eq": "PASS",
+        "new_rule_clean_violating": "PASS"
+      }
+    },
+    "W2.1": {
+      "state": "MERGED",
+      "deps": [],
+      "branch": "swarm/W2.1",
+      "worktree": "/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.1",
+      "source_commit": "70dda34cbea27a3c3ffaddd1b4298a3ec1000ef1",
+      "dispatched_at": "2026-08-08T14:39:35+02:00",
+      "attempts": 1,
+      "note": "MERGED FF: polint-eval crate + cfg(test) eval wiring; release build skips eval harness",
+      "commit": "8d6b7fa1ef740866dd014d6fcf17e4538cfb4353",
+      "merged_at": "2026-08-08T15:17:50+02:00",
+      "done_at": "2026-08-08T15:17:50+02:00",
+      "gates": {
+        "R1-R6": "PASS (4 batched lands ≤25 files each)",
+        "G1": "PASS",
+        "G2": "PASS",
+        "G4": "PASS",
+        "G5": "PASS",
+        "G7": "PASS",
+        "release_excludes_eval": "PASS"
+      }
+    },
+    "W2.2": {
+      "state": "MERGED",
+      "deps": [],
+      "branch": "swarm/W2.2-finish",
+      "worktree": "/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.2-cont",
+      "source_commit": "cd89608bccd71c69225ac0cdc29c6334578e73e5",
+      "dispatched_at": "2026-08-08T14:39:35+02:00",
+      "attempts": 1,
+      "note": "MERGED @5a0f333d; core/mod.rs thin (110 LOC): module decls + re-exports + test includes. AnalysisDb fully in db.rs; tests in core/tests/batch{1-5}.rs. READY for W2.3+W2.4.",
+      "slices_done": [
+        "W2.2a",
+        "W2.2b",
+        "W2.2c",
+        "W2.2d",
+        "W2.2e",
+        "W2.2g-review",
+        "W2.2g-labels",
+        "W2.2f-db",
+        "W2.2g-db-struct",
+        "W2.2h-methods-1",
+        "W2.2i-methods-2",
+        "W2.2j-methods-3",
+        "W2.2k-methods-3",
+        "W2.2k-methods-4",
+        "W2.2l-methods-4",
+        "W2.2m-methods-5",
+        "W2.2n-methods-6",
+        "W2.2o-methods-final",
+        "W2.2n-methods-final",
+        "W2.2o-tests-batch1",
+        "W2.2p-tests-batch2",
+        "W2.2q-tests-batch3",
+        "W2.2r-tests-batch4",
+        "W2.2s-tests-batch5"
+      ],
+      "commit": "5a0f333df406d66e6a1802551ba458a37213b42b",
+      "gates": {
+        "W2.2b": {
+          "G1": "PASS",
+          "G2": "PASS",
+          "G4": "PASS",
+          "G7": "PASS"
+        },
+        "W2.2c": {
+          "G1": "PASS",
+          "G2": "PASS",
+          "G4": "PASS",
+          "G7": "COST_FLAKE_under_contention"
+        },
+        "W2.2d": {
+          "G1": "PASS",
+          "G2": "PASS",
+          "G4": "PASS",
+          "G7": "PASS_via_e_tip"
+        },
+        "W2.2e": {
+          "G1": "PASS",
+          "G2": "PASS",
+          "G4": "PASS",
+          "G7": "PASS"
+        },
+        "W2.2de": {
+          "G1": "PASS",
+          "G2": "PASS",
+          "G4": "PASS",
+          "G7": "PASS"
+        },
+        "W2.2f-review": {
+          "G1": "PASS",
+          "G2": "PASS",
+          "G4": "PASS",
+          "G7": "PASS"
+        },
+        "W2.2f": {
+          "G1": "PASS",
+          "G2": "PASS",
+          "G4": "PASS",
+          "G5": "PASS",
+          "G7": "PASS",
+          "R1": "FAIL_over_budget_mechanical",
+          "R3": "PASS"
+        },
+        "W2.2g-db-struct": {
+          "G1": "PASS",
+          "G2": "PASS",
+          "G4": "PASS",
+          "G7": "PASS",
+          "R2": "PASS_relocated_existing_allows"
+        },
+        "W2.2h-methods-1": {
+          "G1": "PASS",
+          "G2": "PASS",
+          "G4": "PASS",
+          "G7": "PASS"
+        },
+        "final": {
+          "G1": "PASS",
+          "G2": "PASS",
+          "G4": "PASS",
+          "G5": "PASS",
+          "G7": "PASS",
+          "R1": "ACCEPTED_mechanical_completion",
+          "landed": true
+        },
+        "W2.2i-methods-2": {
+          "G1": "PASS",
+          "G2": "PASS",
+          "G4": "PASS",
+          "G7": "PASS"
+        },
+        "W2.2j-methods-3": {
+          "G4": "PASS",
+          "G7": "PASS",
+          "G2": "PASS"
+        },
+        "W2.2k-methods-3": {
+          "G1": "PASS",
+          "G2": "PASS",
+          "G4": "PASS",
+          "G7": "PASS"
+        },
+        "W2.2k-methods-4": {
+          "G2": "PASS",
+          "G4": "PASS",
+          "G7": "PASS"
+        },
+        "W2.2l-methods-4": {
+          "G1": "PASS",
+          "G2": "PASS",
+          "G4": "PASS",
+          "G7": "PASS"
+        },
+        "W2.2m-methods-5": {
+          "G1": "PASS",
+          "G2": "PASS",
+          "G4": "PASS",
+          "G7": "PASS"
+        },
+        "W2.2n-methods-6": {
+          "G1": "PASS",
+          "G2": "PASS",
+          "G4": "PASS",
+          "G7": "PASS"
+        },
+        "W2.2o-methods-final": {
+          "G1": "PASS",
+          "G2": "PASS",
+          "G4": "PASS",
+          "G7": "PASS"
+        },
+        "W2.2n": {
+          "G1": "PASS",
+          "G2": "PASS",
+          "G4": "PASS",
+          "G7": "PASS"
+        },
+        "W2.2o": {
+          "G1": "PASS",
+          "G2": "PASS",
+          "G4": "PASS",
+          "G7": "PASS"
+        },
+        "W2.2p": {
+          "G1": "PASS",
+          "G2": "PASS",
+          "G4": "PASS",
+          "G7": "PASS"
+        },
+        "W2.2q": {
+          "G1": "PASS",
+          "G2": "PASS",
+          "G4": "PASS",
+          "G7": "PASS"
+        },
+        "W2.2r": {
+          "G1": "PASS",
+          "G2": "PASS",
+          "G4": "PASS",
+          "G7": "PASS"
+        },
+        "W2.2s": {
+          "G1": "PASS",
+          "G2": "PASS",
+          "G4": "PASS",
+          "G7": "PASS"
+        }
+      },
+      "slices": {
+        "W2.2d": {
+          "commit": "37f0f4da",
+          "merged_at": "2026-08-08T15:08:59+02:00"
+        },
+        "W2.2e": {
+          "commit": "271ccd15",
+          "merged_at": "2026-08-08T15:08:59+02:00"
+        },
+        "W2.2g-db-struct": {
+          "commit": "18b67c86",
+          "merged_at": "2026-08-08T15:26:16+02:00"
+        },
+        "W2.2h-methods-1": {
+          "commit": "cd89608b",
+          "merged_at": "2026-08-08T15:31:14+02:00"
+        },
+        "W2.2i-methods-2": {
+          "commit": "c4b3239c",
+          "merged_at": "2026-08-08T15:36:57+02:00"
+        },
+        "W2.2j-methods-3": {
+          "commit": "a7d496f6",
+          "merged_at": "2026-08-08T15:39:28+02:00"
+        },
+        "W2.2k-methods-3": {
+          "commit": "8fca02f5",
+          "merged_at": "2026-08-08T15:44:37+02:00"
+        },
+        "W2.2k-methods-4": {
+          "commit": "8fca02f5",
+          "merged_at": "2026-08-08T15:45:08+02:00"
+        },
+        "W2.2l-methods-4": {
+          "commit": "b3db6aa8",
+          "merged_at": "2026-08-08T15:48:32+02:00"
+        },
+        "W2.2m-methods-5": {
+          "commit": "586ec5f8",
+          "merged_at": "2026-08-08T15:51:57+02:00"
+        },
+        "W2.2n-methods-6": {
+          "commit": "48b39bc2",
+          "merged_at": "2026-08-08T15:56:09+02:00"
+        },
+        "W2.2o-methods-final": {
+          "commit": "d43b371f",
+          "merged_at": "2026-08-08T16:01:12+02:00"
+        },
+        "W2.2n-methods-final": {
+          "commit": "7e4c246e",
+          "merged_at": "2026-08-08T16:15:02+02:00",
+          "note": "parallel tip also d43b371f"
+        },
+        "W2.2o-tests-batch1": {
+          "commit": "25eb5c3c",
+          "merged_at": "2026-08-08T16:15:02+02:00"
+        },
+        "W2.2p-tests-batch2": {
+          "commit": "4a459228",
+          "merged_at": "2026-08-08T16:15:02+02:00"
+        },
+        "W2.2q-tests-batch3": {
+          "commit": "00889ef8",
+          "merged_at": "2026-08-08T16:15:02+02:00"
+        },
+        "W2.2r-tests-batch4": {
+          "commit": "b52666bd",
+          "merged_at": "2026-08-08T16:15:02+02:00"
+        },
+        "W2.2s-tests-batch5": {
+          "commit": "5a0f333d",
+          "merged_at": "2026-08-08T16:15:02+02:00"
+        }
+      },
+      "merged_at": "2026-08-08T16:15:02+02:00",
+      "done_at": "2026-08-08T16:15:02+02:00"
+    },
+    "W2.3": {
+      "state": "MERGED-NOOP",
+      "branch": "swarm/W2.3",
+      "worktree": "/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.3",
+      "source_commit": "d43b371f4e8719cd8b3770da80d0abad55bc0777",
+      "commit": "fae8e614",
+      "dispatched_at": "2026-08-08T16:02:09+02:00",
+      "held_at": "2026-08-08T16:18:17+02:00",
+      "attempts": 1,
+      "note": "MERGED-NOOP/ESCALATE: Go RTA dense+bitset ~1.8× slower on chain/wide synthetics; measurement landed; no StableKeyId migration; W2.5 must not assume interning. See docs/architecture-review/W2.3-STEP1-MEASUREMENT.md",
+      "escalate_reason": "not-worth-doing — no measurable win; wall-clock regresses ~1.8×",
+      "measurement": "docs/architecture-review/W2.3-STEP1-MEASUREMENT.md",
+      "gates": {
+        "step1_measure": "ESCALATE_no_win"
+      },
+      "merged_at": "2026-08-08T16:28:48+02:00",
+      "done_at": "2026-08-08T16:28:48+02:00"
+    },
+    "W2.4": {
+      "state": "MERGED",
+      "note": "MERGED on integration (reconciled 2026-08-08; was stale CLAIMED)",
+      "branch": "swarm/W2.4",
+      "worktree": "/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.4",
+      "source_commit": "8fd7c456945dceefeb930c55cde612f54308df4c",
+      "dispatched_at": "2026-08-08T16:02:09+02:00",
+      "attempts": 1,
+      "commit": "8fd7c456",
+      "slices_done": [
+        "step1-ProviderRunResult",
+        "step2-Source-GoSyntax",
+        "step3-TsSyntax",
+        "step4-scheduled_order"
+      ],
+      "gates": {
+        "step1": {
+          "G1": "PASS",
+          "G2": "PASS",
+          "landed": true
+        },
+        "step2": {
+          "G1": "PASS",
+          "G2": "PASS",
+          "G4": "PASS",
+          "G7": "PASS",
+          "landed": true
+        },
+        "step34": {
+          "G1": "PASS",
+          "G2": "PASS",
+          "G4": "PASS",
+          "G7": "PASS",
+          "topo": "PASS",
+          "landed": true
+        }
+      },
+      "reconciled_at": "2026-08-08T20:27:05+02:00"
+    },
+    "W2.5": {
+      "state": "MERGED",
+      "branch": "swarm/W2.5",
+      "worktree": "/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.5",
+      "tip": "acde3818e93deb605e8611552bff1973a623fd04",
+      "analysis_db_fields": 5,
+      "target_fields": 30,
+      "note": "MERGED FF: AnalysisDb fields 57→5 (files, fact_meta, fact_stores, path_contexts, changeset). All provider stores registry-backed. No StableKeyId. G4/G7/R1 PASS. main untouched.",
+      "landed_slices": [
+        "FactStore+GoSyntax",
+        "TsSyntax",
+        "Cfg",
+        "CallStore",
+        "GoSemantic",
+        "ModuleGraph+Topology",
+        "SymbolStore",
+        "SemanticIndexStore",
+        "MetricsStore",
+        "TsObjectModelStore",
+        "IdentityStore",
+        "RefinedCall+DataFlow+Evidence",
+        "Summary+Domain+Entrypoint",
+        "TypeValueAliasFamily",
+        "Reachability+SemanticGraph+Solver+Extension+Adaptation+SemanticMIR"
+      ],
+      "gates": {
+        "G4": "PASS",
+        "G7": "PASS",
+        "R1": "PASS",
+        "clippy": "PASS"
+      },
+      "no_StableKeyId": true,
+      "commit": "acde3818e93deb605e8611552bff1973a623fd04",
+      "merged_at": "2026-08-08T19:11:03+02:00",
+      "done_at": "2026-08-08T19:11:03+02:00"
+    },
+    "W2.6": {
+      "state": "MERGED",
+      "note": "MERGED LanguageFrontend registry (reconciled)",
+      "reconciled_at": "2026-08-08T20:27:05+02:00"
+    },
+    "W3.1": {
+      "state": "MERGED",
+      "spec": "docs/architecture-review/specs/W3.1-mir-blocks-terminators.md",
+      "depends_on": [],
+      "created_at": "2026-08-08T20:27:05+02:00",
+      "branch": "swarm/W3.1",
+      "dispatched_at": "2026-08-08T20:27:09+02:00",
+      "attempts": 1,
+      "commit": "5173934e",
+      "merged_at": "2026-08-08T20:48:49+02:00",
+      "note": "MIR blocks+terminators; CFG terminator-only; no dual paths"
+    },
+    "W3.2": {
+      "state": "MERGED",
+      "spec": "docs/architecture-review/specs/W3.2-mir-effects.md",
+      "depends_on": [
+        "W3.1"
+      ],
+      "created_at": "2026-08-08T20:27:05+02:00",
+      "branch": "swarm/W3.2",
+      "dispatched_at": "2026-08-08T20:48:57+02:00",
+      "attempts": 1,
+      "commit": "0d8e03f1",
+      "merged_at": "2026-08-08T21:05:57+02:00",
+      "note": "Throw/Call unwind/Suspend terminators; string CFG recovery deleted"
+    },
+    "W3.3": {
+      "state": "MERGED",
+      "spec": "docs/architecture-review/specs/W3.3-mir-ops-and-types.md",
+      "depends_on": [
+        "W3.1"
+      ],
+      "created_at": "2026-08-08T20:27:05+02:00",
+      "branch": "swarm/W3.3",
+      "dispatched_at": "2026-08-08T20:48:57+02:00",
+      "attempts": 1,
+      "commit": "835859bf",
+      "merged_at": "2026-08-08T21:14:21+02:00",
+      "note": "BinOp/Aggregate/Closure+captures; PlaceTypeFact"
+    },
+    "W3.4": {
+      "state": "MERGED",
+      "spec": "docs/architecture-review/specs/W3.4-delete-cfg-source-lowerers.md",
+      "depends_on": [
+        "W3.1",
+        "W3.2"
+      ],
+      "created_at": "2026-08-08T20:27:05+02:00",
+      "branch": "swarm/W3.4",
+      "dispatched_at": "2026-08-08T21:14:21+02:00",
+      "attempts": 1,
+      "commit": "5b037543",
+      "merged_at": "2026-08-08T21:24:54+02:00",
+      "note": "single lower_cfg; lang CFG lowerers deleted"
+    },
+    "W3.5": {
+      "state": "MERGED",
+      "spec": "docs/architecture-review/specs/W3.5-fold-ts-value-flows.md",
+      "depends_on": [
+        "W3.3"
+      ],
+      "created_at": "2026-08-08T20:27:05+02:00",
+      "branch": "swarm/W3.5",
+      "dispatched_at": "2026-08-08T21:14:21+02:00",
+      "attempts": 1,
+      "commit": "3e25db23",
+      "merged_at": "2026-08-08T21:19:49+02:00",
+      "note": "Deleted ts_value_flows + calls/js_points_to Oxc pipeline; shared solver remains"
+    },
+    "W4.1": {
+      "state": "MERGED",
+      "spec": "docs/architecture-review/specs/W4.1-points-to-primary.md",
+      "depends_on": [
+        "W3.5"
+      ],
+      "created_at": "2026-08-08T21:24:54+02:00",
+      "branch": "swarm/W4.1",
+      "dispatched_at": "2026-08-08T21:24:54+02:00",
+      "attempts": 1,
+      "commit": "445ad367",
+      "merged_at": "2026-08-08T21:46:52+02:00",
+      "note": "points-to sole TS resolver; ts_tokens+ts_object_model deleted"
+    },
+    "W4.2": {
+      "state": "MERGED",
+      "spec": "docs/architecture-review/specs/W4.2-ifds-icfg.md",
+      "depends_on": [
+        "W3.4",
+        "W4.1"
+      ],
+      "created_at": "2026-08-08T21:24:54+02:00",
+      "branch": "swarm/W4.2",
+      "dispatched_at": "2026-08-08T21:46:52+02:00",
+      "attempts": 1,
+      "commit": "8c0c4891",
+      "merged_at": "2026-08-08T22:11:54+02:00",
+      "note": "IFDS/ICFG matched paths; deleted data_flow/query BFS"
+    },
+    "W4.3": {
+      "state": "MERGED",
+      "spec": "docs/architecture-review/specs/W4.3-taint-ifds.md",
+      "depends_on": [
+        "W4.2"
+      ],
+      "created_at": "2026-08-08T21:24:54+02:00",
+      "branch": "swarm/W4.3",
+      "dispatched_at": "2026-08-08T22:11:54+02:00",
+      "attempts": 1,
+      "commit": "ff636717",
+      "merged_at": "2026-08-08T22:22:53+02:00",
+      "note": "IFDS taint + sanitizer kills; post-solve barrier filter deleted"
+    },
+    "W4.4": {
+      "state": "MERGED",
+      "spec": "docs/architecture-review/specs/W4.4-retire-precision-theater.md",
+      "depends_on": [
+        "W4.1",
+        "W4.3"
+      ],
+      "created_at": "2026-08-08T21:24:54+02:00",
+      "branch": "swarm/W4.4",
+      "dispatched_at": "2026-08-08T22:22:53+02:00",
+      "attempts": 1,
+      "commit": "477ac54a",
+      "merged_at": "2026-08-08T22:41:16+02:00",
+      "note": "retired reachability precision theater"
+    },
+    "W4.5": {
+      "state": "MERGED",
+      "spec": "docs/architecture-review/specs/W4.5-ide-domains.md",
+      "depends_on": [
+        "W4.2"
+      ],
+      "created_at": "2026-08-08T21:24:54+02:00",
+      "branch": "swarm/W4.5",
+      "dispatched_at": "2026-08-08T22:11:54+02:00",
+      "attempts": 1,
+      "commit": "844f8287",
+      "merged_at": "2026-08-08T22:29:07+02:00",
+      "note": "IdeDomainSolver sole domain path; LocalDomainSolver deleted"
+    },
+    "T-VERIFY": {
+      "state": "MERGED",
+      "depends_on": [],
+      "created_at": "2026-08-10T10:04:15+02:00",
+      "dispatched_at": "2026-08-10T10:04:15+02:00",
+      "branch": "static-analysis-architecture-review",
+      "commit": "8427dcc6",
+      "done_at": "2026-08-10T11:20:35+02:00",
+      "note": "tip green after G3 fix 8427dcc6"
+    },
+    "T-INTERN-A": {
+      "state": "MERGED",
+      "depends_on": [
+        "T-VERIFY"
+      ],
+      "created_at": "2026-08-10T10:04:15+02:00",
+      "branch": "swarm/T-INTERN-A",
+      "dispatched_at": "2026-08-10T11:20:35+02:00",
+      "attempts": 1,
+      "commit": "3564fe3d",
+      "merged_at": "2026-08-10T12:03:01+02:00",
+      "note": "StableKeyInterner + construction; facts still String until B"
+    },
+    "T-INTERN-B": {
+      "state": "MERGED",
+      "depends_on": [
+        "T-INTERN-A"
+      ],
+      "created_at": "2026-08-10T10:04:15+02:00",
+      "branch": null,
+      "dispatched_at": "2026-08-10T16:59:58+02:00",
+      "attempts": 1,
+      "slice": null,
+      "fact_family_locks": [],
+      "note": "rest-boundaries MERGED; stable_key: String gate at 6 (C-owned only); T-INTERN-B complete",
+      "commit": "38c55c3d",
+      "merged_at": "2026-08-10T23:59:00+02:00",
+      "slices_done": [
+        "symbols",
+        "mir",
+        "cfg",
+        "calls",
+        "rest-semantic",
+        "rest-frontends",
+        "rest-module-graph",
+        "rest-analysis-mid",
+        "rest-small-facts",
+        "rest-solver-summaries",
+        "rest-boundaries"
+      ],
+      "updated_at": "2026-08-10T23:59:00+02:00",
+      "slices": {
+        "rest-small-facts": {
+          "commit": "15aaf817",
+          "merged_at": "2026-08-10T23:04:25+02:00"
+        },
+        "rest-solver-summaries": {
+          "commit": "1a2d6238",
+          "merged_at": "2026-08-10T23:38:35+02:00"
+        },
+        "rest-boundaries": {
+          "commit": "38c55c3d",
+          "merged_at": "2026-08-10T23:59:00+02:00"
+        }
+      }
+    },
+    "T-INTERN-C": {
+      "state": "MERGED",
+      "depends_on": [
+        "T-INTERN-B"
+      ],
+      "created_at": "2026-08-10T10:04:15+02:00",
+      "note": "FactMeta/stable_key_owners StableKeyId; stable_key:String 6→0; gates green; lock released",
+      "dispatched_at": "2026-08-11T00:05:40+0200",
+      "attempts": 1,
+      "branch": "static-analysis-architecture-review",
+      "commit": "932cfd0b",
+      "merged_at": "2026-08-11T00:18:22+0200",
+      "done_at": "2026-08-11T00:18:22+0200",
+      "updated_at": "2026-08-11T00:18:22+0200",
+      "gates": {
+        "focused_metadata": "PASS",
+        "focused_validation": "PASS",
+        "focused_debug": "PASS",
+        "check": "PASS",
+        "fmt": "PASS",
+        "clippy": "PASS",
+        "structural_zero": "PASS",
+        "determinism": "PASS",
+        "golden": "PASS",
+        "public_surface_leak": "PASS_markers_7_of_8_probe_sandbox_blocked"
+      },
+      "land_commit": "22263b22",
+      "tip": "1bb67299"
+    },
+    "T-SPLIT": {
+      "state": "MERGED",
+      "depends_on": [
+        "T-INTERN-C"
+      ],
+      "created_at": "2026-08-10T10:04:15+02:00",
+      "note": "MERGED/complete; targeted eight-crate split landed; facade retains the host composition root and product surfaces",
+      "dispatched_at": "2026-08-11T00:26:45+0200",
+      "claimed_at": "2026-08-11T00:26:45+0200",
+      "attempts": 1,
+      "branch": "static-analysis-architecture-review",
+      "commit": "92b4b021",
+      "source_commit": "6e95a33c302d6d135dd3724b5b669f457cfe7a10",
+      "worker": "T-SPLIT-exclusive-writer",
+      "exclusive_lock": false,
+      "merged_at": "2026-08-11T21:02:18+0200",
+      "done_at": "2026-08-11T21:02:18+0200",
+      "updated_at": "2026-08-11T21:02:18+0200",
+      "gates": {
+        "workspace_check": "PASS",
+        "fmt": "PASS",
+        "clippy": "PASS",
+        "workspace_tests": "PASS",
+        "public_surface": "PASS_8_of_8",
+        "golden": "PASS_8",
+        "determinism": "PASS_12",
+        "polyglot": "PASS_2",
+        "rustdoc": "PASS",
+        "cargo_deny": "PASS",
+        "structural": "PASS",
+        "gate_log": ".swarm/gate-logs/T-SPLIT-acceptance-92b4b021.log"
+      }
+    },
+    "T-ARCH-DOC": {
+      "state": "MERGED",
+      "depends_on": [
+        "T-SPLIT"
+      ],
+      "created_at": "2026-08-10T10:04:15+02:00",
+      "note": "Root ARCHITECTURE.md and managed AGENTS.md architecture pointer landed; documentation/state only; no Rust or code-head change",
+      "updated_at": "2026-08-11T21:24:11+0200",
+      "branch": "static-analysis-architecture-review",
+      "source_commit": "ce99bde502f6ec375127a7d213ac73d13238e10f",
+      "worker": "T-ARCH-DOC-exclusive-writer",
+      "merged_at": "2026-08-11T21:24:11+0200",
+      "done_at": "2026-08-11T21:24:11+0200"
+    },
+    "T-SHIP-PREP": {
+      "state": "MERGED",
+      "depends_on": [
+        "T-ARCH-DOC"
+      ],
+      "created_at": "2026-08-10T10:04:15+02:00",
+      "note": "MERGED/complete locally as evidence-only ship preparation; final Q6 is green on the product+architecture tip; ready for human review; no push, PR, remote merge, or main operation",
+      "updated_at": "2026-08-11T21:44:47+02:00",
+      "branch": "static-analysis-architecture-review",
+      "tested_sha": "4e563aabc7d01bc605c39d676938603ad96766ea",
+      "immediate_tested_parent": "4e563aabc7d01bc605c39d676938603ad96766ea",
+      "gate_log": ".swarm/gate-logs/FINAL-TIP-4e563aabc7d01bc605c39d676938603ad96766ea.log",
+      "ready_path": ".swarm/READY-TO-SHIP.md",
+      "complete": true,
+      "ready_for_human_review": true,
+      "evidence_only": true,
+      "remote_actions": "none"
+    }
+  },
+  "locks": {
+    "golden": null,
+    "fact_family": {},
+    "t_split_exclusive": null
+  },
+  "milestone": "PRE-SHIP",
+  "READY": [],
+  "IN_FLIGHT": [],
+  "IN_REVIEW": [],
+  "MERGED": [
+    "W2.2",
+    "W0.A4",
+    "W2.3",
+    "W1.4",
+    "W0.A5",
+    "W0.4",
+    "W1.5",
+    "W1.7",
+    "W0.A3",
+    "W1.8",
+    "W1.6",
+    "W1.2",
+    "W0.A2",
+    "W1.3",
+    "W0.3",
+    "W0.2",
+    "W0.A1",
+    "W0.5",
+    "W0.1",
+    "W3.1",
+    "W1.1",
+    "W1.9",
+    "W2.1",
+    "W3.2",
+    "W3.3",
+    "W3.5",
+    "W4.1",
+    "W4.2",
+    "W4.3",
+    "W4.5",
+    "W4.4",
+    "T-INTERN-C",
+    "T-SPLIT",
+    "T-ARCH-DOC",
+    "T-SHIP-PREP"
+  ],
+  "HELD": [
+    "W2.3"
+  ],
+  "hold_count": 1,
+  "dispatch_allowed": false,
+  "halt": {
+    "active": true,
+    "reason": "T-SHIP-PREP complete; evidence committed locally; ready for human review; no push/PR/main operation"
+  },
+  "integration_branch": "static-analysis-architecture-review",
+  "never_merge_to_main": true,
+  "integration_head": "92b4b021",
+  "m0_gate": {
+    "status": "PASS",
+    "completed_at": "2026-08-08T11:52:00+02:00",
+    "marker": ".swarm/M0-COMPLETE.md",
+    "g3_real_s": 674.63
+  },
+  "notes": [
+    "M0 §5 PASS on db0dd36d; G3 real 674.63s",
+    "First G3 on 6b093f0e failed eval_harness_stays_internal; fixed by moving golden_cost off runner",
+    "M1 opened; first wave CLAIMED: W1.4 W1.6 W1.7 W1.8 (mechanical)",
+    "Follow-up 11:56: all four workers have real uncommitted WIP + targeted cargo tests running — not empty CLAIMED stubs",
+    "2026-08-08T12:04: W1.8 MERGED at 9506c58d (FF); G1/G2/G4 re-verified",
+    "W1.1/W1.2/W1.3 deferred pending golden-lock serialization note; W1.5 READY with measure-first checkpoint",
+    "Never merge to main",
+    "Follow-up: W1.4 committed 0adaee13 (G7 PASS); W1.8 committed 9506c58d; W1.6/W1.7 still verifying G3",
+    "Landed W1.8 (9506c58d) then W1.4 (494e3ba0) FF onto static-analysis-architecture-review; integration_head advanced",
+    "2026-08-08T12:18: W1.4 rebased+reverified (G1/G2/G7/cfg) MERGED at 494e3ba0",
+    "W1.6/W1.7 still IN_FLIGHT; will need rebase onto 494e3ba0 before land",
+    "2026-08-08T12:30:05+02:00: W1.6 MERGED at 7799a972 (FF); W1.7 MERGED at ed760c55 (FF); mechanical wave complete except W1.9",
+    "M1 READY remaining: W1.1 W1.2 W1.3 (golden-lock behaviour), W1.5 (measure-first), W1.9 (skill byte-equality)",
+    "2026-08-08T12:32: W1.6 DONE confirmed; tip ed760c55; G1/G2/validation unit re-checked on integration",
+    "2026-08-08T12:34:41+02:00: W1.9 MERGED at 7abad5a4 (FF); M1 mechanical wave complete (W1.4/6/7/8/9)",
+    "M1 READY remaining: W1.1 W1.2 W1.3 (behaviour/golden-lock), W1.5 (measure-first only)",
+    "Dispatched W1.1 W1.2 W1.3 W1.5 after mechanical M1 wave @7abad5a4",
+    "2026-08-08T12:39:09+02:00: W1.9 land confirmed independently; tip 7abad5a4 on static-analysis-architecture-review; main untouched",
+    "2026-08-08T13:05: W1.3 G7 FAIL expected (summary.rules additive); golden lock granted; FF-landing impl then regen",
+    "2026-08-08T13:09:00+02:00: W1.5 MERGED-NOOP (not-worth-doing); measurement landed; no parse cache; hold_count unchanged",
+    "2026-08-08T13:18:34+02:00: W1.3 MERGED at f22f312b (impl+regen+cost restore); golden lock released",
+    "2026-08-08T13:19:10+02:00: W1.3 MERGED — impl 82040a3c + regen ff704506 (summary.rules) + cost restore f22f312b; golden lock released; tip f22f312b",
+    "2026-08-08T13:21:32+02:00: W1.1 MERGED at acdcb1ad (FF from swarm/W1.1; worker SOT f0752c6e rebased→acdcb1ad); R1-R6/G1/G2/G4/G5/acceptance/R7 PASS; G7 diagnostic set unchanged; cost budget fail matches tip; main untouched",
+    "2026-08-08T13:24:16+02:00: W1.2 MERGED at 3891f90a; golden lock claimed for cost sidecar refresh",
+    "2026-08-08T13:38:00+02:00: golden cost sidecars refreshed; tip 0873e17f; golden lock released; M1-GATE.md opened",
+    "2026-08-08T13:38:04+02:00: golden cost sidecars refreshed; tip 0873e17f; golden lock released; M1-GATE.md opened",
+    "2026-08-08T13:38:22+02:00: W1.2 MERGED at 3891f90a (FF); tip advanced to 0873e17f; rebased through W1.3 telemetry + W1.1; main untouched; IN_FLIGHT cleared of W1.2",
+    "2026-08-08T13:40:05+02:00: quiet golden-cost refresh done; tip d86e6712; lock released; starting M1 §5 if G7 green",
+    "2026-08-08T13:44:49+02:00: multi-pass golden cost maxima @ 222838a4; lock released",
+    "2026-08-08T14:24:12+02:00: M1 cost floor pad + gate close prep @ b5734a90",
+    "2026-08-08T14:24:29+02:00: M1 §5 PASS; G3 778.55s on 726a2e05; tip b5734a90 after cost floor; M1-COMPLETE written; milestone→M2 READY W2.1 W2.2; M2 NOT yet dispatched",
+    "M1 COMPLETE; dispatched W2.1+W2.2 from tip b5734a90",
+    "2026-08-08T14:25:22+02:00: G3-contention cost stabilize; lock released",
+    "W2.2a PARTIAL reported; resume for W2.2b+",
+    "2026-08-08T14:39:35+02:00: M1 §5 PASS on 70dda34c; M1-COMPLETE written; M2 opened; CLAIMED W2.1+W2.2 worktrees from tip",
+    "2026-08-08T14:51:00+02:00: W2.2a+b+c landed FF @ 92be8bbf; core/mod.rs 9424 LOC; W2.1 mid-flight with oversize eval move WIP; main untouched",
+    "2026-08-08T14:57:39+02:00: follow-up after W2.1 land @ 8d6b7fa1; integration_head synced; W2.2 still CLAIMED (worker stalled with uncommitted core split)",
+    "2026-08-08T15:17:50+02:00: W2.1 MERGED @ 8d6b7fa1; W2.2d+e+f-review landed FF @ d7c28ebc; core/mod.rs ~8703; main untouched; W2.3/W2.4 blocked until W2.2 complete",
+    "2026-08-08T16:18:17+02:00: W2.3 step1 ESCALATE @ 7f988fc5 (dense RTA no measurable win; measurement doc landed FF; product go_rta unchanged; main untouched; W2.5 must not assume interning)",
+    "2026-08-08T16:28:48+02:00: W2.3 MERGED-NOOP (ESCALATE no RTA win); W2.4 steps1-4 landed @ 8fd7c456; tip advanced; W2.5 blocked (interning model wrong); main untouched",
+    "2026-08-08T18:54:16+02:00: W2.5 progress tip 8a42a69d; AnalysisDb fields 102→59; no ts_/go_semantic_ flats; main untouched",
+    "2026-08-08T18:57:24+02:00: W2.5 IdentityStore landed @ 85a316fb; AnalysisDb fields=57; main untouched",
+    {
+      "at": "2026-08-08T20:27:05+02:00",
+      "text": "M3+M4 authorized; W3.1 READY"
+    },
+    "2026-08-11T02:17:07+0200: T-SPLIT polint-analysis CP1 foundations committed; still IN_FLIGHT/exclusive",
+    "2026-08-11T02:25:02+0200: T-SPLIT polint-analysis CP2 cycle-break API committed; still IN_FLIGHT/exclusive; lang/algorithm moves remain",
+    "2026-08-11T02:29:09+0200: T-SPLIT AnalysisHost expanded for algorithm move; still IN_FLIGHT/exclusive",
+    "2026-08-11T21:02:18+0200: T-SPLIT MERGED/complete at code 92b4b021; eight-crate graph landed; exclusive lock released; T-ARCH-DOC READY",
+    "2026-08-11T21:24:11+0200: T-ARCH-DOC MERGED/complete; docs parent ce99bde5; T-SHIP-PREP READY; integration_head remains code parent 92b4b021",
+    "2026-08-11T21:44:47+02:00: T-SHIP-PREP complete locally; tested tip 4e563aab; final evidence tranche awaits human review; no remote action"
+  ],
+  "m1_gate": {
+    "status": "PASS",
+    "completed_at": "2026-08-08T14:39:35+02:00",
+    "marker": ".swarm/M1-COMPLETE.md",
+    "tip": "70dda34cbea27a3c3ffaddd1b4298a3ec1000ef1",
+    "g3_real_s": 546.25
+  },
+  "log": [
+    "2026-08-08T14:56:34+02:00: W2.1 MERGED FF @ 8d6b7fa1 (eval → polint-eval harness + cfg(test) path)",
+    "2026-08-08T14:56:34+02:00: W2.1 MERGED FF @ 8d6b7fa1 (eval → polint-eval harness + cfg(test) path)",
+    "2026-08-08T14:59:18+02:00: W2.1 finish-worker confirmed MERGED+pushed @ 8d6b7fa1; 4 budget batches; release skips eval; G1/G2/G4/G5/G7 PASS; main untouched",
+    "2026-08-08T15:08:59+02:00: W2.2d+e MERGED FF @ 271ccd15 (capability+rule); core/mod.rs still large; main untouched",
+    "2026-08-08T15:19:31+02:00: W2.2f-helpers MERGED FF @ d7c28ebc; core/mod.rs still holds AnalysisDb; main untouched",
+    "2026-08-08T15:20:44+02:00: W2.2f-helpers MERGED FF @ d7c28ebc; tip after review+helpers; AnalysisDb still in mod; main untouched",
+    "2026-08-08T15:22:05+02:00: W2.2f-helpers MERGED FF @ dec61884 (labels helpers); core/mod.rs LOC post-land; main untouched; W2.3/W2.4 not dispatched",
+    "2026-08-08T15:24:08+02:00: W2.2f DONE @ 167e901e; IN_REVIEW; R1 over budget; await orchestrator land",
+    "2026-08-08T15:26:16+02:00: W2.2g AnalysisDb struct+Default MERGED FF @18b67c86; mod.rs ~8317; main untouched",
+    "2026-08-08T15:29:31+02:00: W2.2 db extract DONE @ 47b41aab based on dec61884; IN_REVIEW; R1 over; await orchestrator FF",
+    "2026-08-08T15:31:14+02:00: W2.2h methods-1 MERGED FF @cd89608b; mod.rs shrinking; main untouched",
+    "2026-08-08T15:36:24+02:00: W2.2 DONE @800554c9 IN_REVIEW await orchestrator land (R1 over); ancestor=True",
+    "2026-08-08T15:36:32+02:00: W2.2 gates G4/G5/G7 PASS @800554c9; still IN_REVIEW for orchestrator land",
+    "2026-08-08T15:36:57+02:00: W2.2i methods-2 MERGED FF @c4b3239c; main untouched",
+    "2026-08-08T15:39:28+02:00: W2.2j MERGED; mod.rs=6233",
+    "2026-08-08T15:45:08+02:00: W2.2k MERGED; mod.rs=5689; W2.2 still PARTIAL",
+    "2026-08-08T16:02:09+02:00: W2.2 MERGED confirmed @ d43b371f; dispatched W2.3+W2.4 worktrees from tip; main untouched",
+    {
+      "at": "2026-08-08T16:15:02+02:00",
+      "event": "W2.2 MERGED",
+      "commit": "5a0f333df406d66e6a1802551ba458a37213b42b",
+      "mod_rs_loc": 110,
+      "ready": [
+        "W2.3",
+        "W2.4"
+      ]
+    },
+    "2026-08-08T16:19:49+02:00: W2.3 ESCALATE confirmed HELD (no-measurable-win); measurement @ 7f988fc5 on tip; FF integration to fae8e614; W2.5 must not assume interning; W2.4 continues; main untouched",
+    "2026-08-08T16:28:48+02:00: W2.3 MERGED-NOOP (ESCALATE no RTA win); W2.4 steps1-4 landed @ 8fd7c456; tip advanced; W2.5 blocked (interning model wrong); main untouched",
+    "2026-08-08T18:54:16+02:00: W2.5 progress tip 8a42a69d; AnalysisDb fields 102→59; no ts_/go_semantic_ flats; main untouched",
+    "2026-08-08T18:57:24+02:00: W2.5 IdentityStore landed @ 85a316fb; AnalysisDb fields=57; main untouched",
+    "2026-08-10T23:16:28+02:00: T-INTERN-B claimed fact_family:solver_summaries_slicing for rest-solver-summaries slice",
+    "2026-08-10T23:37:59+02:00: T-INTERN-B rest-solver-summaries slice complete; released fact_family:solver_summaries_slicing; T-INTERN-B remains open",
+    "2026-08-10T23:38:15+02:00: T-INTERN-B rest-solver-summaries landed @0c6dc64d; fact_family lock released; T-INTERN-B remains open",
+    "2026-08-10T23:38:35+02:00: T-INTERN-B rest-solver-summaries landed @1a2d6238; fact_family lock released; T-INTERN-B remains open",
+    "2026-08-10T23:38:46+02:00: integration_head -> 99c8cbcd after rest-solver-summaries land notes",
+    "2026-08-10T23:38:51+02:00: integration_head synced to tip 67084027",
+    "2026-08-10T23:39:00+02:00: integration_head -> 751d6e9a",
+    "2026-08-10T23:39:20+02:00: integration_head set to rest-solver-summaries feat 1a2d6238 (T-INTERN-B remains open)",
+    "2026-08-10T23:55:00+02:00: T-INTERN-B claimed fact_family:residual_boundaries for rest-boundaries slice",
+    "2026-08-10T23:59:00+02:00: T-INTERN-B rest-boundaries complete; released fact_family:residual_boundaries; T-INTERN-B MERGED; T-INTERN-C READY",
+    "2026-08-11T00:05:40+0200: T-INTERN-C claimed fact_family:metadata for FactMeta migration",
+    "2026-08-11T00:17:59+0200: T-INTERN-C implementation complete; preparing commits; fact_family:metadata still held",
+    "2026-08-11T00:18:22+0200: T-INTERN-C MERGED @932cfd0b; released fact_family:metadata; T-SPLIT READY",
+    "2026-08-11T00:18:39+0200: integration_head synced to T-INTERN-C land tip 22263b22",
+    "2026-08-11T00:18:45+0200: integration_head -> 7ccbca94 after T-INTERN-C SHA bookkeeping",
+    "2026-08-11T00:18:53+0200: integration_head set to tip f2118eaf (T-INTERN-C complete)",
+    "2026-08-11T00:21:12+0200: integration_head set to T-INTERN-C feat 932cfd0b (bookkeeping tip 1bb67299)",
+    "2026-08-11T00:26:45+0200: T-SPLIT CLAIMED exclusive lock @ 6e95a33c; dispatch_allowed=false",
+    "2026-08-11T01:21:30+0200: integration_head set to T-INTERN-C feat 932cfd0b (bookkeeping tip 1bb67299)",
+    "2026-08-11T01:45:00+0200: T-SPLIT polint-go extraction compiler-green (follow-up to ce702a96); still IN_FLIGHT/exclusive; next polint-ts then polint-analysis",
+    "2026-08-11T01:58:51+0200: T-SPLIT polint-ts extraction compiler-green; still IN_FLIGHT/exclusive; next polint-analysis",
+    "2026-08-11T02:11:25+0200: T-SPLIT polint-analysis CP1 foundations compiler-green; still IN_FLIGHT/exclusive",
+    "2026-08-11T21:02:18+0200: T-SPLIT MERGED @92b4b021; released t_split_exclusive; T-ARCH-DOC READY",
+    "2026-08-11T21:24:11+0200: T-ARCH-DOC MERGED @ docs parent ce99bde5 (self SHA intentionally omitted); T-SHIP-PREP READY; final tip gate remains"
+  ],
+  "events": [
+    "2026-08-08T15:10:20+02:00: W2.2d+e landed FF @271ccd15; core/mod.rs 8739 LOC; capability+rule extracted; main untouched",
+    "2026-08-08T15:24:08+02:00: W2.2 finish-worker pushed swarm/W2.2 @ 167e901e; G1/G2/G4/G5/G7 PASS; R1 FAIL mechanical; not FF (prefer orchestrator)",
+    "2026-08-08T15:29:31+02:00: W2.2 pushed swarm/W2.2 @47b41aab; G1/G2/G4/G5/G7 PASS; not landed (R1)",
+    "2026-08-08T15:36:24+02:00: pushed swarm/W2.2 @800554c9 completing AnalysisDb move; main untouched",
+    {
+      "at": "2026-08-11T21:44:47+02:00",
+      "event": "T-SHIP-PREP MERGED/complete",
+      "tested_sha": "4e563aabc7d01bc605c39d676938603ad96766ea",
+      "gate_log": ".swarm/gate-logs/FINAL-TIP-4e563aabc7d01bc605c39d676938603ad96766ea.log",
+      "ready_path": ".swarm/READY-TO-SHIP.md",
+      "evidence_only": true,
+      "ready_for_human_review": true,
+      "remote_actions": "none"
+    }
+  ],
+  "timeline": [
+    "2026-08-08T15:40:52+02:00: follow-up after empty lander 93c66199; tip advanced to a7d496f6 via parallel W2.2 method chunks; abandoned overlapping a0d94699 (diverged); main untouched",
+    "2026-08-08T15:44:37+02:00: W2.2k-methods-3 MERGED FF @8fca02f5; AnalysisDb methods continue; main untouched",
+    "2026-08-08T15:47:21+02:00: W2.2 MERGED FF @f070cac7 from Finish W2.2 split core follow-up; R1 mechanical accepted; main untouched",
+    "2026-08-08T15:48:32+02:00: W2.2l-methods-4 MERGED FF @b3db6aa8; discarded over-budget f070cac7; mod 5132; main untouched",
+    "2026-08-08T15:51:57+02:00: W2.2m-methods-5 MERGED FF @586ec5f8; mod 4487; main untouched",
+    "2026-08-08T15:56:09+02:00: W2.2n-methods-6 MERGED FF @48b39bc2; mod 3842; main untouched",
+    "2026-08-08T16:01:12+02:00: W2.2o-methods-final MERGED FF @d43b371f; methods done; tests remain in mod (3425); main untouched",
+    "2026-08-08T16:01:26+02:00: W2.2 MERGED @d43b371f; AnalysisDb extracted; mod barrel+tests; READY W2.3+W2.4; main untouched",
+    "2026-08-08T16:28:48+02:00: W2.3 MERGED-NOOP (ESCALATE no RTA win); W2.4 steps1-4 landed @ 8fd7c456; tip advanced; W2.5 blocked (interning model wrong); main untouched",
+    "2026-08-08T18:54:16+02:00: W2.5 progress tip 8a42a69d; AnalysisDb fields 102→59; no ts_/go_semantic_ flats; main untouched",
+    "2026-08-08T19:11:03+02:00: W2.5 MERGED FF @acde3818; AnalysisDb fields=5; fact_family locks cleared; main untouched",
+    {
+      "at": "2026-08-10T13:46:49+02:00",
+      "event": "T-INTERN-B symbols MERGED",
+      "commit": "e9ef53b3"
+    },
+    {
+      "at": "2026-08-10T15:00:54+02:00",
+      "event": "T-INTERN-B mir MERGED",
+      "commit": "2e2178bb"
+    },
+    {
+      "at": "2026-08-10T15:29:26+02:00",
+      "event": "T-INTERN-B cfg MERGED",
+      "commit": "38d30482"
+    },
+    {
+      "at": "2026-08-10T15:49:42+02:00",
+      "event": "T-INTERN-B calls MERGED",
+      "commit": "a465e5c2"
+    },
+    {
+      "at": "2026-08-10T16:41:49+02:00",
+      "event": "T-INTERN-B rest-semantic MERGED",
+      "commit": "8082af8a"
+    },
+    {
+      "at": "2026-08-10T16:55:46+02:00",
+      "event": "T-INTERN-B rest-frontends MERGED",
+      "commit": "ec9d2d1a"
+    },
+    {
+      "at": "2026-08-10T17:54:49+02:00",
+      "event": "T-INTERN-B rest-module-graph MERGED",
+      "commit": "753b0ca3"
+    },
+    {
+      "at": "2026-08-10T19:44:40+02:00",
+      "event": "T-INTERN-B rest-analysis-mid MERGED",
+      "commit": "5005df4e"
+    },
+    {
+      "at": "2026-08-10T23:04:10+02:00",
+      "event": "T-INTERN-B rest-small-facts MERGED",
+      "commit": "15aaf817"
+    },
+    {
+      "at": "2026-08-10T23:38:35+02:00",
+      "event": "T-INTERN-B rest-solver-summaries MERGED",
+      "commit": "1a2d6238"
+    },
+    {
+      "at": "2026-08-10T23:59:00+02:00",
+      "event": "T-INTERN-B rest-boundaries MERGED",
+      "commit": "38c55c3d"
+    },
+    {
+      "at": "2026-08-10T23:59:00+02:00",
+      "event": "T-INTERN-B MERGED",
+      "commit": "38c55c3d"
+    },
+    {
+      "at": "2026-08-11T00:18:22+0200",
+      "event": "T-INTERN-C MERGED",
+      "commit": "932cfd0b"
+    },
+    {
+      "at": "2026-08-11T00:18:22+0200",
+      "event": "T-SPLIT READY",
+      "depends_on": "T-INTERN-C"
+    },
+    {
+      "at": "2026-08-11T00:26:45+0200",
+      "event": "T-SPLIT CLAIMED",
+      "commit": "6e95a33c"
+    },
+    "2026-08-11T01:58:51+0200: T-SPLIT polint-ts extraction compiler-green; still IN_FLIGHT/exclusive; next polint-analysis",
+    "2026-08-11T02:11:25+0200: T-SPLIT polint-analysis CP1 foundations compiler-green; still IN_FLIGHT/exclusive",
+    "2026-08-11T02:17:07+0200: T-SPLIT polint-analysis CP1 foundations committed; still IN_FLIGHT/exclusive",
+    "2026-08-11T02:25:02+0200: T-SPLIT polint-analysis CP2 cycle-break API committed; still IN_FLIGHT/exclusive; lang/algorithm moves remain",
+    "2026-08-11T02:29:09+0200: T-SPLIT AnalysisHost expanded for algorithm move; still IN_FLIGHT/exclusive",
+    "2026-08-11T02:45:01+0200: T-SPLIT physical algorithm moves (ifds/slicing/domains-solver/demand) + InputSnapshot vocab; still IN_FLIGHT/exclusive",
+    {
+      "at": "2026-08-11T21:02:18+0200",
+      "event": "T-SPLIT MERGED",
+      "commit": "92b4b021"
+    },
+    {
+      "at": "2026-08-11T21:02:18+0200",
+      "event": "T-ARCH-DOC READY",
+      "depends_on": "T-SPLIT"
+    },
+    {
+      "at": "2026-08-11T21:24:11+0200",
+      "event": "T-ARCH-DOC MERGED",
+      "source_commit": "ce99bde502f6ec375127a7d213ac73d13238e10f",
+      "integration_head": "92b4b021"
+    },
+    {
+      "at": "2026-08-11T21:24:11+0200",
+      "event": "T-SHIP-PREP READY",
+      "depends_on": "T-ARCH-DOC"
+    }
+  ],
+  "ready": [],
+  "BLOCKED": [],
+  "m2_gate": {
+    "status": "STRUCTURAL_DONE",
+    "note": "LoC gates waived by human; M3 authorized"
+  },
+  "human_binding": ".swarm/HUMAN-BINDING-2026-08-08-M3-M4.md",
+  "m3_gate": {
+    "status": "COMPLETE",
+    "at": "2026-08-08T21:24:54+02:00",
+    "note": "W3.1-W3.5 MERGED"
+  },
+  "m4_gate": {
+    "status": "COMPLETE",
+    "at": "2026-08-08T22:41:16+02:00"
+  },
+  "binding": ".swarm/DECISION-2026-08-10-PRE-SHIP.md",
+  "progress": [
+    "2026-08-11T02:45:01+0200: T-SPLIT physical algorithm moves (ifds/slicing/domains-solver/demand) + InputSnapshot vocab; still IN_FLIGHT/exclusive",
+    "2026-08-11T21:02:18+0200: T-SPLIT complete at code 92b4b021; T-ARCH-DOC READY; T-SHIP-PREP remains BLOCKED",
+    "2026-08-11T21:24:11+0200: T-ARCH-DOC complete at documentation parent ce99bde5; T-SHIP-PREP READY; final tip gate and READY-TO-SHIP remain",
+    "2026-08-11T21:44:47+02:00: T-SHIP-PREP MERGED/complete locally; final Q6 green on 4e563aab; evidence-only tranche ready for human review"
+  ]
+}

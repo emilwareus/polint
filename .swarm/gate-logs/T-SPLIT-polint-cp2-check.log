@@ -1,0 +1,12 @@
+warning: unused import: `is_anonymous_callable_name`
+  --> crates/polint-ts/src/adapter.rs:39:63
+   |
+39 | pub(crate) use polint_analysis_api::{anonymous_callable_name, is_anonymous_callable_name};
+   |                                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+    Checking polint-go v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint-go)
+warning: `polint-ts` (lib) generated 1 warning (run `cargo fix --lib -p polint-ts` to apply 1 suggestion)
+    Checking polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.17s

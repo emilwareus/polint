@@ -50,8 +50,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
+          arguments: ""
           command: check
-          arguments: --all-features --locked
+          command-arguments: all
 
   # ── Compile checks (~1-3 min each) ────────────────────────────────────────
 
@@ -67,6 +68,55 @@ jobs:
       - name: cargo check (workspace MSRV)
         run: cargo check --workspace --all-targets --all-features --locked
 
+  language-features:
+    name: "language features — ${{ matrix.name }}"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: no languages
+            args: --no-default-features
+          - name: Go only
+            args: --no-default-features --features lang-go
+          - name: TypeScript only
+            args: --no-default-features --features lang-typescript
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo check
+        run: cargo check -p polint --all-targets ${{ matrix.args }} --locked
+      - name: cargo clippy
+        run: cargo clippy -p polint --all-targets ${{ matrix.args }} --locked -- -D warnings
+      - name: cargo test (feature-aware library suite)
+        run: cargo test -p polint --lib ${{ matrix.args }} --locked
+      - name: cargo test (feature-specific CLI behavior)
+        run: |
+          cargo test -p polint --test cli ${{ matrix.args }} --locked disabled_
+          cargo test -p polint --test cli ${{ matrix.args }} --locked new_rule_creates_skeleton
+      - name: verify parser dependency isolation
+        env:
+          FEATURE_ARGS: ${{ matrix.args }}
+          FEATURE_NAME: ${{ matrix.name }}
+        run: |
+          tree="$(cargo tree -p polint $FEATURE_ARGS --locked)"
+          case "$FEATURE_NAME" in
+            "no languages")
+              ! grep -Eq '(^| )(oxc_|tree-sitter)' <<<"$tree"
+              ;;
+            "Go only")
+              grep -q 'tree-sitter v' <<<"$tree"
+              ! grep -Eq '(^| )oxc_' <<<"$tree"
+              ;;
+            "TypeScript only")
+              grep -q 'oxc_parser v' <<<"$tree"
+              ! grep -q 'tree-sitter v' <<<"$tree"
+              ;;
+          esac
+
   clippy:
     name: clippy (ubuntu)
     runs-on: ubuntu-latest
@@ -76,9 +126,8 @@ jobs:
         with:
           go-version: "1.25.x"
           cache-dependency-path: |
-            crates/polint/go-sidecar/polint-go-frontend/go.sum
-            tools/polint-go-symbols/go.sum
-            crates/polint/go-sidecar/polint-go-symbols/go.sum
+            crates/polint/src/go-sidecar/polint-go-frontend/go.sum
+            crates/polint/src/go-sidecar/polint-go-symbols/go.sum
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -112,9 +161,8 @@ jobs:
         with:
           go-version: "1.25.x"
           cache-dependency-path: |
-            crates/polint/go-sidecar/polint-go-frontend/go.sum
-            tools/polint-go-symbols/go.sum
-            crates/polint/go-sidecar/polint-go-symbols/go.sum
+            crates/polint/src/go-sidecar/polint-go-frontend/go.sum
+            crates/polint/src/go-sidecar/polint-go-symbols/go.sum
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -139,9 +187,8 @@ jobs:
         with:
           go-version: "1.25.x"
           cache-dependency-path: |
-            crates/polint/go-sidecar/polint-go-frontend/go.sum
-            tools/polint-go-symbols/go.sum
-            crates/polint/go-sidecar/polint-go-symbols/go.sum
+            crates/polint/src/go-sidecar/polint-go-frontend/go.sum
+            crates/polint/src/go-sidecar/polint-go-symbols/go.sum
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -175,16 +222,18 @@ jobs:
         with:
           go-version: "1.25.x"
           cache-dependency-path: |
-            crates/polint/go-sidecar/polint-go-frontend/go.sum
-            tools/polint-go-symbols/go.sum
-            crates/polint/go-sidecar/polint-go-symbols/go.sum
+            crates/polint/src/go-sidecar/polint-go-frontend/go.sum
+            crates/polint/src/go-sidecar/polint-go-symbols/go.sum
 
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
 
       - name: polyglot Go+TS canary
-        run: cargo test -p polint polyglot --lib --locked
+        run: >-
+          cargo test -p polint --lib --locked
+          eval::go_rta::polyglot_go_ts_canary_resolves_go_edges_without_ts_interference
+          -- --exact --test-threads=1 --nocapture
 
       - name: public-surface leak gate
         run: cargo test --package polint --test public_surface_leak --locked

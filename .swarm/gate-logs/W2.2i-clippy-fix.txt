@@ -1,0 +1,139 @@
+   Compiling polint-macros v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.2/crates/polint-macros)
+    Checking polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.2/crates/polint)
+       Fixed crates/polint/src/core/mod.rs (24 fixes)
+error[E0433]: cannot find type `BudgetStatus` in this scope
+    --> crates/polint/src/core/mod.rs:3658:47
+     |
+3658 |         assert_eq!(db.solver_budget_status(), BudgetStatus::NotRun);
+     |                                               ^^^^^^^^^^^^ use of undeclared type `BudgetStatus`
+     |
+help: consider importing this enum
+     |
+3604 +     use crate::analysis::solver::budget::BudgetStatus;
+     |
+
+error[E0433]: cannot find type `SolverOutput` in this scope
+    --> crates/polint/src/core/mod.rs:3661:33
+     |
+3661 |         db.replace_solver_facts(SolverOutput::default())
+     |                                 ^^^^^^^^^^^^ use of undeclared type `SolverOutput`
+     |
+help: consider importing this struct
+     |
+3604 +     use crate::analysis::solver::store::SolverOutput;
+     |
+
+error[E0433]: cannot find type `BudgetStatus` in this scope
+    --> crates/polint/src/core/mod.rs:3663:47
+     |
+3663 |         assert_eq!(db.solver_budget_status(), BudgetStatus::WithinBudget);
+     |                                               ^^^^^^^^^^^^ use of undeclared type `BudgetStatus`
+     |
+help: consider importing this enum
+     |
+3604 +     use crate::analysis::solver::budget::BudgetStatus;
+     |
+
+error[E0422]: cannot find struct, variant or union type `SolverOutput` in this scope
+    --> crates/polint/src/core/mod.rs:3666:33
+     |
+3666 |         db.replace_solver_facts(SolverOutput {
+     |                                 ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this struct
+     |
+3604 +     use crate::analysis::solver::store::SolverOutput;
+     |
+
+error[E0433]: cannot find type `BudgetStatus` in this scope
+    --> crates/polint/src/core/mod.rs:3667:28
+     |
+3667 |             budget_status: BudgetStatus::BudgetExceeded,
+     |                            ^^^^^^^^^^^^ use of undeclared type `BudgetStatus`
+     |
+help: consider importing this enum
+     |
+3604 +     use crate::analysis::solver::budget::BudgetStatus;
+     |
+
+error[E0433]: cannot find type `SolverOutput` in this scope
+    --> crates/polint/src/core/mod.rs:3669:15
+     |
+3669 |             ..SolverOutput::default()
+     |               ^^^^^^^^^^^^ use of undeclared type `SolverOutput`
+     |
+help: consider importing this struct
+     |
+3604 +     use crate::analysis::solver::store::SolverOutput;
+     |
+
+error[E0433]: cannot find type `BudgetStatus` in this scope
+    --> crates/polint/src/core/mod.rs:3672:47
+     |
+3672 |         assert_eq!(db.solver_budget_status(), BudgetStatus::BudgetExceeded);
+     |                                               ^^^^^^^^^^^^ use of undeclared type `BudgetStatus`
+     |
+help: consider importing this enum
+     |
+3604 +     use crate::analysis::solver::budget::BudgetStatus;
+     |
+
+error[E0422]: cannot find struct, variant or union type `TypeValueAliasOutput` in this scope
+    --> crates/polint/src/core/mod.rs:4488:47
+     |
+4488 |             db.replace_type_value_alias_facts(TypeValueAliasOutput {
+     |                                               ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this struct
+     |
+4478 +         use crate::analysis::types::store::TypeValueAliasOutput;
+     |
+
+error[E0433]: cannot find type `TypeValueAliasOutput` in this scope
+    --> crates/polint/src/core/mod.rs:4506:19
+     |
+4506 |                 ..TypeValueAliasOutput::default()
+     |                   ^^^^^^^^^^^^^^^^^^^^ use of undeclared type `TypeValueAliasOutput`
+     |
+help: consider importing this struct
+     |
+4478 +         use crate::analysis::types::store::TypeValueAliasOutput;
+     |
+
+error[E0422]: cannot find struct, variant or union type `ExtensionActivationRow` in this scope
+    --> crates/polint/src/core/mod.rs:6828:31
+     |
+6828 |             activations: vec![ExtensionActivationRow {
+     |                               ^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this struct
+     |
+3604 +     use crate::analysis::extensions::store::ExtensionActivationRow;
+     |
+
+error[E0422]: cannot find struct, variant or union type `AcceptedExtensionFact` in this scope
+    --> crates/polint/src/core/mod.rs:6836:28
+     |
+6836 |             accepted: vec![AcceptedExtensionFact {
+     |                            ^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this struct
+     |
+3604 +     use crate::analysis::extensions::store::AcceptedExtensionFact;
+     |
+
+error[E0422]: cannot find struct, variant or union type `RejectedExtensionFact` in this scope
+    --> crates/polint/src/core/mod.rs:6849:28
+     |
+6849 |             rejected: vec![RejectedExtensionFact {
+     |                            ^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this struct
+     |
+3604 +     use crate::analysis::extensions::store::RejectedExtensionFact;
+     |
+
+Some errors have detailed explanations: E0422, E0433.
+For more information about an error, try `rustc --explain E0422`.
+error: could not compile `polint` (lib test) due to 12 previous errors
+warning: build failed, waiting for other jobs to finish...

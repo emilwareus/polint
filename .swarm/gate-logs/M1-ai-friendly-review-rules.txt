@@ -1,0 +1,14 @@
+polint: 0 diagnostics across 0 rules. Full JSON: .polint/output/latest.json
+
+By rule
+  none
+
+Examples, max 10
+  none
+
+JSON format: versioned object with `summary`, `examples`, and `diagnostics`.
+Do not read the whole file into an AI prompt. Query it with bounded commands:
+  jq '.summary.by_rule' .polint/output/latest.json
+  jq '.summary.rules[] | select(.diagnostics_emitted == 0)' .polint/output/latest.json
+  jq '[.diagnostics[] | select(.rule_id=="local/example")][0:20]' .polint/output/latest.json
+  jq '.diagnostics[] | select(.file=="src/example.ts") | {rule_id, range, message}' .polint/output/latest.json | head -c 12000

@@ -1,0 +1,20 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running unittests src/lib.rs (target/debug/deps/polint-af2f858c5d9987a8)
+
+running 1 test
+
+thread 'analysis::refined_calls::provider::solver_projection_tests::solver_derived_call_edges_project_to_refined_calls' (36595127) panicked at crates/polint/src/analysis/refined_calls/provider.rs:686:9:
+assertion `left == right` failed
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test analysis::refined_calls::provider::solver_projection_tests::solver_derived_call_edges_project_to_refined_calls ... FAILED
+
+failures:
+
+failures:
+    analysis::refined_calls::provider::solver_projection_tests::solver_derived_call_edges_project_to_refined_calls
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2340 filtered out; finished in 0.10s
+
+error: test failed, to rerun pass `-p polint --lib`

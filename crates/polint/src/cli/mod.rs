@@ -15,8 +15,9 @@ use crate::core::{
 };
 use crate::diagnostics::{
     AiFriendlyReport, ColorChoice, Diagnostic, JsonReportMeta, OutputFormat, RenderOpts, Severity,
-    apply_report_filters, build_ai_friendly_report, diagnostics_from_public_json_report,
-    limit_report_diagnostics, render_ai_friendly_stdout, render_with_sarif_help,
+    apply_report_filters, build_ai_friendly_report,
+    diagnostics_and_rule_execution_from_public_json_report, limit_report_diagnostics,
+    render_ai_friendly_stdout, render_with_sarif_help,
 };
 use crate::fs::load_analysis_files_scoped;
 use crate::ignores::{apply_ignores, filter_report, render_ignore_report_human};
@@ -56,6 +57,7 @@ fn json_report_meta() -> JsonReportMeta<'static> {
 fn render_opts<'a>(
     args: &CheckArgs,
     sources: Option<&'a BTreeMap<String, Arc<str>>>,
+    rule_execution: &'a [crate::diagnostics::RuleExecutionRow],
 ) -> RenderOpts<'a> {
     RenderOpts {
         json: json_report_meta(),
@@ -65,6 +67,7 @@ fn render_opts<'a>(
             ColorArg::Never => ColorChoice::Never,
         },
         sources,
+        rule_execution,
     }
 }
 
@@ -81,6 +84,7 @@ fn write_ai_friendly_report(
     diagnostics: &[Diagnostic],
     persisted_diagnostics: &[Diagnostic],
     json_meta: JsonReportMeta<'_>,
+    rule_execution: &[crate::diagnostics::RuleExecutionRow],
 ) -> Result<AiFriendlyOutput> {
     crate::repo_fs::ensure_repo_dir(root, AI_FRIENDLY_OUTPUT_DIR).with_context(|| {
         format!(
@@ -96,6 +100,7 @@ fn write_ai_friendly_report(
         persisted_diagnostics,
         json_meta,
         generated_at.clone(),
+        rule_execution,
     );
     let json = serde_json::to_string_pretty(&report)?;
     let hash = crate::cache::stable_hash(&[&json]);
@@ -737,6 +742,35 @@ fn gitignore_line_covers(line: &str, entry: &str) -> bool {
     t.trim_end_matches('/') == entry.trim_end_matches('/')
 }
 
+#[derive(Debug)]
+struct ScaffoldWrite {
+    relative_path: PathBuf,
+    contents: Vec<u8>,
+    previous: Option<crate::repo_fs::RepoFileSnapshot>,
+}
+
+impl ScaffoldWrite {
+    fn create(relative_path: impl Into<PathBuf>, contents: impl Into<Vec<u8>>) -> Self {
+        Self {
+            relative_path: relative_path.into(),
+            contents: contents.into(),
+            previous: None,
+        }
+    }
+
+    fn replace(
+        relative_path: impl Into<PathBuf>,
+        contents: impl Into<Vec<u8>>,
+        previous: crate::repo_fs::RepoFileSnapshot,
+    ) -> Self {
+        Self {
+            relative_path: relative_path.into(),
+            contents: contents.into(),
+            previous: Some(previous),
+        }
+    }
+}
+
 fn new_rule(root: PathBuf, args: &NewRuleArgs) -> Result<()> {
     let rule_name = validate_rule_name(&args.rule_name)?;
     let language = RuleLanguage::parse(&args.language)?;
@@ -746,40 +780,15 @@ fn new_rule(root: PathBuf, args: &NewRuleArgs) -> Result<()> {
     if let Some(template) = args.template {
         validate_rule_template_language(language, template)?;
     }
-    let rules_dir = root.join(".polint/rules");
+
     let module = rust_module_name(&rule_name);
-    let module_path = rules_dir.join("src").join(format!("{module}.rs"));
+    let writes = plan_new_rule_scaffold(&root, args, language, &rule_name, &module)?;
+    commit_new_rule_scaffold(&root, &writes)?;
 
-    match fs::symlink_metadata(&module_path) {
-        Ok(_) => anyhow::bail!("rule already exists: {}", module_path.display()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("failed to inspect {}", module_path.display()));
-        }
-    }
-
-    fs::create_dir_all(rules_dir.join("src"))
-        .with_context(|| format!("failed to create {}", rules_dir.display()))?;
-
-    let pack_toml = rules_dir.join("Cargo.toml");
-    if !pack_toml.is_file() {
-        write_pack_cargo_toml(&rules_dir)?;
-        write_initial_pack_main(&rules_dir, &module)?;
-    } else if !rules_dir.join("src/main.rs").is_file() {
-        write_initial_pack_main(&rules_dir, &module)?;
-    } else {
-        prepend_pack_mod_use(&rules_dir, &module)?;
-        append_rule_to_run_cli_vec(&rules_dir, &module)?;
-    }
-
-    fs::write(
-        &module_path,
-        rule_module_template(language.as_str(), &rule_name, args.review, args.template),
-    )?;
+    let module_path = root.join(".polint/rules/src").join(format!("{module}.rs"));
     if args.review {
         // A review rule's diagnostics depend on a diff, so the static
-        // positive/negative `polint check` fixtures do not apply. Review rules
+        // clean/violating `polint check` fixtures do not apply. Review rules
         // are exercised with `polint review <ref>`.
         println!(
             "Created review rule module {} (run it with `polint review <ref>`; \
@@ -787,10 +796,233 @@ fn new_rule(root: PathBuf, args: &NewRuleArgs) -> Result<()> {
             module_path.display()
         );
     } else {
-        write_rule_fixture_skeleton(&root, language, &rule_name, &module, args.template)?;
         println!("Created rule module {}", module_path.display());
     }
     Ok(())
+}
+
+fn plan_new_rule_scaffold(
+    root: &Path,
+    args: &NewRuleArgs,
+    language: RuleLanguage,
+    rule_name: &str,
+    module: &str,
+) -> Result<Vec<ScaffoldWrite>> {
+    let module_relative = PathBuf::from(format!(".polint/rules/src/{module}.rs"));
+    ensure_scaffold_destination_absent(root, &module_relative, "rule")?;
+
+    let cargo_relative = Path::new(".polint/rules/Cargo.toml");
+    let main_relative = Path::new(".polint/rules/src/main.rs");
+    let cargo_previous = read_optional_scaffold_file(root, cargo_relative)?;
+    let main_previous = read_optional_scaffold_file(root, main_relative)?;
+    let mut writes = Vec::new();
+
+    if cargo_previous.is_none() {
+        writes.push(ScaffoldWrite::create(
+            cargo_relative,
+            pack_cargo_toml(&root.join(".polint/rules")),
+        ));
+    }
+
+    let main_contents = match &main_previous {
+        Some(previous) => {
+            let existing = std::str::from_utf8(&previous.contents).with_context(|| {
+                format!("{} is not valid UTF-8", root.join(main_relative).display())
+            })?;
+            register_rule_in_pack_main(existing, module)?
+        }
+        None => initial_pack_main(module),
+    };
+    if let Some(previous) = main_previous {
+        writes.push(ScaffoldWrite::replace(
+            main_relative,
+            main_contents,
+            previous,
+        ));
+    } else {
+        writes.push(ScaffoldWrite::create(main_relative, main_contents));
+    }
+
+    writes.push(ScaffoldWrite::create(
+        module_relative,
+        rule_module_template(language.as_str(), rule_name, args.review, args.template),
+    ));
+
+    if !args.review {
+        writes.extend(plan_rule_fixture_skeleton(
+            root,
+            language,
+            rule_name,
+            module,
+            args.template,
+        )?);
+    }
+
+    // Validate every destination before the first write. In particular, this
+    // catches symlinked rule/fixture parents and regular-file ancestors before
+    // Cargo.toml or main.rs can be changed.
+    for write in &writes {
+        let target = crate::repo_fs::repo_write_target(root, &write.relative_path)
+            .with_context(|| format!("unsafe scaffold path {}", write.relative_path.display()))?;
+        match fs::symlink_metadata(&target) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                anyhow::bail!("refusing to write through symlink: {}", target.display());
+            }
+            Ok(metadata) if !metadata.is_file() => {
+                anyhow::bail!("scaffold destination is not a file: {}", target.display());
+            }
+            Ok(_) if write.previous.is_none() => {
+                anyhow::bail!("scaffold destination already exists: {}", target.display());
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                if write.previous.is_some() {
+                    anyhow::bail!("scaffold destination disappeared: {}", target.display());
+                }
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to inspect {}", target.display()));
+            }
+        }
+    }
+
+    Ok(writes)
+}
+
+fn ensure_scaffold_destination_absent(root: &Path, relative_path: &Path, kind: &str) -> Result<()> {
+    let target = crate::repo_fs::repo_write_target(root, relative_path)
+        .with_context(|| format!("unsafe {kind} path {}", relative_path.display()))?;
+    match fs::symlink_metadata(&target) {
+        Ok(_) => anyhow::bail!("{kind} already exists: {}", target.display()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("failed to inspect {}", target.display())),
+    }
+}
+
+fn read_optional_scaffold_file(
+    root: &Path,
+    relative_path: &Path,
+) -> Result<Option<crate::repo_fs::RepoFileSnapshot>> {
+    crate::repo_fs::read_optional_repo_file_snapshot(root, relative_path)
+        .with_context(|| format!("failed to inspect {}", relative_path.display()))
+}
+
+fn commit_new_rule_scaffold(root: &Path, writes: &[ScaffoldWrite]) -> Result<()> {
+    commit_new_rule_scaffold_with(root, writes, |root, write, created_directories| {
+        if let Some(previous) = &write.previous {
+            crate::repo_fs::write_repo_file_atomic_tracked(
+                root,
+                &write.relative_path,
+                &write.contents,
+                previous,
+                created_directories,
+            )
+        } else {
+            crate::repo_fs::write_repo_file_atomic_noclobber_tracked(
+                root,
+                &write.relative_path,
+                &write.contents,
+                created_directories,
+            )
+        }
+    })
+}
+
+fn commit_new_rule_scaffold_with<F>(
+    root: &Path,
+    writes: &[ScaffoldWrite],
+    mut write_file: F,
+) -> Result<()>
+where
+    F: FnMut(
+        &Path,
+        &ScaffoldWrite,
+        &mut Vec<crate::repo_fs::RepoCreatedDirectory>,
+    ) -> std::result::Result<
+        crate::repo_fs::RepoFileIdentity,
+        crate::repo_fs::RepoFileReadError,
+    >,
+{
+    let mut created_directories = Vec::new();
+    let mut committed = Vec::new();
+    for write in writes {
+        match write_file(root, write, &mut created_directories) {
+            Ok(identity) => committed.push((write, identity)),
+            Err(error) => {
+                let rollback = rollback_new_rule_scaffold(root, &committed, &created_directories);
+                return match rollback {
+                    Ok(()) => Err(error).with_context(|| {
+                        format!(
+                            "failed to write {}; scaffold was rolled back",
+                            write.relative_path.display()
+                        )
+                    }),
+                    Err(rollback_error) => Err(error).with_context(|| {
+                        format!(
+                            "failed to write {}; rollback refused a concurrent replacement or also failed: {rollback_error:#}",
+                            write.relative_path.display()
+                        )
+                    }),
+                };
+            }
+        }
+    }
+    Ok(())
+}
+
+fn rollback_new_rule_scaffold(
+    root: &Path,
+    committed: &[(&ScaffoldWrite, crate::repo_fs::RepoFileIdentity)],
+    created_directories: &[crate::repo_fs::RepoCreatedDirectory],
+) -> Result<()> {
+    let mut failures = Vec::new();
+    for (write, identity) in committed.iter().rev() {
+        let committed_snapshot = crate::repo_fs::RepoFileSnapshot {
+            identity: identity.clone(),
+            contents: write.contents.clone(),
+        };
+        let result = if let Some(previous) = &write.previous {
+            crate::repo_fs::restore_repo_file_if_matches(
+                root,
+                &write.relative_path,
+                &committed_snapshot,
+                &previous.contents,
+            )
+        } else {
+            crate::repo_fs::remove_repo_file_if_matches(
+                root,
+                &write.relative_path,
+                &committed_snapshot,
+            )
+        };
+        match result {
+            Ok(true) => {}
+            Ok(false) => failures.push(format!(
+                "{}: destination changed concurrently; preserved it",
+                write.relative_path.display()
+            )),
+            Err(error) => failures.push(format!("{}: {error}", write.relative_path.display())),
+        }
+    }
+    for created_directory in created_directories.iter().rev() {
+        match crate::repo_fs::remove_created_repo_directory(root, created_directory) {
+            Ok(true) => {}
+            Ok(false) => failures.push(format!(
+                "{}: directory changed concurrently or is not empty; preserved it",
+                created_directory.relative_path.display()
+            )),
+            Err(error) => failures.push(format!(
+                "{}: {error}",
+                created_directory.relative_path.display()
+            )),
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        anyhow::bail!("{}", failures.join("; "))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -877,16 +1109,34 @@ fn polint_deps_path_prefix(rules_dir: &Path) -> Option<String> {
     }
 }
 
-fn write_pack_cargo_toml(rules_dir: &Path) -> Result<()> {
+fn enabled_language_features() -> Vec<&'static str> {
+    [
+        #[cfg(feature = "lang-go")]
+        "lang-go",
+        #[cfg(feature = "lang-typescript")]
+        "lang-typescript",
+    ]
+    .into_iter()
+    .collect()
+}
+
+fn pack_cargo_toml(rules_dir: &Path) -> String {
     let version = env!("CARGO_PKG_VERSION");
+    let features = enabled_language_features()
+        .into_iter()
+        .map(|feature| format!(r#""{feature}""#))
+        .collect::<Vec<_>>()
+        .join(", ");
     let polint_dep_line = match polint_deps_path_prefix(rules_dir) {
-        Some(prefix) => format!(r#"polint = {{ path = "{prefix}polint" }}"#),
-        None => format!(r#"polint = "{version}""#),
+        Some(prefix) => format!(
+            r#"polint = {{ path = "{prefix}polint", default-features = false, features = [{features}] }}"#
+        ),
+        None => format!(
+            r#"polint = {{ version = "{version}", default-features = false, features = [{features}] }}"#
+        ),
     };
-    fs::write(
-        rules_dir.join("Cargo.toml"),
-        format!(
-            r#"[package]
+    format!(
+        r#"[package]
 name = "polint-local-rules"
 version = "{version}"
 edition = "2024"
@@ -897,16 +1147,11 @@ publish = false
 
 [workspace]
 "#,
-            version = version,
-            polint_dep_line = polint_dep_line,
-        ),
     )
-    .with_context(|| format!("failed to write {}", rules_dir.join("Cargo.toml").display()))?;
-    Ok(())
 }
 
-fn write_initial_pack_main(rules_dir: &Path, module: &str) -> Result<()> {
-    let initial = format!(
+fn initial_pack_main(module: &str) -> String {
+    format!(
         r#"mod {module};
 
 use std::process::ExitCode;
@@ -917,39 +1162,20 @@ fn main() -> ExitCode {{
     ])
 }}
 "#
-    );
-    fs::write(rules_dir.join("src/main.rs"), initial).with_context(|| {
-        format!(
-            "failed to write {}",
-            rules_dir.join("src/main.rs").display()
-        )
-    })?;
-    Ok(())
+    )
 }
 
-fn prepend_pack_mod_use(rules_dir: &Path, module: &str) -> Result<()> {
-    let main_path = rules_dir.join("src/main.rs");
-    let mut src = fs::read_to_string(&main_path)
-        .with_context(|| format!("failed to read {}", main_path.display()))?;
+fn register_rule_in_pack_main(existing: &str, module: &str) -> Result<String> {
+    let mut src = existing.to_string();
     let mod_decl = format!("mod {module};");
     if !src.contains(&mod_decl) {
         src.insert_str(0, &format!("{mod_decl}\n"));
-        fs::write(&main_path, src)?;
     }
-    Ok(())
-}
 
-fn append_rule_to_run_cli_vec(rules_dir: &Path, module: &str) -> Result<()> {
-    let main_path = rules_dir.join("src/main.rs");
-    let src = fs::read_to_string(&main_path)
-        .with_context(|| format!("failed to read {}", main_path.display()))?;
     let needle = "polint::runner::run_cli(vec![";
-    let start = src.find(needle).with_context(|| {
-        format!(
-            "{} must call polint::runner::run_cli(vec![...])",
-            main_path.display()
-        )
-    })?;
+    let start = src
+        .find(needle)
+        .with_context(|| "main.rs must call polint::runner::run_cli(vec![...])")?;
     let inner_start = start + needle.len();
     let mut depth = 1u32;
     let mut end = None;
@@ -966,7 +1192,7 @@ fn append_rule_to_run_cli_vec(rules_dir: &Path, module: &str) -> Result<()> {
             _ => {}
         }
     }
-    let end = end.with_context(|| format!("unclosed vec![ in {}", main_path.display()))?;
+    let end = end.context("unclosed vec![ in main.rs")?;
     let inner = &src[inner_start..end];
     let trimmed = inner.trim_end();
     let new_inner = if trimmed.is_empty() {
@@ -974,12 +1200,11 @@ fn append_rule_to_run_cli_vec(rules_dir: &Path, module: &str) -> Result<()> {
     } else {
         format!("{trimmed}\n        {module}::{module}(),\n    ")
     };
-    let mut new_src = String::new();
+    let mut new_src = String::with_capacity(src.len() + new_inner.len());
     new_src.push_str(&src[..inner_start]);
     new_src.push_str(&new_inner);
     new_src.push_str(&src[end..]);
-    fs::write(&main_path, new_src)?;
-    Ok(())
+    Ok(new_src)
 }
 
 fn validate_rule_name(name: &str) -> Result<String> {
@@ -998,22 +1223,22 @@ fn validate_rule_name(name: &str) -> Result<String> {
     Ok(sanitized)
 }
 
-fn write_rule_fixture_skeleton(
+fn plan_rule_fixture_skeleton(
     root: &Path,
     language: RuleLanguage,
     rule_name: &str,
     module: &str,
     template: Option<RuleTemplateKind>,
-) -> Result<()> {
-    let rule_tests_dir = root.join(".polint/tests/rules").join(module);
-    if rule_tests_dir.exists() {
-        return Ok(());
-    }
+) -> Result<Vec<ScaffoldWrite>> {
+    let rule_tests_relative = PathBuf::from(format!(".polint/tests/rules/{module}"));
+    ensure_scaffold_destination_absent(root, &rule_tests_relative, "rule fixture")?;
+
     let fixture_file = language.fixture_file();
-    write_rule_fixture_case(
-        &rule_tests_dir.join("positive"),
+    let mut writes = Vec::new();
+    writes.extend(plan_rule_fixture_case(
+        &rule_tests_relative.join("clean"),
         language.as_str(),
-        &rule_fixture_positive_source_template(language.as_str(), template),
+        &rule_fixture_clean_source_template(language.as_str(), template),
         &rule_fixture_manifest_template(
             rule_name,
             fixture_file,
@@ -1021,11 +1246,11 @@ fn write_rule_fixture_skeleton(
             rule_fixture_message_contains(template),
             rule_fixture_severity(template),
         ),
-    )?;
-    write_rule_fixture_case(
-        &rule_tests_dir.join("negative"),
+    ));
+    writes.extend(plan_rule_fixture_case(
+        &rule_tests_relative.join("violating"),
         language.as_str(),
-        &rule_fixture_negative_source_template(language.as_str(), template),
+        &rule_fixture_violating_source_template(language.as_str(), template),
         &rule_fixture_manifest_template(
             rule_name,
             fixture_file,
@@ -1033,39 +1258,36 @@ fn write_rule_fixture_skeleton(
             rule_fixture_message_contains(template),
             rule_fixture_severity(template),
         ),
-    )?;
-    Ok(())
+    ));
+    Ok(writes)
 }
 
-fn write_rule_fixture_case(
-    case_dir: &Path,
+fn plan_rule_fixture_case(
+    case_relative: &Path,
     language: &str,
     source: &str,
     manifest: &str,
-) -> Result<()> {
-    let source_path = match language {
-        "go" => case_dir.join("src/example.go"),
-        "js" => case_dir.join("src/example.js"),
-        _ => case_dir.join("src/example.ts"),
+) -> Vec<ScaffoldWrite> {
+    let source_relative = match language {
+        "go" => case_relative.join("src/example.go"),
+        "js" => case_relative.join("src/example.js"),
+        _ => case_relative.join("src/example.ts"),
     };
-    fs::create_dir_all(source_path.parent().unwrap_or(case_dir))
-        .with_context(|| format!("failed to create {}", case_dir.display()))?;
-    fs::write(case_dir.join("polint-test.toml"), manifest).with_context(|| {
-        format!(
-            "failed to write {}",
-            case_dir.join("polint-test.toml").display()
-        )
-    })?;
+    let mut writes = vec![ScaffoldWrite::create(
+        case_relative.join("polint-test.toml"),
+        manifest.as_bytes().to_vec(),
+    )];
     if language == "go" {
-        fs::write(
-            case_dir.join("go.mod"),
-            "module example.com/polint-rule-fixture\n\ngo 1.22\n",
-        )
-        .with_context(|| format!("failed to write {}", case_dir.join("go.mod").display()))?;
+        writes.push(ScaffoldWrite::create(
+            case_relative.join("go.mod"),
+            b"module example.com/polint-rule-fixture\n\ngo 1.22\n".to_vec(),
+        ));
     }
-    fs::write(&source_path, source)
-        .with_context(|| format!("failed to write {}", source_path.display()))?;
-    Ok(())
+    writes.push(ScaffoldWrite::create(
+        source_relative,
+        source.as_bytes().to_vec(),
+    ));
+    writes
 }
 
 fn rule_fixture_manifest_template(
@@ -1108,13 +1330,13 @@ fn rule_fixture_severity(template: Option<RuleTemplateKind>) -> &'static str {
     if template.is_some() { "error" } else { "warn" }
 }
 
-fn rule_fixture_positive_source_template(
+fn rule_fixture_clean_source_template(
     language: &str,
     template: Option<RuleTemplateKind>,
 ) -> String {
     if let Some(template) = template {
         return policy_template_spec(language, template)
-            .positive_source
+            .clean_source
             .to_string();
     }
 
@@ -1135,13 +1357,13 @@ func main() {}
     }
 }
 
-fn rule_fixture_negative_source_template(
+fn rule_fixture_violating_source_template(
     language: &str,
     template: Option<RuleTemplateKind>,
 ) -> String {
     if let Some(template) = template {
         return policy_template_spec(language, template)
-            .negative_source
+            .violating_source
             .to_string();
     }
 
@@ -1272,8 +1494,8 @@ struct PolicyTemplateSpec {
     view_param: &'static str,
     body: String,
     message: &'static str,
-    positive_source: &'static str,
-    negative_source: &'static str,
+    clean_source: &'static str,
+    violating_source: &'static str,
 }
 
 fn policy_rule_module_template(
@@ -1318,14 +1540,14 @@ fn policy_template_spec(language: &str, template: RuleTemplateKind) -> PolicyTem
             None,
             (
                 if go {
-                    GO_REQUEST_TO_SHELL_POSITIVE
+                    GO_REQUEST_TO_SHELL_CLEAN
                 } else {
-                    TS_REQUEST_TO_SHELL_POSITIVE
+                    TS_REQUEST_TO_SHELL_CLEAN
                 },
                 if go {
-                    GO_REQUEST_TO_SHELL_NEGATIVE
+                    GO_REQUEST_TO_SHELL_VIOLATING
                 } else {
-                    TS_REQUEST_TO_SHELL_NEGATIVE
+                    TS_REQUEST_TO_SHELL_VIOLATING
                 },
             ),
         ),
@@ -1338,14 +1560,14 @@ fn policy_template_spec(language: &str, template: RuleTemplateKind) -> PolicyTem
             Some("Heuristic"),
             (
                 if go {
-                    GO_SECRET_TO_LOG_POSITIVE
+                    GO_SECRET_TO_LOG_CLEAN
                 } else {
-                    TS_SECRET_TO_LOG_POSITIVE
+                    TS_SECRET_TO_LOG_CLEAN
                 },
                 if go {
-                    GO_SECRET_TO_LOG_NEGATIVE
+                    GO_SECRET_TO_LOG_VIOLATING
                 } else {
-                    TS_SECRET_TO_LOG_NEGATIVE
+                    TS_SECRET_TO_LOG_VIOLATING
                 },
             ),
         ),
@@ -1362,14 +1584,14 @@ fn policy_template_spec(language: &str, template: RuleTemplateKind) -> PolicyTem
             Some("Heuristic"),
             (
                 if go {
-                    GO_PII_TO_ANALYTICS_POSITIVE
+                    GO_PII_TO_ANALYTICS_CLEAN
                 } else {
-                    TS_PII_TO_ANALYTICS_POSITIVE
+                    TS_PII_TO_ANALYTICS_CLEAN
                 },
                 if go {
-                    GO_PII_TO_ANALYTICS_NEGATIVE
+                    GO_PII_TO_ANALYTICS_VIOLATING
                 } else {
-                    TS_PII_TO_ANALYTICS_NEGATIVE
+                    TS_PII_TO_ANALYTICS_VIOLATING
                 },
             ),
         ),
@@ -1379,14 +1601,14 @@ fn policy_template_spec(language: &str, template: RuleTemplateKind) -> PolicyTem
             "writeBalance",
             r#"["authorize", "validate_payment"]"#,
             if go {
-                GO_SENSITIVE_WRITE_GUARD_POSITIVE
+                GO_SENSITIVE_WRITE_GUARD_CLEAN
             } else {
-                TS_SENSITIVE_WRITE_GUARD_POSITIVE
+                TS_SENSITIVE_WRITE_GUARD_CLEAN
             },
             if go {
-                GO_SENSITIVE_WRITE_GUARD_NEGATIVE
+                GO_SENSITIVE_WRITE_GUARD_VIOLATING
             } else {
-                TS_SENSITIVE_WRITE_GUARD_NEGATIVE
+                TS_SENSITIVE_WRITE_GUARD_VIOLATING
             },
         ),
         RuleTemplateKind::TransactionCleanup => control_cleanup_policy_template(
@@ -1395,14 +1617,14 @@ fn policy_template_spec(language: &str, template: RuleTemplateKind) -> PolicyTem
             if go { "Begin" } else { "beginTransaction" },
             if go { "Rollback" } else { "rollback" },
             if go {
-                GO_TRANSACTION_CLEANUP_POSITIVE
+                GO_TRANSACTION_CLEANUP_CLEAN
             } else {
-                TS_TRANSACTION_CLEANUP_POSITIVE
+                TS_TRANSACTION_CLEANUP_CLEAN
             },
             if go {
-                GO_TRANSACTION_CLEANUP_NEGATIVE
+                GO_TRANSACTION_CLEANUP_VIOLATING
             } else {
-                TS_TRANSACTION_CLEANUP_NEGATIVE
+                TS_TRANSACTION_CLEANUP_VIOLATING
             },
         ),
         RuleTemplateKind::RawReachableApi => calls_policy_template(
@@ -1411,14 +1633,14 @@ fn policy_template_spec(language: &str, template: RuleTemplateKind) -> PolicyTem
             "dangerousAdmin",
             "main",
             if go {
-                GO_RAW_REACHABLE_API_POSITIVE
+                GO_RAW_REACHABLE_API_CLEAN
             } else {
-                TS_RAW_REACHABLE_API_POSITIVE
+                TS_RAW_REACHABLE_API_CLEAN
             },
             if go {
-                GO_RAW_REACHABLE_API_NEGATIVE
+                GO_RAW_REACHABLE_API_VIOLATING
             } else {
-                TS_RAW_REACHABLE_API_NEGATIVE
+                TS_RAW_REACHABLE_API_VIOLATING
             },
         ),
         RuleTemplateKind::Ssrf => data_flow_policy_template(
@@ -1429,15 +1651,11 @@ fn policy_template_spec(language: &str, template: RuleTemplateKind) -> PolicyTem
             r#"["allowlist_url", "validate_url"]"#,
             None,
             (
+                if go { GO_SSRF_CLEAN } else { TS_SSRF_CLEAN },
                 if go {
-                    GO_SSRF_POSITIVE
+                    GO_SSRF_VIOLATING
                 } else {
-                    TS_SSRF_POSITIVE
-                },
-                if go {
-                    GO_SSRF_NEGATIVE
-                } else {
-                    TS_SSRF_NEGATIVE
+                    TS_SSRF_VIOLATING
                 },
             ),
         ),
@@ -1450,14 +1668,14 @@ fn policy_template_spec(language: &str, template: RuleTemplateKind) -> PolicyTem
             None,
             (
                 if go {
-                    GO_DANGEROUS_HTML_POSITIVE
+                    GO_DANGEROUS_HTML_CLEAN
                 } else {
-                    TS_DANGEROUS_HTML_POSITIVE
+                    TS_DANGEROUS_HTML_CLEAN
                 },
                 if go {
-                    GO_DANGEROUS_HTML_NEGATIVE
+                    GO_DANGEROUS_HTML_VIOLATING
                 } else {
-                    TS_DANGEROUS_HTML_NEGATIVE
+                    TS_DANGEROUS_HTML_VIOLATING
                 },
             ),
         ),
@@ -1470,14 +1688,14 @@ fn policy_template_spec(language: &str, template: RuleTemplateKind) -> PolicyTem
             None,
             (
                 if go {
-                    GO_UNSAFE_DESERIALIZATION_POSITIVE
+                    GO_UNSAFE_DESERIALIZATION_CLEAN
                 } else {
-                    TS_UNSAFE_DESERIALIZATION_POSITIVE
+                    TS_UNSAFE_DESERIALIZATION_CLEAN
                 },
                 if go {
-                    GO_UNSAFE_DESERIALIZATION_NEGATIVE
+                    GO_UNSAFE_DESERIALIZATION_VIOLATING
                 } else {
-                    TS_UNSAFE_DESERIALIZATION_NEGATIVE
+                    TS_UNSAFE_DESERIALIZATION_VIOLATING
                 },
             ),
         ),
@@ -1490,14 +1708,14 @@ fn policy_template_spec(language: &str, template: RuleTemplateKind) -> PolicyTem
             None,
             (
                 if go {
-                    GO_USER_FILE_PATH_POSITIVE
+                    GO_USER_FILE_PATH_CLEAN
                 } else {
-                    TS_USER_FILE_PATH_POSITIVE
+                    TS_USER_FILE_PATH_CLEAN
                 },
                 if go {
-                    GO_USER_FILE_PATH_NEGATIVE
+                    GO_USER_FILE_PATH_VIOLATING
                 } else {
-                    TS_USER_FILE_PATH_NEGATIVE
+                    TS_USER_FILE_PATH_VIOLATING
                 },
             ),
         ),
@@ -1514,7 +1732,7 @@ fn data_flow_policy_template(
     fixtures: (&'static str, &'static str),
 ) -> PolicyTemplateSpec {
     let sink = sink.into();
-    let (positive_source, negative_source) = fixtures;
+    let (clean_source, violating_source) = fixtures;
     let minimum_precision = minimum_precision
         .map(|precision| format!("    query.minimum_precision = PolicyPrecision::{precision};\n"))
         .unwrap_or_default();
@@ -1539,8 +1757,8 @@ fn data_flow_policy_template(
 "#
         ),
         message,
-        positive_source,
-        negative_source,
+        clean_source,
+        violating_source,
     }
 }
 
@@ -1549,8 +1767,8 @@ fn control_guard_policy_template(
     message: &'static str,
     event: &'static str,
     guards: &'static str,
-    positive_source: &'static str,
-    negative_source: &'static str,
+    clean_source: &'static str,
+    violating_source: &'static str,
 ) -> PolicyTemplateSpec {
     PolicyTemplateSpec {
         description,
@@ -1571,8 +1789,8 @@ fn control_guard_policy_template(
 "#
         ),
         message,
-        positive_source,
-        negative_source,
+        clean_source,
+        violating_source,
     }
 }
 
@@ -1581,8 +1799,8 @@ fn control_cleanup_policy_template(
     message: &'static str,
     start: &'static str,
     cleanup: &'static str,
-    positive_source: &'static str,
-    negative_source: &'static str,
+    clean_source: &'static str,
+    violating_source: &'static str,
 ) -> PolicyTemplateSpec {
     PolicyTemplateSpec {
         description,
@@ -1603,8 +1821,8 @@ fn control_cleanup_policy_template(
 "#
         ),
         message,
-        positive_source,
-        negative_source,
+        clean_source,
+        violating_source,
     }
 }
 
@@ -1613,8 +1831,8 @@ fn calls_policy_template(
     message: &'static str,
     target: &'static str,
     root: &'static str,
-    positive_source: &'static str,
-    negative_source: &'static str,
+    clean_source: &'static str,
+    violating_source: &'static str,
 ) -> PolicyTemplateSpec {
     PolicyTemplateSpec {
         description,
@@ -1634,8 +1852,8 @@ fn calls_policy_template(
 "#
         ),
         message,
-        positive_source,
-        negative_source,
+        clean_source,
+        violating_source,
     }
 }
 
@@ -1643,7 +1861,7 @@ fn call_sink(target: &'static str) -> String {
     format!(r#"SinkPattern::call("{target}")"#)
 }
 
-const TS_REQUEST_TO_SHELL_POSITIVE: &str = r#"import express from "express";
+const TS_REQUEST_TO_SHELL_CLEAN: &str = r#"import express from "express";
 const app = express();
 
 function validate_command(command: string): string { return command; }
@@ -1655,7 +1873,7 @@ app.get("/run", function handler(req, res) {
 });
 "#;
 
-const TS_REQUEST_TO_SHELL_NEGATIVE: &str = r#"import express from "express";
+const TS_REQUEST_TO_SHELL_VIOLATING: &str = r#"import express from "express";
 const app = express();
 
 function exec(command: string) {}
@@ -1666,7 +1884,7 @@ app.get("/run", function handler(req, res) {
 });
 "#;
 
-const TS_SECRET_TO_LOG_POSITIVE: &str = r#"function redact(value: string): string { return value; }
+const TS_SECRET_TO_LOG_CLEAN: &str = r#"function redact(value: string): string { return value; }
 
 export function handler(token: string) {
   // Token-like input is redacted before it is logged.
@@ -1674,13 +1892,13 @@ export function handler(token: string) {
 }
 "#;
 
-const TS_SECRET_TO_LOG_NEGATIVE: &str = r#"export function handler(token: string) {
+const TS_SECRET_TO_LOG_VIOLATING: &str = r#"export function handler(token: string) {
   // Policy violation: token-like input reaches a logger unchanged.
   console.log(token);
 }
 "#;
 
-const TS_PII_TO_ANALYTICS_POSITIVE: &str = r#"function analyticsTrack(value: string) {}
+const TS_PII_TO_ANALYTICS_CLEAN: &str = r#"function analyticsTrack(value: string) {}
 function anonymize(value: string): string { return value; }
 
 export function handler(email: string) {
@@ -1689,7 +1907,7 @@ export function handler(email: string) {
 }
 "#;
 
-const TS_PII_TO_ANALYTICS_NEGATIVE: &str = r#"function analyticsTrack(value: string) {}
+const TS_PII_TO_ANALYTICS_VIOLATING: &str = r#"function analyticsTrack(value: string) {}
 
 export function handler(email: string) {
   // Policy violation: raw PII-like input reaches analytics.
@@ -1697,7 +1915,7 @@ export function handler(email: string) {
 }
 "#;
 
-const TS_SENSITIVE_WRITE_GUARD_POSITIVE: &str = r#"function authorize() {}
+const TS_SENSITIVE_WRITE_GUARD_CLEAN: &str = r#"function authorize() {}
 function writeBalance() {}
 
 export function handler() {
@@ -1707,7 +1925,7 @@ export function handler() {
 }
 "#;
 
-const TS_SENSITIVE_WRITE_GUARD_NEGATIVE: &str = r#"function writeBalance() {}
+const TS_SENSITIVE_WRITE_GUARD_VIOLATING: &str = r#"function writeBalance() {}
 
 export function handler() {
   // Policy violation: sensitive write has no prior guard in this function.
@@ -1715,7 +1933,7 @@ export function handler() {
 }
 "#;
 
-const TS_TRANSACTION_CLEANUP_POSITIVE: &str = r#"function beginTransaction() {}
+const TS_TRANSACTION_CLEANUP_CLEAN: &str = r#"function beginTransaction() {}
 function rollback() {}
 
 export function handler() {
@@ -1725,7 +1943,7 @@ export function handler() {
 }
 "#;
 
-const TS_TRANSACTION_CLEANUP_NEGATIVE: &str = r#"function beginTransaction() {}
+const TS_TRANSACTION_CLEANUP_VIOLATING: &str = r#"function beginTransaction() {}
 
 export function handler() {
   // Policy violation: the transaction is opened without cleanup.
@@ -1733,7 +1951,7 @@ export function handler() {
 }
 "#;
 
-const TS_RAW_REACHABLE_API_POSITIVE: &str = r#"function safeAdmin() {}
+const TS_RAW_REACHABLE_API_CLEAN: &str = r#"function safeAdmin() {}
 
 export function main() {
   // Production root reaches only the safe wrapper.
@@ -1741,7 +1959,7 @@ export function main() {
 }
 "#;
 
-const TS_RAW_REACHABLE_API_NEGATIVE: &str = r#"function dangerousAdmin() {}
+const TS_RAW_REACHABLE_API_VIOLATING: &str = r#"function dangerousAdmin() {}
 function handler() { dangerousAdmin(); }
 
 export function main() {
@@ -1750,7 +1968,7 @@ export function main() {
 }
 "#;
 
-const TS_SSRF_POSITIVE: &str = r#"import express from "express";
+const TS_SSRF_CLEAN: &str = r#"import express from "express";
 const app = express();
 
 function allowlist_url(url: string): string { return url; }
@@ -1762,7 +1980,7 @@ app.get("/fetch", function handler(req, res) {
 });
 "#;
 
-const TS_SSRF_NEGATIVE: &str = r#"import express from "express";
+const TS_SSRF_VIOLATING: &str = r#"import express from "express";
 const app = express();
 
 function fetchUrl(url: string) {}
@@ -1773,7 +1991,7 @@ app.get("/fetch", function handler(req, res) {
 });
 "#;
 
-const TS_DANGEROUS_HTML_POSITIVE: &str = r#"import express from "express";
+const TS_DANGEROUS_HTML_CLEAN: &str = r#"import express from "express";
 const app = express();
 
 function setInnerHTML(html: string) {}
@@ -1785,7 +2003,7 @@ app.post("/preview", function handler(req, res) {
 });
 "#;
 
-const TS_DANGEROUS_HTML_NEGATIVE: &str = r#"import express from "express";
+const TS_DANGEROUS_HTML_VIOLATING: &str = r#"import express from "express";
 const app = express();
 
 function setInnerHTML(html: string) {}
@@ -1796,7 +2014,7 @@ app.post("/preview", function handler(req, res) {
 });
 "#;
 
-const TS_UNSAFE_DESERIALIZATION_POSITIVE: &str = r#"import express from "express";
+const TS_UNSAFE_DESERIALIZATION_CLEAN: &str = r#"import express from "express";
 const app = express();
 
 function unsafeDeserialize(raw: string) {}
@@ -1808,7 +2026,7 @@ app.post("/load", function handler(req, res) {
 });
 "#;
 
-const TS_UNSAFE_DESERIALIZATION_NEGATIVE: &str = r#"import express from "express";
+const TS_UNSAFE_DESERIALIZATION_VIOLATING: &str = r#"import express from "express";
 const app = express();
 
 function unsafeDeserialize(raw: string) {}
@@ -1819,7 +2037,7 @@ app.post("/load", function handler(req, res) {
 });
 "#;
 
-const TS_USER_FILE_PATH_POSITIVE: &str = r#"import express from "express";
+const TS_USER_FILE_PATH_CLEAN: &str = r#"import express from "express";
 const app = express();
 
 function readFile(path: string) {}
@@ -1831,7 +2049,7 @@ app.get("/file", function handler(req, res) {
 });
 "#;
 
-const TS_USER_FILE_PATH_NEGATIVE: &str = r#"import express from "express";
+const TS_USER_FILE_PATH_VIOLATING: &str = r#"import express from "express";
 const app = express();
 
 function readFile(path: string) {}
@@ -1842,7 +2060,7 @@ app.get("/file", function handler(req, res) {
 });
 "#;
 
-const GO_REQUEST_TO_SHELL_POSITIVE: &str = r#"package main
+const GO_REQUEST_TO_SHELL_CLEAN: &str = r#"package main
 
 func validate_command(command string) string { return command }
 
@@ -1852,7 +2070,7 @@ func handler(command string) {
 }
 "#;
 
-const GO_REQUEST_TO_SHELL_NEGATIVE: &str = r#"package main
+const GO_REQUEST_TO_SHELL_VIOLATING: &str = r#"package main
 
 func execCommand(command string) {}
 
@@ -1861,7 +2079,7 @@ func handler(command string) {
 }
 "#;
 
-const GO_SECRET_TO_LOG_POSITIVE: &str = r#"package main
+const GO_SECRET_TO_LOG_CLEAN: &str = r#"package main
 
 func log(value string) {}
 func redact(value string) string { return value }
@@ -1873,7 +2091,7 @@ func handler(token string) {
 }
 "#;
 
-const GO_SECRET_TO_LOG_NEGATIVE: &str = r#"package main
+const GO_SECRET_TO_LOG_VIOLATING: &str = r#"package main
 
 func log(value string) {}
 
@@ -1882,7 +2100,7 @@ func handler(token string) {
 }
 "#;
 
-const GO_PII_TO_ANALYTICS_POSITIVE: &str = r#"package main
+const GO_PII_TO_ANALYTICS_CLEAN: &str = r#"package main
 
 func trackAnalytics(value string) {}
 func anonymize(value string) string { return value }
@@ -1894,7 +2112,7 @@ func handler(email string) {
 }
 "#;
 
-const GO_PII_TO_ANALYTICS_NEGATIVE: &str = r#"package main
+const GO_PII_TO_ANALYTICS_VIOLATING: &str = r#"package main
 
 func trackAnalytics(value string) {}
 
@@ -1903,7 +2121,7 @@ func handler(email string) {
 }
 "#;
 
-const GO_SENSITIVE_WRITE_GUARD_POSITIVE: &str = r#"package main
+const GO_SENSITIVE_WRITE_GUARD_CLEAN: &str = r#"package main
 
 func authorize() {}
 func writeBalance() {}
@@ -1915,7 +2133,7 @@ func handler() {
 }
 "#;
 
-const GO_SENSITIVE_WRITE_GUARD_NEGATIVE: &str = r#"package main
+const GO_SENSITIVE_WRITE_GUARD_VIOLATING: &str = r#"package main
 
 func writeBalance() {}
 
@@ -1925,7 +2143,7 @@ func handler() {
 }
 "#;
 
-const GO_TRANSACTION_CLEANUP_POSITIVE: &str = r#"package main
+const GO_TRANSACTION_CLEANUP_CLEAN: &str = r#"package main
 
 func Begin() {}
 func Rollback() {}
@@ -1937,7 +2155,7 @@ func handler() {
 }
 "#;
 
-const GO_TRANSACTION_CLEANUP_NEGATIVE: &str = r#"package main
+const GO_TRANSACTION_CLEANUP_VIOLATING: &str = r#"package main
 
 func Begin() {}
 
@@ -1947,7 +2165,7 @@ func handler() {
 }
 "#;
 
-const GO_RAW_REACHABLE_API_POSITIVE: &str = r#"package main
+const GO_RAW_REACHABLE_API_CLEAN: &str = r#"package main
 
 func main() {
 	// Production root reaches only the safe wrapper.
@@ -1957,7 +2175,7 @@ func main() {
 func safeAdmin() {}
 "#;
 
-const GO_RAW_REACHABLE_API_NEGATIVE: &str = r#"package main
+const GO_RAW_REACHABLE_API_VIOLATING: &str = r#"package main
 
 func main() {
 	// Policy violation: production root reaches the raw admin API.
@@ -1971,7 +2189,7 @@ func handler() {
 func dangerousAdmin() {}
 "#;
 
-const GO_SSRF_POSITIVE: &str = r#"package main
+const GO_SSRF_CLEAN: &str = r#"package main
 
 func allowlist_url(url string) string { return url }
 
@@ -1981,7 +2199,7 @@ func handler(url string) {
 }
 "#;
 
-const GO_SSRF_NEGATIVE: &str = r#"package main
+const GO_SSRF_VIOLATING: &str = r#"package main
 
 func fetchURL(url string) {}
 
@@ -1990,7 +2208,7 @@ func handler(url string) {
 }
 "#;
 
-const GO_DANGEROUS_HTML_POSITIVE: &str = r#"package main
+const GO_DANGEROUS_HTML_CLEAN: &str = r#"package main
 
 func renderHTML(html string) {}
 func sanitize_html(html string) string { return html }
@@ -2002,7 +2220,7 @@ func handler(html string) {
 }
 "#;
 
-const GO_DANGEROUS_HTML_NEGATIVE: &str = r#"package main
+const GO_DANGEROUS_HTML_VIOLATING: &str = r#"package main
 
 func renderHTML(html string) {}
 
@@ -2011,7 +2229,7 @@ func handler(html string) {
 }
 "#;
 
-const GO_UNSAFE_DESERIALIZATION_POSITIVE: &str = r#"package main
+const GO_UNSAFE_DESERIALIZATION_CLEAN: &str = r#"package main
 
 func unsafeDeserialize(raw string) {}
 func verify_schema(raw string) string { return raw }
@@ -2023,7 +2241,7 @@ func handler(payload string) {
 }
 "#;
 
-const GO_UNSAFE_DESERIALIZATION_NEGATIVE: &str = r#"package main
+const GO_UNSAFE_DESERIALIZATION_VIOLATING: &str = r#"package main
 
 func unsafeDeserialize(raw string) {}
 
@@ -2032,7 +2250,7 @@ func handler(payload string) {
 }
 "#;
 
-const GO_USER_FILE_PATH_POSITIVE: &str = r#"package main
+const GO_USER_FILE_PATH_CLEAN: &str = r#"package main
 
 func readFile(path string) {}
 func validate_path(path string) string { return path }
@@ -2044,7 +2262,7 @@ func handler(path string) {
 }
 "#;
 
-const GO_USER_FILE_PATH_NEGATIVE: &str = r#"package main
+const GO_USER_FILE_PATH_VIOLATING: &str = r#"package main
 
 func readFile(path string) {}
 
@@ -2191,7 +2409,7 @@ fn facts_sample(root: &Path, args: &FactsSampleArgs) -> Result<u8> {
                     symbol.primary_span.as_ref().map(span_start),
                     "present",
                     Some(symbol_precision_label(symbol.precision).to_string()),
-                    Some(symbol.stable_key.clone()),
+                    Some(db.resolve_stable_key(symbol.stable_key).to_string()),
                 )
             })
             .collect(),
@@ -2207,7 +2425,7 @@ fn facts_sample(root: &Path, args: &FactsSampleArgs) -> Result<u8> {
                     reference.primary_span.as_ref().map(span_start),
                     symbol_status_label(reference.status),
                     Some(symbol_precision_label(reference.precision).to_string()),
-                    Some(reference.stable_key.clone()),
+                    Some(db.resolve_stable_key(reference.stable_key).to_string()),
                 )
             })
             .collect(),
@@ -2293,7 +2511,10 @@ fn unknowns(root: PathBuf, args: &UnknownsArgs) -> Result<u8> {
         .as_ref()
         .is_none_or(|view| !view_supports_unknowns(view))
     {
+        let db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
         let row = crate::analysis::unknown_taxonomy::collect::unsupported_capability_row(
+            &interner,
             &args.capability,
             support.map(|view| view.docs_path),
         );
@@ -2342,7 +2563,10 @@ fn inspect_unknowns(root: PathBuf, args: &InspectUnknownsArgs) -> Result<u8> {
             .as_ref()
             .is_none_or(|view| !view_supports_unknowns(view))
         {
+            let db = AnalysisDb::new();
+            let interner = db.stable_key_interner();
             let row = crate::analysis::unknown_taxonomy::collect::unsupported_capability_row(
+                &interner,
                 capability,
                 support.map(|view| view.docs_path),
             );
@@ -2456,7 +2680,7 @@ fn explain(root: PathBuf, args: &ExplainArgs) -> Result<u8> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DerivedEdgeProvenanceView {
     /// The derived edge's stable key.
-    pub(crate) edge_stable_key: String,
+    pub(crate) edge_stable_key_text: String,
     /// The contributing fact stable keys, totally ordered by stable ID (D-08).
     pub(crate) contributing_fact_keys: Vec<String>,
     /// The producing constraint kind (`ConstraintKind::as_str()` label).
@@ -2481,19 +2705,20 @@ pub(crate) struct DerivedEdgeProvenanceView {
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn explain_derived_edge_provenance(
     store: &crate::analysis::solver::store::SolverStore,
+    interner: &crate::core::StableKeyInterner,
     edge_stable_key: &str,
 ) -> Option<DerivedEdgeProvenanceView> {
     store
         .derived_edges()
         .iter()
-        .find(|edge| edge.stable_key == edge_stable_key)
+        .find(|edge| interner.resolve(edge.stable_key).as_ref() == edge_stable_key)
         .map(|edge| DerivedEdgeProvenanceView {
-            edge_stable_key: edge.stable_key.clone(),
+            edge_stable_key_text: interner.resolve(edge.stable_key).to_string(),
             contributing_fact_keys: edge
                 .provenance
                 .contributing_facts
                 .iter()
-                .map(|fact| fact.stable_key.clone())
+                .map(|fact| interner.resolve(fact.stable_key).to_string())
                 .collect(),
             constraint_kind: edge.provenance.constraint_kind.clone(),
             solver_step: edge.provenance.solver_step,
@@ -3022,6 +3247,7 @@ fn status_label(status: ResolutionStatus) -> &'static str {
         ResolutionStatus::SetupMissing => "setup_missing",
         ResolutionStatus::Dynamic => "dynamic",
         ResolutionStatus::Unsupported => "unsupported",
+        _ => "unknown",
     }
 }
 
@@ -3032,6 +3258,7 @@ fn resolution_precision_label(precision: crate::core::ResolutionPrecision) -> &'
         crate::core::ResolutionPrecision::ExternalPackage => "external_package",
         crate::core::ResolutionPrecision::Heuristic => "heuristic",
         crate::core::ResolutionPrecision::None => "none",
+        _ => "unknown",
     }
 }
 
@@ -3042,6 +3269,7 @@ fn symbol_status_label(status: SymbolResolutionStatus) -> &'static str {
         SymbolResolutionStatus::Ambiguous => "ambiguous",
         SymbolResolutionStatus::SetupMissing => "setup_missing",
         SymbolResolutionStatus::Unsupported => "unsupported",
+        _ => "unknown",
     }
 }
 
@@ -3055,6 +3283,7 @@ fn symbol_precision_label(precision: SymbolPrecision) -> &'static str {
         SymbolPrecision::Ambiguous => "ambiguous",
         SymbolPrecision::SetupMissing => "setup_missing",
         SymbolPrecision::Unsupported => "unsupported",
+        _ => "unknown",
     }
 }
 
@@ -3217,6 +3446,7 @@ fn check(root: PathBuf, args: &CheckArgs) -> Result<u8> {
             &diagnostics,
             &rendered_diagnostics,
             json_report_meta(),
+            &[],
         )?;
         print!(
             "{}",
@@ -3228,7 +3458,7 @@ fn check(root: PathBuf, args: &CheckArgs) -> Result<u8> {
             render_with_sarif_help(
                 format,
                 &rendered_diagnostics,
-                render_opts(args, sources),
+                render_opts(args, sources, &[]),
                 sarif_help_map(&loaded),
             )
         );
@@ -3293,13 +3523,14 @@ fn collect_ignore_report(root: &Path, args: &IgnoresArgs) -> Result<crate::ignor
     let enabled = selected_rule_patterns(&config, args.profile.as_deref())?;
     let mut diagnostics = Vec::new();
     for manifest in &local_rule_hosts {
-        diagnostics.extend(run_local_rule_host(root, manifest, &check_args, false)?);
+        let (host_diagnostics, _) = run_local_rule_host(root, manifest, &check_args, false)?;
+        diagnostics.extend(host_diagnostics);
     }
     // Same scope narrowing as `check_local_rule_hosts`: the db only feeds
     // ignore-directive scanning, which is limited to the configured rule scopes
     // plus any files diagnostics actually landed in.
     let rule_scope = config_rule_scope_globset(&config, enabled.as_ref());
-    let mut db = load_analysis_files_scoped(&config, rule_scope.as_ref())?;
+    let (mut db, _) = load_analysis_files_scoped(&config, rule_scope.as_ref())?;
     backfill_diagnostic_files(&mut db, &diagnostics, root);
     Ok(apply_ignores(&db, diagnostics, &config.config.ignores).report)
 }
@@ -3446,6 +3677,7 @@ fn language_label(language: Language) -> &'static str {
         Language::JavaScript => "js",
         Language::Jsx => "jsx",
         Language::Unknown => "unknown",
+        _ => "unknown",
     }
 }
 
@@ -3454,6 +3686,7 @@ fn severity_label(severity: Severity) -> &'static str {
         Severity::Info => "info",
         Severity::Warn => "warn",
         Severity::Error => "error",
+        _ => unreachable!(),
     }
 }
 
@@ -3529,11 +3762,12 @@ fn collect_diagnostics_for_baseline(
         let enabled = selected_rule_patterns(&config, profile)?;
         let mut diagnostics = Vec::new();
         for manifest in &local_rule_hosts {
-            diagnostics.extend(run_local_rule_host(root, manifest, &check_args, false)?);
+            let (host_diagnostics, _) = run_local_rule_host(root, manifest, &check_args, false)?;
+            diagnostics.extend(host_diagnostics);
         }
         // Same scope narrowing as `check_local_rule_hosts`.
         let rule_scope = config_rule_scope_globset(&config, enabled.as_ref());
-        let mut loaded_db = load_analysis_files_scoped(&config, rule_scope.as_ref())?;
+        let (mut loaded_db, _) = load_analysis_files_scoped(&config, rule_scope.as_ref())?;
         backfill_diagnostic_files(&mut loaded_db, &diagnostics, root);
         apply_ignores(&loaded_db, diagnostics, &config.config.ignores).diagnostics
     };
@@ -3703,14 +3937,14 @@ fn check_local_rule_hosts(root: &Path, args: &CheckArgs, manifests: &[PathBuf]) 
     let child_applies_ignores =
         args.ignore_comments && manifests.len() == 1 && !should_render_check_stats(args);
     let mut diagnostics = Vec::new();
+    let mut rule_execution = Vec::new();
     for manifest in manifests {
-        diagnostics.extend(run_local_rule_host(
-            root,
-            manifest,
-            args,
-            child_applies_ignores,
-        )?);
+        let (host_diagnostics, host_rules) =
+            run_local_rule_host(root, manifest, args, child_applies_ignores)?;
+        diagnostics.extend(host_diagnostics);
+        rule_execution.extend(host_rules);
     }
+    merge_rule_execution_rows(&mut rule_execution);
 
     let mut db = None;
     let mut ignore_report = None;
@@ -3722,14 +3956,14 @@ fn check_local_rule_hosts(root: &Path, args: &CheckArgs, manifests: &[PathBuf]) 
     // still apply.
     let rule_scope = config_rule_scope_globset(&config, enabled.as_ref());
     if args.ignore_comments && !child_applies_ignores {
-        let mut loaded_db = load_analysis_files_scoped(&config, rule_scope.as_ref())?;
+        let (mut loaded_db, _) = load_analysis_files_scoped(&config, rule_scope.as_ref())?;
         backfill_diagnostic_files(&mut loaded_db, &diagnostics, root);
         let ignore_application = apply_ignores(&loaded_db, diagnostics, &config.config.ignores);
         diagnostics = ignore_application.diagnostics;
         ignore_report = Some(ignore_application.report);
         db = Some(loaded_db);
     } else if should_render_check_stats(args) {
-        let mut loaded_db = load_analysis_files_scoped(&config, rule_scope.as_ref())?;
+        let (mut loaded_db, _) = load_analysis_files_scoped(&config, rule_scope.as_ref())?;
         backfill_diagnostic_files(&mut loaded_db, &diagnostics, root);
         db = Some(loaded_db);
     }
@@ -3759,6 +3993,7 @@ fn check_local_rule_hosts(root: &Path, args: &CheckArgs, manifests: &[PathBuf]) 
             &diagnostics,
             &rendered_diagnostics,
             json_report_meta(),
+            &rule_execution,
         )?;
         print!(
             "{}",
@@ -3770,7 +4005,7 @@ fn check_local_rule_hosts(root: &Path, args: &CheckArgs, manifests: &[PathBuf]) 
             render_with_sarif_help(
                 format,
                 &rendered_diagnostics,
-                render_opts(args, sources),
+                render_opts(args, sources, &rule_execution),
                 sarif_help_map(&config),
             )
         );
@@ -3839,20 +4074,24 @@ fn review(root: PathBuf, args: &ReviewArgs) -> Result<u8> {
     let enabled = selected_rule_patterns(&config, check_args.profile.as_deref())?;
     let child_applies_ignores = check_args.ignore_comments && manifests.len() == 1;
     let mut diagnostics = Vec::new();
+    let mut rule_execution = Vec::new();
     for manifest in &manifests {
-        diagnostics.extend(run_local_rule_host_kind(
+        let (host_diagnostics, host_rules) = run_local_rule_host_kind(
             &root,
             manifest,
             &check_args,
             child_applies_ignores,
             "review",
             Some(changeset_file.as_path()),
-        )?);
+        )?;
+        diagnostics.extend(host_diagnostics);
+        rule_execution.extend(host_rules);
     }
+    merge_rule_execution_rows(&mut rule_execution);
 
     if check_args.ignore_comments && !child_applies_ignores {
         let rule_scope = config_rule_scope_globset(&config, enabled.as_ref());
-        let mut loaded_db = load_analysis_files_scoped(&config, rule_scope.as_ref())?;
+        let (mut loaded_db, _) = load_analysis_files_scoped(&config, rule_scope.as_ref())?;
         backfill_diagnostic_files(&mut loaded_db, &diagnostics, &root);
         diagnostics = apply_ignores(&loaded_db, diagnostics, &config.config.ignores).diagnostics;
     }
@@ -3891,6 +4130,7 @@ fn review(root: PathBuf, args: &ReviewArgs) -> Result<u8> {
             &diagnostics,
             &rendered_diagnostics,
             json_report_meta(),
+            &rule_execution,
         )?;
         print!(
             "{}",
@@ -3902,7 +4142,7 @@ fn review(root: PathBuf, args: &ReviewArgs) -> Result<u8> {
             render_with_sarif_help(
                 format,
                 &rendered_diagnostics,
-                render_opts(&check_args, sources),
+                render_opts(&check_args, sources, &rule_execution),
                 sarif_help_map(&config),
             )
         );
@@ -3982,7 +4222,7 @@ fn run_local_rule_host(
     manifest: &Path,
     args: &CheckArgs,
     apply_ignore_comments: bool,
-) -> Result<Vec<Diagnostic>> {
+) -> Result<(Vec<Diagnostic>, Vec<crate::diagnostics::RuleExecutionRow>)> {
     // The outer `check` path always runs Check-kind rules and injects no diff.
     run_local_rule_host_kind(root, manifest, args, apply_ignore_comments, "check", None)
 }
@@ -4000,7 +4240,7 @@ fn run_local_rule_host_kind(
     apply_ignore_comments: bool,
     kind: &str,
     changed_files: Option<&Path>,
-) -> Result<Vec<Diagnostic>> {
+) -> Result<(Vec<Diagnostic>, Vec<crate::diagnostics::RuleExecutionRow>)> {
     let cargo = std::env::var("POLINT_CARGO")
         .or_else(|_| std::env::var("CARGO"))
         .unwrap_or_else(|_| "cargo".to_string());
@@ -4078,12 +4318,17 @@ fn run_local_rule_host_kind(
             manifest.display()
         )
     })?;
-    diagnostics_from_public_json_report(&stdout).with_context(|| {
+    diagnostics_and_rule_execution_from_public_json_report(&stdout).with_context(|| {
         format!(
             "local rule host did not emit polint JSON report: {}",
             manifest.display()
         )
     })
+}
+
+fn merge_rule_execution_rows(rows: &mut Vec<crate::diagnostics::RuleExecutionRow>) {
+    rows.sort_by(|left, right| left.rule_id.cmp(&right.rule_id));
+    rows.dedup_by(|left, right| left.rule_id == right.rule_id);
 }
 
 fn run_local_rule_host_inspect(root: &Path, manifest: &Path) -> Result<InspectRuleReport> {
@@ -4223,9 +4468,224 @@ mod tests {
     use clap::CommandFactory;
 
     use super::{
-        Cli, FactsListReport, LocalRuleHostProfile, explain_derived_edge_provenance,
-        public_fact_view,
+        Cli, FactsListReport, LocalRuleHostProfile, enabled_language_features,
+        explain_derived_edge_provenance, public_fact_view,
     };
+    #[cfg(unix)]
+    use super::{ScaffoldWrite, commit_new_rule_scaffold_with};
+
+    #[test]
+    fn rule_host_dependency_features_match_the_cli_build() {
+        let features = enabled_language_features();
+        assert_eq!(features.contains(&"lang-go"), cfg!(feature = "lang-go"));
+        assert_eq!(
+            features.contains(&"lang-typescript"),
+            cfg!(feature = "lang-typescript")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn new_rule_transaction_rolls_back_failure_at_every_write_boundary() {
+        let sentinel = b"fn main() { polint::runner::run_cli(vec![]) }\n";
+        for failed_boundary in 0..5 {
+            let repo = tempfile::tempdir().expect("repo");
+            let main = repo.path().join(".polint/rules/src/main.rs");
+            std::fs::create_dir_all(main.parent().expect("main parent"))
+                .expect("create existing pack");
+            std::fs::write(&main, sentinel).expect("write existing main");
+            let main_previous = crate::repo_fs::read_optional_repo_file_snapshot(
+                repo.path(),
+                ".polint/rules/src/main.rs",
+            )
+            .expect("snapshot main")
+            .expect("main exists");
+            let writes = vec![
+                ScaffoldWrite::create(".polint/rules/Cargo.toml", b"[workspace]\n".to_vec()),
+                ScaffoldWrite::replace(
+                    ".polint/rules/src/main.rs",
+                    b"updated main\n".to_vec(),
+                    main_previous,
+                ),
+                ScaffoldWrite::create(".polint/rules/src/demo.rs", b"rule module\n".to_vec()),
+                ScaffoldWrite::create(
+                    ".polint/tests/rules/demo/clean/polint-test.toml",
+                    b"fixture manifest\n".to_vec(),
+                ),
+                ScaffoldWrite::create(
+                    ".polint/tests/rules/demo/clean/src/example.ts",
+                    b"fixture source\n".to_vec(),
+                ),
+            ];
+            let mut boundary = 0usize;
+
+            let error = commit_new_rule_scaffold_with(
+                repo.path(),
+                &writes,
+                |root, write, created_directories| {
+                    let current = boundary;
+                    boundary += 1;
+                    if current == failed_boundary {
+                        return Err(crate::repo_fs::RepoFileReadError::Write);
+                    }
+                    if let Some(previous) = &write.previous {
+                        crate::repo_fs::write_repo_file_atomic_tracked(
+                            root,
+                            &write.relative_path,
+                            &write.contents,
+                            previous,
+                            created_directories,
+                        )
+                    } else {
+                        crate::repo_fs::write_repo_file_atomic_noclobber_tracked(
+                            root,
+                            &write.relative_path,
+                            &write.contents,
+                            created_directories,
+                        )
+                    }
+                },
+            )
+            .expect_err("injected boundary failure must fail the transaction");
+
+            assert!(
+                error.to_string().contains("scaffold was rolled back"),
+                "boundary {failed_boundary}: {error:#}"
+            );
+            assert_eq!(
+                std::fs::read(&main).expect("restored main"),
+                sentinel,
+                "boundary {failed_boundary}"
+            );
+            assert!(
+                !repo.path().join(".polint/rules/Cargo.toml").exists(),
+                "boundary {failed_boundary}"
+            );
+            assert!(
+                !repo.path().join(".polint/rules/src/demo.rs").exists(),
+                "boundary {failed_boundary}"
+            );
+            assert!(
+                !repo.path().join(".polint/tests").exists(),
+                "boundary {failed_boundary}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn new_rule_rollback_preserves_concurrent_destination_replacement() {
+        let repo = tempfile::tempdir().expect("repo");
+        let main = repo.path().join(".polint/rules/src/main.rs");
+        std::fs::create_dir_all(main.parent().expect("main parent")).expect("create pack");
+        std::fs::write(&main, b"original main\n").expect("write original");
+        let previous = crate::repo_fs::read_optional_repo_file_snapshot(
+            repo.path(),
+            ".polint/rules/src/main.rs",
+        )
+        .expect("snapshot main")
+        .expect("main exists");
+        let writes = vec![
+            ScaffoldWrite::replace(
+                ".polint/rules/src/main.rs",
+                b"transaction main\n".to_vec(),
+                previous,
+            ),
+            ScaffoldWrite::create(
+                ".polint/rules/src/demo.rs",
+                b"transaction module\n".to_vec(),
+            ),
+        ];
+        let mut boundary = 0usize;
+
+        let error = commit_new_rule_scaffold_with(
+            repo.path(),
+            &writes,
+            |root, write, created_directories| {
+                let current = boundary;
+                boundary += 1;
+                if current == 1 {
+                    std::fs::write(&main, b"concurrent replacement\n")
+                        .expect("replace committed destination concurrently");
+                    return Err(crate::repo_fs::RepoFileReadError::Write);
+                }
+                let previous = write.previous.as_ref().expect("first write replaces main");
+                crate::repo_fs::write_repo_file_atomic_tracked(
+                    root,
+                    &write.relative_path,
+                    &write.contents,
+                    previous,
+                    created_directories,
+                )
+            },
+        )
+        .expect_err("injected later failure must fail transaction");
+
+        assert!(
+            error
+                .to_string()
+                .contains("rollback refused a concurrent replacement"),
+            "{error:#}"
+        );
+        assert_eq!(
+            std::fs::read(&main).expect("concurrent main remains"),
+            b"concurrent replacement\n"
+        );
+        assert!(!repo.path().join(".polint/rules/src/demo.rs").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn new_rule_rollback_does_not_delete_concurrently_replaced_created_file() {
+        let repo = tempfile::tempdir().expect("repo");
+        let destination = repo.path().join(".polint/rules/src/demo.rs");
+        let writes = vec![
+            ScaffoldWrite::create(
+                ".polint/rules/src/demo.rs",
+                b"transaction module\n".to_vec(),
+            ),
+            ScaffoldWrite::create(
+                ".polint/tests/rules/demo/polint-test.toml",
+                b"later write\n".to_vec(),
+            ),
+        ];
+        let mut boundary = 0usize;
+
+        let error = commit_new_rule_scaffold_with(
+            repo.path(),
+            &writes,
+            |root, write, created_directories| {
+                let current = boundary;
+                boundary += 1;
+                if current == 1 {
+                    let replacement = destination.with_extension("replacement");
+                    std::fs::write(&replacement, b"concurrent replacement\n")
+                        .expect("write replacement inode");
+                    std::fs::rename(&replacement, &destination)
+                        .expect("replace created destination concurrently");
+                    return Err(crate::repo_fs::RepoFileReadError::Write);
+                }
+                crate::repo_fs::write_repo_file_atomic_noclobber_tracked(
+                    root,
+                    &write.relative_path,
+                    &write.contents,
+                    created_directories,
+                )
+            },
+        )
+        .expect_err("injected later failure must fail transaction");
+
+        assert!(
+            error
+                .to_string()
+                .contains("rollback refused a concurrent replacement"),
+            "{error:#}"
+        );
+        assert_eq!(
+            std::fs::read(&destination).expect("concurrent file remains"),
+            b"concurrent replacement\n"
+        );
+    }
 
     #[test]
     fn explain_private_plumbing_surfaces_derived_edge_provenance() {
@@ -4247,14 +4707,15 @@ mod tests {
                 },
                 status: PointsToStatus::Present,
                 precision: PointsToPrecision::FlowInsensitive,
-                stable_key: stable_key.to_string(),
+                stable_key: crate::core::stable_key_for_test(stable_key),
             }
         }
 
         let constraints = vec![copy("copy|a-b", 1, 2), copy("copy|b-c", 2, 3)];
         let budget = crate::analysis::solver::budget::SolverBudget::default();
-        let output = derive_edges(&constraints, &budget);
-        let store = SolverStore::from_output(output).expect("store");
+        let interner = crate::core::test_stable_key_interner();
+        let output = derive_edges(&interner, &constraints, &budget);
+        let store = SolverStore::from_output(output, &interner).expect("store");
 
         // Pick the transitive edge (the one with 2 contributing facts).
         let transitive = store
@@ -4263,13 +4724,19 @@ mod tests {
             .find(|e| e.provenance.contributing_facts.len() == 2)
             .expect("transitive derived edge");
 
-        let view = explain_derived_edge_provenance(&store, &transitive.stable_key)
-            .expect("provenance surfaced via private plumbing");
+        let view = explain_derived_edge_provenance(
+            &store,
+            &interner,
+            interner.resolve(transitive.stable_key).as_ref(),
+        )
+        .expect("provenance surfaced via private plumbing");
         assert_eq!(view.constraint_kind, "copy_edge");
         assert_eq!(view.contributing_fact_keys.len(), 2);
         assert!(view.solver_step > 0);
         // A missing edge key yields None (no panic, no public surface).
-        assert!(explain_derived_edge_provenance(&store, "edge|does|not|exist").is_none());
+        assert!(
+            explain_derived_edge_provenance(&store, &interner, "edge|does|not|exist").is_none()
+        );
     }
 
     #[test]

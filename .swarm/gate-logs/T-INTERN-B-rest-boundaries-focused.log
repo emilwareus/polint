@@ -1,0 +1,77 @@
+   Compiling polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 26.51s
+     Running unittests src/lib.rs (target/debug/deps/polint-af2f858c5d9987a8)
+
+running 54 tests
+test analysis::demand::trace::tests::debug_json_is_well_formed ... ok
+test analysis::entrypoints::debug::tests::empty_db_produces_zero_counts ... ok
+test analysis::reachability::debug::tests::empty_db_produces_zero_counts ... ok
+test analysis::reachability::debug::tests::debug_output_is_deterministic ... ok
+test analysis::reachability::debug::tests::populated_db_renders_relative_path_and_labels ... ok
+test analysis::entrypoints::debug::tests::debug_output_is_deterministic ... ok
+test analysis::entrypoints::debug::tests::unresolved_rows_contain_reason_and_evidence ... ok
+test analysis::entrypoints::debug::tests::trust_boundary_rows_contain_truncated_entrypoint_key ... ok
+test analysis::entrypoints::debug::tests::dispatch_edge_rows_contain_from_source_and_edge_kind ... ok
+test analysis::entrypoints::debug::tests::entrypoint_detail_rows_contain_relative_path_and_function_name ... ok
+test analysis::entrypoints::debug::tests::populated_db_produces_correct_count_breakdowns ... ok
+test analysis::reachability::debug::tests::debug_output_avoids_absolute_paths_and_dense_ids ... ok
+test analysis::entrypoints::debug::tests::debug_output_avoids_absolute_paths_and_dense_ids ... ok
+test analysis::semantic_graph::debug::tests::debug_json_marks_ts_direct_binding_constraints_with_node_refs ... ok
+test analysis::types::debug::tests::empty_type_value_alias_debug_is_deterministic_and_path_free ... ok
+test analysis::summaries::scc::tests::schedule_debug_info_serializes_resolved_text ... ok
+test analysis::summaries::scc::tests::debug_info_extracts_correct_statistics ... ok
+test analysis::types::debug::tests::populated_type_value_alias_debug_counts_all_families_and_reasons ... ok
+test analysis::types::debug::tests::type_value_alias_debug_counts_alias_statuses_deterministically ... ok
+test analysis::evidence::debug::tests::debug_budget_caps_are_aggregated_across_replay_keys ... ok
+test analysis::evidence::debug::tests::debug_report_is_deterministic_compact_and_private ... ok
+test analysis_kernel::debug::abstract_domains_debug_json::metadata_debug_json_contains_scc_schedule_and_empty_demand_query_sections ... ok
+test analysis_kernel::debug::abstract_domains_debug_json::metadata_debug_json_with_scc_closure_result_contains_iteration_and_backdating_rows ... ok
+test analysis_kernel::debug::abstract_domains_debug_json::metadata_debug_json_with_demand_trace_contains_query_rows ... ok
+test analysis_kernel::debug::calls_debug_json::calls_debug_json_exposes_deterministic_d10_index_counts ... ok
+test analysis_kernel::debug::abstract_domains_debug_json::summaries_debug_json_omits_dense_ids_absolute_paths_and_timestamps ... ok
+test analysis_kernel::debug::calls_debug_json::calls_debug_json_omits_source_ast_absolute_paths_and_dense_identity ... ok
+test analysis_kernel::debug::calls_debug_json::calls_debug_json_counts_call_site_only_and_unresolved_rows ... ok
+test analysis_kernel::validation::fact_metadata_validation_gate::runs_in_debug_builds_by_default ... ok
+test analysis_kernel::debug::semantic_mir_debug_json::metadata_debug_json_contains_deterministic_semantic_mir_rows ... ok
+test analysis_kernel::debug::cfg_debug_json::cfg_debug_json_contains_deterministic_cfg_arrays ... ok
+test analysis_kernel::debug::abstract_domains_debug_json::summaries_debug_json_contains_summary_rows_counts_and_domain_counts ... ok
+test analysis_kernel::debug::abstract_domains_debug_json::abstract_domains_debug_json_exposes_compact_deterministic_rows ... ok
+test eval::direct_call_rows::observed_call_debug_rows_emit_count_and_index_invariants ... ok
+test eval::observed::cfg::cfg_facts_include_all_debug_families_with_compact_payloads ... ok
+test eval::observed::eval_observed_kernel_tests::eval_observed_kernel_extracts_scc_and_demand_query_debug_invariants ... ok
+test eval::direct_call_rows::observed_call_debug_rows_normalize_to_fact_rows_with_compact_payloads ... ok
+test eval::direct_summary::observed_direct_summary_debug_rows_normalize_to_fact_rows_with_compact_payloads ... ok
+test eval::refined_call_rows::observed_refined_call_debug_rows_normalize_to_fact_rows_and_invariants ... ok
+test eval::abstract_domain_rows::observed_abstract_domain_debug_rows_normalize_to_compact_fact_rows ... ok
+test eval::semantic_rows::observed_semantic_debug_rows_normalize_to_fact_rows_with_evidence ... ok
+test symbol_graph::stable_id::symbol_graph_stable_ids::stable_keys_are_debug_safe_and_length_prefixed ... ok
+test analysis::mir::lower_go::places::go_mir_place_rows_do_not_carry_parser_node_debug_evidence ... ok
+test analysis_kernel::debug::calls_debug_json::metadata_debug_json_contains_call_rows_counts_and_indexes ... FAILED
+test eval::semantic_mir_rows::observed_semantic_mir_debug_rows_normalize_to_fact_rows_with_compact_payloads ... ok
+test analysis::mir::lower_ts::places::ts_mir_place_rows_do_not_carry_oxc_ast_debug_evidence ... ok
+test analysis_kernel::debug::tests::metadata_debug_helpers_are_not_public ... ok
+test analysis_kernel::debug::semantic_debug_json::semantic_debug_json_rows_include_status_fact_precision_and_nested_metadata ... ok
+test analysis_kernel::debug::semantic_debug_json::metadata_debug_json_contains_semantic_index_families ... ok
+test analysis_kernel::debug::tests::metadata_debug_json_rows_include_required_metadata_fields ... ok
+test analysis_kernel::debug::tests::metadata_debug_json_contains_files_imports_symbols_and_references ... ok
+test analysis_kernel::debug::tests::metadata_debug_json_excludes_absolute_paths_and_transient_runtime_details ... ok
+test analysis_kernel::debug::tests::metadata_debug_json_serializes_byte_identically_for_same_database ... ok
+test eval::observed::eval_observed_kernel_tests::eval_observed_kernel_collects_metadata_debug_facts_with_stable_identity ... ok
+
+failures:
+
+---- analysis_kernel::debug::calls_debug_json::metadata_debug_json_contains_call_rows_counts_and_indexes stdout ----
+
+thread 'analysis_kernel::debug::calls_debug_json::metadata_debug_json_contains_call_rows_counts_and_indexes' (36876009) panicked at crates/polint/src/analysis_kernel/debug.rs:2819:9:
+assertion `left == right` failed
+  left: Some("node:0")
+ right: Some("call-site:app-target")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    analysis_kernel::debug::calls_debug_json::metadata_debug_json_contains_call_rows_counts_and_indexes
+
+test result: FAILED. 53 passed; 1 failed; 0 ignored; 0 measured; 2290 filtered out; finished in 0.13s
+
+error: test failed, to rerun pass `-p polint --lib`

@@ -1,0 +1,33 @@
+=== G7 verify 2026-08-08T13:37:53+02:00 tip=0873e17f ===
+    Blocking waiting for file lock on artifact directory
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.21s
+     Running tests/golden.rs (target/debug/deps/golden-0b79c88cdf5488ee)
+
+running 8 tests
+test golden_updates_require_explicit_env_flag ... ok
+test diagnostic_set_diff_names_lost_fingerprints ... ok
+test cost_budget_helper_rejects_clear_regression ... ok
+test normalize_sorts_diagnostics_by_stable_fingerprint ... ok
+test scale_cases_are_optional_and_discovered ... ok
+test example_golden_cases_cover_inventory_rule_packs ... ok
+test ci_workflows_never_set_golden_update_env ... ok
+test characterization_goldens_match_cli ... FAILED
+
+failures:
+
+---- characterization_goldens_match_cli stdout ----
+
+thread 'characterization_goldens_match_cli' (6306549) panicked at crates/polint/tests/golden.rs:494:9:
+golden cost budget breached for `examples/basic/json`:
+  wall_clock_ms: measured 189 exceeds budget (baseline 35, ratio 5.4000, max 1.2, abs floor +50)
+baseline=GoldenCostRecord { schema_version: "polint-golden-cost-1", wall_clock_ms: 35, peak_rss_bytes: 25198592, peak_rss_delta_bytes: 18268160 }
+measured=GoldenCostRecord { schema_version: "polint-golden-cost-1", wall_clock_ms: 189, peak_rss_bytes: 25198592, peak_rss_delta_bytes: 18284544 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    characterization_goldens_match_cli
+
+test result: FAILED. 7 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.37s
+
+error: test failed, to rerun pass `-p polint --test golden`

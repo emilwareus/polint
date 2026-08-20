@@ -7,9 +7,17 @@
 //! exposing internal graph APIs.
 
 use crate::cache::stable_hash;
-use crate::diagnostics::{Diagnostic, TextRange};
+use crate::diagnostics::{Diagnostic, StructuredEvidenceV1, TextRange};
 
 pub(crate) const POLICY_QUERY_VERSION: &str = "policy-query-preview-v1";
+
+/// Edge taxonomy used when rendering policy-query path hops into `evidence_v1`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PolicyEvidenceEdgeKind {
+    Call,
+    Control,
+    DataTaint,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PolicyOperation {
@@ -34,6 +42,7 @@ impl PolicyOperation {
 
 /// Result status for a policy-query match.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PolicyStatus {
     /// The query result is exact for the supported scope.
     Exact,
@@ -49,6 +58,7 @@ pub enum PolicyStatus {
 
 /// Precision level attached to a policy-query result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PolicyPrecision {
     /// Exact semantic evidence.
     Exact,
@@ -66,6 +76,7 @@ pub enum PolicyPrecision {
 
 /// Confidence level attached to a policy-query result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PolicyConfidence {
     /// High-confidence evidence from resolved or validated facts.
     High,
@@ -77,6 +88,7 @@ pub enum PolicyConfidence {
 
 /// Preview violation returned by policy-query views.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PolicyViolation {
     query: PolicyOperation,
     query_digest: String,
@@ -85,6 +97,7 @@ pub struct PolicyViolation {
     status: PolicyStatus,
     precision: PolicyPrecision,
     evidence: Vec<(String, String)>,
+    structured_evidence: Option<StructuredEvidenceV1>,
 }
 
 impl PolicyViolation {
@@ -105,6 +118,7 @@ impl PolicyViolation {
             status,
             precision,
             evidence,
+            structured_evidence: None,
         }
     }
 
@@ -114,6 +128,34 @@ impl PolicyViolation {
 
     pub(crate) fn push_evidence(&mut self, label: impl Into<String>, value: impl Into<String>) {
         self.evidence.push((label.into(), value.into()));
+    }
+
+    /// Attaches a bounded `evidence_v1` envelope built from engine path hops.
+    pub(crate) fn with_path_evidence(
+        mut self,
+        hops: impl IntoIterator<Item = impl Into<String>>,
+        edge_kind: PolicyEvidenceEdgeKind,
+    ) -> Self {
+        let hops = hops.into_iter().map(Into::into).collect::<Vec<_>>();
+        if hops.len() < 2 {
+            return self;
+        }
+        let diagnostic_stable_key = self.stable_key();
+        match render_policy_path_evidence(
+            &diagnostic_stable_key,
+            &self.query_digest,
+            self.status,
+            self.precision,
+            &hops,
+            edge_kind,
+        ) {
+            Ok(evidence) => self.structured_evidence = Some(evidence),
+            Err(_) => {
+                // Engine-produced envelopes must validate; leave unset rather than
+                // fabricate an invalid claim.
+            }
+        }
+        self
     }
 
     pub(crate) fn stable_key(&self) -> String {
@@ -161,12 +203,16 @@ impl PolicyViolation {
         for (label, value) in &self.evidence {
             diagnostic = diagnostic.with_evidence(label.clone(), value.clone());
         }
+        if let Some(evidence) = self.structured_evidence.clone() {
+            diagnostic = diagnostic.with_structured_evidence_v1(evidence);
+        }
         diagnostic
     }
 }
 
 /// Query for reachable event/call policies.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ReachQuery {
     /// Target event that must not be reachable.
     pub target: EventPattern,
@@ -220,6 +266,7 @@ impl ReachQuery {
 
 /// Query for missing guard policies.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct GuardQuery {
     /// Sensitive event that requires a guard.
     pub event: EventPattern,
@@ -262,6 +309,7 @@ impl GuardQuery {
 
 /// Query for resource lifecycle policies.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct LifecycleQuery {
     /// Event that acquires or opens a resource.
     pub start: EventPattern,
@@ -308,6 +356,7 @@ impl LifecycleQuery {
 
 /// Query for source-to-sink data-flow policies.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct FlowQuery {
     /// Required source pattern.
     pub source: SourcePattern,
@@ -354,6 +403,7 @@ impl FlowQuery {
 
 /// Pattern for semantic events such as calls or field writes.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct EventPattern {
     kind: EventPatternKind,
     values: Vec<String>,
@@ -394,6 +444,7 @@ impl EventPattern {
 
 /// Pattern for data-flow sources.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct SourcePattern {
     kind: SourcePatternKind,
     values: Vec<String>,
@@ -431,6 +482,7 @@ impl SourcePattern {
 
 /// Pattern for data-flow sinks.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct SinkPattern {
     kind: SinkPatternKind,
     values: Vec<String>,
@@ -464,6 +516,7 @@ impl SinkPattern {
 
 /// Pattern for guard checks.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct GuardPattern {
     kind: GuardPatternKind,
     values: Vec<String>,
@@ -493,6 +546,7 @@ impl GuardPattern {
 
 /// Pattern for data-flow barriers or sanitizers.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct BarrierPattern {
     kind: BarrierPatternKind,
     values: Vec<String>,
@@ -703,6 +757,142 @@ fn policy_confidence_label(confidence: PolicyConfidence) -> &'static str {
     }
 }
 
+fn render_policy_path_evidence(
+    diagnostic_stable_key: &str,
+    query_digest: &str,
+    status: PolicyStatus,
+    precision: PolicyPrecision,
+    hops: &[String],
+    edge_kind: PolicyEvidenceEdgeKind,
+) -> Result<StructuredEvidenceV1, String> {
+    const MAX_PATHS: u64 = 5;
+    const MAX_EDGES_PER_PATH: u64 = 96;
+    const MAX_UNKNOWNS: u64 = 32;
+    const MAX_OMITTED_REGIONS: u64 = 32;
+
+    let max_edges = usize::try_from(MAX_EDGES_PER_PATH).unwrap_or(usize::MAX);
+    let hop_limit = max_edges.saturating_add(1);
+    let hops = if hops.len() > hop_limit {
+        &hops[..hop_limit]
+    } else {
+        hops
+    };
+    let total_edges = hops.len().saturating_sub(1) as u64;
+    let rendered_edges = total_edges.min(MAX_EDGES_PER_PATH);
+    let edges_truncated = total_edges > rendered_edges;
+
+    let nodes = (0..hops.len() as u64).collect::<Vec<_>>();
+    let edges = hops
+        .windows(2)
+        .take(rendered_edges as usize)
+        .enumerate()
+        .map(|(index, pair)| {
+            serde_json::json!({
+                "id": index as u64,
+                "stable_key": format!("edge:{}:{}:{}", index, pair[0], pair[1]),
+                "kind": edge_kind_label(edge_kind),
+                "status": evidence_status_label(status),
+                "precision": evidence_precision_label(precision),
+                "provenance": "Query",
+                "validation": "RendererValidated",
+                "confidence": evidence_confidence_label(status, precision),
+                "summary_stable_key": null,
+                "expansion": { "state": "none" },
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let path_key = hops.join(" -> ");
+    let replay_key = format!(
+        "replay:policy:{}:{}",
+        query_digest,
+        stable_hash(&[&path_key])
+    );
+    let value = serde_json::json!({
+        "version": 1,
+        "bundle": {
+            "id": 0,
+            "stable_key": format!("bundle:policy:{diagnostic_stable_key}"),
+            "diagnostic_stable_key": diagnostic_stable_key,
+            "status": evidence_status_label(status),
+            "precision": evidence_precision_label(precision),
+            "provenance": "Query",
+            "validation": "RendererValidated",
+            "confidence": evidence_confidence_label(status, precision),
+            "replay_key": replay_key,
+        },
+        "paths": [{
+            "id": 0,
+            "stable_key": format!("path:policy:{path_key}"),
+            "rank": 0,
+            "status": evidence_status_label(status),
+            "hidden_node_count": 0,
+            "nodes": nodes,
+            "edges": edges,
+            "omitted_regions": [],
+            "total_edges": total_edges,
+            "rendered_edges": rendered_edges,
+            "edges_truncated": edges_truncated,
+        }],
+        "unknowns": [],
+        "omitted_regions": [],
+        "limits": {
+            "max_paths": MAX_PATHS,
+            "max_edges_per_path": MAX_EDGES_PER_PATH,
+            "max_unknowns": MAX_UNKNOWNS,
+            "max_omitted_regions": MAX_OMITTED_REGIONS,
+            "total_paths": 1,
+            "rendered_paths": 1,
+            "paths_truncated": false,
+            "total_unknowns": 0,
+            "rendered_unknowns": 0,
+            "unknowns_truncated": false,
+            "total_omitted_regions": 0,
+            "rendered_omitted_regions": 0,
+            "omitted_regions_truncated": false,
+        },
+    });
+    StructuredEvidenceV1::try_from_value(value)
+}
+
+fn edge_kind_label(kind: PolicyEvidenceEdgeKind) -> &'static str {
+    match kind {
+        PolicyEvidenceEdgeKind::Call => "Call",
+        PolicyEvidenceEdgeKind::Control => "Control",
+        PolicyEvidenceEdgeKind::DataTaint => "DataTaint",
+    }
+}
+
+fn evidence_status_label(status: PolicyStatus) -> &'static str {
+    match status {
+        PolicyStatus::Exact | PolicyStatus::Heuristic => "Present",
+        PolicyStatus::Unknown => "Unknown",
+        PolicyStatus::Unsupported => "Unsupported",
+        PolicyStatus::BudgetExceeded => "BudgetExceeded",
+    }
+}
+
+fn evidence_precision_label(precision: PolicyPrecision) -> &'static str {
+    match precision {
+        PolicyPrecision::Exact => "Exact",
+        PolicyPrecision::SetupAware => "SetupAware",
+        PolicyPrecision::Syntax => "Syntax",
+        PolicyPrecision::Conservative => "Conservative",
+        PolicyPrecision::Heuristic => "Heuristic",
+        PolicyPrecision::Unknown => "Unknown",
+    }
+}
+
+fn evidence_confidence_label(status: PolicyStatus, precision: PolicyPrecision) -> &'static str {
+    match (status, precision) {
+        (PolicyStatus::Exact, PolicyPrecision::Exact | PolicyPrecision::SetupAware) => "High",
+        (PolicyStatus::BudgetExceeded | PolicyStatus::Unsupported | PolicyStatus::Unknown, _) => {
+            "Low"
+        }
+        _ => "Medium",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -731,5 +921,38 @@ mod tests {
         changed.max_depth += 1;
 
         assert_ne!(baseline.query_digest(), changed.query_digest());
+    }
+
+    #[test]
+    fn policy_path_evidence_is_replayable_and_bounded() {
+        let violation = PolicyViolation::new(
+            PolicyOperation::CallsForbiddenReachable,
+            "digest",
+            "src/main.go",
+            TextRange::point(1, 1),
+            PolicyStatus::Exact,
+            PolicyPrecision::SetupAware,
+            vec![("path".into(), "main -> helper -> dangerous".into())],
+        )
+        .with_path_evidence(
+            ["main", "helper", "dangerous"],
+            PolicyEvidenceEdgeKind::Call,
+        );
+        let diagnostic = violation.diagnostic("local/reach", "reachable");
+        let evidence = diagnostic
+            .evidence_v1
+            .as_ref()
+            .expect("structured evidence");
+        let value = evidence.as_value();
+        assert_eq!(value["version"], 1);
+        assert!(value["bundle"]["replay_key"].as_str().is_some());
+        assert!(
+            value["paths"]
+                .as_array()
+                .map(|paths| !paths.is_empty())
+                .unwrap_or(false)
+        );
+        assert!(value["unknowns"].as_array().is_some());
+        assert!(value["limits"].as_object().is_some());
     }
 }

@@ -1,84 +1,1111 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ProviderManifest {
-    pub(crate) id: &'static str,
-    pub(crate) kind: ProviderKind,
-    pub(crate) inputs: &'static [&'static str],
-    pub(crate) outputs: &'static [&'static str],
-    pub(crate) language_scope: LanguageScope,
-    pub(crate) cache_policy: CachePolicy,
-    pub(crate) schema_versions: &'static [SchemaVersion],
-    pub(crate) precision_ceiling: PrecisionCeiling,
+use super::host;
+use super::incremental::{CacheStats, Digest, DigestKind, InputSnapshot};
+use crate::analysis::summaries::provider::SccClosureProviderOutput;
+use crate::analysis_api::ProviderExecution;
+use crate::analysis_plan::AnalysisPlan;
+use crate::cache::Cache;
+use crate::config::LoadedConfig;
+use crate::core::{AnalysisDb, CapabilitySupportView};
+use crate::diagnostics::{Diagnostic, TextRange};
+use crate::frontend::{LanguageIdRegistryExt, LanguageRegistryExt};
+use std::collections::BTreeMap;
+
+pub(crate) use crate::analysis_api::{
+    CachePolicy, PrecisionCeiling, Provider, ProviderCtx, ProviderKind, ProviderManifest,
+    ProviderRunResult, SchemaVersion,
+};
+
+/// Facade-local view over [`ProviderCtx`] for providers that still live in this crate.
+struct CtxHandle<'a> {
+    db: &'a mut AnalysisDb,
+    cache: Cache,
+    loaded: LoadedConfig,
+    input_snapshot: InputSnapshot,
+    config_digest: &'a str,
+    rule_digest: &'a str,
+    plan: AnalysisPlan,
+    #[allow(dead_code)]
+    parallel: bool,
+    upstream_digests: &'a BTreeMap<&'static str, Digest>,
+    capability_support: CapabilitySupportView,
+    scc_closure: Option<SccClosureProviderOutput>,
 }
 
-impl ProviderManifest {
-    pub(crate) fn provider_version(&self) -> &'static str {
-        env!("CARGO_PKG_VERSION")
+impl<'a> CtxHandle<'a> {
+    fn from_ctx(ctx: &'a mut ProviderCtx<'_>) -> Self {
+        let config_digest = ctx.config_digest;
+        let rule_digest = ctx.rule_digest;
+        let parallel = ctx.parallel;
+        let upstream_digests = ctx.upstream_digests;
+        let db = crate::analysis_api::FactDatabase::as_any_mut(ctx.facts)
+            .downcast_mut::<AnalysisDb>()
+            .expect("facade AnalysisDb host");
+        let (cache, loaded, input_snapshot, plan, capability_support, scc_closure) =
+            host::with_provider_host_session_mut(|session| {
+                (
+                    session.cache.clone(),
+                    session.loaded.clone(),
+                    session.input_snapshot.clone(),
+                    session.plan.clone(),
+                    session.capability_support.clone(),
+                    session.scc_closure.take(),
+                )
+            });
+        Self {
+            db,
+            cache,
+            loaded,
+            input_snapshot,
+            config_digest,
+            rule_digest,
+            plan,
+            parallel,
+            upstream_digests,
+            capability_support,
+            scc_closure,
+        }
     }
 
-    pub(crate) fn primary_schema_label(&self) -> String {
-        let mut labels = self
-            .schema_versions
+    fn dependency_digest(&self, provider_id: &'static str) -> Digest {
+        self.upstream_digests
+            .get(provider_id)
+            .cloned()
+            .unwrap_or_else(|| Digest::absent(DigestKind::ProviderOutput, provider_id))
+    }
+}
+
+impl Drop for CtxHandle<'_> {
+    fn drop(&mut self) {
+        host::with_provider_host_session_mut(|session| {
+            session.capability_support = self.capability_support.clone();
+            session.scc_closure = self.scc_closure.take();
+        });
+    }
+}
+
+fn manifest_by_id(id: &'static str) -> &'static ProviderManifest {
+    provider_manifests()
+        .iter()
+        .find(|manifest| manifest.id == id)
+        .unwrap_or_else(|| panic!("missing provider manifest {id}"))
+}
+
+pub(crate) struct SourceProvider;
+
+impl Provider for SourceProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.source")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let ctx = CtxHandle::from_ctx(ctx);
+        // Source discovery has no provider-output dependencies; the map is empty here.
+        debug_assert!(ctx.upstream_digests.is_empty());
+        // Source files are already loaded into the db before providers run;
+        // this stage only records the discovery provider output metadata.
+        ProviderRunResult {
+            diagnostics: Vec::new(),
+            cache_stats: CacheStats::default(),
+            output_digest: None,
+            execution: Default::default(),
+        }
+    }
+}
+
+pub(crate) struct GoSyntaxProvider;
+
+impl Provider for GoSyntaxProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.go.syntax")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        run_registered_frontend_syntax(ctx, "go")
+    }
+}
+
+pub(crate) struct TsSyntaxProvider;
+
+impl Provider for TsSyntaxProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.ts.syntax")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        run_registered_frontend_syntax(ctx, "ts")
+    }
+}
+
+fn run_registered_frontend_syntax(
+    ctx: &mut ProviderCtx<'_>,
+    frontend_name: &'static str,
+) -> ProviderRunResult {
+    let registry = crate::frontend::frontend_registry();
+    let frontend = registry
+        .by_name(frontend_name)
+        .unwrap_or_else(|| panic!("missing language frontend {frontend_name}"));
+    let frontend_id = frontend.id();
+    if frontend.profile().name != frontend_name {
+        panic!(
+            "frontend profile name {} != requested {frontend_name}",
+            frontend.profile().name
+        );
+    }
+    let _ = (
+        frontend.profile().family,
+        frontend.profile().produces,
+        frontend.profile().precision_ceiling,
+        frontend_id.to_public_language(),
+    );
+    // Clone matching files so AnalysisUnit does not borrow the fact DB across `analyze`.
+    let db = crate::analysis_api::FactDatabase::as_any_mut(ctx.facts)
+        .downcast_mut::<AnalysisDb>()
+        .expect("facade AnalysisDb host");
+    let owned: Vec<crate::core::SourceFile> = db
+        .files()
+        .iter()
+        .filter(|file| file.language.id() == frontend_id)
+        .cloned()
+        .collect();
+    debug_assert!(
+        owned.iter().all(|file| registry
+            .scheduled_for(&file.path)
             .iter()
-            .map(|schema| format!("{}:{}", schema.name, schema.version))
-            .collect::<Vec<_>>();
-        labels.sort();
-        labels.join(",")
+            .any(|candidate| candidate.id() == frontend_id)),
+        "Language::id selection must agree with scheduled_for"
+    );
+    let files: Vec<&crate::core::SourceFile> = owned.iter().collect();
+    let root = host::with_provider_host_session_mut(|session| session.loaded.root.clone());
+    let unit = crate::frontend::AnalysisUnit {
+        files: &files,
+        root: &root,
+    };
+    frontend.analyze(ctx, &unit)
+}
+
+pub(crate) struct ModuleGraphProvider;
+
+impl Provider for ModuleGraphProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.module_graph")
     }
 
-    pub(crate) fn language_scope_label(&self) -> &'static str {
-        match self.language_scope {
-            LanguageScope::Workspace => "workspace",
-            LanguageScope::Go => "go",
-            LanguageScope::TypeScriptJavaScript => "typescript_javascript",
-            LanguageScope::MultiLanguage => "multi_language",
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let mut ctx = CtxHandle::from_ctx(ctx);
+        let derivation = crate::module_graph::derive_requested_module_graph_with_cache_stats(
+            ctx.db,
+            &ctx.loaded,
+            &ctx.plan,
+            &ctx.cache,
+            &ctx.input_snapshot,
+            self.manifest(),
+            vec![
+                ctx.dependency_digest("polint.go.syntax"),
+                ctx.dependency_digest("polint.ts.syntax"),
+            ],
+        );
+        let updated = derivation.support_view(&ctx.capability_support);
+        ctx.capability_support = updated;
+        ProviderRunResult {
+            diagnostics: derivation.diagnostics,
+            cache_stats: derivation.cache_stats,
+            output_digest: derivation.output_digest,
+            execution: ProviderExecution::Succeeded,
         }
     }
+}
 
-    pub(crate) fn cache_policy_label(&self) -> String {
-        match self.cache_policy {
-            CachePolicy::NoCache => "no_cache".to_string(),
-            CachePolicy::ExistingFileFactCache { schema } => {
-                format!("existing_file_fact_cache:{schema}")
+pub(crate) struct SymbolGraphProvider;
+
+impl Provider for SymbolGraphProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.symbol_graph")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let mut ctx = CtxHandle::from_ctx(ctx);
+        let derivation = crate::symbol_graph::derive_requested_symbols_with_cache_stats(
+            ctx.db,
+            &ctx.loaded,
+            &ctx.plan,
+            &ctx.cache,
+            &ctx.input_snapshot,
+            self.manifest(),
+            ctx.dependency_digest("polint.module_graph"),
+            vec![
+                ctx.dependency_digest("polint.go.syntax"),
+                ctx.dependency_digest("polint.ts.syntax"),
+            ],
+        );
+        let updated = derivation.support_view(&ctx.capability_support);
+        ctx.capability_support = updated;
+        ProviderRunResult {
+            diagnostics: derivation.diagnostics,
+            cache_stats: derivation.cache_stats,
+            output_digest: derivation.output_digest,
+            execution: ProviderExecution::Succeeded,
+        }
+    }
+}
+
+pub(crate) struct ModuleTopologyProvider;
+
+impl Provider for ModuleTopologyProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.module_topology")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let ctx = CtxHandle::from_ctx(ctx);
+        let derivation = crate::module_graph::derive_module_topology_with_cache_stats(
+            ctx.db,
+            &ctx.cache,
+            &ctx.input_snapshot,
+            self.manifest(),
+            ctx.dependency_digest("polint.module_graph"),
+            ctx.dependency_digest("polint.symbol_graph"),
+        );
+        ProviderRunResult {
+            diagnostics: derivation.diagnostics,
+            cache_stats: derivation.cache_stats,
+            output_digest: derivation.output_digest,
+            execution: ProviderExecution::Succeeded,
+        }
+    }
+}
+
+pub(crate) struct SemanticMirProvider;
+
+impl Provider for SemanticMirProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.semantic_mir")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let ctx = CtxHandle::from_ctx(ctx);
+        let derivation = crate::analysis::provider::derive_semantic_mir_with_cache_stats(
+            ctx.db,
+            &ctx.input_snapshot,
+            self.manifest(),
+            ctx.dependency_digest("polint.module_topology"),
+            ctx.dependency_digest("polint.symbol_graph"),
+            vec![
+                ctx.dependency_digest("polint.go.syntax"),
+                ctx.dependency_digest("polint.ts.syntax"),
+            ],
+        );
+        ProviderRunResult {
+            diagnostics: derivation.diagnostics,
+            cache_stats: derivation.cache_stats,
+            output_digest: derivation.output_digest,
+            execution: derivation.execution,
+        }
+    }
+}
+
+pub(crate) struct CfgProvider;
+
+impl Provider for CfgProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.cfg")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let ctx = CtxHandle::from_ctx(ctx);
+        let derivation = crate::analysis::cfg::provider::derive_cfg_with_cache_stats(
+            ctx.db,
+            &ctx.input_snapshot,
+            self.manifest(),
+            ctx.dependency_digest("polint.semantic_mir"),
+            vec![
+                ctx.dependency_digest("polint.go.syntax"),
+                ctx.dependency_digest("polint.ts.syntax"),
+            ],
+        );
+        ProviderRunResult {
+            diagnostics: derivation.diagnostics,
+            cache_stats: derivation.cache_stats,
+            output_digest: derivation.output_digest,
+            execution: derivation.execution,
+        }
+    }
+}
+
+pub(crate) struct CallsProvider;
+
+impl Provider for CallsProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.calls")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let ctx = CtxHandle::from_ctx(ctx);
+        // Capability-closure only schedules this provider when the deep stack runs;
+        // SEMANTIC/CFG/FULL triggers are identical, so the call-sites-only path is gone.
+        let derivation = crate::analysis::calls::provider::derive_calls_with_cache_stats(
+            ctx.db,
+            &ctx.input_snapshot,
+            self.manifest(),
+            ctx.dependency_digest("polint.semantic_mir"),
+            ctx.dependency_digest("polint.cfg"),
+            ctx.dependency_digest("polint.symbol_graph"),
+            ctx.dependency_digest("polint.module_topology"),
+            vec![
+                ctx.dependency_digest("polint.go.syntax"),
+                ctx.dependency_digest("polint.ts.syntax"),
+            ],
+        );
+        ProviderRunResult {
+            diagnostics: derivation.diagnostics,
+            cache_stats: derivation.cache_stats,
+            output_digest: derivation.output_digest,
+            execution: derivation.execution,
+        }
+    }
+}
+
+pub(crate) struct GoSemanticProvider;
+
+impl Provider for GoSemanticProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.go.semantic")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let ctx = CtxHandle::from_ctx(ctx);
+        let root = ctx.loaded.root.clone();
+        let go_settings = ctx.loaded.config.languages.go.clone();
+        let config_digest = ctx.config_digest;
+        let go_syntax_digest = ctx.dependency_digest("polint.go.syntax");
+        let derivation = crate::go::semantic::provider::derive_go_semantic_with_cache_stats(
+            ctx.db,
+            &root,
+            &go_settings,
+            config_digest,
+            self.manifest(),
+            go_syntax_digest,
+        );
+        ProviderRunResult {
+            diagnostics: derivation.diagnostics,
+            cache_stats: derivation.cache_stats,
+            output_digest: derivation.output_digest,
+            execution: derivation.execution,
+        }
+    }
+}
+
+pub(crate) struct IdentityProvider;
+
+impl Provider for IdentityProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.identity")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let ctx = CtxHandle::from_ctx(ctx);
+        let derivation = crate::analysis::identity::provider::derive_identity_with_cache_stats(
+            ctx.db,
+            &ctx.input_snapshot,
+            self.manifest(),
+            ctx.dependency_digest("polint.calls"),
+            ctx.dependency_digest("polint.go.semantic"),
+        );
+        ProviderRunResult {
+            diagnostics: derivation.diagnostics,
+            cache_stats: derivation.cache_stats,
+            output_digest: derivation.output_digest,
+            execution: derivation.execution,
+        }
+    }
+}
+
+pub(crate) struct AbstractDomainsProvider;
+
+impl Provider for AbstractDomainsProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.abstract_domains")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let ctx = CtxHandle::from_ctx(ctx);
+        let compact_domain_materialization = ctx.plan.rules().iter().any(|rule| {
+            rule.requested_capabilities
+                .iter()
+                .any(|c| c == "control_flow")
+        }) && !ctx.plan.rules().iter().any(|rule| {
+            rule.requested_capabilities
+                .iter()
+                .any(|c| c == "calls" || c == "dataflow")
+        });
+        let derivation = if compact_domain_materialization {
+            crate::analysis::domains::provider::derive_summary_input_abstract_domains_with_cache_stats(ctx.db,
+                &ctx.input_snapshot,
+                self.manifest(),
+                ctx.dependency_digest("polint.semantic_mir"),
+                ctx.dependency_digest("polint.cfg"),
+                ctx.dependency_digest("polint.calls"),
+                ctx.dependency_digest("polint.symbol_graph"),
+                ctx.dependency_digest("polint.module_topology"),
+                vec![
+                    ctx.dependency_digest("polint.go.syntax"),
+                    ctx.dependency_digest("polint.ts.syntax"),
+                ],
+            )
+        } else {
+            crate::analysis::domains::provider::derive_abstract_domains_with_cache_stats(
+                ctx.db,
+                &ctx.input_snapshot,
+                self.manifest(),
+                ctx.dependency_digest("polint.semantic_mir"),
+                ctx.dependency_digest("polint.cfg"),
+                ctx.dependency_digest("polint.calls"),
+                ctx.dependency_digest("polint.symbol_graph"),
+                ctx.dependency_digest("polint.module_topology"),
+                vec![
+                    ctx.dependency_digest("polint.go.syntax"),
+                    ctx.dependency_digest("polint.ts.syntax"),
+                ],
+            )
+        };
+        ProviderRunResult {
+            diagnostics: derivation.diagnostics,
+            cache_stats: derivation.cache_stats,
+            output_digest: derivation.output_digest,
+            execution: ProviderExecution::Succeeded,
+        }
+    }
+}
+
+pub(crate) struct DirectSummariesProvider;
+
+impl Provider for DirectSummariesProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.direct_summaries")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let mut ctx = CtxHandle::from_ctx(ctx);
+        let derivation =
+            crate::analysis::summaries::provider::derive_direct_summaries_with_cache_stats(
+                ctx.db,
+                &ctx.input_snapshot,
+                self.manifest(),
+                ctx.dependency_digest("polint.semantic_mir"),
+                ctx.dependency_digest("polint.cfg"),
+                ctx.dependency_digest("polint.calls"),
+                ctx.dependency_digest("polint.abstract_domains"),
+                ctx.dependency_digest("polint.symbol_graph"),
+                ctx.dependency_digest("polint.module_topology"),
+                vec![
+                    ctx.dependency_digest("polint.go.syntax"),
+                    ctx.dependency_digest("polint.ts.syntax"),
+                ],
+            );
+        debug_assert!(derivation.output_digest.is_some());
+        let mut diagnostics = derivation.diagnostics;
+        let cache_stats = derivation.cache_stats;
+
+        let scc_closure = crate::analysis::summaries::provider::run_scc_closure_with_cache(
+            ctx.db,
+            &ctx.cache,
+            ctx.config_digest,
+            ctx.rule_digest,
+            ctx.plan.digest(),
+        );
+        diagnostics.extend(scc_closure.diagnostics.clone());
+        ctx.scc_closure = Some(scc_closure);
+
+        let final_direct_summaries_output = crate::analysis::summaries::store::SummaryOutput {
+            summaries: ctx.db.summary_facts().to_vec(),
+            events: ctx.db.summary_events().to_vec(),
+        };
+        let go_ts = [
+            ctx.dependency_digest("polint.go.syntax"),
+            ctx.dependency_digest("polint.ts.syntax"),
+        ];
+        let interner = ctx.db.stable_key_interner();
+        let output_digest = crate::analysis::summaries::provider::direct_summaries_output_digest(
+            self.manifest(),
+            &ctx.input_snapshot,
+            &ctx.dependency_digest("polint.semantic_mir"),
+            &ctx.dependency_digest("polint.cfg"),
+            &ctx.dependency_digest("polint.calls"),
+            &ctx.dependency_digest("polint.abstract_domains"),
+            &ctx.dependency_digest("polint.symbol_graph"),
+            &ctx.dependency_digest("polint.module_topology"),
+            &go_ts,
+            &interner,
+            &crate::analysis::summaries::provider::callable_stable_key_map(ctx.db),
+            &final_direct_summaries_output,
+        );
+        ProviderRunResult {
+            diagnostics,
+            cache_stats,
+            output_digest: Some(output_digest),
+            execution: derivation.execution,
+        }
+    }
+}
+
+pub(crate) struct EntrypointsProvider;
+
+impl Provider for EntrypointsProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.entrypoints")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let ctx = CtxHandle::from_ctx(ctx);
+        let derivation =
+            crate::analysis::entrypoints::provider::derive_entrypoints_with_cache_stats(
+                ctx.db,
+                &ctx.input_snapshot,
+                self.manifest(),
+                ctx.dependency_digest("polint.semantic_mir"),
+                ctx.dependency_digest("polint.cfg"),
+                ctx.dependency_digest("polint.calls"),
+                ctx.dependency_digest("polint.symbol_graph"),
+                ctx.dependency_digest("polint.module_topology"),
+                vec![
+                    ctx.dependency_digest("polint.go.syntax"),
+                    ctx.dependency_digest("polint.ts.syntax"),
+                ],
+            );
+        ProviderRunResult {
+            diagnostics: derivation.diagnostics,
+            cache_stats: derivation.cache_stats,
+            output_digest: derivation.output_digest,
+            execution: derivation.execution,
+        }
+    }
+}
+
+pub(crate) struct ReachabilityProvider;
+
+impl Provider for ReachabilityProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.reachability")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let ctx = CtxHandle::from_ctx(ctx);
+        let derivation =
+            crate::analysis::reachability::provider::derive_reachability_with_cache_stats(
+                ctx.db,
+                &ctx.input_snapshot,
+                self.manifest(),
+                &ctx.loaded.config.reachability.roots,
+                ctx.dependency_digest("polint.calls"),
+                ctx.dependency_digest("polint.entrypoints"),
+                ctx.dependency_digest("polint.identity"),
+                ctx.dependency_digest("polint.symbol_graph"),
+                ctx.dependency_digest("polint.module_topology"),
+            );
+        ProviderRunResult {
+            diagnostics: derivation.diagnostics,
+            cache_stats: derivation.cache_stats,
+            output_digest: derivation.output_digest,
+            execution: derivation.execution,
+        }
+    }
+}
+
+pub(crate) struct ExtensionsProvider;
+
+impl Provider for ExtensionsProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.extensions")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let ctx = CtxHandle::from_ctx(ctx);
+        let derivation = crate::analysis::extensions::provider::derive_extension_provider_outputs_with_cache_stats(
+            ctx.db,
+            &ctx.loaded.root,
+            &ctx.input_snapshot,
+            self.manifest(),
+        );
+        ProviderRunResult {
+            diagnostics: derivation.diagnostics,
+            cache_stats: derivation.cache_stats,
+            output_digest: derivation.output_digest,
+            execution: derivation.execution,
+        }
+    }
+}
+
+fn solver_budget_from_loaded(
+    loaded: &LoadedConfig,
+) -> crate::analysis::solver::budget::SolverBudget {
+    crate::analysis::solver::budget::SolverBudget {
+        go: loaded.config.solver.to_go_sub_budget(),
+        ..crate::analysis::solver::budget::SolverBudget::default()
+    }
+}
+
+pub(crate) struct TypeValueAliasProvider;
+
+impl Provider for TypeValueAliasProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.type_value_alias")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let ctx = CtxHandle::from_ctx(ctx);
+        let derivation = crate::analysis::types::provider::derive_type_value_alias_with_cache_stats(
+            ctx.db,
+            &ctx.input_snapshot,
+            self.manifest(),
+            ctx.dependency_digest("polint.semantic_mir"),
+            ctx.dependency_digest("polint.cfg"),
+            ctx.dependency_digest("polint.calls"),
+            ctx.dependency_digest("polint.abstract_domains"),
+            ctx.dependency_digest("polint.direct_summaries"),
+            ctx.dependency_digest("polint.entrypoints"),
+            ctx.dependency_digest("polint.extensions"),
+            ctx.dependency_digest("polint.symbol_graph"),
+            ctx.dependency_digest("polint.module_topology"),
+            vec![
+                ctx.dependency_digest("polint.go.syntax"),
+                ctx.dependency_digest("polint.ts.syntax"),
+            ],
+        );
+        ProviderRunResult {
+            diagnostics: derivation.diagnostics,
+            cache_stats: derivation.cache_stats,
+            output_digest: derivation.output_digest,
+            execution: derivation.execution,
+        }
+    }
+}
+
+pub(crate) struct SemanticGraphProvider;
+
+impl Provider for SemanticGraphProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.semantic_graph")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let ctx = CtxHandle::from_ctx(ctx);
+        let solver_budget = solver_budget_from_loaded(&ctx.loaded);
+        let derivation =
+            crate::analysis::semantic_graph::provider::derive_semantic_graph_with_cache_stats(
+                ctx.db,
+                &ctx.loaded,
+                solver_budget.adaptation,
+                &ctx.input_snapshot,
+                self.manifest(),
+                ctx.dependency_digest("polint.calls"),
+                ctx.dependency_digest("polint.identity"),
+                ctx.dependency_digest("polint.abstract_domains"),
+                ctx.dependency_digest("polint.entrypoints"),
+                ctx.dependency_digest("polint.reachability"),
+                ctx.dependency_digest("polint.type_value_alias"),
+                ctx.dependency_digest("polint.symbol_graph"),
+                ctx.dependency_digest("polint.module_topology"),
+                ctx.dependency_digest("polint.go.syntax"),
+                ctx.dependency_digest("polint.ts.syntax"),
+                ctx.dependency_digest("polint.semantic_mir"),
+                ctx.dependency_digest("polint.go.semantic"),
+            );
+        ProviderRunResult {
+            diagnostics: derivation.diagnostics,
+            cache_stats: derivation.cache_stats,
+            output_digest: derivation.output_digest,
+            execution: derivation.execution,
+        }
+    }
+}
+
+pub(crate) struct SolverProvider;
+
+impl Provider for SolverProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.solver")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let ctx = CtxHandle::from_ctx(ctx);
+        let derivation = crate::analysis::solver::provider::derive_solver_with_cache_stats(
+            ctx.db,
+            &ctx.input_snapshot,
+            self.manifest(),
+            solver_budget_from_loaded(&ctx.loaded),
+            ctx.dependency_digest("polint.semantic_graph"),
+            ctx.dependency_digest("polint.type_value_alias"),
+            ctx.dependency_digest("polint.go.semantic"),
+        );
+        ProviderRunResult {
+            diagnostics: derivation.diagnostics,
+            cache_stats: derivation.cache_stats,
+            output_digest: derivation.output_digest,
+            execution: derivation.execution,
+        }
+    }
+}
+
+pub(crate) struct RefinedCallsProvider;
+
+impl Provider for RefinedCallsProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.refined_calls")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let ctx = CtxHandle::from_ctx(ctx);
+        let derivation =
+            crate::analysis::refined_calls::provider::derive_refined_calls_with_cache_stats(
+                ctx.db,
+                &ctx.input_snapshot,
+                self.manifest(),
+                ctx.dependency_digest("polint.calls"),
+                ctx.dependency_digest("polint.entrypoints"),
+                ctx.dependency_digest("polint.direct_summaries"),
+                ctx.dependency_digest("polint.type_value_alias"),
+                ctx.dependency_digest("polint.extensions"),
+                ctx.dependency_digest("polint.solver"),
+            );
+        ProviderRunResult {
+            diagnostics: derivation.diagnostics,
+            cache_stats: derivation.cache_stats,
+            output_digest: derivation.output_digest,
+            execution: derivation.execution,
+        }
+    }
+}
+
+pub(crate) struct DataFlowProvider;
+
+impl Provider for DataFlowProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.data_flow")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let ctx = CtxHandle::from_ctx(ctx);
+        let derivation = crate::analysis::data_flow::provider::derive_data_flow_with_cache_stats(
+            ctx.db,
+            &ctx.input_snapshot,
+            self.manifest(),
+            ctx.dependency_digest("polint.semantic_mir"),
+            ctx.dependency_digest("polint.cfg"),
+            ctx.dependency_digest("polint.calls"),
+            ctx.dependency_digest("polint.refined_calls"),
+            ctx.dependency_digest("polint.direct_summaries"),
+            ctx.dependency_digest("polint.type_value_alias"),
+            ctx.dependency_digest("polint.entrypoints"),
+            ctx.dependency_digest("polint.extensions"),
+        );
+        ProviderRunResult {
+            diagnostics: derivation.diagnostics,
+            cache_stats: derivation.cache_stats,
+            output_digest: derivation.output_digest,
+            execution: derivation.execution,
+        }
+    }
+}
+
+pub(crate) struct EvidenceProvider;
+
+impl Provider for EvidenceProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.evidence")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let ctx = CtxHandle::from_ctx(ctx);
+        let derivation = crate::analysis::evidence::provider::derive_evidence_with_cache_stats(
+            ctx.db,
+            &ctx.input_snapshot,
+            self.manifest(),
+            ctx.dependency_digest("polint.semantic_mir"),
+            ctx.dependency_digest("polint.cfg"),
+            ctx.dependency_digest("polint.calls"),
+            ctx.dependency_digest("polint.refined_calls"),
+            ctx.dependency_digest("polint.direct_summaries"),
+            ctx.dependency_digest("polint.type_value_alias"),
+            ctx.dependency_digest("polint.entrypoints"),
+            ctx.dependency_digest("polint.extensions"),
+            ctx.dependency_digest("polint.data_flow"),
+        );
+        ProviderRunResult {
+            diagnostics: derivation.diagnostics,
+            cache_stats: derivation.cache_stats,
+            output_digest: derivation.output_digest,
+            execution: derivation.execution,
+        }
+    }
+}
+
+pub(crate) struct MetricsProvider;
+
+impl Provider for MetricsProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.metrics")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let ctx = CtxHandle::from_ctx(ctx);
+        let derivation = match crate::metrics::derive_requested_metrics_with_cache_stats(
+            ctx.db,
+            &ctx.plan,
+            &ctx.cache,
+            self.manifest(),
+        ) {
+            Ok(derivation) => derivation,
+            Err(error) => {
+                return ProviderRunResult {
+                    diagnostics: vec![Diagnostic::error(
+                        "internal/metrics",
+                        "<workspace>",
+                        TextRange::point(1, 1),
+                        format!("metrics projection failed: {error}"),
+                    )],
+                    cache_stats: CacheStats::default(),
+                    output_digest: None,
+                    execution: crate::analysis_api::ProviderExecution::Failed {
+                        stage: crate::analysis_api::ProviderFailureStage::Execution,
+                        reason: crate::analysis_api::ProviderFailureReason::ExecutionFailed,
+                    },
+                };
             }
-            CachePolicy::InMemoryDerived => "in_memory_derived".to_string(),
+        };
+        ProviderRunResult {
+            diagnostics: derivation.diagnostics,
+            cache_stats: derivation.cache_stats,
+            output_digest: derivation.output_digest,
+            execution: derivation.execution,
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ProviderKind {
-    SourceDiscovery,
-    LanguageSyntax,
-    WholeRepoDerived,
-    MetricsDerived,
+/// Topological schedule of `PROVIDER_MANIFESTS` with ties broken by declaration index.
+///
+/// Edge: provider P depends on Q when any string in `P.inputs` appears in `Q.outputs`.
+/// External inputs with no producer (e.g. `workspace_config`) create no edges.
+///
+/// Order is asserted against the declared manifest sequence; the kernel switches
+/// execution onto this schedule once capability-closure gating replaces the
+/// hand-rolled boolean pipeline flags.
+pub(crate) fn scheduled_order() -> Vec<&'static str> {
+    use std::cmp::Reverse;
+    use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
+
+    let manifests = provider_manifests();
+    let n = manifests.len();
+
+    let mut producers: BTreeMap<&'static str, Vec<usize>> = BTreeMap::new();
+    for (index, manifest) in manifests.iter().enumerate() {
+        for &output in manifest.outputs {
+            producers.entry(output).or_default().push(index);
+        }
+    }
+
+    let mut indegree = vec![0usize; n];
+    let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (index, manifest) in manifests.iter().enumerate() {
+        let mut preds = BTreeSet::new();
+        for &input in manifest.inputs {
+            if let Some(qs) = producers.get(input) {
+                for &q in qs {
+                    if q != index {
+                        preds.insert(q);
+                    }
+                }
+            }
+        }
+        indegree[index] = preds.len();
+        for &q in &preds {
+            dependents[q].push(index);
+        }
+    }
+
+    // Tie-break by manifest declaration index (not id/name).
+    let mut ready: BinaryHeap<Reverse<usize>> = BinaryHeap::new();
+    for (index, &degree) in indegree.iter().enumerate() {
+        if degree == 0 {
+            ready.push(Reverse(index));
+        }
+    }
+
+    let mut order = Vec::with_capacity(n);
+    while let Some(Reverse(index)) = ready.pop() {
+        order.push(manifests[index].id);
+        for &dependent in &dependents[index] {
+            indegree[dependent] -= 1;
+            if indegree[dependent] == 0 {
+                ready.push(Reverse(dependent));
+            }
+        }
+    }
+    assert_eq!(
+        order.len(),
+        n,
+        "provider DAG must be acyclic; scheduled {} of {n}",
+        order.len()
+    );
+    order
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LanguageScope {
-    Workspace,
-    Go,
-    TypeScriptJavaScript,
-    MultiLanguage,
+pub(crate) fn run_named_provider(id: &str, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+    match id {
+        "polint.source" => SourceProvider.run(ctx),
+        "polint.go.syntax" => GoSyntaxProvider.run(ctx),
+        "polint.ts.syntax" => TsSyntaxProvider.run(ctx),
+        "polint.module_graph" => ModuleGraphProvider.run(ctx),
+        "polint.symbol_graph" => SymbolGraphProvider.run(ctx),
+        "polint.module_topology" => ModuleTopologyProvider.run(ctx),
+        "polint.semantic_mir" => SemanticMirProvider.run(ctx),
+        "polint.cfg" => CfgProvider.run(ctx),
+        "polint.calls" => CallsProvider.run(ctx),
+        "polint.go.semantic" => GoSemanticProvider.run(ctx),
+        "polint.identity" => IdentityProvider.run(ctx),
+        "polint.abstract_domains" => AbstractDomainsProvider.run(ctx),
+        "polint.direct_summaries" => DirectSummariesProvider.run(ctx),
+        "polint.entrypoints" => EntrypointsProvider.run(ctx),
+        "polint.reachability" => ReachabilityProvider.run(ctx),
+        "polint.extensions" => ExtensionsProvider.run(ctx),
+        "polint.type_value_alias" => TypeValueAliasProvider.run(ctx),
+        "polint.semantic_graph" => SemanticGraphProvider.run(ctx),
+        "polint.solver" => SolverProvider.run(ctx),
+        "polint.refined_calls" => RefinedCallsProvider.run(ctx),
+        "polint.data_flow" => DataFlowProvider.run(ctx),
+        "polint.evidence" => EvidenceProvider.run(ctx),
+        "polint.metrics" => MetricsProvider.run(ctx),
+        other => panic!("unknown provider id {other}"),
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CachePolicy {
-    NoCache,
-    ExistingFileFactCache { schema: &'static str },
-    InMemoryDerived,
+/// Providers always present in today's `run()` schedule (graphs + metrics).
+const BASELINE_PROVIDER_SEEDS: &[&str] = &[
+    "polint.module_graph",
+    "polint.symbol_graph",
+    "polint.metrics",
+];
+
+/// Seeds that pull the deep semantic/CFG/refinement stack through dependency closure.
+const DEEP_PROVIDER_SEEDS: &[&str] = &[
+    "polint.calls",
+    "polint.direct_summaries",
+    "polint.reachability",
+    "polint.refined_calls",
+    "polint.solver",
+];
+
+const DEEP_TRIGGER_CAPABILITIES: &[&str] = &["calls", "control_flow", "dataflow"];
+
+/// Provider set enabled by the historical boolean pipeline gates for `requested`.
+pub(crate) fn providers_enabled_by_boolean_gates(
+    requested: &std::collections::BTreeSet<&str>,
+) -> std::collections::BTreeSet<&'static str> {
+    let mut enabled = std::collections::BTreeSet::from([
+        "polint.source",
+        "polint.go.syntax",
+        "polint.ts.syntax",
+        "polint.module_graph",
+        "polint.symbol_graph",
+        "polint.metrics",
+    ]);
+    let deep = DEEP_TRIGGER_CAPABILITIES
+        .iter()
+        .any(|capability| requested.contains(capability));
+    if deep {
+        enabled.extend([
+            "polint.module_topology",
+            "polint.semantic_mir",
+            "polint.cfg",
+            "polint.calls",
+            "polint.go.semantic",
+            "polint.identity",
+            "polint.abstract_domains",
+            "polint.direct_summaries",
+            "polint.entrypoints",
+            "polint.reachability",
+            "polint.extensions",
+            "polint.type_value_alias",
+            "polint.semantic_graph",
+            "polint.solver",
+            "polint.refined_calls",
+        ]);
+    }
+    if requested.contains("dataflow") {
+        enabled.extend(["polint.data_flow", "polint.evidence"]);
+    }
+    enabled
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct SchemaVersion {
-    pub(crate) name: &'static str,
-    pub(crate) version: u32,
+fn seed_providers_for_capability(capability: &str) -> &'static [&'static str] {
+    match capability {
+        "resolved_imports" | "module_graph" => &["polint.module_graph"],
+        "symbols" | "references" => &["polint.symbol_graph"],
+        "calls" | "control_flow" => DEEP_PROVIDER_SEEDS,
+        "dataflow" => {
+            const DATAFLOW_SEEDS: &[&str] = &[
+                "polint.calls",
+                "polint.direct_summaries",
+                "polint.reachability",
+                "polint.refined_calls",
+                "polint.solver",
+                "polint.data_flow",
+                "polint.evidence",
+            ];
+            DATAFLOW_SEEDS
+        }
+        "file_metrics" | "function_metrics" | "complexity_metrics" => &["polint.metrics"],
+        _ => &[],
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PrecisionCeiling {
-    Exact,
-    Syntax,
-    SetupAware,
+/// Provider set derived by seeding from requested capabilities and closing over
+/// manifest dependency edges (input fact produced by provider).
+pub(crate) fn providers_enabled_by_capability_closure(
+    requested: &std::collections::BTreeSet<&str>,
+) -> std::collections::BTreeSet<&'static str> {
+    use std::collections::{BTreeMap, BTreeSet, VecDeque};
+
+    let manifests = provider_manifests();
+    let mut producers: BTreeMap<&str, Vec<&'static str>> = BTreeMap::new();
+    for manifest in manifests {
+        for &output in manifest.outputs {
+            producers.entry(output).or_default().push(manifest.id);
+        }
+    }
+
+    let mut seeds: BTreeSet<&'static str> = BASELINE_PROVIDER_SEEDS.iter().copied().collect();
+    for &capability in requested {
+        seeds.extend(seed_providers_for_capability(capability).iter().copied());
+    }
+
+    let mut enabled = seeds.clone();
+    let mut queue: VecDeque<&'static str> = seeds.into_iter().collect();
+    while let Some(provider_id) = queue.pop_front() {
+        let Some(manifest) = manifests.iter().find(|manifest| manifest.id == provider_id) else {
+            continue;
+        };
+        for &input in manifest.inputs {
+            let Some(producers_for_input) = producers.get(input) else {
+                continue;
+            };
+            for &producer in producers_for_input {
+                if enabled.insert(producer) {
+                    queue.push_back(producer);
+                }
+            }
+        }
+    }
+    enabled
+}
+
+/// Topological provider order restricted to the capability-closure set for `requested`.
+pub(crate) fn scheduled_order_for(
+    requested: &std::collections::BTreeSet<&str>,
+) -> Vec<&'static str> {
+    let enabled = providers_enabled_by_capability_closure(requested);
+    scheduled_order()
+        .into_iter()
+        .filter(|id| enabled.contains(id))
+        .collect()
 }
 
 pub(crate) fn provider_manifests() -> &'static [ProviderManifest] {
@@ -100,7 +1127,7 @@ pub(crate) fn provider_order_report_for_test() -> Vec<ProviderOrderRow> {
         .map(|manifest| ProviderOrderRow {
             id: manifest.id,
             kind: provider_kind_label(manifest.kind),
-            language_scope: language_scope_label(manifest.language_scope),
+            language_scope: manifest.language_scope_label(),
             inputs: manifest.inputs.to_vec(),
             outputs: manifest.outputs.to_vec(),
         })
@@ -124,16 +1151,6 @@ fn provider_kind_label(kind: ProviderKind) -> &'static str {
         ProviderKind::LanguageSyntax => "language_syntax",
         ProviderKind::WholeRepoDerived => "whole_repo_derived",
         ProviderKind::MetricsDerived => "metrics_derived",
-    }
-}
-
-#[cfg(test)]
-fn language_scope_label(scope: LanguageScope) -> &'static str {
-    match scope {
-        LanguageScope::Workspace => "workspace",
-        LanguageScope::Go => "go",
-        LanguageScope::TypeScriptJavaScript => "typescript_javascript",
-        LanguageScope::MultiLanguage => "multi_language",
     }
 }
 
@@ -243,7 +1260,7 @@ const EVIDENCE_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
 }];
 
 const EXTENSIONS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
-    name: crate::analysis::extensions::cache_key::EXTENSION_FACTS_SCHEMA_LABEL,
+    name: crate::analysis::extensions::EXTENSION_FACTS_SCHEMA_LABEL,
     version: 1,
 }];
 
@@ -258,7 +1275,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
         kind: ProviderKind::SourceDiscovery,
         inputs: &["workspace_config", "file_discovery"],
         outputs: &["source_files"],
-        language_scope: LanguageScope::Workspace,
+        language_ids: crate::frontend::LANGUAGE_IDS_NONE,
         cache_policy: CachePolicy::NoCache,
         schema_versions: SOURCE_SCHEMA,
         precision_ceiling: PrecisionCeiling::Exact,
@@ -275,7 +1292,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "branch_obligations",
             "string_literals",
         ],
-        language_scope: LanguageScope::Go,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO,
         cache_policy: CachePolicy::ExistingFileFactCache {
             schema: "go-facts-v2",
         },
@@ -294,7 +1311,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "string_literals",
             "jsx_attributes",
         ],
-        language_scope: LanguageScope::TypeScriptJavaScript,
+        language_ids: crate::frontend::LANGUAGE_IDS_TS,
         cache_policy: CachePolicy::ExistingFileFactCache {
             schema: "ts-facts-v5",
         },
@@ -316,7 +1333,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "resolved_dependency_edges",
             "repo_topology_overlays",
         ],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: MODULE_GRAPH_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -345,7 +1362,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "generated_symbols",
             "stable_exports",
         ],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: SYMBOL_GRAPH_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -367,7 +1384,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "semantic_imports",
         ],
         outputs: &["import_to_package_edges"],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: MODULE_TOPOLOGY_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -390,7 +1407,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "places",
             "unsupported_semantics",
         ],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: SEMANTIC_MIR_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -417,7 +1434,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "cfg_control_dependence",
             "unsupported_control_flow",
         ],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: CFG_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -441,7 +1458,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "cfg_edges",
         ],
         outputs: &["call_sites", "call_targets", "unresolved_calls"],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: CALLS_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -470,7 +1487,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "go_semantic_rta_edges",
             "go_semantic_package_errors",
         ],
-        language_scope: LanguageScope::Go,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: GO_SEMANTIC_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -487,7 +1504,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "go_semantic_packages",
         ],
         outputs: &["identity_records"],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: IDENTITY_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -510,7 +1527,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "unresolved_calls",
         ],
         outputs: &["domain_observations", "domain_events"],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: ABSTRACT_DOMAINS_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -541,7 +1558,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "summary_tito",
             "summary_events",
         ],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: DIRECT_SUMMARIES_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -570,7 +1587,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "dispatch_edges",
             "unresolved_framework",
         ],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: ENTRYPOINTS_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -591,7 +1608,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "exports",
         ],
         outputs: &["reachability_roots", "call_reachability"],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: REACHABILITY_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -611,7 +1628,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "extension.providers",
         ],
         outputs: &["extension_facts", "extension_rejections"],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: EXTENSIONS_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -659,7 +1676,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "points_to_sets",
             "alias_answers",
         ],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: TYPE_VALUE_ALIAS_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -712,7 +1729,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "semantic_edges",
             "semantic_constraints",
         ],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: SEMANTIC_GRAPH_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -755,7 +1772,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "solver_budget_status",
             "solver_budget_reasons",
         ],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: SOLVER_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -786,7 +1803,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "solver_derived_edges",
         ],
         outputs: &["refined_call_edges"],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: REFINED_CALLS_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -821,7 +1838,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "data_flow_models",
             "data_flow_budgets",
         ],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: DATA_FLOW_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -867,7 +1884,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "evidence_omitted_regions",
             "evidence_replay_keys",
         ],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: EVIDENCE_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -877,7 +1894,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
         kind: ProviderKind::MetricsDerived,
         inputs: &["source_files", "functions"],
         outputs: &["file_metrics", "function_metrics", "complexity_metrics"],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: METRICS_SCHEMA,
         precision_ceiling: PrecisionCeiling::Syntax,
@@ -907,7 +1924,10 @@ mod tests {
                 "string_literals",
             ]
         );
-        assert_eq!(manifest.language_scope, LanguageScope::Go);
+        assert_eq!(
+            manifest.language_ids,
+            &[crate::internal_core::LanguageId::GO]
+        );
         assert_eq!(
             manifest.cache_policy,
             CachePolicy::ExistingFileFactCache {
@@ -928,15 +1948,53 @@ mod tests {
             );
             assert!(!manifest.outputs.is_empty());
             assert!(!manifest.schema_versions.is_empty());
-            let _language_scope = manifest.language_scope;
+            let _language_ids = manifest.language_ids;
             let _cache_policy = manifest.cache_policy;
             let _precision_ceiling = manifest.precision_ceiling;
         }
     }
 
     #[test]
+    fn topological_order_matches_declared_manifest_order() {
+        let scheduled = scheduled_order();
+        let declared: Vec<&str> = provider_manifests().iter().map(|m| m.id).collect();
+        assert_eq!(
+            scheduled, declared,
+            "DAG topo (manifest-index tie-break) must reproduce PROVIDER_MANIFESTS order"
+        );
+    }
+
+    #[test]
+    fn capability_closure_matches_boolean_pipeline_gates() {
+        let capabilities = [
+            "resolved_imports",
+            "module_graph",
+            "symbols",
+            "references",
+            "calls",
+            "control_flow",
+            "dataflow",
+        ];
+        let n = capabilities.len();
+        for mask in 0..(1usize << n) {
+            let requested: BTreeSet<&str> = capabilities
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| mask & (1usize << index) != 0)
+                .map(|(_, capability)| *capability)
+                .collect();
+            let via_booleans = providers_enabled_by_boolean_gates(&requested);
+            let via_closure = providers_enabled_by_capability_closure(&requested);
+            assert_eq!(via_closure, via_booleans, "{requested:?}");
+            let scheduled = scheduled_order_for(&requested);
+            let scheduled_set: BTreeSet<&str> = scheduled.iter().copied().collect();
+            assert_eq!(scheduled_set, via_closure, "order filter {requested:?}");
+        }
+    }
+
+    #[test]
     fn v13_cache_dependency_ledger_matches_provider_manifest_inputs() {
-        for dependency in crate::analysis::cache_key::v13_cache_dependency_ledger() {
+        for dependency in crate::analysis_neutral::cache_key::v13_cache_dependency_ledger() {
             let manifest = provider_manifests()
                 .iter()
                 .find(|manifest| manifest.id == dependency.provider_id)
@@ -1742,7 +2800,10 @@ mod tests {
             .expect("semantic MIR manifest should exist");
 
         assert_eq!(manifest.primary_schema_label(), "semantic-mir-facts-1:1");
-        assert_eq!(manifest.language_scope, LanguageScope::MultiLanguage);
+        assert_eq!(
+            manifest.language_ids,
+            crate::frontend::LANGUAGE_IDS_GO_AND_TS
+        );
         assert_eq!(manifest.cache_policy, CachePolicy::InMemoryDerived);
         assert_eq!(manifest.precision_ceiling, PrecisionCeiling::SetupAware);
         assert!(manifest.inputs.contains(&"functions"));
@@ -1765,7 +2826,10 @@ mod tests {
             .expect("calls manifest should exist");
 
         assert_eq!(manifest.primary_schema_label(), "calls-facts-1:1");
-        assert_eq!(manifest.language_scope, LanguageScope::MultiLanguage);
+        assert_eq!(
+            manifest.language_ids,
+            crate::frontend::LANGUAGE_IDS_GO_AND_TS
+        );
         assert_eq!(manifest.cache_policy, CachePolicy::InMemoryDerived);
         assert_eq!(manifest.precision_ceiling, PrecisionCeiling::SetupAware);
         for input in [
@@ -1934,7 +2998,10 @@ mod tests {
             .expect("direct summaries manifest should exist");
 
         assert_eq!(manifest.primary_schema_label(), "direct-summary-facts-1:1");
-        assert_eq!(manifest.language_scope, LanguageScope::MultiLanguage);
+        assert_eq!(
+            manifest.language_ids,
+            crate::frontend::LANGUAGE_IDS_GO_AND_TS
+        );
         assert_eq!(manifest.cache_policy, CachePolicy::InMemoryDerived);
         assert_eq!(manifest.precision_ceiling, PrecisionCeiling::SetupAware);
         for input in [

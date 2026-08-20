@@ -663,12 +663,7 @@ paths = ["src/**"]
         let observed = normalize_diagnostics(&[Diagnostic::warning(
             "local/no-raw-colors",
             "src/example.ts",
-            TextRange {
-                start_line: 2,
-                start_col: 10,
-                end_line: 2,
-                end_col: 16,
-            },
+            TextRange::new(2, 10, 2, 16),
             "Use a design token instead.",
         )]);
 

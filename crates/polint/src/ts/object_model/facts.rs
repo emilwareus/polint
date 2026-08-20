@@ -2,27 +2,27 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::analysis::ids::{TsInventoryCallsiteId, TsInventoryFunctionId};
-use crate::core::{FileId, Span};
+use crate::internal_core::{FileId, Span, StableKeyId};
+use crate::ts::ids::{TsInventoryCallsiteId, TsInventoryFunctionId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub(crate) struct TsObjectAllocationId(pub(crate) u64);
+pub struct TsObjectAllocationId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub(crate) struct TsPropertyWriteId(pub(crate) u64);
+pub struct TsPropertyWriteId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub(crate) struct TsPropertyReadId(pub(crate) u64);
+pub struct TsPropertyReadId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub(crate) struct TsReceiverBindingId(pub(crate) u64);
+pub struct TsReceiverBindingId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub(crate) struct TsPrototypeLinkId(pub(crate) u64);
+pub struct TsPrototypeLinkId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum TsObjectAllocationKind {
+pub enum TsObjectAllocationKind {
     ObjectLiteral,
     ArrayLiteral,
     FunctionObject,
@@ -34,7 +34,7 @@ pub(crate) enum TsObjectAllocationKind {
 }
 
 impl TsObjectAllocationKind {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::ObjectLiteral => "object_literal",
             Self::ArrayLiteral => "array_literal",
@@ -50,7 +50,7 @@ impl TsObjectAllocationKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum TsPropertyKeyKind {
+pub enum TsPropertyKeyKind {
     Static,
     Private,
     StringLiteral,
@@ -60,7 +60,7 @@ pub(crate) enum TsPropertyKeyKind {
 }
 
 impl TsPropertyKeyKind {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Static => "static",
             Self::Private => "private",
@@ -73,20 +73,20 @@ impl TsPropertyKeyKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub(crate) struct TsPropertyKey {
-    pub(crate) kind: TsPropertyKeyKind,
-    pub(crate) value: Option<String>,
+pub struct TsPropertyKey {
+    pub kind: TsPropertyKeyKind,
+    pub value: Option<String>,
 }
 
 impl TsPropertyKey {
-    pub(crate) fn stable_label(&self) -> String {
+    pub fn stable_label(&self) -> String {
         match self.value.as_deref() {
             Some(value) => format!("{}:{value}", self.kind.as_str()),
             None => self.kind.as_str().to_string(),
         }
     }
 
-    pub(crate) fn field_label(&self) -> String {
+    pub fn field_label(&self) -> String {
         match (self.kind, self.value.as_deref()) {
             (
                 TsPropertyKeyKind::Static
@@ -100,7 +100,7 @@ impl TsPropertyKey {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub(crate) enum TsObjectModelStatus {
+pub enum TsObjectModelStatus {
     Resolved,
     Unknown { reason: String },
     Unsupported { reason: String },
@@ -108,29 +108,29 @@ pub(crate) enum TsObjectModelStatus {
 }
 
 impl TsObjectModelStatus {
-    pub(crate) fn resolved() -> Self {
+    pub fn resolved() -> Self {
         Self::Resolved
     }
 
-    pub(crate) fn unknown(reason: impl Into<String>) -> Self {
+    pub fn unknown(reason: impl Into<String>) -> Self {
         Self::Unknown {
             reason: reason.into(),
         }
     }
 
-    pub(crate) fn unsupported(reason: impl Into<String>) -> Self {
+    pub fn unsupported(reason: impl Into<String>) -> Self {
         Self::Unsupported {
             reason: reason.into(),
         }
     }
 
-    pub(crate) fn budget_exceeded(reason: impl Into<String>) -> Self {
+    pub fn budget_exceeded(reason: impl Into<String>) -> Self {
         Self::BudgetExceeded {
             reason: reason.into(),
         }
     }
 
-    pub(crate) fn as_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             Self::Resolved => "resolved",
             Self::Unknown { .. } => "unknown",
@@ -139,7 +139,7 @@ impl TsObjectModelStatus {
         }
     }
 
-    pub(crate) fn reason(&self) -> Option<&str> {
+    pub fn reason(&self) -> Option<&str> {
         match self {
             Self::Resolved => None,
             Self::Unknown { reason }
@@ -151,7 +151,7 @@ impl TsObjectModelStatus {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum TsReceiverBindingKind {
+pub enum TsReceiverBindingKind {
     MethodCall,
     LexicalThis,
     ConstructorInstance,
@@ -161,7 +161,7 @@ pub(crate) enum TsReceiverBindingKind {
 }
 
 impl TsReceiverBindingKind {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::MethodCall => "method_call",
             Self::LexicalThis => "lexical_this",
@@ -175,7 +175,7 @@ impl TsReceiverBindingKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum TsPrototypeLinkKind {
+pub enum TsPrototypeLinkKind {
     ClassPrototype,
     ClassExtends,
     ConstructorPrototypeProperty,
@@ -184,7 +184,7 @@ pub(crate) enum TsPrototypeLinkKind {
 }
 
 impl TsPrototypeLinkKind {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::ClassPrototype => "class_prototype",
             Self::ClassExtends => "class_extends",
@@ -195,77 +195,77 @@ impl TsPrototypeLinkKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct TsObjectAllocationFact {
-    pub(crate) id: TsObjectAllocationId,
-    pub(crate) file: FileId,
-    pub(crate) span: Span,
-    pub(crate) stable_key: String,
-    pub(crate) lexical_parent_key: Option<String>,
-    pub(crate) inventory_function: Option<TsInventoryFunctionId>,
-    pub(crate) inventory_function_stable_key: Option<String>,
-    pub(crate) inventory_callsite: Option<TsInventoryCallsiteId>,
-    pub(crate) inventory_callsite_stable_key: Option<String>,
-    pub(crate) kind: TsObjectAllocationKind,
-    pub(crate) status: TsObjectModelStatus,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TsObjectAllocationFact {
+    pub id: TsObjectAllocationId,
+    pub file: FileId,
+    pub span: Span,
+    pub stable_key: StableKeyId,
+    pub lexical_parent_key: Option<StableKeyId>,
+    pub inventory_function: Option<TsInventoryFunctionId>,
+    pub inventory_function_stable_key: Option<StableKeyId>,
+    pub inventory_callsite: Option<TsInventoryCallsiteId>,
+    pub inventory_callsite_stable_key: Option<StableKeyId>,
+    pub kind: TsObjectAllocationKind,
+    pub status: TsObjectModelStatus,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct TsPropertyWriteFact {
-    pub(crate) id: TsPropertyWriteId,
-    pub(crate) file: FileId,
-    pub(crate) span: Span,
-    pub(crate) stable_key: String,
-    pub(crate) base_object_stable_key: String,
-    pub(crate) property_key: TsPropertyKey,
-    pub(crate) value_function: Option<TsInventoryFunctionId>,
-    pub(crate) value_function_stable_key: Option<String>,
-    pub(crate) value_object_stable_key: Option<String>,
-    pub(crate) status: TsObjectModelStatus,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TsPropertyWriteFact {
+    pub id: TsPropertyWriteId,
+    pub file: FileId,
+    pub span: Span,
+    pub stable_key: StableKeyId,
+    pub base_object_stable_key: StableKeyId,
+    pub property_key: TsPropertyKey,
+    pub value_function: Option<TsInventoryFunctionId>,
+    pub value_function_stable_key: Option<StableKeyId>,
+    pub value_object_stable_key: Option<StableKeyId>,
+    pub status: TsObjectModelStatus,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct TsPropertyReadFact {
-    pub(crate) id: TsPropertyReadId,
-    pub(crate) file: FileId,
-    pub(crate) span: Span,
-    pub(crate) stable_key: String,
-    pub(crate) base_object_stable_key: String,
-    pub(crate) property_key: TsPropertyKey,
-    pub(crate) destination_stable_key: Option<String>,
-    pub(crate) callsite: Option<TsInventoryCallsiteId>,
-    pub(crate) callsite_stable_key: Option<String>,
-    pub(crate) status: TsObjectModelStatus,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TsPropertyReadFact {
+    pub id: TsPropertyReadId,
+    pub file: FileId,
+    pub span: Span,
+    pub stable_key: StableKeyId,
+    pub base_object_stable_key: StableKeyId,
+    pub property_key: TsPropertyKey,
+    pub destination_stable_key: Option<StableKeyId>,
+    pub callsite: Option<TsInventoryCallsiteId>,
+    pub callsite_stable_key: Option<StableKeyId>,
+    pub status: TsObjectModelStatus,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct TsReceiverBindingFact {
-    pub(crate) id: TsReceiverBindingId,
-    pub(crate) file: FileId,
-    pub(crate) span: Span,
-    pub(crate) stable_key: String,
-    pub(crate) kind: TsReceiverBindingKind,
-    pub(crate) callsite: Option<TsInventoryCallsiteId>,
-    pub(crate) callsite_stable_key: Option<String>,
-    pub(crate) callee_function: Option<TsInventoryFunctionId>,
-    pub(crate) callee_function_stable_key: Option<String>,
-    pub(crate) receiver_object_stable_key: Option<String>,
-    pub(crate) receiver_place_stable_key: Option<String>,
-    pub(crate) lexical_parent_key: Option<String>,
-    pub(crate) status: TsObjectModelStatus,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TsReceiverBindingFact {
+    pub id: TsReceiverBindingId,
+    pub file: FileId,
+    pub span: Span,
+    pub stable_key: StableKeyId,
+    pub kind: TsReceiverBindingKind,
+    pub callsite: Option<TsInventoryCallsiteId>,
+    pub callsite_stable_key: Option<StableKeyId>,
+    pub callee_function: Option<TsInventoryFunctionId>,
+    pub callee_function_stable_key: Option<StableKeyId>,
+    pub receiver_object_stable_key: Option<StableKeyId>,
+    pub receiver_place_stable_key: Option<StableKeyId>,
+    pub lexical_parent_key: Option<StableKeyId>,
+    pub status: TsObjectModelStatus,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct TsPrototypeLinkFact {
-    pub(crate) id: TsPrototypeLinkId,
-    pub(crate) file: FileId,
-    pub(crate) span: Span,
-    pub(crate) stable_key: String,
-    pub(crate) kind: TsPrototypeLinkKind,
-    pub(crate) object_stable_key: String,
-    pub(crate) prototype_stable_key: String,
-    pub(crate) property_key: Option<TsPropertyKey>,
-    pub(crate) status: TsObjectModelStatus,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TsPrototypeLinkFact {
+    pub id: TsPrototypeLinkId,
+    pub file: FileId,
+    pub span: Span,
+    pub stable_key: StableKeyId,
+    pub kind: TsPrototypeLinkKind,
+    pub object_stable_key: StableKeyId,
+    pub prototype_stable_key: StableKeyId,
+    pub property_key: Option<TsPropertyKey>,
+    pub status: TsObjectModelStatus,
 }
 
 #[cfg(test)]

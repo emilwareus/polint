@@ -39,6 +39,57 @@ use crate::symbol_graph::semantic::{ExportId, ScopeId, SemanticStatus};
 const SYMBOL_GRAPH_PROVIDER_ID: &str = "polint.symbol_graph";
 const SEMANTIC_EVIDENCE_ORDER: (&str, &str, &str) = ("family", "stable_key", "reason");
 
+/// Opt-in that forces whole-DB fact-metadata validation in release builds.
+pub(crate) const VALIDATE_FACTS_ENV: &str = "POLINT_VALIDATE_FACTS";
+
+#[cfg(test)]
+static FACT_METADATA_VALIDATION_CALLS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Whether the kernel should run [`validate_fact_metadata`] on this process.
+///
+/// Debug builds validate by default so tests and local development keep the
+/// assertion pass. Release production runs skip it unless `POLINT_VALIDATE_FACTS`
+/// is set in the environment.
+pub(crate) fn fact_metadata_validation_enabled() -> bool {
+    fact_metadata_validation_enabled_for(
+        cfg!(debug_assertions),
+        std::env::var_os(VALIDATE_FACTS_ENV).is_some(),
+    )
+}
+
+fn fact_metadata_validation_enabled_for(
+    debug_assertions: bool,
+    validate_facts_opt_in: bool,
+) -> bool {
+    debug_assertions || validate_facts_opt_in
+}
+
+#[cfg(test)]
+pub(crate) fn fact_metadata_validation_call_count_for_test() -> usize {
+    FACT_METADATA_VALIDATION_CALLS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(test)]
+mod fact_metadata_validation_gate {
+    use super::fact_metadata_validation_enabled_for;
+
+    #[test]
+    fn skips_release_builds_without_opt_in() {
+        assert!(!fact_metadata_validation_enabled_for(false, false));
+    }
+
+    #[test]
+    fn runs_in_debug_builds_by_default() {
+        assert!(fact_metadata_validation_enabled_for(true, false));
+    }
+
+    #[test]
+    fn runs_when_opted_in_for_release() {
+        assert!(fact_metadata_validation_enabled_for(false, true));
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 enum Attribution {
     #[cfg(test)]
@@ -171,6 +222,8 @@ pub(crate) fn validate_fact_metadata(
     db: &AnalysisDb,
     manifests: &[ProviderManifest],
 ) -> ValidationReport {
+    #[cfg(test)]
+    FACT_METADATA_VALIDATION_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut pending = Vec::new();
     let ids = IdSets::from_db(db);
     let manifests_by_id = manifests
@@ -194,7 +247,7 @@ pub(crate) fn validate_fact_metadata(
     validate_spans(db, &ids.files, &mut pending);
     collect!("polint.symbol_graph", validate_semantic_index, db, &ids);
     collect!("polint.module_topology", validate_topology_facts, db, &ids);
-    collect!("polint.semantic_mir", validate_semantic_mir, db, &ids);
+    collect!("polint.semantic_mir", validate_semantic_mir, db);
     collect!("polint.cfg", validate_cfg, db);
     collect!("polint.calls", validate_calls, db);
     collect!("polint.identity", validate_identity, db);
@@ -233,82 +286,82 @@ fn validate_data_flow(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
         models: db.data_flow_models().to_vec(),
         budgets: db.data_flow_budgets().to_vec(),
     };
-    for issue in validate_data_flow_output(&output) {
+    for issue in validate_data_flow_output(&output, &db.stable_key_interner()) {
         diagnostics.push(internal_diagnostic(format!(
             "Data-flow validation issue for `{}`: {}",
-            issue.stable_key, issue.reason
+            issue.stable_key_text, issue.reason
         )));
     }
 }
 
 fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
+    let interner = db.stable_key_interner();
     let type_value_alias_ids = TypeValueAliasIdSets::from_db(db);
 
     check_type_value_alias_stable_keys(
         diagnostics,
         FactFamily::Type,
-        db.type_facts().iter().map(|fact| fact.stable_key.as_str()),
+        &interner,
+        db.type_facts().iter().map(|fact| fact.stable_key),
     );
     check_type_value_alias_stable_keys(
         diagnostics,
         FactFamily::Value,
-        db.value_facts().iter().map(|fact| fact.stable_key.as_str()),
+        &interner,
+        db.value_facts().iter().map(|fact| fact.stable_key),
     );
     check_type_value_alias_stable_keys(
         diagnostics,
         FactFamily::NarrowedType,
-        db.narrowed_type_facts()
-            .iter()
-            .map(|fact| fact.stable_key.as_str()),
+        &interner,
+        db.narrowed_type_facts().iter().map(|fact| fact.stable_key),
     );
     check_type_value_alias_stable_keys(
         diagnostics,
         FactFamily::AllocationToken,
-        db.allocation_tokens()
-            .iter()
-            .map(|fact| fact.stable_key.as_str()),
+        &interner,
+        db.allocation_tokens().iter().map(|fact| fact.stable_key),
     );
     check_type_value_alias_stable_keys(
         diagnostics,
         FactFamily::AccessPath,
-        db.access_path_facts()
-            .iter()
-            .map(|fact| fact.stable_key.as_str()),
+        &interner,
+        db.access_path_facts().iter().map(|fact| fact.stable_key),
     );
     check_type_value_alias_stable_keys(
         diagnostics,
         FactFamily::AliasAnswer,
-        db.alias_answers()
-            .iter()
-            .map(|fact| fact.stable_key.as_str()),
+        &interner,
+        db.alias_answers().iter().map(|fact| fact.stable_key),
     );
     check_type_value_alias_stable_keys(
         diagnostics,
         FactFamily::PointsToConstraint,
+        &interner,
         db.points_to_constraints()
             .iter()
-            .map(|fact| fact.stable_key.as_str()),
+            .map(|fact| fact.stable_key),
     );
     check_type_value_alias_stable_keys(
         diagnostics,
         FactFamily::PointsToSet,
-        db.points_to_sets()
-            .iter()
-            .map(|fact| fact.stable_key.as_str()),
+        &interner,
+        db.points_to_sets().iter().map(|fact| fact.stable_key),
     );
 
     for fact in db.type_facts() {
+        let stable_key = interner.resolve(fact.stable_key);
         validate_type_subject(
             diagnostics,
             &type_value_alias_ids,
-            &fact.stable_key,
+            stable_key.as_ref(),
             &fact.subject,
         );
         validate_optional_type_value_alias_ref(
             diagnostics,
             &type_value_alias_ids.files,
             FactFamily::Type,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "file",
             fact.file,
         );
@@ -316,7 +369,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.functions,
             FactFamily::Type,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "function",
             fact.function,
         );
@@ -324,7 +377,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.bodies,
             FactFamily::Type,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "body",
             fact.body,
         );
@@ -332,7 +385,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.places,
             FactFamily::Type,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "place",
             fact.place,
         );
@@ -340,7 +393,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.cfg_blocks,
             FactFamily::Type,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "cfg_block",
             fact.cfg_block,
         );
@@ -348,25 +401,31 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.operations,
             FactFamily::Type,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "operation",
             fact.operation,
         );
         validate_type_shape_refs(
             diagnostics,
             &type_value_alias_ids,
-            &fact.stable_key,
+            stable_key.as_ref(),
             &fact.shape,
         );
-        validate_type_status_precision(diagnostics, &fact.stable_key, fact.status, fact.precision);
+        validate_type_status_precision(
+            diagnostics,
+            stable_key.as_ref(),
+            fact.status,
+            fact.precision,
+        );
     }
 
     for fact in db.narrowed_type_facts() {
+        let stable_key = interner.resolve(fact.stable_key);
         validate_type_value_alias_ref(
             diagnostics,
             &type_value_alias_ids.places,
             FactFamily::NarrowedType,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "place",
             fact.place,
         );
@@ -374,7 +433,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.type_sets,
             FactFamily::NarrowedType,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "type_set",
             fact.type_set,
         );
@@ -382,7 +441,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.cfg_blocks,
             FactFamily::NarrowedType,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "cfg_block",
             fact.cfg_block,
         );
@@ -390,7 +449,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.operations,
             FactFamily::NarrowedType,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "operation",
             fact.operation,
         );
@@ -398,7 +457,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.places,
             FactFamily::NarrowedType,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "predicate",
             fact.predicate,
         );
@@ -406,7 +465,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.files,
             FactFamily::NarrowedType,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "file",
             fact.file,
         );
@@ -414,7 +473,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.functions,
             FactFamily::NarrowedType,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "function",
             fact.function,
         );
@@ -422,31 +481,37 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.bodies,
             FactFamily::NarrowedType,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "body",
             fact.body,
         );
-        validate_type_status_precision(diagnostics, &fact.stable_key, fact.status, fact.precision);
+        validate_type_status_precision(
+            diagnostics,
+            stable_key.as_ref(),
+            fact.status,
+            fact.precision,
+        );
     }
 
     for fact in db.value_facts() {
+        let stable_key = interner.resolve(fact.stable_key);
         validate_value_subject(
             diagnostics,
             &type_value_alias_ids,
-            &fact.stable_key,
+            stable_key.as_ref(),
             &fact.subject,
         );
         validate_value_kind(
             diagnostics,
             &type_value_alias_ids,
-            &fact.stable_key,
+            stable_key.as_ref(),
             &fact.kind,
         );
         validate_optional_type_value_alias_ref(
             diagnostics,
             &type_value_alias_ids.files,
             FactFamily::Value,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "file",
             fact.file,
         );
@@ -454,7 +519,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.functions,
             FactFamily::Value,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "function",
             fact.function,
         );
@@ -462,19 +527,25 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.bodies,
             FactFamily::Value,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "body",
             fact.body,
         );
-        validate_value_status_precision(diagnostics, &fact.stable_key, fact.status, fact.precision);
+        validate_value_status_precision(
+            diagnostics,
+            stable_key.as_ref(),
+            fact.status,
+            fact.precision,
+        );
     }
 
     for fact in db.allocation_tokens() {
+        let stable_key = interner.resolve(fact.stable_key);
         validate_optional_type_value_alias_ref(
             diagnostics,
             &type_value_alias_ids.files,
             FactFamily::AllocationToken,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "file",
             fact.file,
         );
@@ -482,7 +553,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.functions,
             FactFamily::AllocationToken,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "function",
             fact.function,
         );
@@ -490,7 +561,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.bodies,
             FactFamily::AllocationToken,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "body",
             fact.body,
         );
@@ -498,7 +569,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.places,
             FactFamily::AllocationToken,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "source_place",
             fact.source_place,
         );
@@ -506,7 +577,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.operations,
             FactFamily::AllocationToken,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "source_operation",
             fact.source_operation,
         );
@@ -516,7 +587,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
         {
             diagnostics.push(type_value_alias_diagnostic(
                 FactFamily::AllocationToken,
-                &fact.stable_key,
+                stable_key.as_ref(),
                 "span",
                 reason,
             ));
@@ -524,11 +595,12 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
     }
 
     for fact in db.access_path_facts() {
+        let stable_key = interner.resolve(fact.stable_key);
         validate_type_value_alias_ref(
             diagnostics,
             &type_value_alias_ids.places,
             FactFamily::AccessPath,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "base",
             fact.base,
         );
@@ -536,7 +608,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.files,
             FactFamily::AccessPath,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "file",
             fact.file,
         );
@@ -544,7 +616,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.functions,
             FactFamily::AccessPath,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "function",
             fact.function,
         );
@@ -552,14 +624,14 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.bodies,
             FactFamily::AccessPath,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "body",
             fact.body,
         );
         if fact.depth != fact.projections.len() as u32 {
             diagnostics.push(type_value_alias_diagnostic(
                 FactFamily::AccessPath,
-                &fact.stable_key,
+                stable_key.as_ref(),
                 "depth",
                 "access_path_depth_mismatch",
             ));
@@ -570,7 +642,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
                     diagnostics,
                     &type_value_alias_ids.call_sites,
                     FactFamily::AccessPath,
-                    &fact.stable_key,
+                    stable_key.as_ref(),
                     "projection.call_return",
                     *call,
                 );
@@ -579,27 +651,29 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
     }
 
     for fact in db.points_to_constraints() {
+        let stable_key = interner.resolve(fact.stable_key);
         validate_points_to_constraint_kind(
             diagnostics,
             &type_value_alias_ids,
-            &fact.stable_key,
+            stable_key.as_ref(),
             &fact.kind,
         );
         validate_points_to_status_precision(
             diagnostics,
             FactFamily::PointsToConstraint,
-            &fact.stable_key,
+            stable_key.as_ref(),
             fact.status,
             fact.precision,
         );
     }
 
     for fact in db.points_to_sets() {
+        let stable_key = interner.resolve(fact.stable_key);
         validate_points_to_var(
             diagnostics,
             &type_value_alias_ids,
             FactFamily::PointsToSet,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "variable",
             fact.variable,
         );
@@ -608,7 +682,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
         {
             diagnostics.push(type_value_alias_diagnostic(
                 FactFamily::PointsToSet,
-                &fact.stable_key,
+                stable_key.as_ref(),
                 "budget",
                 "budget_status_mismatch",
             ));
@@ -618,7 +692,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
                 diagnostics,
                 &type_value_alias_ids.object_tokens,
                 FactFamily::PointsToSet,
-                &fact.stable_key,
+                stable_key.as_ref(),
                 "object",
                 *object,
             );
@@ -626,19 +700,20 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
         validate_points_to_status_precision(
             diagnostics,
             FactFamily::PointsToSet,
-            &fact.stable_key,
+            stable_key.as_ref(),
             fact.status,
             fact.precision,
         );
     }
 
     for fact in db.alias_answers() {
+        let stable_key = interner.resolve(fact.stable_key);
         validate_alias_operand(
             db,
             diagnostics,
             &type_value_alias_ids.places,
             &type_value_alias_ids.access_paths,
-            fact.stable_key.as_str(),
+            stable_key.as_ref(),
             fact.left,
         );
         validate_alias_operand(
@@ -646,7 +721,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.places,
             &type_value_alias_ids.access_paths,
-            fact.stable_key.as_str(),
+            stable_key.as_ref(),
             fact.right,
         );
         if matches!(fact.status, AliasStatus::MustAlias | AliasStatus::NoAlias)
@@ -654,7 +729,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
         {
             diagnostics.push(type_value_alias_diagnostic(
                 FactFamily::AliasAnswer,
-                &fact.stable_key,
+                stable_key.as_ref(),
                 "evidence",
                 "overconfident_alias_answer",
             ));
@@ -742,17 +817,19 @@ impl TypeValueAliasIdSets {
     }
 }
 
-fn check_type_value_alias_stable_keys<'a>(
+fn check_type_value_alias_stable_keys(
     diagnostics: &mut Vec<Diagnostic>,
     family: FactFamily,
-    keys: impl Iterator<Item = &'a str>,
+    interner: &crate::core::StableKeyInterner,
+    keys: impl Iterator<Item = crate::core::StableKeyId>,
 ) {
     let mut seen = BTreeSet::new();
     for key in keys {
-        if !seen.insert(key) {
+        let text = interner.resolve(key);
+        if !seen.insert(text.to_string()) {
             diagnostics.push(type_value_alias_diagnostic(
                 family,
-                key,
+                text.as_ref(),
                 "stable_key",
                 "duplicate_stable_key",
             ));
@@ -1223,11 +1300,6 @@ mod abstract_domains {
     };
     use crate::analysis::cfg::ids::{BasicBlockId, CfgFunctionId, CfgNodeId};
     use crate::analysis::cfg::store::CfgOutput;
-    use crate::analysis::domains::facts::{
-        DomainEventFact, DomainLocation, DomainObservationFact, DomainPrecision, DomainSlot,
-        DomainStatus, DomainValue,
-    };
-    use crate::analysis::domains::store::DomainOutput;
     use crate::analysis::ids::{DomainEventId, DomainObservationId, MirBodyId, MirOpId, PlaceId};
     use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
     use crate::analysis::mir::op::{AssignMode, MirOperation, MirOperationKind, MirValue};
@@ -1236,6 +1308,11 @@ mod abstract_domains {
         AnalysisKernel, FactConfidence, FactFamily, FactMeta, FactPrecision, FactRef,
         ValidationStatus,
     };
+    use crate::analysis_neutral::domains::facts::{
+        DomainEventFact, DomainLocation, DomainObservationFact, DomainPrecision, DomainSlot,
+        DomainStatus, DomainValue,
+    };
+    use crate::analysis_neutral::domains::store::DomainOutput;
     use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, Span};
     use std::path::PathBuf;
 
@@ -1256,7 +1333,7 @@ mod abstract_domains {
                     block: Some(BasicBlockId(99)),
                     operation: Some(MirOpId(99)),
                     place: Some(PlaceId(99)),
-                    stable_key: "domain:dup".to_string(),
+                    stable_key: crate::core::stable_key_for_test("domain:dup"),
                     ..observation(
                         1,
                         "domain:bad",
@@ -1274,7 +1351,7 @@ mod abstract_domains {
                 status: DomainStatus::BudgetExceeded,
                 precision: DomainPrecision::Unknown,
                 reason: "unknown_value".to_string(),
-                stable_key: "domain:event:bad".to_string(),
+                stable_key: crate::core::stable_key_for_test("domain:event:bad"),
             }],
         });
 
@@ -1311,10 +1388,13 @@ mod abstract_domains {
         });
         db.fact_meta_mut_for_test()
             .remove_for_test(FactRef::new(FactFamily::DomainObservation, 0));
+        let stable_key = db
+            .stable_key_interner()
+            .intern("domain:exact-local-payload");
         db.fact_meta_mut_for_test().insert(
             FactRef::new(FactFamily::DomainObservation, 0),
             FactMeta {
-                stable_key: "domain:exact-local-payload".to_string(),
+                stable_key,
                 producer_id: "polint.abstract_domains",
                 layer_id: "polint.abstract_domains",
                 precision: FactPrecision::Exact,
@@ -1341,46 +1421,47 @@ mod abstract_domains {
 
     fn base_db() -> AnalysisDb {
         let mut db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
         let file = db.add_file(
             PathBuf::from("src/app.ts"),
             "src/app.ts".to_string(),
             "export function app() { let value = 1; return value; }\n".to_string(),
         );
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "app".to_string(),
-            span: span(file),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "app".to_string(),
+            span(file),
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
         db.replace_semantic_mir(MirOutput {
             bodies: vec![MirBody {
                 id: MirBodyId(0),
                 language: Language::TypeScript,
                 file,
-                function: FunctionId(0),
+                function: FunctionId::from_raw(0),
                 package: None,
                 module: None,
-                owner_stable_key: "function:app".to_string(),
+                owner_stable_key: interner.intern("function:app".to_string()),
                 span: span(file),
-                stable_key: "body:app".to_string(),
+                stable_key: interner.intern("body:app".to_string()),
                 status: MirStatus::Partial,
             }],
             places: vec![PlaceFact {
                 id: PlaceId(0),
                 language: Language::TypeScript,
                 file: Some(file),
-                function: Some(FunctionId(0)),
+                function: Some(FunctionId::from_raw(0)),
                 root: PlaceRoot::Local {
-                    function: FunctionId(0),
+                    function: FunctionId::from_raw(0),
                     name: "value".to_string(),
                 },
                 projections: Vec::new(),
-                stable_key: "place:value".to_string(),
+                stable_key: interner.intern("place:value".to_string()),
                 status: PlaceStatus::Partial,
             }],
             operations: vec![MirOperation {
@@ -1395,24 +1476,25 @@ mod abstract_domains {
                     },
                     mode: AssignMode::DeclarationBinding,
                 },
-                stable_key: "op:assign".to_string(),
+                stable_key: interner.intern("op:assign".to_string()),
                 status: MirStatus::Partial,
             }],
             unsupported: Vec::new(),
+            ..MirOutput::default()
         })
         .expect("semantic MIR rows should store");
         db.replace_cfg_facts(CfgOutput {
             functions: vec![CfgFunctionFact {
                 id: CfgFunctionId(0),
                 body: MirBodyId(0),
-                function: FunctionId(0),
+                function: FunctionId::from_raw(0),
                 language: Language::TypeScript,
                 file,
                 span: span(file),
                 entry_node: CfgNodeId(0),
                 normal_exit_node: CfgNodeId(0),
                 exceptional_exit_node: None,
-                stable_key: "cfg:function:app".to_string(),
+                stable_key: interner.intern("cfg:function:app"),
                 status: CfgStatus::Resolved,
                 precision: CfgPrecision::ExactLowered,
             }],
@@ -1426,7 +1508,7 @@ mod abstract_domains {
                 span: Some(span(file)),
                 generated: false,
                 operation_ordinal: 0,
-                stable_key: "cfg:node:assign".to_string(),
+                stable_key: interner.intern("cfg:node:assign"),
                 status: CfgStatus::Resolved,
                 precision: CfgPrecision::ExactLowered,
             }],
@@ -1438,7 +1520,7 @@ mod abstract_domains {
                 last_node: Some(CfgNodeId(0)),
                 reachable: true,
                 reverse_postorder: 0,
-                stable_key: "cfg:block:app".to_string(),
+                stable_key: interner.intern("cfg:block:app"),
                 status: CfgStatus::Resolved,
                 precision: CfgPrecision::ExactLowered,
             }],
@@ -1465,20 +1547,12 @@ mod abstract_domains {
             value,
             status,
             precision: DomainPrecision::ExactLocal,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
     fn span(file: FileId) -> Span {
-        Span {
-            file,
-            start_byte: 0,
-            end_byte: 10,
-            start_line: 1,
-            start_col: 1,
-            end_line: 1,
-            end_col: 11,
-        }
+        Span::new(file, 0, 10, 1, 1, 1, 11)
     }
 
     fn domain_diagnostics(
@@ -1551,7 +1625,7 @@ mod type_value_alias_validation {
                     body: None,
                     precision: TypePrecision::ExactLocal,
                     status: TypeStatus::Unsupported,
-                    stable_key: "narrowed:bad".to_string(),
+                    stable_key: crate::core::stable_key_for_test("narrowed:bad"),
                 }],
             },
             values: ValueOutput {
@@ -1567,7 +1641,7 @@ mod type_value_alias_validation {
                     precision: ValuePrecision::Unknown,
                     status: ValueStatus::Present,
                     provenance: ValueProvenance::Native,
-                    stable_key: "value:bad".to_string(),
+                    stable_key: crate::core::stable_key_for_test("value:bad"),
                 }],
                 allocations: vec![AllocationTokenFact {
                     id: AllocationTokenId(0),
@@ -1578,17 +1652,17 @@ mod type_value_alias_validation {
                     body: None,
                     source_place: Some(PlaceId(55)),
                     source_operation: Some(MirOpId(56)),
-                    span: Some(Span {
-                        file: crate::core::FileId(0),
-                        start_byte: 10,
-                        end_byte: 2,
-                        start_line: 2,
-                        start_col: 1,
-                        end_line: 1,
-                        end_col: 1,
-                    }),
+                    span: Some(Span::new(
+                        crate::core::FileId::from_raw(0),
+                        10,
+                        2,
+                        2,
+                        1,
+                        1,
+                        1,
+                    )),
                     provenance: ValueProvenance::Native,
-                    stable_key: "allocation:bad".to_string(),
+                    stable_key: crate::core::stable_key_for_test("allocation:bad"),
                 }],
             },
             access_paths: AccessPathOutput {
@@ -1604,7 +1678,7 @@ mod type_value_alias_validation {
                     function: None,
                     body: None,
                     status: AccessPathStatus::Resolved,
-                    stable_key: "path:bad".to_string(),
+                    stable_key: crate::core::stable_key_for_test("path:bad"),
                 }],
             },
             points_to: PointsToOutput {
@@ -1617,7 +1691,7 @@ mod type_value_alias_validation {
                         },
                         status: PointsToStatus::Present,
                         precision: PointsToPrecision::Unknown,
-                        stable_key: "pt:constraint:object".to_string(),
+                        stable_key: crate::core::stable_key_for_test("pt:constraint:object"),
                     },
                     PointsToConstraintFact {
                         id: PointsToConstraintId(1),
@@ -1627,7 +1701,7 @@ mod type_value_alias_validation {
                         },
                         status: PointsToStatus::Present,
                         precision: PointsToPrecision::Unknown,
-                        stable_key: "pt:constraint:value".to_string(),
+                        stable_key: crate::core::stable_key_for_test("pt:constraint:value"),
                     },
                 ],
                 sets: vec![PointsToSetFact {
@@ -1637,7 +1711,7 @@ mod type_value_alias_validation {
                     status: PointsToStatus::BudgetExceeded,
                     precision: PointsToPrecision::Unknown,
                     budget: PointsToBudgetStatus::WithinBudget,
-                    stable_key: "pt:budget".to_string(),
+                    stable_key: crate::core::stable_key_for_test("pt:budget"),
                 }],
             },
             aliases: AliasOutput {
@@ -1649,7 +1723,7 @@ mod type_value_alias_validation {
                     reason: AliasReason::ExtensionProvided,
                     evidence: Vec::new(),
                     precision: AliasPrecision::Unknown,
-                    stable_key: "alias:bad".to_string(),
+                    stable_key: crate::core::stable_key_for_test("alias:bad"),
                 }],
             },
         });
@@ -1722,7 +1796,7 @@ mod type_value_alias_validation {
                     precision: ValuePrecision::Unknown,
                     status: ValueStatus::Unknown,
                     provenance: ValueProvenance::Generated,
-                    stable_key: "value:call-result".to_string(),
+                    stable_key: crate::core::stable_key_for_test("value:call-result"),
                 }],
                 allocations: Vec::new(),
             },
@@ -1737,7 +1811,7 @@ mod type_value_alias_validation {
                     status: PointsToStatus::Present,
                     precision: PointsToPrecision::FlowInsensitive,
                     budget: PointsToBudgetStatus::WithinBudget,
-                    stable_key: "points-to:value-object".to_string(),
+                    stable_key: crate::core::stable_key_for_test("points-to:value-object"),
                 }],
             },
             ..TypeValueAliasOutput::default()
@@ -1779,7 +1853,7 @@ mod type_value_alias_validation {
             provenance: TypeProvenance::Extension {
                 extension_id: "fixture".to_string(),
             },
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 }
@@ -1805,27 +1879,41 @@ mod semantic_mir {
     #[test]
     fn semantic_mir_validation_reports_malformed_rows_with_required_evidence() {
         let mut db = base_db();
+        let interner = db.stable_key_interner();
         db.replace_semantic_mir(MirOutput {
             bodies: vec![
-                body(0, FunctionId(0), span(FileId(0), 0, 20), "body:dup"),
-                body(1, FunctionId(99), span(FileId(0), 0, 999), "body:dup"),
+                body(
+                    &interner,
+                    0,
+                    FunctionId::from_raw(0),
+                    span(FileId::from_raw(0), 0, 20),
+                    "body:dup",
+                ),
+                body(
+                    &interner,
+                    1,
+                    FunctionId::from_raw(99),
+                    span(FileId::from_raw(0), 0, 999),
+                    "body:dup",
+                ),
             ],
             places: vec![
                 place(
+                    &interner,
                     0,
-                    FunctionId(99),
+                    FunctionId::from_raw(99),
                     vec![PlaceProjection::IndexUnknown {
                         evidence: String::new(),
                     }],
                     "place:bad",
                 ),
-                call_return_place(1, "place:return"),
+                call_return_place(&interner, 1, "place:return"),
             ],
             operations: vec![MirOperation {
                 id: MirOpId(0),
                 body: MirBodyId(0),
                 ordinal: 0,
-                span: span(FileId(0), 0, 20),
+                span: span(FileId::from_raw(0), 0, 20),
                 kind: MirOperationKind::Call {
                     site: CallSiteId(0),
                     callee: MirValue::Unknown {
@@ -1834,7 +1922,7 @@ mod semantic_mir {
                     arguments: vec![PlaceId(0)],
                     return_place: PlaceId(1),
                 },
-                stable_key: "op:call".to_string(),
+                stable_key: interner.intern("op:call".to_string()),
                 status: MirStatus::Partial,
             }],
             unsupported: vec![UnsupportedSemanticFact {
@@ -1842,8 +1930,8 @@ mod semantic_mir {
                 body: Some(MirBodyId(0)),
                 operation: Some(MirOpId(0)),
                 language: Language::TypeScript,
-                file: FileId(0),
-                span: span(FileId(0), 0, 20),
+                file: FileId::from_raw(0),
+                span: span(FileId::from_raw(0), 0, 20),
                 construct: String::new(),
                 source_evidence: String::new(),
                 affected_places: Vec::new(),
@@ -1851,8 +1939,9 @@ mod semantic_mir {
                 conservative_action: ConservativeAction::HavocAffectedPlaces,
                 precision: UnsupportedPrecision::Unsupported,
                 status: MirStatus::Unsupported,
-                stable_key: "unsupported:bad".to_string(),
+                stable_key: interner.intern("unsupported:bad".to_string()),
             }],
+            ..MirOutput::default()
         })
         .expect("semantic rows should store for validation");
 
@@ -1882,19 +1971,28 @@ mod semantic_mir {
     #[test]
     fn semantic_mir_validation_rejects_exact_provider_precision() {
         let mut db = base_db();
+        let interner = db.stable_key_interner();
         db.replace_semantic_mir(MirOutput {
-            bodies: vec![body(0, FunctionId(0), span(FileId(0), 0, 20), "body:ok")],
+            bodies: vec![body(
+                &interner,
+                0,
+                FunctionId::from_raw(0),
+                span(FileId::from_raw(0), 0, 20),
+                "body:ok",
+            )],
             places: Vec::new(),
             operations: Vec::new(),
             unsupported: Vec::new(),
+            ..MirOutput::default()
         })
         .expect("semantic rows should store");
         db.fact_meta_mut_for_test()
             .remove_for_test(FactRef::new(FactFamily::MirBody, 0));
+        let stable_key = db.stable_key_interner().intern("body:ok");
         db.fact_meta_mut_for_test().insert(
             FactRef::new(FactFamily::MirBody, 0),
             FactMeta {
-                stable_key: "body:ok".to_string(),
+                stable_key,
                 producer_id: "polint.semantic_mir",
                 layer_id: "polint.semantic_mir",
                 precision: FactPrecision::Exact,
@@ -1926,21 +2024,27 @@ mod semantic_mir {
             "src/app.ts".to_string(),
             "export function app() { return 1; }\n".to_string(),
         );
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "app".to_string(),
-            span: span(file, 0, 33),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "app".to_string(),
+            span(file, 0, 33),
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
         db
     }
 
-    fn body(id: u64, function: FunctionId, span: Span, stable_key: &str) -> MirBody {
+    fn body(
+        interner: &crate::core::StableKeyInterner,
+        id: u64,
+        function: FunctionId,
+        span: Span,
+        stable_key: &str,
+    ) -> MirBody {
         MirBody {
             id: MirBodyId(id),
             language: Language::TypeScript,
@@ -1948,14 +2052,15 @@ mod semantic_mir {
             function,
             package: None,
             module: None,
-            owner_stable_key: format!("function:{}", function.0),
+            owner_stable_key: interner.intern(format!("function:{}", function.0)),
             span,
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key.to_string()),
             status: MirStatus::Partial,
         }
     }
 
     fn place(
+        interner: &crate::core::StableKeyInterner,
         id: u64,
         function: FunctionId,
         projections: Vec<PlaceProjection>,
@@ -1964,43 +2069,47 @@ mod semantic_mir {
         PlaceFact {
             id: PlaceId(id),
             language: Language::TypeScript,
-            file: Some(FileId(0)),
+            file: Some(FileId::from_raw(0)),
             function: Some(function),
             root: PlaceRoot::Local {
                 function,
                 name: "value".to_string(),
             },
             projections,
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key.to_string()),
             status: PlaceStatus::Partial,
         }
     }
 
-    fn call_return_place(id: u64, stable_key: &str) -> PlaceFact {
+    fn call_return_place(
+        interner: &crate::core::StableKeyInterner,
+        id: u64,
+        stable_key: &str,
+    ) -> PlaceFact {
         PlaceFact {
             id: PlaceId(id),
             language: Language::TypeScript,
-            file: Some(FileId(0)),
-            function: Some(FunctionId(0)),
+            file: Some(FileId::from_raw(0)),
+            function: Some(FunctionId::from_raw(0)),
             root: PlaceRoot::CallReturn {
                 call: CallSiteId(0),
             },
             projections: Vec::new(),
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key.to_string()),
             status: PlaceStatus::Partial,
         }
     }
 
     fn span(file: FileId, start_byte: u32, end_byte: u32) -> Span {
-        Span {
+        Span::new(
             file,
             start_byte,
             end_byte,
-            start_line: 1,
-            start_col: start_byte + 1,
-            end_line: 1,
-            end_col: end_byte + 1,
-        }
+            1,
+            start_byte + 1,
+            1,
+            end_byte + 1,
+        )
     }
 
     fn evidence_labels(diagnostic: &crate::diagnostics::Diagnostic) -> BTreeSet<&str> {
@@ -2033,15 +2142,18 @@ mod cfg {
     #[test]
     fn cfg_validation_reports_malformed_rows_with_required_evidence() {
         let mut db = base_db();
+        let interner = db.stable_key_interner();
         db.replace_cfg_facts(CfgOutput {
             functions: vec![
                 function(
+                    &interner,
                     "cfg:function:dup",
                     CfgFunctionId(0),
                     CfgNodeId(404),
                     CfgNodeId(405),
                 ),
                 function(
+                    &interner,
                     "cfg:function:dup",
                     CfgFunctionId(1),
                     CfgNodeId(0),
@@ -2055,18 +2167,10 @@ mod cfg {
                 operation: None,
                 block: BasicBlockId(99),
                 kind: CfgNodeKind::Operation,
-                span: Some(Span {
-                    file: FileId(0),
-                    start_byte: 10,
-                    end_byte: 1,
-                    start_line: 1,
-                    start_col: 11,
-                    end_line: 1,
-                    end_col: 2,
-                }),
+                span: Some(Span::new(FileId::from_raw(0), 10, 1, 1, 11, 1, 2)),
                 generated: false,
                 operation_ordinal: 0,
-                stable_key: "cfg:node:bad".to_string(),
+                stable_key: interner.intern("cfg:node:bad"),
                 status: CfgStatus::Resolved,
                 precision: CfgPrecision::ExactLowered,
             }],
@@ -2078,18 +2182,20 @@ mod cfg {
                 last_node: None,
                 reachable: true,
                 reverse_postorder: 0,
-                stable_key: "cfg:block:bad".to_string(),
+                stable_key: interner.intern("cfg:block:bad"),
                 status: CfgStatus::Resolved,
                 precision: CfgPrecision::ExactLowered,
             }],
             edges: vec![
                 edge(
+                    &interner,
                     "cfg:edge:one",
                     CfgEdgeId(0),
                     BasicBlockId(0),
                     BasicBlockId(1),
                 ),
                 edge(
+                    &interner,
                     "cfg:edge:two",
                     CfgEdgeId(1),
                     BasicBlockId(0),
@@ -2119,8 +2225,10 @@ mod cfg {
     #[test]
     fn cfg_validation_rejects_missing_exit_and_bad_reachability() {
         let mut db = base_db();
+        let interner = db.stable_key_interner();
         db.replace_cfg_facts(CfgOutput {
             functions: vec![function(
+                &interner,
                 "cfg:function:shape",
                 CfgFunctionId(0),
                 CfgNodeId(0),
@@ -2128,12 +2236,14 @@ mod cfg {
             )],
             nodes: vec![
                 node(
+                    &interner,
                     CfgNodeId(0),
                     BasicBlockId(0),
                     CfgNodeKind::Entry,
                     "cfg:node:entry",
                 ),
                 node(
+                    &interner,
                     CfgNodeId(1),
                     BasicBlockId(1),
                     CfgNodeKind::Operation,
@@ -2142,6 +2252,7 @@ mod cfg {
             ],
             blocks: vec![
                 block(
+                    &interner,
                     BasicBlockId(0),
                     BasicBlockKind::Entry,
                     CfgNodeId(0),
@@ -2149,6 +2260,7 @@ mod cfg {
                     "cfg:block:entry",
                 ),
                 block(
+                    &interner,
                     BasicBlockId(1),
                     BasicBlockKind::StraightLine,
                     CfgNodeId(1),
@@ -2158,12 +2270,14 @@ mod cfg {
             ],
             edges: vec![
                 edge(
+                    &interner,
                     "cfg:edge:entry-body",
                     CfgEdgeId(0),
                     BasicBlockId(0),
                     BasicBlockId(1),
                 ),
                 edge(
+                    &interner,
                     "cfg:edge:body-entry",
                     CfgEdgeId(1),
                     BasicBlockId(1),
@@ -2193,8 +2307,10 @@ mod cfg {
     #[test]
     fn cfg_validation_rejects_exact_provider_precision() {
         let mut db = base_db();
+        let interner = db.stable_key_interner();
         db.replace_cfg_facts(CfgOutput {
             functions: vec![function(
+                &interner,
                 "cfg:function:ok",
                 CfgFunctionId(0),
                 CfgNodeId(0),
@@ -2205,10 +2321,11 @@ mod cfg {
         .expect("cfg rows should store");
         db.fact_meta_mut_for_test()
             .remove_for_test(FactRef::new(FactFamily::CfgFunction, 0));
+        let stable_key = db.stable_key_interner().intern("cfg:function:ok");
         db.fact_meta_mut_for_test().insert(
             FactRef::new(FactFamily::CfgFunction, 0),
             FactMeta {
-                stable_key: "cfg:function:ok".to_string(),
+                stable_key,
                 producer_id: "polint.cfg",
                 layer_id: "polint.cfg",
                 precision: FactPrecision::Exact,
@@ -2240,21 +2357,22 @@ mod cfg {
             "src/app.ts".to_string(),
             "export function app() { return 1; }\n".to_string(),
         );
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "app".to_string(),
-            span: span(file),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "app".to_string(),
+            span(file),
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
         db
     }
 
     fn function(
+        interner: &crate::core::StableKeyInterner,
         stable_key: &str,
         id: CfgFunctionId,
         entry_node: CfgNodeId,
@@ -2263,20 +2381,21 @@ mod cfg {
         CfgFunctionFact {
             id,
             body: MirBodyId(0),
-            function: FunctionId(0),
+            function: FunctionId::from_raw(0),
             language: Language::TypeScript,
-            file: FileId(0),
-            span: span(FileId(0)),
+            file: FileId::from_raw(0),
+            span: span(FileId::from_raw(0)),
             entry_node,
             normal_exit_node,
             exceptional_exit_node: None,
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key),
             status: CfgStatus::Resolved,
             precision: CfgPrecision::ExactLowered,
         }
     }
 
     fn edge(
+        interner: &crate::core::StableKeyInterner,
         stable_key: &str,
         id: CfgEdgeId,
         from_block: BasicBlockId,
@@ -2292,13 +2411,14 @@ mod cfg {
             to_block,
             kind: CfgEdgeKind::Normal,
             label: None,
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key),
             status: CfgStatus::Resolved,
             precision: CfgPrecision::ExactLowered,
         }
     }
 
     fn node(
+        interner: &crate::core::StableKeyInterner,
         id: CfgNodeId,
         block: BasicBlockId,
         kind: CfgNodeKind,
@@ -2311,16 +2431,17 @@ mod cfg {
             operation: None,
             block,
             kind,
-            span: Some(span(FileId(0))),
+            span: Some(span(FileId::from_raw(0))),
             generated: true,
             operation_ordinal: 0,
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key),
             status: CfgStatus::Resolved,
             precision: CfgPrecision::ExactLowered,
         }
     }
 
     fn block(
+        interner: &crate::core::StableKeyInterner,
         id: BasicBlockId,
         kind: BasicBlockKind,
         node: CfgNodeId,
@@ -2335,22 +2456,14 @@ mod cfg {
             last_node: Some(node),
             reachable,
             reverse_postorder: id.0 as u32,
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key),
             status: CfgStatus::Resolved,
             precision: CfgPrecision::ExactLowered,
         }
     }
 
     fn span(file: FileId) -> Span {
-        Span {
-            file,
-            start_byte: 0,
-            end_byte: 10,
-            start_line: 1,
-            start_col: 1,
-            end_line: 1,
-            end_col: 11,
-        }
+        Span::new(file, 0, 10, 1, 1, 1, 11)
     }
 
     fn cfg_diagnostics(
@@ -2399,24 +2512,16 @@ mod calls {
                 site(0, "call-site:dup"),
                 CallSiteFact {
                     id: CallSiteId(1),
-                    file: FileId(99),
-                    caller: FunctionId(99),
-                    owner_symbol: Some(SymbolId(99)),
+                    file: FileId::from_raw(99),
+                    caller: FunctionId::from_raw(99),
+                    owner_symbol: Some(SymbolId::from_raw(99)),
                     body: MirBodyId(99),
                     operation: MirOpId(99),
-                    span: Span {
-                        file: FileId(0),
-                        start_byte: 10,
-                        end_byte: 1,
-                        start_line: 1,
-                        start_col: 11,
-                        end_line: 1,
-                        end_col: 2,
-                    },
+                    span: Span::new(FileId::from_raw(0), 10, 1, 1, 11, 1, 2),
                     arguments: vec![PlaceId(99)],
                     receiver: Some(PlaceId(98)),
                     result: Some(PlaceId(97)),
-                    stable_key: "call-site:dup".to_string(),
+                    stable_key: crate::core::StableKeyId(0),
                     ..site(1, "call-site:bad")
                 },
             ],
@@ -2428,7 +2533,7 @@ mod calls {
                     reason: Some(UnresolvedCallReason::DynamicProperty),
                     target_function: None,
                     target_symbol: None,
-                    stable_key: "call-target:contradictory".to_string(),
+                    stable_key: crate::core::StableKeyId(1),
                     ..target(1, CallSiteId(0), "call-target:ok")
                 },
                 CallTargetFact {
@@ -2436,19 +2541,19 @@ mod calls {
                     status: CallTargetStatus::Unresolved,
                     target_function: None,
                     target_symbol: None,
-                    stable_key: "call-target:missing-reason".to_string(),
+                    stable_key: crate::core::StableKeyId(2),
                     ..target(2, CallSiteId(0), "call-target:ok")
                 },
             ],
             unresolved: vec![UnresolvedCallFact {
                 site: CallSiteId(0),
-                caller: FunctionId(99),
+                caller: FunctionId::from_raw(99),
                 status: CallTargetStatus::Resolved,
                 reason: UnresolvedCallReason::Unknown,
                 algorithm: CallAlgorithm::DirectReference,
                 provenance: CallProvenance::Native,
                 precision: CallPrecision::Exact,
-                stable_key: "call-unresolved:bad".to_string(),
+                stable_key: crate::core::StableKeyId(3),
             }],
         })
         .expect("call rows should store for validation");
@@ -2494,9 +2599,9 @@ mod calls {
             targets: vec![CallTargetFact {
                 status: CallTargetStatus::Unsupported,
                 reason: Some(UnresolvedCallReason::FrameworkDispatch),
-                target_function: Some(FunctionId(1)),
-                target_symbol: Some(SymbolId(1)),
-                stable_key: "call-target:unsupported-with-target".to_string(),
+                target_function: Some(FunctionId::from_raw(1)),
+                target_symbol: Some(SymbolId::from_raw(1)),
+                stable_key: crate::core::StableKeyId(1),
                 ..target(0, CallSiteId(0), "call-target:ok")
             }],
             unresolved: Vec::new(),
@@ -2530,10 +2635,11 @@ mod calls {
         .expect("call rows should store");
         db.fact_meta_mut_for_test()
             .remove_for_test(FactRef::new(FactFamily::CallSite, 0));
+        let stable_key = db.stable_key_interner().intern("call-site:ok");
         db.fact_meta_mut_for_test().insert(
             FactRef::new(FactFamily::CallSite, 0),
             FactMeta {
-                stable_key: "call-site:ok".to_string(),
+                stable_key,
                 producer_id: "polint.calls",
                 layer_id: "polint.calls",
                 precision: FactPrecision::Exact,
@@ -2566,14 +2672,16 @@ mod calls {
             targets: vec![target(0, CallSiteId(0), "call-target:ok")],
             unresolved: vec![unresolved(0, "call-unresolved:ok")],
         };
-        let store = CallStore::from_output(output).expect("call store should index rows");
+        let interner = crate::core::StableKeyInterner::default();
+        let store =
+            CallStore::from_output(output, &interner).expect("call store should index rows");
 
-        assert_eq!(store.sites_by_caller(FunctionId(0)).len(), 1);
+        assert_eq!(store.sites_by_caller(FunctionId::from_raw(0)).len(), 1);
         assert_eq!(store.targets_by_site(CallSiteId(0)).len(), 1);
-        assert_eq!(store.outgoing_by_function(FunctionId(0)).len(), 1);
-        assert_eq!(store.outgoing_by_symbol(SymbolId(0)).len(), 1);
-        assert_eq!(store.incoming_by_symbol(SymbolId(1)).len(), 1);
-        assert_eq!(store.incoming_by_function(FunctionId(1)).len(), 1);
+        assert_eq!(store.outgoing_by_function(FunctionId::from_raw(0)).len(), 1);
+        assert_eq!(store.outgoing_by_symbol(SymbolId::from_raw(0)).len(), 1);
+        assert_eq!(store.incoming_by_symbol(SymbolId::from_raw(1)).len(), 1);
+        assert_eq!(store.incoming_by_function(FunctionId::from_raw(1)).len(), 1);
         assert_eq!(
             store
                 .unresolved_by_reason(UnresolvedCallReason::DynamicProperty)
@@ -2587,11 +2695,17 @@ mod calls {
             1
         );
 
-        let missing = CallStore::from_output(CallOutput {
-            sites: Vec::new(),
-            targets: vec![target(0, CallSiteId(99), "call-target:without-site")],
-            unresolved: Vec::new(),
-        })
+        let interner = crate::core::StableKeyInterner::default();
+        let mut dangling = target(0, CallSiteId(99), "call-target:without-site");
+        dangling.stable_key = interner.intern("call-target:without-site");
+        let missing = CallStore::from_output(
+            CallOutput {
+                sites: Vec::new(),
+                targets: vec![dangling],
+                unresolved: Vec::new(),
+            },
+            &interner,
+        )
         .expect_err("targets without sites should be rejected before indexing");
         assert!(missing.to_string().contains("dangling call site"));
     }
@@ -2603,32 +2717,33 @@ mod calls {
             "src/app.ts".to_string(),
             "export function app() { target(); }\n".to_string(),
         );
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "app".to_string(),
-            span: span(file),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
-        db.push_function(FunctionFact {
-            id: FunctionId(1),
+            "app".to_string(),
+            span(file),
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(1),
             file,
-            name: "target".to_string(),
-            span: span(file),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "target".to_string(),
+            span(file),
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
+        let interner = db.stable_key_interner();
         db.replace_symbol_graph_facts(
             vec![
-                symbol(SymbolId(0), file, "app"),
-                symbol(SymbolId(1), file, "target"),
+                symbol(&interner, SymbolId::from_raw(0), file, "app"),
+                symbol(&interner, SymbolId::from_raw(1), file, "target"),
             ],
             Vec::new(),
             Vec::new(),
@@ -2636,36 +2751,41 @@ mod calls {
         db
     }
 
-    fn symbol(id: SymbolId, file: FileId, name: &str) -> SymbolFact {
-        SymbolFact {
+    fn symbol(
+        interner: &crate::core::StableKeyInterner,
+        id: SymbolId,
+        file: FileId,
+        name: &str,
+    ) -> SymbolFact {
+        SymbolFact::new(
             id,
-            language: Language::TypeScript,
-            name: name.to_string(),
-            qualified_name: name.to_string(),
-            kind: SymbolKind::Function,
-            namespace: SymbolNamespace::Value,
-            file: Some(file),
-            package: None,
-            module: None,
-            owner: None,
-            primary_span: Some(span(file)),
-            is_exported: true,
-            stable_key: format!("symbol:{name}"),
-            precision: SymbolPrecision::ExactLocal,
-        }
+            Language::TypeScript,
+            name.to_string(),
+            name.to_string(),
+            SymbolKind::Function,
+            SymbolNamespace::Value,
+            Some(file),
+            None,
+            None,
+            None,
+            Some(span(file)),
+            true,
+            interner.intern(format!("symbol:{name}")),
+            SymbolPrecision::ExactLocal,
+        )
     }
 
-    fn site(id: u64, stable_key: &str) -> CallSiteFact {
+    fn site(id: u64, _stable_key: &str) -> CallSiteFact {
         CallSiteFact {
             in_throw: false,
             id: CallSiteId(id),
             language: Language::TypeScript,
-            file: FileId(0),
-            caller: FunctionId(0),
-            owner_symbol: Some(SymbolId(0)),
+            file: FileId::from_raw(0),
+            caller: FunctionId::from_raw(0),
+            owner_symbol: Some(SymbolId::from_raw(0)),
             body: MirBodyId(0),
             operation: MirOpId(0),
-            span: span(FileId(0)),
+            span: span(FileId::from_raw(0)),
             kind: CallSyntaxKind::Function,
             callee: CallCallee::Identifier {
                 reference: None,
@@ -2676,50 +2796,42 @@ mod calls {
             result: None,
             status: CallTargetStatus::Resolved,
             precision: CallPrecision::SetupAware,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::StableKeyId(id as u32),
         }
     }
 
-    fn target(id: u64, site: CallSiteId, stable_key: &str) -> CallTargetFact {
+    fn target(id: u64, site: CallSiteId, _stable_key: &str) -> CallTargetFact {
         CallTargetFact {
             id: CallTargetId(id),
             site,
-            caller: FunctionId(0),
-            target_function: Some(FunctionId(1)),
-            target_symbol: Some(SymbolId(1)),
+            caller: FunctionId::from_raw(0),
+            target_function: Some(FunctionId::from_raw(1)),
+            target_symbol: Some(SymbolId::from_raw(1)),
             edge_kind: CallEdgeKind::Direct,
             algorithm: CallAlgorithm::DirectReference,
             status: CallTargetStatus::Resolved,
             reason: None,
             provenance: CallProvenance::Native,
             precision: CallPrecision::SetupAware,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::StableKeyId(id as u32),
         }
     }
 
-    fn unresolved(site: u64, stable_key: &str) -> UnresolvedCallFact {
+    fn unresolved(site: u64, _stable_key: &str) -> UnresolvedCallFact {
         UnresolvedCallFact {
             site: CallSiteId(site),
-            caller: FunctionId(0),
+            caller: FunctionId::from_raw(0),
             status: CallTargetStatus::Unresolved,
             reason: UnresolvedCallReason::DynamicProperty,
             algorithm: CallAlgorithm::SyntaxOnly,
             provenance: CallProvenance::MirShape,
             precision: CallPrecision::Unknown,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::StableKeyId(site as u32),
         }
     }
 
     fn span(file: FileId) -> Span {
-        Span {
-            file,
-            start_byte: 0,
-            end_byte: 10,
-            start_line: 1,
-            start_col: 1,
-            end_line: 1,
-            end_col: 11,
-        }
+        Span::new(file, 0, 10, 1, 1, 1, 11)
     }
 
     fn call_diagnostics(
@@ -2770,17 +2882,17 @@ mod semantic_index {
             vec![GeneratedSymbolFact {
                 id: GeneratedSymbolId(99),
                 language: Language::TypeScript,
-                file: Some(FileId(404)),
+                file: Some(FileId::from_raw(404)),
                 package: None,
                 module: None,
-                symbol_stable_key: "symbol:answer".to_string(),
-                source_stable_key: String::new(),
+                symbol_stable_key: db.stable_key_interner().intern("symbol:answer"),
+                source_stable_key: db.stable_key_interner().intern(""),
                 producer_id: String::new(),
                 generator: "test".to_string(),
                 generated_discriminator: String::new(),
                 kind: GeneratedSymbolKind::BuildGenerated,
-                span: Some(span(FileId(404), 0, 999)),
-                stable_key: "generated:bad".to_string(),
+                span: Some(span(FileId::from_raw(404), 0, 999)),
+                stable_key: db.stable_key_interner().intern("generated:bad"),
                 status: SemanticStatus::Resolved,
             }],
             Vec::new(),
@@ -2823,27 +2935,28 @@ mod semantic_index {
             vec![GeneratedSymbolFact {
                 id: GeneratedSymbolId(0),
                 language: Language::TypeScript,
-                file: Some(FileId(0)),
+                file: Some(FileId::from_raw(0)),
                 package: None,
                 module: None,
-                symbol_stable_key: "symbol:answer".to_string(),
-                source_stable_key: "symbol:answer".to_string(),
+                symbol_stable_key: db.stable_key_interner().intern("symbol:answer"),
+                source_stable_key: db.stable_key_interner().intern("symbol:answer"),
                 producer_id: "polint.symbol_graph".to_string(),
                 generator: "test".to_string(),
                 generated_discriminator: "entrypoint".to_string(),
                 kind: GeneratedSymbolKind::BuildGenerated,
-                span: Some(span(FileId(0), 0, 1)),
-                stable_key: "generated:answer".to_string(),
+                span: Some(span(FileId::from_raw(0), 0, 1)),
+                stable_key: db.stable_key_interner().intern("generated:answer"),
                 status: SemanticStatus::Generated,
             }],
             Vec::new(),
         );
         db.fact_meta_mut_for_test()
             .remove_for_test(FactRef::new(FactFamily::GeneratedSymbol, 0));
+        let stable_key = db.stable_key_interner().intern("generated:answer");
         db.fact_meta_mut_for_test().insert(
             FactRef::new(FactFamily::GeneratedSymbol, 0),
             FactMeta {
-                stable_key: "generated:answer".to_string(),
+                stable_key,
                 producer_id: "polint.symbol_graph",
                 layer_id: "polint.symbol_graph",
                 precision: FactPrecision::Exact,
@@ -2884,7 +2997,7 @@ mod semantic_index {
             vec![ExportFact {
                 id: ExportId(0),
                 language: Language::TypeScript,
-                file: Some(FileId(0)),
+                file: Some(FileId::from_raw(0)),
                 package: None,
                 module: None,
                 scope: None,
@@ -2892,7 +3005,7 @@ mod semantic_index {
                 export_name: "answer".to_string(),
                 namespace: SymbolNamespace::Value,
                 kind: ExportKind::Named,
-                stable_key: "export:answer".to_string(),
+                stable_key: db.stable_key_interner().intern("export:answer"),
                 status: SemanticStatus::Resolved,
             }],
             Vec::new(),
@@ -2906,9 +3019,9 @@ mod semantic_index {
                 module_key: Some("src/app.ts".to_string()),
                 export_name: "answer".to_string(),
                 namespace: SymbolNamespace::Value,
-                symbol_stable_key: "symbol:missing".to_string(),
+                symbol_stable_key: db.stable_key_interner().intern("symbol:missing"),
                 generated_discriminator: Some("native".to_string()),
-                stable_key: "stable-export:answer".to_string(),
+                stable_key: db.stable_key_interner().intern("stable-export:answer"),
                 status: SemanticStatus::Resolved,
             }],
         );
@@ -2938,23 +3051,24 @@ mod semantic_index {
             "src/app.ts".to_string(),
             "export const answer = 1;\n".to_string(),
         );
+        let interner = db.stable_key_interner();
         db.replace_symbol_graph_facts(
-            vec![SymbolFact {
-                id: SymbolId(0),
-                language: Language::TypeScript,
-                name: "answer".to_string(),
-                qualified_name: "answer".to_string(),
-                kind: SymbolKind::Constant,
-                namespace: SymbolNamespace::Value,
-                file: Some(file),
-                package: None,
-                module: None,
-                owner: None,
-                primary_span: Some(span(file, 13, 19)),
-                is_exported: true,
-                stable_key: "symbol:answer".to_string(),
-                precision: SymbolPrecision::ExactLocal,
-            }],
+            vec![SymbolFact::new(
+                SymbolId::from_raw(0),
+                Language::TypeScript,
+                "answer".to_string(),
+                "answer".to_string(),
+                SymbolKind::Constant,
+                SymbolNamespace::Value,
+                Some(file),
+                None,
+                None,
+                None,
+                Some(span(file, 13, 19)),
+                true,
+                interner.intern("symbol:answer".to_string()),
+                SymbolPrecision::ExactLocal,
+            )],
             Vec::new(),
             Vec::new(),
         );
@@ -2962,15 +3076,15 @@ mod semantic_index {
     }
 
     fn span(file: FileId, start_byte: u32, end_byte: u32) -> Span {
-        Span {
+        Span::new(
             file,
             start_byte,
             end_byte,
-            start_line: 1,
-            start_col: start_byte + 1,
-            end_line: 1,
-            end_col: end_byte + 1,
-        }
+            1,
+            start_byte + 1,
+            1,
+            end_byte + 1,
+        )
     }
 
     fn evidence_labels(diagnostic: &crate::diagnostics::Diagnostic) -> BTreeSet<&str> {
@@ -3011,24 +3125,24 @@ mod topology {
             "src/app.ts".to_string(),
             "import './target';\n".to_string(),
         );
-        let import = db.push_import(ImportFact {
-            id: ImportId(99),
+        let import = db.push_import(ImportFact::new(
+            ImportId::from_raw(99),
             file,
-            package: None,
-            path: "./target".to_string(),
-            span: span(file),
-            language: Language::TypeScript,
-        });
+            None,
+            "./target".to_string(),
+            span(file),
+            Language::TypeScript,
+        ));
         db.replace_module_graph_facts(
-            vec![ResolvedImportFact {
-                id: ResolvedImportId(0),
+            vec![ResolvedImportFact::new(
+                ResolvedImportId::from_raw(0),
                 import,
-                from_file: file,
-                target_node: None,
-                status: ResolutionStatus::Unresolved,
-                precision: ResolutionPrecision::None,
-                reason: None,
-            }],
+                file,
+                None,
+                ResolutionStatus::Unresolved,
+                ResolutionPrecision::None,
+                None,
+            )],
             Vec::new(),
             Vec::new(),
         );
@@ -3037,7 +3151,7 @@ mod topology {
             packages: vec![package(
                 "package:bad",
                 Some(WorkspaceRootId(404)),
-                Some(ModuleNodeId(404)),
+                Some(ModuleNodeId::from_raw(404)),
                 "../escape",
                 TopologyPrecision::ExactStatic,
                 TopologyStatus::Present,
@@ -3049,18 +3163,18 @@ mod topology {
                 kind: SourceSetKind::Source,
                 path: r"src\app.ts".to_string(),
                 language: Some(Language::TypeScript),
-                files: vec![FileId(404)],
-                stable_key: "source-set:bad".to_string(),
+                files: vec![FileId::from_raw(404)],
+                stable_key: crate::core::stable_key_for_test("source-set:bad"),
                 producer_id: "test",
                 precision: TopologyPrecision::ExactStatic,
                 status: TopologyStatus::Present,
             }],
             import_to_package_edges: vec![import_edge(
                 "import-to-package:bad",
-                Some(ImportId(404)),
-                Some(ResolvedImportId(404)),
+                Some(ImportId::from_raw(404)),
+                Some(ResolvedImportId::from_raw(404)),
                 Some("semantic:missing".to_string()),
-                Some(FileId(404)),
+                Some(FileId::from_raw(404)),
                 ImportToPackageStatus::Resolved,
                 TopologyPrecision::ExactStatic,
             )],
@@ -3126,14 +3240,14 @@ mod topology {
             "src/app.ts".to_string(),
             "import React from 'react';\n".to_string(),
         );
-        let import = db.push_import(ImportFact {
-            id: ImportId(99),
+        let import = db.push_import(ImportFact::new(
+            ImportId::from_raw(99),
             file,
-            package: None,
-            path: "react".to_string(),
-            span: span(file),
-            language: Language::TypeScript,
-        });
+            None,
+            "react".to_string(),
+            span(file),
+            Language::TypeScript,
+        ));
         db.replace_semantic_index_facts(
             Vec::new(),
             vec![SemanticImportFact {
@@ -3148,7 +3262,7 @@ mod topology {
                 imported_name: None,
                 namespace: crate::core::SymbolNamespace::Value,
                 kind: SemanticImportKind::DynamicImport,
-                stable_key: "semantic:react".to_string(),
+                stable_key: db.stable_key_interner().intern("semantic:react"),
                 status: SemanticStatus::Dynamic,
             }],
             Vec::new(),
@@ -3166,7 +3280,7 @@ mod topology {
                 version_requirement: Some("^18".to_string()),
                 kind: RequirementKind::Runtime,
                 manifest_path: Some("package.json".to_string()),
-                stable_key: "requirement:react".to_string(),
+                stable_key: crate::core::stable_key_for_test("requirement:react"),
                 producer_id: "test",
                 precision: TopologyPrecision::ExactLockfile,
                 status: TopologyStatus::Unsupported,
@@ -3179,7 +3293,7 @@ mod topology {
                 package_name: "react".to_string(),
                 resolved_version: None,
                 kind: ResolvedDependencyKind::Unknown,
-                stable_key: "resolved:react".to_string(),
+                stable_key: crate::core::stable_key_for_test("resolved:react"),
                 producer_id: "test",
                 precision: TopologyPrecision::ExactLockfile,
                 status: TopologyStatus::Unsupported,
@@ -3231,7 +3345,7 @@ mod topology {
                 package_name: format!("package-{index}"),
                 resolved_version: Some("1.0.0".to_string()),
                 kind,
-                stable_key: format!("resolved:package-{index}"),
+                stable_key: crate::core::stable_key_for_test(&format!("resolved:package-{index}")),
                 producer_id: "test",
                 precision: TopologyPrecision::ExactLockfile,
                 status: TopologyStatus::Resolved,
@@ -3255,7 +3369,7 @@ mod topology {
             root_path: path.to_string(),
             manifest_path: None,
             language: None,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
             producer_id: "test",
             precision: TopologyPrecision::ExactStatic,
             status: TopologyStatus::Present,
@@ -3280,7 +3394,7 @@ mod topology {
             version: None,
             path: path.to_string(),
             language: Some(Language::TypeScript),
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
             producer_id: "test",
             precision,
             status,
@@ -3300,17 +3414,19 @@ mod topology {
             id: ImportToPackageId(0),
             syntax_import,
             resolved_import,
-            semantic_import_stable_key,
+            semantic_import_stable_key: semantic_import_stable_key
+                .as_deref()
+                .map(crate::core::stable_key_for_test),
             from_file,
             from_package: Some(TopologyPackageId(404)),
             to_package: None,
-            target_node: Some(ModuleNodeId(404)),
+            target_node: Some(ModuleNodeId::from_raw(404)),
             from_package_stable_key: None,
             to_package_stable_key: None,
             source_set_stable_key: None,
             import_path: "react".to_string(),
             context: ImportContextKind::Source,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
             producer_id: "test",
             precision,
             status,
@@ -3318,15 +3434,7 @@ mod topology {
     }
 
     fn span(file: FileId) -> Span {
-        Span {
-            file,
-            start_byte: 0,
-            end_byte: 1,
-            start_line: 1,
-            start_col: 1,
-            end_line: 1,
-            end_col: 2,
-        }
+        Span::new(file, 0, 1, 1, 1, 1, 2)
     }
 
     fn topology_diagnostics(
@@ -3404,17 +3512,17 @@ impl IdSets {
             semantic_import_stable_keys: db
                 .semantic_imports()
                 .iter()
-                .map(|fact| fact.stable_key.clone())
+                .map(|fact| db.resolve_stable_key(fact.stable_key).to_string())
                 .collect(),
             symbol_stable_keys: db
                 .symbols()
                 .iter()
-                .map(|fact| fact.stable_key.clone())
+                .map(|fact| db.resolve_stable_key(fact.stable_key).to_string())
                 .collect(),
             reference_stable_keys: db
                 .references()
                 .iter()
-                .map(|fact| fact.stable_key.clone())
+                .map(|fact| db.resolve_stable_key(fact.stable_key).to_string())
                 .collect(),
         }
     }
@@ -3437,21 +3545,38 @@ fn validate_missing_metadata(db: &AnalysisDb, diagnostics: &mut Vec<PendingIssue
 }
 
 fn validate_stable_key_conflicts(db: &AnalysisDb, diagnostics: &mut Vec<PendingIssue>) {
-    for conflict in db.fact_meta().stable_key_conflicts() {
+    let mut conflicts = db.fact_meta().stable_key_conflicts().collect::<Vec<_>>();
+    conflicts.sort_by(|left, right| {
+        (
+            left.family,
+            db.resolve_stable_key(left.stable_key),
+            left.existing,
+            left.incoming,
+        )
+            .cmp(&(
+                right.family,
+                db.resolve_stable_key(right.stable_key),
+                right.existing,
+                right.incoming,
+            ))
+    });
+    for conflict in conflicts {
         diagnostics.push((
             internal_diagnostic(format!(
                 "Fact metadata stable key conflict detected for {} stable key.",
                 conflict.family.label()
             ))
             .with_evidence("family", conflict.family.label())
-            .with_evidence("stable_key", conflict.stable_key.clone())
+            .with_evidence(
+                "stable_key",
+                db.resolve_stable_key(conflict.stable_key).to_string(),
+            )
             .with_evidence("existing_ref", fact_ref_value(conflict.existing))
             .with_evidence("incoming_ref", fact_ref_value(conflict.incoming)),
             Attribution::FamilyIdentity(conflict.family),
         ));
     }
 }
-
 fn validate_metadata_providers(
     db: &AnalysisDb,
     manifests_by_id: &BTreeMap<&'static str, ProviderManifest>,
@@ -4238,7 +4363,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.files,
             FactFamily::Scope,
-            scope.stable_key.as_str(),
+            db.resolve_stable_key(scope.stable_key).as_ref(),
             "ScopeFact.file",
             scope.file,
         );
@@ -4246,7 +4371,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.packages,
             FactFamily::Scope,
-            scope.stable_key.as_str(),
+            db.resolve_stable_key(scope.stable_key).as_ref(),
             "ScopeFact.package",
             scope.package,
         );
@@ -4254,7 +4379,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.module_nodes,
             FactFamily::Scope,
-            scope.stable_key.as_str(),
+            db.resolve_stable_key(scope.stable_key).as_ref(),
             "ScopeFact.module",
             scope.module,
         );
@@ -4262,7 +4387,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.scopes,
             FactFamily::Scope,
-            scope.stable_key.as_str(),
+            db.resolve_stable_key(scope.stable_key).as_ref(),
             "ScopeFact.parent",
             scope.parent,
         );
@@ -4273,7 +4398,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.files,
             FactFamily::SemanticImport,
-            import.stable_key.as_str(),
+            db.resolve_stable_key(import.stable_key).as_ref(),
             "SemanticImportFact.file",
             import.file,
         );
@@ -4281,7 +4406,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.packages,
             FactFamily::SemanticImport,
-            import.stable_key.as_str(),
+            db.resolve_stable_key(import.stable_key).as_ref(),
             "SemanticImportFact.package",
             import.package,
         );
@@ -4289,7 +4414,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.module_nodes,
             FactFamily::SemanticImport,
-            import.stable_key.as_str(),
+            db.resolve_stable_key(import.stable_key).as_ref(),
             "SemanticImportFact.module",
             import.module,
         );
@@ -4297,7 +4422,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.scopes,
             FactFamily::SemanticImport,
-            import.stable_key.as_str(),
+            db.resolve_stable_key(import.stable_key).as_ref(),
             "SemanticImportFact.scope",
             import.scope,
         );
@@ -4308,7 +4433,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.files,
             FactFamily::Export,
-            export.stable_key.as_str(),
+            db.resolve_stable_key(export.stable_key).as_ref(),
             "ExportFact.file",
             export.file,
         );
@@ -4316,7 +4441,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.packages,
             FactFamily::Export,
-            export.stable_key.as_str(),
+            db.resolve_stable_key(export.stable_key).as_ref(),
             "ExportFact.package",
             export.package,
         );
@@ -4324,7 +4449,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.module_nodes,
             FactFamily::Export,
-            export.stable_key.as_str(),
+            db.resolve_stable_key(export.stable_key).as_ref(),
             "ExportFact.module",
             export.module,
         );
@@ -4332,7 +4457,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.scopes,
             FactFamily::Export,
-            export.stable_key.as_str(),
+            db.resolve_stable_key(export.stable_key).as_ref(),
             "ExportFact.scope",
             export.scope,
         );
@@ -4341,7 +4466,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
                 diagnostics,
                 &ids.symbols,
                 FactFamily::Export,
-                export.stable_key.as_str(),
+                db.resolve_stable_key(export.stable_key).as_ref(),
                 "ExportFact.symbol",
                 export.symbol,
             );
@@ -4353,7 +4478,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.files,
             FactFamily::Alias,
-            alias.stable_key.as_str(),
+            db.resolve_stable_key(alias.stable_key).as_ref(),
             "AliasFact.file",
             alias.file,
         );
@@ -4361,7 +4486,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.packages,
             FactFamily::Alias,
-            alias.stable_key.as_str(),
+            db.resolve_stable_key(alias.stable_key).as_ref(),
             "AliasFact.package",
             alias.package,
         );
@@ -4369,7 +4494,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.module_nodes,
             FactFamily::Alias,
-            alias.stable_key.as_str(),
+            db.resolve_stable_key(alias.stable_key).as_ref(),
             "AliasFact.module",
             alias.module,
         );
@@ -4378,18 +4503,19 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
                 diagnostics,
                 &semantic_keys,
                 FactFamily::Alias,
-                alias.stable_key.as_str(),
+                db.resolve_stable_key(alias.stable_key).as_ref(),
                 "AliasFact.source_symbol_stable_key",
-                alias.source_symbol_stable_key.as_str(),
+                db.resolve_stable_key(alias.source_symbol_stable_key)
+                    .as_ref(),
             );
             for target in &alias.target_symbol_stable_keys {
                 check_semantic_key_ref(
                     diagnostics,
                     &semantic_keys,
                     FactFamily::Alias,
-                    alias.stable_key.as_str(),
+                    db.resolve_stable_key(alias.stable_key).as_ref(),
                     "AliasFact.target_symbol_stable_keys",
-                    target.as_str(),
+                    db.resolve_stable_key(*target).as_ref(),
                 );
             }
         }
@@ -4400,7 +4526,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.files,
             FactFamily::Resolution,
-            resolution.stable_key.as_str(),
+            db.resolve_stable_key(resolution.stable_key).as_ref(),
             "ResolutionFact.file",
             resolution.file,
         );
@@ -4408,7 +4534,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.packages,
             FactFamily::Resolution,
-            resolution.stable_key.as_str(),
+            db.resolve_stable_key(resolution.stable_key).as_ref(),
             "ResolutionFact.package",
             resolution.package,
         );
@@ -4416,7 +4542,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.module_nodes,
             FactFamily::Resolution,
-            resolution.stable_key.as_str(),
+            db.resolve_stable_key(resolution.stable_key).as_ref(),
             "ResolutionFact.module",
             resolution.module,
         );
@@ -4425,18 +4551,18 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
                 diagnostics,
                 &semantic_keys,
                 FactFamily::Resolution,
-                resolution.stable_key.as_str(),
+                db.resolve_stable_key(resolution.stable_key).as_ref(),
                 "ResolutionFact.source_stable_key",
-                resolution.source_stable_key.as_str(),
+                db.resolve_stable_key(resolution.source_stable_key).as_ref(),
             );
             for target in &resolution.target_stable_keys {
                 check_semantic_key_ref(
                     diagnostics,
                     &semantic_keys,
                     FactFamily::Resolution,
-                    resolution.stable_key.as_str(),
+                    db.resolve_stable_key(resolution.stable_key).as_ref(),
                     "ResolutionFact.target_stable_keys",
-                    target.as_str(),
+                    db.resolve_stable_key(*target).as_ref(),
                 );
             }
         }
@@ -4447,7 +4573,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.files,
             FactFamily::GeneratedSymbol,
-            generated.stable_key.as_str(),
+            db.resolve_stable_key(generated.stable_key).as_ref(),
             "GeneratedSymbolFact.file",
             generated.file,
         );
@@ -4455,7 +4581,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.packages,
             FactFamily::GeneratedSymbol,
-            generated.stable_key.as_str(),
+            db.resolve_stable_key(generated.stable_key).as_ref(),
             "GeneratedSymbolFact.package",
             generated.package,
         );
@@ -4463,7 +4589,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.module_nodes,
             FactFamily::GeneratedSymbol,
-            generated.stable_key.as_str(),
+            db.resolve_stable_key(generated.stable_key).as_ref(),
             "GeneratedSymbolFact.module",
             generated.module,
         );
@@ -4471,28 +4597,28 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &semantic_keys,
             FactFamily::GeneratedSymbol,
-            generated.stable_key.as_str(),
+            db.resolve_stable_key(generated.stable_key).as_ref(),
             "GeneratedSymbolFact.source_stable_key",
-            generated.source_stable_key.as_str(),
+            db.resolve_stable_key(generated.source_stable_key).as_ref(),
         );
         if generated.producer_id != SYMBOL_GRAPH_PROVIDER_ID {
             diagnostics.push(semantic_diagnostic(
                 FactFamily::GeneratedSymbol,
-                generated.stable_key.as_str(),
+                db.resolve_stable_key(generated.stable_key).as_ref(),
                 format!("GeneratedSymbolFact.producer_id must be {SYMBOL_GRAPH_PROVIDER_ID}"),
             ));
         }
         if generated.generated_discriminator.is_empty() {
             diagnostics.push(semantic_diagnostic(
                 FactFamily::GeneratedSymbol,
-                generated.stable_key.as_str(),
+                db.resolve_stable_key(generated.stable_key).as_ref(),
                 "GeneratedSymbolFact.generated_discriminator is empty",
             ));
         }
         if generated.status != SemanticStatus::Generated {
             diagnostics.push(semantic_diagnostic(
                 FactFamily::GeneratedSymbol,
-                generated.stable_key.as_str(),
+                db.resolve_stable_key(generated.stable_key).as_ref(),
                 "GeneratedSymbolFact.status must be Generated",
             ));
         }
@@ -4501,7 +4627,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
         {
             diagnostics.push(semantic_diagnostic(
                 FactFamily::GeneratedSymbol,
-                generated.stable_key.as_str(),
+                db.resolve_stable_key(generated.stable_key).as_ref(),
                 format!("GeneratedSymbolFact.span {reason}"),
             ));
         }
@@ -4512,22 +4638,26 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.exports,
             FactFamily::StableExport,
-            stable_export.stable_key.as_str(),
+            db.resolve_stable_key(stable_export.stable_key).as_ref(),
             "StableExportIdentity.export",
             stable_export.export,
         );
         if stable_export.status != SemanticStatus::Generated
-            && !ids
-                .symbol_stable_keys
-                .contains(stable_export.symbol_stable_key.as_str())
-            && !semantic_keys.contains(stable_export.symbol_stable_key.as_str())
+            && !ids.symbol_stable_keys.contains(
+                db.resolve_stable_key(stable_export.symbol_stable_key)
+                    .as_ref(),
+            )
+            && !semantic_keys.contains(
+                db.resolve_stable_key(stable_export.symbol_stable_key)
+                    .as_ref(),
+            )
         {
             diagnostics.push(semantic_diagnostic(
                 FactFamily::StableExport,
-                stable_export.stable_key.as_str(),
+                db.resolve_stable_key(stable_export.stable_key).as_ref(),
                 format!(
                     "StableExportIdentity.symbol_stable_key does not exist: {}",
-                    stable_export.symbol_stable_key
+                    db.resolve_stable_key(stable_export.symbol_stable_key)
                 ),
             ));
         }
@@ -4540,7 +4670,7 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
         {
             diagnostics.push(semantic_diagnostic(
                 reference.family,
-                metadata.stable_key.as_str(),
+                db.resolve_stable_key(metadata.stable_key).as_ref(),
                 "provider precision ceiling exceeded: semantic rows from polint.symbol_graph are setup-aware, not exact",
             ));
         }
@@ -4552,64 +4682,64 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
         diagnostics,
         FactFamily::WorkspaceRoot,
         db.workspace_roots(),
-        |row| row.stable_key.as_str(),
+        |row| db.resolve_stable_key(row.stable_key),
     );
     check_topology_family_stable_keys(
         diagnostics,
         FactFamily::TopologyPackage,
         db.topology_packages(),
-        |row| row.stable_key.as_str(),
+        |row| db.resolve_stable_key(row.stable_key),
     );
     check_topology_family_stable_keys(
         diagnostics,
         FactFamily::SourceSet,
         db.source_sets(),
-        |row| row.stable_key.as_str(),
+        |row| db.resolve_stable_key(row.stable_key),
     );
     check_topology_family_stable_keys(
         diagnostics,
         FactFamily::DependencyRequirement,
         db.dependency_requirements(),
-        |row| row.stable_key.as_str(),
+        |row| db.resolve_stable_key(row.stable_key),
     );
     check_topology_family_stable_keys(
         diagnostics,
         FactFamily::ResolvedDependencyEdge,
         db.resolved_dependency_edges(),
-        |row| row.stable_key.as_str(),
+        |row| db.resolve_stable_key(row.stable_key),
     );
     check_topology_family_stable_keys(
         diagnostics,
         FactFamily::ImportToPackage,
         db.import_to_package_edges(),
-        |row| row.stable_key.as_str(),
+        |row| db.resolve_stable_key(row.stable_key),
     );
     check_topology_family_stable_keys(
         diagnostics,
         FactFamily::RepoTopologyOverlay,
         db.repo_topology_overlays(),
-        |row| row.stable_key.as_str(),
+        |row| db.resolve_stable_key(row.stable_key),
     );
 
     for root in db.workspace_roots() {
         check_topology_path(
             diagnostics,
             FactFamily::WorkspaceRoot,
-            root.stable_key.as_str(),
+            db.resolve_stable_key(root.stable_key).as_ref(),
             "WorkspaceRootFact.root_path",
             root.root_path.as_str(),
         );
         check_topology_optional_path(
             diagnostics,
             FactFamily::WorkspaceRoot,
-            root.stable_key.as_str(),
+            db.resolve_stable_key(root.stable_key).as_ref(),
             "WorkspaceRootFact.manifest_path",
             root.manifest_path.as_deref(),
         );
         check_topology_precision(
             diagnostics,
             FactFamily::WorkspaceRoot,
-            root.stable_key.as_str(),
+            db.resolve_stable_key(root.stable_key).as_ref(),
             "WorkspaceRootFact.precision",
             root.precision,
             root.status,
@@ -4622,7 +4752,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.workspace_roots,
             FactFamily::TopologyPackage,
-            package.stable_key.as_str(),
+            db.resolve_stable_key(package.stable_key).as_ref(),
             "TopologyPackageFact.workspace_root",
             package.workspace_root,
         );
@@ -4630,7 +4760,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.packages,
             FactFamily::TopologyPackage,
-            package.stable_key.as_str(),
+            db.resolve_stable_key(package.stable_key).as_ref(),
             "TopologyPackageFact.package",
             package.package,
         );
@@ -4638,21 +4768,21 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.module_nodes,
             FactFamily::TopologyPackage,
-            package.stable_key.as_str(),
+            db.resolve_stable_key(package.stable_key).as_ref(),
             "TopologyPackageFact.module_node",
             package.module_node,
         );
         check_topology_path(
             diagnostics,
             FactFamily::TopologyPackage,
-            package.stable_key.as_str(),
+            db.resolve_stable_key(package.stable_key).as_ref(),
             "TopologyPackageFact.path",
             package.path.as_str(),
         );
         check_topology_precision(
             diagnostics,
             FactFamily::TopologyPackage,
-            package.stable_key.as_str(),
+            db.resolve_stable_key(package.stable_key).as_ref(),
             "TopologyPackageFact.precision",
             package.precision,
             package.status,
@@ -4665,7 +4795,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.topology_packages,
             FactFamily::SourceSet,
-            source_set.stable_key.as_str(),
+            db.resolve_stable_key(source_set.stable_key).as_ref(),
             "SourceSetFact.package",
             source_set.package,
         );
@@ -4673,7 +4803,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.workspace_roots,
             FactFamily::SourceSet,
-            source_set.stable_key.as_str(),
+            db.resolve_stable_key(source_set.stable_key).as_ref(),
             "SourceSetFact.root",
             source_set.root,
         );
@@ -4682,7 +4812,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
                 diagnostics,
                 &ids.files,
                 FactFamily::SourceSet,
-                source_set.stable_key.as_str(),
+                db.resolve_stable_key(source_set.stable_key).as_ref(),
                 "SourceSetFact.files",
                 *file,
             );
@@ -4690,14 +4820,14 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
         check_topology_path(
             diagnostics,
             FactFamily::SourceSet,
-            source_set.stable_key.as_str(),
+            db.resolve_stable_key(source_set.stable_key).as_ref(),
             "SourceSetFact.path",
             source_set.path.as_str(),
         );
         check_topology_precision(
             diagnostics,
             FactFamily::SourceSet,
-            source_set.stable_key.as_str(),
+            db.resolve_stable_key(source_set.stable_key).as_ref(),
             "SourceSetFact.precision",
             source_set.precision,
             source_set.status,
@@ -4710,7 +4840,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.topology_packages,
             FactFamily::DependencyRequirement,
-            requirement.stable_key.as_str(),
+            db.resolve_stable_key(requirement.stable_key).as_ref(),
             "DependencyRequirementFact.from_package",
             requirement.from_package,
         );
@@ -4718,21 +4848,21 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.topology_packages,
             FactFamily::DependencyRequirement,
-            requirement.stable_key.as_str(),
+            db.resolve_stable_key(requirement.stable_key).as_ref(),
             "DependencyRequirementFact.target_package",
             requirement.target_package,
         );
         check_topology_optional_path(
             diagnostics,
             FactFamily::DependencyRequirement,
-            requirement.stable_key.as_str(),
+            db.resolve_stable_key(requirement.stable_key).as_ref(),
             "DependencyRequirementFact.manifest_path",
             requirement.manifest_path.as_deref(),
         );
         check_topology_precision(
             diagnostics,
             FactFamily::DependencyRequirement,
-            requirement.stable_key.as_str(),
+            db.resolve_stable_key(requirement.stable_key).as_ref(),
             "DependencyRequirementFact.precision",
             requirement.precision,
             requirement.status,
@@ -4745,7 +4875,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.dependency_requirements,
             FactFamily::ResolvedDependencyEdge,
-            edge.stable_key.as_str(),
+            db.resolve_stable_key(edge.stable_key).as_ref(),
             "ResolvedDependencyEdgeFact.requirement",
             edge.requirement,
         );
@@ -4753,7 +4883,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.topology_packages,
             FactFamily::ResolvedDependencyEdge,
-            edge.stable_key.as_str(),
+            db.resolve_stable_key(edge.stable_key).as_ref(),
             "ResolvedDependencyEdgeFact.from_package",
             edge.from_package,
         );
@@ -4761,11 +4891,11 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.topology_packages,
             FactFamily::ResolvedDependencyEdge,
-            edge.stable_key.as_str(),
+            db.resolve_stable_key(edge.stable_key).as_ref(),
             "ResolvedDependencyEdgeFact.to_package",
             edge.to_package,
         );
-        check_resolved_dependency_precision(diagnostics, edge);
+        check_resolved_dependency_precision(db, diagnostics, edge);
     }
 
     for edge in db.import_to_package_edges() {
@@ -4773,7 +4903,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.imports,
             FactFamily::ImportToPackage,
-            edge.stable_key.as_str(),
+            db.resolve_stable_key(edge.stable_key).as_ref(),
             "ImportToPackageFact.syntax_import",
             edge.syntax_import,
         );
@@ -4781,7 +4911,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.resolved_imports,
             FactFamily::ImportToPackage,
-            edge.stable_key.as_str(),
+            db.resolve_stable_key(edge.stable_key).as_ref(),
             "ImportToPackageFact.resolved_import",
             edge.resolved_import,
         );
@@ -4789,7 +4919,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.files,
             FactFamily::ImportToPackage,
-            edge.stable_key.as_str(),
+            db.resolve_stable_key(edge.stable_key).as_ref(),
             "ImportToPackageFact.from_file",
             edge.from_file,
         );
@@ -4797,7 +4927,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.topology_packages,
             FactFamily::ImportToPackage,
-            edge.stable_key.as_str(),
+            db.resolve_stable_key(edge.stable_key).as_ref(),
             "ImportToPackageFact.from_package",
             edge.from_package,
         );
@@ -4805,7 +4935,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.topology_packages,
             FactFamily::ImportToPackage,
-            edge.stable_key.as_str(),
+            db.resolve_stable_key(edge.stable_key).as_ref(),
             "ImportToPackageFact.to_package",
             edge.to_package,
         );
@@ -4813,16 +4943,18 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.module_nodes,
             FactFamily::ImportToPackage,
-            edge.stable_key.as_str(),
+            db.resolve_stable_key(edge.stable_key).as_ref(),
             "ImportToPackageFact.target_node",
             edge.target_node,
         );
-        if let Some(key) = edge.semantic_import_stable_key.as_deref()
-            && !ids.semantic_import_stable_keys.contains(key)
+        if let Some(key) = edge.semantic_import_stable_key
+            && !ids
+                .semantic_import_stable_keys
+                .contains(db.resolve_stable_key(key).as_ref())
         {
             diagnostics.push(topology_diagnostic(
                 FactFamily::ImportToPackage,
-                edge.stable_key.as_str(),
+                db.resolve_stable_key(edge.stable_key).as_ref(),
                 "ImportToPackageFact.semantic_import_stable_key",
                 "semantic_import_stable_key_missing",
             ));
@@ -4830,7 +4962,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
         if edge.status == ImportToPackageStatus::Resolved && edge.to_package_stable_key.is_none() {
             diagnostics.push(topology_diagnostic(
                 FactFamily::ImportToPackage,
-                edge.stable_key.as_str(),
+                db.resolve_stable_key(edge.stable_key).as_ref(),
                 "ImportToPackageFact.to_package_stable_key",
                 "resolved_row_missing_to_package_stable_key",
             ));
@@ -4840,12 +4972,12 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
         {
             diagnostics.push(topology_diagnostic(
                 FactFamily::ImportToPackage,
-                edge.stable_key.as_str(),
+                db.resolve_stable_key(edge.stable_key).as_ref(),
                 "ImportToPackageFact.status",
                 "undeclared_row_has_matching_dependency_requirement",
             ));
         }
-        check_import_to_package_precision(diagnostics, edge);
+        check_import_to_package_precision(db, diagnostics, edge);
     }
 
     for overlay in db.repo_topology_overlays() {
@@ -4853,7 +4985,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.workspace_roots,
             FactFamily::RepoTopologyOverlay,
-            overlay.stable_key.as_str(),
+            db.resolve_stable_key(overlay.stable_key).as_ref(),
             "RepoTopologyOverlayFact.root",
             overlay.root,
         );
@@ -4861,7 +4993,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.topology_packages,
             FactFamily::RepoTopologyOverlay,
-            overlay.stable_key.as_str(),
+            db.resolve_stable_key(overlay.stable_key).as_ref(),
             "RepoTopologyOverlayFact.package",
             overlay.package,
         );
@@ -4869,21 +5001,21 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.source_sets,
             FactFamily::RepoTopologyOverlay,
-            overlay.stable_key.as_str(),
+            db.resolve_stable_key(overlay.stable_key).as_ref(),
             "RepoTopologyOverlayFact.source_set",
             overlay.source_set,
         );
         check_topology_optional_path(
             diagnostics,
             FactFamily::RepoTopologyOverlay,
-            overlay.stable_key.as_str(),
+            db.resolve_stable_key(overlay.stable_key).as_ref(),
             "RepoTopologyOverlayFact.path",
             overlay.path.as_deref(),
         );
         check_topology_precision(
             diagnostics,
             FactFamily::RepoTopologyOverlay,
-            overlay.stable_key.as_str(),
+            db.resolve_stable_key(overlay.stable_key).as_ref(),
             "RepoTopologyOverlayFact.precision",
             overlay.precision,
             overlay.status,
@@ -4896,7 +5028,7 @@ fn check_topology_family_stable_keys<T: Serialize>(
     diagnostics: &mut Vec<Diagnostic>,
     family: FactFamily,
     rows: &[T],
-    stable_key: impl Fn(&T) -> &str,
+    stable_key: impl Fn(&T) -> std::sync::Arc<str>,
 ) {
     let mut seen = BTreeMap::<String, serde_json::Value>::new();
     for row in rows {
@@ -5011,6 +5143,7 @@ fn repo_relative_path_is_valid(path: &str) -> bool {
 }
 
 fn check_resolved_dependency_precision(
+    db: &AnalysisDb,
     diagnostics: &mut Vec<Diagnostic>,
     edge: &crate::module_graph::topology::ResolvedDependencyEdgeFact,
 ) {
@@ -5023,7 +5156,7 @@ fn check_resolved_dependency_precision(
     if edge.precision == TopologyPrecision::ExactLockfile && !exact_lockfile_allowed {
         diagnostics.push(topology_diagnostic(
             FactFamily::ResolvedDependencyEdge,
-            edge.stable_key.as_str(),
+            db.resolve_stable_key(edge.stable_key).as_ref(),
             "ResolvedDependencyEdgeFact.precision",
             "exact_lockfile_requires_lockfile_or_checksum_row",
         ));
@@ -5031,7 +5164,7 @@ fn check_resolved_dependency_precision(
     check_topology_precision(
         diagnostics,
         FactFamily::ResolvedDependencyEdge,
-        edge.stable_key.as_str(),
+        db.resolve_stable_key(edge.stable_key).as_ref(),
         "ResolvedDependencyEdgeFact.precision",
         edge.precision,
         edge.status,
@@ -5040,6 +5173,7 @@ fn check_resolved_dependency_precision(
 }
 
 fn check_import_to_package_precision(
+    db: &AnalysisDb,
     diagnostics: &mut Vec<Diagnostic>,
     edge: &crate::module_graph::topology::ImportToPackageFact,
 ) {
@@ -5054,7 +5188,7 @@ fn check_import_to_package_precision(
     ) {
         diagnostics.push(topology_diagnostic(
             FactFamily::ImportToPackage,
-            edge.stable_key.as_str(),
+            db.resolve_stable_key(edge.stable_key).as_ref(),
             "ImportToPackageFact.precision",
             "unsupported_or_dynamic_exactness",
         ));
@@ -5062,7 +5196,7 @@ fn check_import_to_package_precision(
     if edge.precision == TopologyPrecision::ExactLockfile {
         diagnostics.push(topology_diagnostic(
             FactFamily::ImportToPackage,
-            edge.stable_key.as_str(),
+            db.resolve_stable_key(edge.stable_key).as_ref(),
             "ImportToPackageFact.precision",
             "exact_lockfile_requires_lockfile_or_checksum_row",
         ));
@@ -5176,25 +5310,25 @@ fn semantic_reference_keys(db: &AnalysisDb, ids: &IdSets) -> BTreeSet<String> {
     let mut keys = ids.symbol_stable_keys.clone();
     keys.extend(ids.reference_stable_keys.iter().cloned());
     for scope in db.scopes() {
-        keys.insert(scope.stable_key.clone());
+        keys.insert(db.resolve_stable_key(scope.stable_key).to_string());
     }
     for import in db.semantic_imports() {
-        keys.insert(import.stable_key.clone());
+        keys.insert(db.resolve_stable_key(import.stable_key).to_string());
     }
     for export in db.exports() {
-        keys.insert(export.stable_key.clone());
+        keys.insert(db.resolve_stable_key(export.stable_key).to_string());
     }
     for alias in db.aliases() {
-        keys.insert(alias.stable_key.clone());
+        keys.insert(db.resolve_stable_key(alias.stable_key).to_string());
     }
     for resolution in db.resolution_facts() {
-        keys.insert(resolution.stable_key.clone());
+        keys.insert(db.resolve_stable_key(resolution.stable_key).to_string());
     }
     for generated in db.generated_symbols() {
-        keys.insert(generated.stable_key.clone());
+        keys.insert(db.resolve_stable_key(generated.stable_key).to_string());
     }
     for stable_export in db.stable_exports() {
-        keys.insert(stable_export.stable_key.clone());
+        keys.insert(db.resolve_stable_key(stable_export.stable_key).to_string());
     }
     keys
 }
@@ -5523,14 +5657,10 @@ mod tests {
         let existing = FactRef::new(FactFamily::Import, 1);
         let incoming = FactRef::new(FactFamily::Import, 2);
 
-        db.fact_meta_mut_for_test().insert(
-            existing,
-            test_meta(FactFamily::Import, "import:key", "payload:a"),
-        );
-        db.fact_meta_mut_for_test().insert(
-            incoming,
-            test_meta(FactFamily::Import, "import:key", "payload:b"),
-        );
+        let meta = test_meta(&db, FactFamily::Import, "import:key", "payload:a");
+        db.fact_meta_mut_for_test().insert(existing, meta);
+        let meta = test_meta(&db, FactFamily::Import, "import:key", "payload:b");
+        db.fact_meta_mut_for_test().insert(incoming, meta);
 
         let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
 
@@ -5560,39 +5690,39 @@ mod tests {
             "src/other.ts".to_string(),
             "abcdef".to_string(),
         );
-        db.push_function(FunctionFact {
-            id: FunctionId(99),
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(99),
             file,
-            name: "too_long".to_string(),
-            span: span(file, 0, 4),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: false,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
-        db.push_function(FunctionFact {
-            id: FunctionId(99),
+            "too_long".to_string(),
+            span(file, 0, 4),
+            Language::TypeScript,
+            false,
+            false,
+            1,
+            Vec::new(),
+        ));
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(99),
             file,
-            name: "reversed".to_string(),
-            span: span(file, 2, 1),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: false,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
-        db.push_function(FunctionFact {
-            id: FunctionId(99),
+            "reversed".to_string(),
+            span(file, 2, 1),
+            Language::TypeScript,
+            false,
+            false,
+            1,
+            Vec::new(),
+        ));
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(99),
             file,
-            name: "wrong_file".to_string(),
-            span: span(other_file, 0, 1),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: false,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "wrong_file".to_string(),
+            span(other_file, 0, 1),
+            Language::TypeScript,
+            false,
+            false,
+            1,
+            Vec::new(),
+        ));
 
         let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
         let messages = diagnostics
@@ -5616,71 +5746,71 @@ mod tests {
             "src/app.tsx".to_string(),
             "export function Button() { return null; }\n".to_string(),
         );
-        db.push_branch(BranchObligation {
-            id: BranchId(99),
-            function: Some(FunctionId(404)),
+        db.push_branch(BranchObligation::new(
+            BranchId::from_raw(99),
+            Some(FunctionId::from_raw(404)),
             file,
-            decision_span: span(file, 0, 1),
-            condition_text: "enabled".to_string(),
-            edge_label: "true".to_string(),
-            is_error_path: false,
-            stable_fingerprint: "branch:key".to_string(),
-        });
-        db.push_test(TestFact {
+            span(file, 0, 1),
+            "enabled".to_string(),
+            "true".to_string(),
+            false,
+            "branch:key".to_string(),
+        ));
+        db.push_test(TestFact::new(
             file,
-            function: Some(FunctionId(405)),
-            name: "TestButton".to_string(),
-            span: span(file, 0, 1),
-            evidence_terms: Vec::new(),
-            assertion_count: 0,
-            subtest_count: 0,
-            subtest_names: Vec::new(),
-            table_rows: 0,
-        });
-        db.push_ts_component(TsComponentFact {
+            Some(FunctionId::from_raw(405)),
+            "TestButton".to_string(),
+            span(file, 0, 1),
+            Vec::new(),
+            0,
+            0,
+            Vec::new(),
+            0,
+        ));
+        db.push_ts_component(TsComponentFact::new(
             file,
-            function: Some(FunctionId(406)),
-            name: "Button".to_string(),
-            span: span(file, 0, 1),
-        });
+            Some(FunctionId::from_raw(406)),
+            "Button".to_string(),
+            span(file, 0, 1),
+        ));
         db.replace_module_graph_facts(
             Vec::new(),
-            vec![ModuleNode {
-                id: ModuleNodeId(99),
-                kind: ModuleNodeKind::File,
-                label: "missing".to_string(),
-                file: Some(FileId(404)),
-                package: Some(PackageId(405)),
-                language: Some(Language::Tsx),
-            }],
+            vec![ModuleNode::new(
+                ModuleNodeId::from_raw(99),
+                ModuleNodeKind::File,
+                "missing".to_string(),
+                Some(FileId::from_raw(404)),
+                Some(PackageId::from_raw(405)),
+                Some(Language::Tsx),
+            )],
             Vec::new(),
         );
         db.replace_metric_facts(
-            vec![FileMetricFact {
-                file: FileId(406),
-                language: Language::Tsx,
-                line_count: 1,
-                non_empty_line_count: 1,
-                byte_count: 1,
-                function_count: 0,
-            }],
-            vec![FunctionMetricFact {
-                function: FunctionId(407),
-                file: FileId(407),
-                name: "Button".to_string(),
-                span: span(file, 0, 1),
-                language: Language::Tsx,
-                line_count: 1,
-                byte_count: 1,
-            }],
-            vec![ComplexityMetricFact {
-                function: FunctionId(408),
-                file: FileId(408),
-                name: "Button".to_string(),
-                span: span(file, 0, 1),
-                language: Language::Tsx,
-                cyclomatic_complexity: 1,
-            }],
+            vec![FileMetricFact::new(
+                FileId::from_raw(406),
+                Language::Tsx,
+                1,
+                1,
+                1,
+                0,
+            )],
+            vec![FunctionMetricFact::new(
+                FunctionId::from_raw(407),
+                FileId::from_raw(407),
+                "Button".to_string(),
+                span(file, 0, 1),
+                Language::Tsx,
+                1,
+                1,
+            )],
+            vec![ComplexityMetricFact::new(
+                FunctionId::from_raw(408),
+                FileId::from_raw(408),
+                "Button".to_string(),
+                span(file, 0, 1),
+                Language::Tsx,
+                1,
+            )],
         );
 
         let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
@@ -5721,7 +5851,7 @@ mod tests {
     fn metadata_validation_reports_evidence_external_reference_failures() {
         let mut db = AnalysisDb::new();
         db.replace_evidence_facts(EvidenceOutput {
-            nodes: vec![evidence_node(0, FileId(404))],
+            nodes: vec![evidence_node(0, FileId::from_raw(404))],
             ..EvidenceOutput::empty()
         })
         .expect("evidence store accepts external refs for kernel validation");
@@ -5777,10 +5907,11 @@ mod tests {
     #[test]
     fn metadata_validation_precision_ceiling_violations_name_provider_family_and_precision() {
         let mut db = AnalysisDb::new();
+        let stable_key = db.stable_key_interner().intern("metric:key");
         db.fact_meta_mut_for_test().insert(
             FactRef::new(FactFamily::FileMetric, 0),
             FactMeta {
-                stable_key: "metric:key".to_string(),
+                stable_key,
                 producer_id: "polint.metrics",
                 layer_id: "polint.metrics",
                 precision: FactPrecision::Exact,
@@ -5836,10 +5967,11 @@ mod tests {
     #[test]
     fn family_scoped_issues_downgrade_only_that_familys_producers() {
         let mut db = AnalysisDb::new();
+        let stable_key = db.stable_key_interner().intern("metric:key");
         db.fact_meta_mut_for_test().insert(
             FactRef::new(FactFamily::FileMetric, 0),
             FactMeta {
-                stable_key: "metric:key".to_string(),
+                stable_key,
                 producer_id: "polint.metrics",
                 layer_id: "polint.metrics",
                 precision: FactPrecision::Syntax,
@@ -5882,11 +6014,14 @@ mod tests {
     #[test]
     fn stable_key_conflicts_are_reported_without_downgrading_the_producer() {
         let mut db = AnalysisDb::new();
+        let stable_key = db
+            .stable_key_interner()
+            .intern("Export|export_name=MergeMe");
         for run_id in [0, 1] {
             db.fact_meta_mut_for_test().insert(
                 FactRef::new(FactFamily::Export, run_id),
                 FactMeta {
-                    stable_key: "Export|export_name=MergeMe".to_string(),
+                    stable_key,
                     producer_id: super::SYMBOL_GRAPH_PROVIDER_ID,
                     layer_id: super::SYMBOL_GRAPH_PROVIDER_ID,
                     precision: FactPrecision::Exact,
@@ -5937,10 +6072,11 @@ mod tests {
     #[test]
     fn unknown_producer_ids_do_not_erase_a_known_co_owner() {
         let mut db = AnalysisDb::new();
+        let stable_key = db.stable_key_interner().intern("metric:key");
         db.fact_meta_mut_for_test().insert(
             FactRef::new(FactFamily::FileMetric, 0),
             FactMeta {
-                stable_key: "metric:key".to_string(),
+                stable_key,
                 producer_id: "acme.extension",
                 layer_id: "polint.metrics",
                 precision: FactPrecision::Syntax,
@@ -5973,10 +6109,11 @@ mod tests {
     #[test]
     fn metadata_validation_reports_unknown_producer_and_layer_ids() {
         let mut db = AnalysisDb::new();
+        let stable_key = db.stable_key_interner().intern("metric:key");
         db.fact_meta_mut_for_test().insert(
             FactRef::new(FactFamily::FileMetric, 0),
             FactMeta {
-                stable_key: "metric:key".to_string(),
+                stable_key,
                 producer_id: "polint.unknown_producer",
                 layer_id: "polint.unknown_layer",
                 precision: FactPrecision::Syntax,
@@ -6015,7 +6152,7 @@ mod tests {
                 extension_id: "demo".to_string(),
                 provider_id: "routes".to_string(),
                 fact_family: "extension.routes".to_string(),
-                stable_key: "route:/a".to_string(),
+                stable_key: crate::core::stable_key_for_test("route:/a"),
                 binding_refs: Vec::new(),
                 precision: crate::analysis::extensions::sinks::ExtensionFactPrecision::Exact,
                 confidence: crate::analysis::extensions::sinks::ExtensionFactConfidence::High,
@@ -6045,9 +6182,14 @@ mod tests {
         }));
     }
 
-    fn test_meta(family: FactFamily, stable_key: &str, payload_digest: &str) -> FactMeta {
+    fn test_meta(
+        db: &AnalysisDb,
+        family: FactFamily,
+        stable_key: &str,
+        payload_digest: &str,
+    ) -> FactMeta {
         FactMeta {
-            stable_key: stable_key.to_string(),
+            stable_key: db.stable_key_interner().intern(stable_key),
             producer_id: match family {
                 FactFamily::SourceFile => "polint.source",
                 FactFamily::FileMetric => "polint.metrics",
@@ -6062,15 +6204,15 @@ mod tests {
     }
 
     fn span(file: FileId, start_byte: u32, end_byte: u32) -> Span {
-        Span {
+        Span::new(
             file,
             start_byte,
             end_byte,
-            start_line: 1,
-            start_col: start_byte + 1,
-            end_line: 1,
-            end_col: end_byte + 1,
-        }
+            1,
+            start_byte + 1,
+            1,
+            end_byte + 1,
+        )
     }
 
     fn evidence_node(id: u64, file: FileId) -> EvidenceNodeFact {
@@ -6095,7 +6237,7 @@ mod tests {
             confidence: EvidenceConfidence::High,
             compact_label: None,
             source_fact_stable_keys: Vec::new(),
-            stable_key: format!("evidence:node:{id}"),
+            stable_key: crate::core::stable_key_for_test(&format!("evidence:node:{id}")),
         }
     }
 

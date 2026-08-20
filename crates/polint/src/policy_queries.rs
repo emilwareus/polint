@@ -3,20 +3,20 @@ use crate::analysis::data_flow::facts::{
     DataFlowConfidence, DataFlowEdgeFact, DataFlowEdgeKind, DataFlowNodeFact, DataFlowNodeKind,
     DataFlowPrecision,
 };
-use crate::analysis::data_flow::query::{
-    DataFlowPath, DataFlowPathStatus, DataFlowSearchBudget, find_paths,
-};
 use crate::analysis::data_flow::store::DataFlowStore;
 use crate::analysis::ids::{CallSiteId, DataFlowNodeId, MirBodyId, MirOpId, PlaceId};
+use crate::analysis::ifds::{
+    DataFlowPath, DataFlowPathStatus, DataFlowSearchBudget, find_taint_paths,
+};
 use crate::analysis::places::{PlaceFact, PlaceProjection, PlaceRoot};
 use crate::analysis::reachability::facts::{ReachabilityRootFact, RootKind};
 use crate::analysis::refined_calls::facts::{RefinedCallConfidence, RefinedCallEdgeFact};
 use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId};
 use crate::sdk::policy::{
     BarrierPattern, BarrierPatternKind, EventPattern, EventPatternKind, FlowQuery, GuardPattern,
-    GuardPatternKind, GuardQuery, LifecycleQuery, PolicyConfidence, PolicyOperation,
-    PolicyPrecision, PolicyStatus, PolicyViolation, ReachQuery, SinkPattern, SinkPatternKind,
-    SourcePattern, SourcePatternKind,
+    GuardPatternKind, GuardQuery, LifecycleQuery, PolicyConfidence, PolicyEvidenceEdgeKind,
+    PolicyOperation, PolicyPrecision, PolicyStatus, PolicyViolation, ReachQuery, SinkPattern,
+    SinkPatternKind, SourcePattern, SourcePatternKind,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -68,6 +68,7 @@ fn forbidden_data_flows(
     };
 
     let site_by_id = call_sites_by_id(db);
+    let sanitizer_sites = matching_sanitizer_sites(db, &site_by_id, &query.barriers);
     let sources = matching_flow_sources(db, store, &query.source);
     let sinks = matching_flow_sinks(db, store, &query.sink, &site_by_id);
     if sources.is_empty() || sinks.is_empty() {
@@ -83,13 +84,11 @@ fn forbidden_data_flows(
 
     'sources: for source in &sources {
         for sink in &sinks {
-            let paths = find_paths(store, source.node, sink.node, budget);
+            let paths =
+                find_taint_paths(db, store, source.node, sink.node, &sanitizer_sites, budget);
             for path in paths {
                 match path.status {
                     DataFlowPathStatus::Found => {
-                        if barrier_covers_path(db, store, &site_by_id, &path, &query.barriers) {
-                            continue;
-                        }
                         let key = flow_result_key(source, sink, &path);
                         if emitted.insert(key) {
                             let violation =
@@ -275,19 +274,22 @@ fn forbidden_reachable_calls(
                         truncated = true;
                         break 'roots;
                     }
-                    results.push(violation_for_edge(
-                        db,
-                        edge,
-                        &site_by_id,
-                        PolicyOperation::CallsForbiddenReachable,
-                        query_digest,
-                        vec![
-                            ("root", root_label.clone()),
-                            ("path", path.join(" -> ")),
-                            ("target", target_label),
-                            ("depth", edge_depth.to_string()),
-                        ],
-                    ));
+                    results.push(
+                        violation_for_edge(
+                            db,
+                            edge,
+                            &site_by_id,
+                            PolicyOperation::CallsForbiddenReachable,
+                            query_digest,
+                            vec![
+                                ("root", root_label.clone()),
+                                ("path", path.join(" -> ")),
+                                ("target", target_label),
+                                ("depth", edge_depth.to_string()),
+                            ],
+                        )
+                        .with_path_evidence(path.clone(), PolicyEvidenceEdgeKind::Call),
+                    );
                 }
 
                 if traversable_status(edge.status)
@@ -344,18 +346,24 @@ fn missing_guard_calls(
                 truncated = true;
                 break 'functions;
             }
-            results.push(control_violation(
-                db,
-                event,
-                PolicyOperation::ControlFlowMissingGuard,
-                query_digest,
-                vec![
-                    ("policy", "missing_guard".to_string()),
-                    ("required_guard", query.guard.values().join(",")),
-                    ("uncovered_path", format!("entry -> {}", event.target_label)),
-                    ("requested_max_depth", query.max_depth.to_string()),
-                ],
-            ));
+            results.push(
+                control_violation(
+                    db,
+                    event,
+                    PolicyOperation::ControlFlowMissingGuard,
+                    query_digest,
+                    vec![
+                        ("policy", "missing_guard".to_string()),
+                        ("required_guard", query.guard.values().join(",")),
+                        ("uncovered_path", format!("entry -> {}", event.target_label)),
+                        ("requested_max_depth", query.max_depth.to_string()),
+                    ],
+                )
+                .with_path_evidence(
+                    ["entry".to_string(), event.target_label.clone()],
+                    PolicyEvidenceEdgeKind::Control,
+                ),
+            );
         }
     }
 
@@ -399,22 +407,28 @@ fn missing_cleanup_calls(
                 truncated = true;
                 break 'functions;
             }
-            results.push(control_violation(
-                db,
-                event,
-                PolicyOperation::ControlFlowMissingCleanup,
-                query_digest,
-                vec![
-                    ("policy", "missing_cleanup".to_string()),
-                    ("required_cleanup", query.cleanup.values().join(",")),
-                    ("uncovered_path", format!("{} -> exit", event.target_label)),
-                    (
-                        "require_error_cleanup",
-                        query.require_error_cleanup.to_string(),
-                    ),
-                    ("requested_max_depth", query.max_depth.to_string()),
-                ],
-            ));
+            results.push(
+                control_violation(
+                    db,
+                    event,
+                    PolicyOperation::ControlFlowMissingCleanup,
+                    query_digest,
+                    vec![
+                        ("policy", "missing_cleanup".to_string()),
+                        ("required_cleanup", query.cleanup.values().join(",")),
+                        ("uncovered_path", format!("{} -> exit", event.target_label)),
+                        (
+                            "require_error_cleanup",
+                            query.require_error_cleanup.to_string(),
+                        ),
+                        ("requested_max_depth", query.max_depth.to_string()),
+                    ],
+                )
+                .with_path_evidence(
+                    [event.target_label.clone(), "exit".to_string()],
+                    PolicyEvidenceEdgeKind::Control,
+                ),
+            );
         }
     }
 
@@ -666,23 +680,19 @@ fn call_name_matches(candidate: &str, value: &str) -> bool {
             .is_some_and(|(_, tail)| tail == value)
 }
 
-fn barrier_covers_path(
+fn matching_sanitizer_sites(
     db: &AnalysisDb,
-    store: &DataFlowStore,
     site_by_id: &BTreeMap<CallSiteId, &CallSiteFact>,
-    path: &DataFlowPath,
     barrier: &BarrierPattern,
-) -> bool {
+) -> BTreeSet<CallSiteId> {
     match barrier.kind() {
-        BarrierPatternKind::None => false,
-        BarrierPatternKind::CallAny => path.edges.iter().any(|edge_id| {
-            store
-                .edges()
-                .iter()
-                .find(|edge| edge.id == *edge_id)
-                .and_then(edge_call_site)
-                .is_some_and(|site| barrier_matches_call_site(db, site_by_id, site, barrier))
-        }),
+        BarrierPatternKind::None => BTreeSet::new(),
+        BarrierPatternKind::CallAny => db
+            .call_sites()
+            .iter()
+            .map(|site| site.id)
+            .filter(|site| barrier_matches_call_site(db, site_by_id, *site, barrier))
+            .collect(),
     }
 }
 
@@ -714,17 +724,6 @@ fn barrier_matches_call_site(
     syntax.sort();
     syntax.dedup();
     explicit_values_match_preferred(barrier.values(), &semantic, &syntax)
-}
-
-fn edge_call_site(edge: &DataFlowEdgeFact) -> Option<CallSiteId> {
-    edge.call_site.or_else(|| {
-        edge.evidence.iter().find_map(|evidence| {
-            evidence
-                .strip_prefix("call_site=")
-                .and_then(|value| value.parse::<u64>().ok())
-                .map(CallSiteId)
-        })
-    })
 }
 
 fn flow_violation(
@@ -800,6 +799,12 @@ fn flow_violation(
         ));
     }
 
+    let mut hops = vec![source.label.clone()];
+    for edge in path_edges(store, path) {
+        hops.push(data_flow_edge_step_label(edge.kind).to_string());
+    }
+    hops.push(sink.target_label.clone());
+
     PolicyViolation::new(
         PolicyOperation::DataFlowForbidden,
         query_digest,
@@ -809,6 +814,7 @@ fn flow_violation(
         precision,
         evidence,
     )
+    .with_path_evidence(hops, PolicyEvidenceEdgeKind::DataTaint)
 }
 
 fn found_data_flow_status(
@@ -1076,7 +1082,6 @@ fn data_flow_edge_step_label(kind: DataFlowEdgeKind) -> &'static str {
         DataFlowEdgeKind::UnknownFlow | DataFlowEdgeKind::HavocFlow => "unknown",
         DataFlowEdgeKind::BudgetTruncated => "budget",
         DataFlowEdgeKind::SourceIntroduction => "source",
-        DataFlowEdgeKind::SinkReachability => "sink",
         DataFlowEdgeKind::Sanitizer => "sanitizer",
         DataFlowEdgeKind::Barrier => "barrier",
         DataFlowEdgeKind::Model => "model",
@@ -1138,7 +1143,9 @@ struct ControlOrder {
     line: u32,
     col: u32,
     byte: u32,
-    stable_key: String,
+    /// Resolved callsite identity text used only for deterministic ordering.
+    /// Never a StableKeyId — allocation order must not affect control order.
+    stable_key_text: String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1264,7 +1271,7 @@ fn control_event_for_edge(
         range: site.span.diagnostic_range(),
         target_label,
         candidates,
-        order: control_order(site, operation_orders),
+        order: control_order(db, site, operation_orders),
         order_source: control_order_source(site, operation_orders),
         status: edge.status,
         precision: edge.precision,
@@ -1284,7 +1291,7 @@ fn control_event_for_site(
         range: site.span.diagnostic_range(),
         target_label: label.clone(),
         candidates: vec![label],
-        order: control_order(site, operation_orders),
+        order: control_order(db, site, operation_orders),
         order_source: control_order_source(site, operation_orders),
         status: site.status,
         precision: site.precision,
@@ -1293,6 +1300,7 @@ fn control_event_for_site(
 }
 
 fn control_order(
+    db: &AnalysisDb,
     site: &CallSiteFact,
     operation_orders: &BTreeMap<(MirBodyId, MirOpId), OperationOrder>,
 ) -> ControlOrder {
@@ -1305,7 +1313,7 @@ fn control_order(
         line: site.span.start_line,
         col: site.span.start_col,
         byte: site.span.start_byte,
-        stable_key: site.stable_key.clone(),
+        stable_key_text: db.resolve_stable_key(site.stable_key).to_string(),
     }
 }
 
@@ -1435,11 +1443,11 @@ fn refined_adjacency<'a>(
         edges.sort_by(|left, right| {
             (
                 best_call_target_label(db, left, site_by_id),
-                left.stable_key.as_str(),
+                db.resolve_stable_key(left.stable_key).as_ref(),
             )
                 .cmp(&(
                     best_call_target_label(db, right, site_by_id),
-                    right.stable_key.as_str(),
+                    db.resolve_stable_key(right.stable_key).as_ref(),
                 ))
         });
     }
@@ -1467,8 +1475,14 @@ fn selected_reachability_roots<'a>(
         })
         .collect::<Vec<_>>();
     roots.sort_by(|left, right| {
-        (root_label(db, left), left.stable_key.as_str())
-            .cmp(&(root_label(db, right), right.stable_key.as_str()))
+        (
+            root_label(db, left),
+            db.resolve_stable_key(left.stable_key).as_ref(),
+        )
+            .cmp(&(
+                root_label(db, right),
+                db.resolve_stable_key(right.stable_key).as_ref(),
+            ))
     });
     roots
 }
@@ -1936,6 +1950,50 @@ mod tests {
         assert_eq!(violations.len(), 1);
         assert_eq!(violations[0].status(), PolicyStatus::Exact);
         assert_eq!(violations[0].precision(), PolicyPrecision::SetupAware);
+    }
+
+    #[test]
+    fn policy_query_findings_carry_replayable_evidence() {
+        let db = policy_query_db(false);
+        let mut query = ReachQuery::new(EventPattern::call("dangerous"));
+        query.roots = vec![EventPattern::call("main")];
+
+        let violations = forbidden_reachable(&db, query);
+        assert!(!violations.is_empty());
+
+        let with_path = violations
+            .iter()
+            .map(|violation| violation.diagnostic("local/test", "reachable"))
+            .filter(|diagnostic| {
+                diagnostic
+                    .evidence_v1
+                    .as_ref()
+                    .and_then(|evidence| evidence.as_value().get("paths"))
+                    .and_then(|paths| paths.as_array())
+                    .is_some_and(|paths| !paths.is_empty())
+            })
+            .collect::<Vec<_>>();
+        let coverage = (with_path.len() as f64) / (violations.len() as f64);
+        assert!(
+            coverage > 0.90,
+            "expected >90% policy-query findings with evidence paths, got {:.1}% ({}/{})",
+            coverage * 100.0,
+            with_path.len(),
+            violations.len()
+        );
+
+        let evidence = with_path[0]
+            .evidence_v1
+            .as_ref()
+            .expect("structured evidence")
+            .as_value();
+        assert!(
+            evidence["bundle"]["replay_key"]
+                .as_str()
+                .is_some_and(|key| !key.is_empty())
+        );
+        assert!(evidence["unknowns"].as_array().is_some());
+        assert!(evidence["limits"].as_object().is_some());
     }
 
     #[test]
@@ -2585,15 +2643,16 @@ mod tests {
                 provenance: RootProvenance::NativeDiscovery,
                 status: RootStatus::Resolved,
                 provider_id: REACHABILITY_PROVIDER_ID.to_string(),
-                stable_key: compute_reachability_root_stable_key(
-                    root_kind,
-                    Language::Go,
-                    "main.main",
-                    file,
-                    &root_span,
+                stable_key: crate::core::stable_key_for_test(
+                    &compute_reachability_root_stable_key(
+                        root_kind,
+                        Language::Go,
+                        "main.main",
+                        "src/main.go",
+                        &root_span,
+                    ),
                 ),
             }],
-            marks: Vec::new(),
         })
         .expect("valid reachability facts");
         db
@@ -2649,17 +2708,17 @@ mod tests {
             "src/main.ts".to_string(),
             "export function handler() { client.dangerous(); }\n".to_string(),
         );
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "handler".to_string(),
-            span: Span::point(file, 1, 1),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: vec![call.to_string()],
-        });
+            "handler".to_string(),
+            Span::point(file, 1, 1),
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            vec![call.to_string()],
+        ));
         db
     }
 
@@ -2756,15 +2815,16 @@ mod tests {
                 provenance: RootProvenance::NativeDiscovery,
                 status: RootStatus::Resolved,
                 provider_id: REACHABILITY_PROVIDER_ID.to_string(),
-                stable_key: compute_reachability_root_stable_key(
-                    RootKind::Main,
-                    Language::Go,
-                    "main.main",
-                    file,
-                    &root_span,
+                stable_key: crate::core::stable_key_for_test(
+                    &compute_reachability_root_stable_key(
+                        RootKind::Main,
+                        Language::Go,
+                        "main.main",
+                        "src/main.go",
+                        &root_span,
+                    ),
                 ),
             }],
-            marks: Vec::new(),
         })
         .expect("valid reachability facts");
         db
@@ -2815,15 +2875,16 @@ mod tests {
                 provenance: RootProvenance::NativeDiscovery,
                 status: RootStatus::Resolved,
                 provider_id: REACHABILITY_PROVIDER_ID.to_string(),
-                stable_key: compute_reachability_root_stable_key(
-                    RootKind::Main,
-                    Language::Go,
-                    "main.main",
-                    file,
-                    &root_span,
+                stable_key: crate::core::stable_key_for_test(
+                    &compute_reachability_root_stable_key(
+                        RootKind::Main,
+                        Language::Go,
+                        "main.main",
+                        "src/main.go",
+                        &root_span,
+                    ),
                 ),
             }],
-            marks: Vec::new(),
         })
         .expect("valid reachability facts");
         db
@@ -2864,6 +2925,7 @@ mod tests {
 
     fn policy_query_db_with_mir_ordered_call_sequence(callees: &[(&str, u32)]) -> AnalysisDb {
         let mut db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
         let file = db.add_file(
             PathBuf::from("src/main.go"),
             "src/main.go".to_string(),
@@ -2884,6 +2946,7 @@ mod tests {
             targets.push(call_target(id, site.id, handler, callee_function));
             edges.push(refined_edge(id, site.id, handler, callee_function, callee));
             operations.push(mir_operation(
+                &interner,
                 operation,
                 MirBodyId(handler.0),
                 *operation_ordinal,
@@ -2893,10 +2956,11 @@ mod tests {
         }
 
         db.replace_semantic_mir(MirOutput {
-            bodies: vec![mir_body(file, handler)],
+            bodies: vec![mir_body(&interner, file, handler)],
             places: Vec::new(),
             operations,
             unsupported: Vec::new(),
+            ..MirOutput::default()
         })
         .expect("valid semantic MIR facts");
         db.replace_call_facts(CallOutput {
@@ -2912,6 +2976,7 @@ mod tests {
 
     fn policy_query_db_with_cfg_ordered_call_sequence(callees: &[(&str, u32, u32)]) -> AnalysisDb {
         let mut db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
         let file = db.add_file(
             PathBuf::from("src/main.go"),
             "src/main.go".to_string(),
@@ -2937,7 +3002,13 @@ mod tests {
             let site = call_site(id, file, handler, callee);
             targets.push(call_target(id, site.id, handler, callee_function));
             edges.push(refined_edge(id, site.id, handler, callee_function, callee));
-            operations.push(mir_operation(operation, body, *mir_ordinal, file));
+            operations.push(mir_operation(
+                &interner,
+                operation,
+                body,
+                *mir_ordinal,
+                file,
+            ));
             cfg_nodes.push(CfgNodeFact {
                 id: cfg_node,
                 cfg_function,
@@ -2948,7 +3019,7 @@ mod tests {
                 span: Some(site.span.clone()),
                 generated: false,
                 operation_ordinal: *cfg_ordinal,
-                stable_key: format!("cfg:node:{id}:{callee}"),
+                stable_key: interner.intern(format!("cfg:node:{id}:{callee}")),
                 status: CfgStatus::Resolved,
                 precision: CfgPrecision::ExactLowered,
             });
@@ -2960,7 +3031,7 @@ mod tests {
                 last_node: Some(cfg_node),
                 reachable: true,
                 reverse_postorder: *cfg_ordinal,
-                stable_key: format!("cfg:block:{id}:{callee}"),
+                stable_key: interner.intern(format!("cfg:block:{id}:{callee}")),
                 status: CfgStatus::Resolved,
                 precision: CfgPrecision::ExactLowered,
             });
@@ -2968,10 +3039,11 @@ mod tests {
         }
 
         db.replace_semantic_mir(MirOutput {
-            bodies: vec![mir_body(file, handler)],
+            bodies: vec![mir_body(&interner, file, handler)],
             places: Vec::new(),
             operations,
             unsupported: Vec::new(),
+            ..MirOutput::default()
         })
         .expect("valid semantic MIR facts");
         db.replace_cfg_facts(CfgOutput {
@@ -2985,7 +3057,7 @@ mod tests {
                 entry_node: CfgNodeId(10_000),
                 normal_exit_node: CfgNodeId(10_001),
                 exceptional_exit_node: None,
-                stable_key: "cfg:function:handler".to_string(),
+                stable_key: interner.intern("cfg:function:handler"),
                 status: CfgStatus::Resolved,
                 precision: CfgPrecision::ExactLowered,
             }],
@@ -3180,6 +3252,15 @@ mod tests {
             ],
         })
         .expect("valid refined call facts");
+        let mut sanitizer_edge = data_flow_edge(
+            1,
+            1,
+            2,
+            DataFlowEdgeKind::CallArgumentToReturn,
+            DataFlowStatus::Present,
+            Vec::new(),
+        );
+        sanitizer_edge.call_site = Some(validate_site.id);
         db.replace_data_flow_facts(DataFlowOutput {
             nodes: data_flow_nodes(file, handler),
             edges: vec![
@@ -3191,14 +3272,7 @@ mod tests {
                     DataFlowStatus::Present,
                     Vec::new(),
                 ),
-                data_flow_edge(
-                    1,
-                    1,
-                    2,
-                    DataFlowEdgeKind::CallArgumentToReturn,
-                    DataFlowStatus::Present,
-                    vec!["call_site=2".to_string()],
-                ),
+                sanitizer_edge,
             ],
             models: vec![source_model()],
             budgets: Vec::new(),
@@ -3224,7 +3298,7 @@ mod tests {
                 call_site: None,
                 model: Some(DataFlowModelId(0)),
                 span: Some(Span::point(file, 1, 1)),
-                stable_key: "node:source".to_string(),
+                stable_key: crate::core::stable_key_for_test("node:source"),
             },
             data_flow_place_node(1, file, function, PlaceId(1)),
             data_flow_place_node(2, file, function, PlaceId(2)),
@@ -3252,7 +3326,7 @@ mod tests {
             call_site: None,
             model: None,
             span: Some(Span::point(file, id as u32 + 1, 1)),
-            stable_key: format!("node:place:{id}"),
+            stable_key: crate::core::stable_key_for_test(&format!("node:place:{id}")),
         }
     }
 
@@ -3271,7 +3345,7 @@ mod tests {
             provenance: DataFlowProvenance::Native,
             evidence: vec!["trust_boundary".to_string()],
             payload_labels: vec!["source_kind=QueryString".to_string()],
-            stable_key: "model:source".to_string(),
+            stable_key: crate::core::stable_key_for_test("model:source"),
         }
     }
 
@@ -3316,11 +3390,17 @@ mod tests {
             budget: None,
             evidence,
             input_stable_keys: Vec::new(),
-            stable_key: format!("edge:{id}:{from}:{to}:{status:?}"),
+            stable_key: crate::core::stable_key_for_test(&format!(
+                "edge:{id}:{from}:{to}:{status:?}"
+            )),
         }
     }
 
-    fn mir_body(file: FileId, function: FunctionId) -> MirBody {
+    fn mir_body(
+        interner: &crate::core::StableKeyInterner,
+        file: FileId,
+        function: FunctionId,
+    ) -> MirBody {
         MirBody {
             id: MirBodyId(function.0),
             language: Language::Go,
@@ -3328,14 +3408,15 @@ mod tests {
             function,
             package: None,
             module: None,
-            owner_stable_key: "function:handler".to_string(),
+            owner_stable_key: interner.intern("function:handler".to_string()),
             span: Span::point(file, 1, 1),
-            stable_key: "mir:body:handler".to_string(),
+            stable_key: interner.intern("mir:body:handler".to_string()),
             status: MirStatus::Resolved,
         }
     }
 
     fn mir_operation(
+        interner: &crate::core::StableKeyInterner,
         operation: MirOpId,
         body: MirBodyId,
         ordinal: u32,
@@ -3350,7 +3431,7 @@ mod tests {
                 predicate: MirPredicateId(operation.0),
                 predicate_place: None,
             },
-            stable_key: format!("mir:op:{:05}", operation.0),
+            stable_key: interner.intern(format!("mir:op:{:05}", operation.0)),
             status: MirStatus::Resolved,
         }
     }
@@ -3362,17 +3443,17 @@ mod tests {
         line: u32,
         is_test: bool,
     ) -> FunctionId {
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: name.to_string(),
-            span: Span::point(file, line, 1),
-            language: Language::Go,
+            name.to_string(),
+            Span::point(file, line, 1),
+            Language::Go,
             is_test,
-            is_exported: false,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        })
+            false,
+            1,
+            Vec::new(),
+        ))
     }
 
     fn call_site(id: u64, file: FileId, caller: FunctionId, callee: &str) -> CallSiteFact {
@@ -3396,7 +3477,7 @@ mod tests {
             status: CallTargetStatus::Resolved,
             precision: CallPrecision::Exact,
             in_throw: false,
-            stable_key: format!("site:{id}:{callee}"),
+            stable_key: crate::core::StableKeyId(id as u32),
         }
     }
 
@@ -3430,7 +3511,7 @@ mod tests {
             reason: None,
             provenance: CallProvenance::NativeDirect,
             precision: CallPrecision::SetupAware,
-            stable_key: format!("target:{id}"),
+            stable_key: crate::core::StableKeyId(id as u32),
         }
     }
 
@@ -3461,7 +3542,7 @@ mod tests {
             confidence: RefinedCallConfidence::High,
             evidence: Vec::new(),
             input_stable_keys: Vec::new(),
-            stable_key: format!("refined:{id}:{label}"),
+            stable_key: crate::core::stable_key_for_test(&format!("refined:{id}:{label}")),
         }
     }
 
@@ -3491,7 +3572,9 @@ mod tests {
             confidence: RefinedCallConfidence::High,
             evidence: Vec::new(),
             input_stable_keys: Vec::new(),
-            stable_key: format!("refined:{id}:{label}:unresolved"),
+            stable_key: crate::core::stable_key_for_test(&format!(
+                "refined:{id}:{label}:unresolved"
+            )),
         }
     }
 }

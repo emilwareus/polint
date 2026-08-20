@@ -737,7 +737,7 @@ fn polint_test_json_matches_schema_v1() {
 }
 
 #[test]
-fn new_rule_generates_positive_and_negative_agent_fixtures() {
+fn new_rule_generates_clean_and_violating_agent_fixtures() {
     let temp = tempfile::tempdir().unwrap();
     polint_cmd()
         .current_dir(temp.path())
@@ -752,12 +752,12 @@ fn new_rule_generates_positive_and_negative_agent_fixtures() {
 
     assert!(
         temp.path()
-            .join(".polint/tests/rules/no_raw_colors/positive/polint-test.toml")
+            .join(".polint/tests/rules/no_raw_colors/clean/polint-test.toml")
             .is_file()
     );
     assert!(
         temp.path()
-            .join(".polint/tests/rules/no_raw_colors/negative/polint-test.toml")
+            .join(".polint/tests/rules/no_raw_colors/violating/polint-test.toml")
             .is_file()
     );
 }
@@ -2382,17 +2382,17 @@ paths = [".polint/rules"]
     let rule_path = temp.path().join(".polint/rules/src/no_raw_colors.rs");
     let fixture_manifest = temp
         .path()
-        .join(".polint/tests/rules/no_raw_colors/negative/polint-test.toml");
+        .join(".polint/tests/rules/no_raw_colors/violating/polint-test.toml");
     let fixture_source = temp
         .path()
-        .join(".polint/tests/rules/no_raw_colors/negative/src/example.ts");
-    let positive_manifest = temp
+        .join(".polint/tests/rules/no_raw_colors/violating/src/example.ts");
+    let clean_manifest = temp
         .path()
-        .join(".polint/tests/rules/no_raw_colors/positive/polint-test.toml");
+        .join(".polint/tests/rules/no_raw_colors/clean/polint-test.toml");
     assert!(rule_path.is_file());
     assert!(fixture_manifest.is_file());
     assert!(fixture_source.is_file());
-    assert!(positive_manifest.is_file());
+    assert!(clean_manifest.is_file());
 
     let generated_rule = fs::read_to_string(&rule_path).unwrap();
     assert!(generated_rule.contains("use polint::sdk::prelude::*;"));
@@ -2578,6 +2578,14 @@ fn assert_eval_module_is_crate_private() {
     let lib_rs = fs::read_to_string(&lib_rs_path)
         .unwrap_or_else(|error| panic!("read {}: {error}", lib_rs_path.display()));
 
+    assert!(
+        lib_rs.contains("#[cfg(all(test, feature = \"lang-go\", feature = \"lang-typescript\"))]"),
+        "eval module should stay test-only:\n{lib_rs}"
+    );
+    assert!(
+        lib_rs.contains("#[path = \"../../polint-eval/src/harness/mod.rs\"]"),
+        "eval harness sources should live in polint-eval:\n{lib_rs}"
+    );
     assert!(
         lib_rs.contains("pub(crate) mod eval;"),
         "eval module should stay crate-private:\n{lib_rs}"
@@ -4909,6 +4917,12 @@ fn collect_public_surface_files(path: &Path, files: &mut Vec<PathBuf>) {
             .unwrap_or_else(|error| panic!("read dir entry under {}: {error}", path.display()))
             .path();
         if path.is_dir() {
+            if path
+                .file_name()
+                .is_some_and(|name| name == "architecture-review")
+            {
+                continue;
+            }
             collect_public_surface_files(&path, files);
         } else if path.extension().is_some_and(|extension| {
             matches!(
@@ -4991,7 +5005,7 @@ fn needs_imports(_ctx: &mut RuleCtx<'_>, imports: Imports<'_>) -> RuleResult {
 )]
 fn needs_cfg(_ctx: &mut RuleCtx<'_>, _cfg: Cfg<'_>) -> RuleResult {
     _ctx.warn(
-        &Span::point(FileId(0), 1, 1),
+        &Span::point(FileId::from_raw(0), 1, 1),
         "this should not run while cfg is unsupported",
     );
     Ok(())
@@ -5429,6 +5443,7 @@ fn reference_target(reference: &ReferenceFact) -> String {
 
 fn report_symbol(
     ctx: &mut RuleCtx<'_>,
+    symbols: Symbols<'_>,
     case: &str,
     symbol: &SymbolFact,
     extra_label: &str,
@@ -5446,13 +5461,14 @@ fn report_symbol(
         .with_evidence("symbol_kind", format!("{:?}", symbol.kind))
         .with_evidence("symbol_precision", format!("{:?}", symbol.precision))
         .with_evidence("symbol_id", symbol.id.0.to_string())
-        .with_evidence("symbol_stable_key", symbol.stable_key.clone())
+        .with_evidence("symbol_stable_key", symbols.stable_key(symbol).to_string())
         .with_evidence(extra_label, extra_value),
     );
 }
 
 fn report_reference(
     ctx: &mut RuleCtx<'_>,
+    references: References<'_>,
     case: &str,
     symbol: Option<&SymbolFact>,
     reference: &ReferenceFact,
@@ -5489,7 +5505,10 @@ fn report_reference(
         .with_evidence("reference_status", format!("{:?}", reference.status))
         .with_evidence("reference_id", reference.id.0.to_string())
         .with_evidence("reference_target", reference_target(reference))
-        .with_evidence("reference_stable_key", reference.stable_key.clone()),
+        .with_evidence(
+            "reference_stable_key",
+            references.stable_key(reference).to_string(),
+        ),
     );
 }
 
@@ -5507,12 +5526,12 @@ fn ts_symbol_reference_public_sdk(
         .by_name("answer")
         .find(|symbol| symbol.kind == SymbolKind::Function)
     {
-        report_symbol(ctx, "ts-symbol:function", symbol, "definition_count", symbols.definitions(symbol.id).count().to_string());
+        report_symbol(ctx, symbols, "ts-symbol:function", symbol, "definition_count", symbols.definitions(symbol.id).count().to_string());
         if let Some(reference) = references
             .to(symbol.id)
             .find(|reference| reference.kind == ReferenceKind::Call)
         {
-            report_reference(ctx, "ts-reference:function-call", Some(symbol), reference);
+            report_reference(ctx, references, "ts-reference:function-call", Some(symbol), reference);
         }
     }
 
@@ -5520,12 +5539,12 @@ fn ts_symbol_reference_public_sdk(
         .by_name("localValue")
         .find(|symbol| symbol.kind == SymbolKind::Variable)
     {
-        report_symbol(ctx, "ts-symbol:local-variable", symbol, "definition_count", symbols.definitions(symbol.id).count().to_string());
+        report_symbol(ctx, symbols, "ts-symbol:local-variable", symbol, "definition_count", symbols.definitions(symbol.id).count().to_string());
         if let Some(reference) = references
             .to(symbol.id)
             .find(|reference| reference.kind == ReferenceKind::Read)
         {
-            report_reference(ctx, "ts-reference:local-variable", Some(symbol), reference);
+            report_reference(ctx, references, "ts-reference:local-variable", Some(symbol), reference);
         }
     }
 
@@ -5538,6 +5557,7 @@ fn ts_symbol_reference_public_sdk(
         if declaration_count >= 2 || merge_symbols.len() >= 2 {
             report_symbol(
                 ctx,
+                symbols,
                 "ts-symbol:declaration-merge",
                 symbol,
                 "declaration_count",
@@ -5552,14 +5572,14 @@ fn ts_symbol_reference_public_sdk(
             && reference.precision == SymbolPrecision::ModuleLinked
     }) {
         let symbol = reference.target.and_then(|target| symbols.get(target));
-        report_reference(ctx, "ts-reference:module-import", symbol, reference);
+        report_reference(ctx, references, "ts-reference:module-import", symbol, reference);
     }
 
     if let Some(reference) = references
         .unresolved()
         .find(|reference| reference.name == "missingGlobal")
     {
-        report_reference(ctx, "ts-reference:unresolved-global", None, reference);
+        report_reference(ctx, references, "ts-reference:unresolved-global", None, reference);
     }
 
     Ok(())
@@ -5618,6 +5638,8 @@ fn reference_target(reference: &ReferenceFact) -> String {
 
 fn report_reference(
     ctx: &mut RuleCtx<'_>,
+    symbols: Symbols<'_>,
+    references: References<'_>,
     case: &str,
     symbol: &SymbolFact,
     reference: &ReferenceFact,
@@ -5634,14 +5656,17 @@ fn report_reference(
         .with_evidence("symbol_kind", format!("{:?}", symbol.kind))
         .with_evidence("symbol_precision", format!("{:?}", symbol.precision))
         .with_evidence("symbol_id", symbol.id.0.to_string())
-        .with_evidence("symbol_stable_key", symbol.stable_key.clone())
+        .with_evidence("symbol_stable_key", symbols.stable_key(symbol).to_string())
         .with_evidence("reference_name", reference.name.clone())
         .with_evidence("reference_kind", format!("{:?}", reference.kind))
         .with_evidence("reference_precision", format!("{:?}", reference.precision))
         .with_evidence("reference_status", format!("{:?}", reference.status))
         .with_evidence("reference_id", reference.id.0.to_string())
         .with_evidence("reference_target", reference_target(reference))
-        .with_evidence("reference_stable_key", reference.stable_key.clone()),
+        .with_evidence(
+            "reference_stable_key",
+            references.stable_key(reference).to_string(),
+        ),
     );
 }
 
@@ -5663,7 +5688,7 @@ fn go_symbol_reference_public_sdk(
             .to(symbol.id)
             .find(|reference| reference.kind == ReferenceKind::Call)
         {
-            report_reference(ctx, "go-reference:function-call", symbol, reference);
+            report_reference(ctx, symbols, references, "go-reference:function-call", symbol, reference);
         }
     }
 
@@ -5675,7 +5700,7 @@ fn go_symbol_reference_public_sdk(
             .to(symbol.id)
             .find(|reference| reference.kind == ReferenceKind::Call)
         {
-            report_reference(ctx, "go-reference:method-call", symbol, reference);
+            report_reference(ctx, symbols, references, "go-reference:method-call", symbol, reference);
         }
     }
 
@@ -5687,7 +5712,7 @@ fn go_symbol_reference_public_sdk(
             .to(symbol.id)
             .find(|reference| reference.kind == ReferenceKind::MemberAccess)
         {
-            report_reference(ctx, "go-reference:field-selector", symbol, reference);
+            report_reference(ctx, symbols, references, "go-reference:field-selector", symbol, reference);
         }
     }
 
@@ -5699,7 +5724,7 @@ fn go_symbol_reference_public_sdk(
             .to(symbol.id)
             .find(|reference| reference.kind == ReferenceKind::Read)
         {
-            report_reference(ctx, "go-reference:local-variable", symbol, reference);
+            report_reference(ctx, symbols, references, "go-reference:local-variable", symbol, reference);
         }
     }
 
@@ -6459,9 +6484,17 @@ fn new_rule_creates_skeleton() {
         .assert()
         .success();
 
+    let manifest_path = temp.path().join(".polint/rules/Cargo.toml");
     assert!(
-        temp.path().join(".polint/rules/Cargo.toml").exists(),
+        manifest_path.exists(),
         "expected one pack manifest at .polint/rules/Cargo.toml"
+    );
+    let manifest = fs::read_to_string(manifest_path).unwrap();
+    assert!(manifest.contains("default-features = false"));
+    assert_eq!(manifest.contains(r#""lang-go""#), cfg!(feature = "lang-go"));
+    assert_eq!(
+        manifest.contains(r#""lang-typescript""#),
+        cfg!(feature = "lang-typescript")
     );
     assert!(
         temp.path()
@@ -6527,6 +6560,100 @@ fn new_rule_rejects_existing_rule_without_overwriting_files() {
     assert_eq!(
         fs::read_to_string(rules.join("src/demo.rs")).unwrap(),
         sentinel
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn new_rule_rejects_symlinked_rules_parent_without_writing_outside_repo() {
+    let temp = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    fs::create_dir_all(temp.path().join(".polint/rules")).unwrap();
+    std::os::unix::fs::symlink(outside.path(), temp.path().join(".polint/rules/src")).unwrap();
+
+    polint_cmd()
+        .current_dir(temp.path())
+        .args(["new-rule", "go", "escaped-rule"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("path escapes repository root"));
+
+    assert!(fs::read_dir(outside.path()).unwrap().next().is_none());
+    assert!(!temp.path().join(".polint/rules/Cargo.toml").exists());
+    assert!(!temp.path().join(".polint/tests").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn new_rule_rejects_symlinked_fixture_parent_before_mutating_rule_pack() {
+    let temp = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let rules = temp.path().join(".polint/rules");
+    fs::create_dir_all(rules.join("src")).unwrap();
+    fs::create_dir_all(temp.path().join(".polint/tests")).unwrap();
+    std::os::unix::fs::symlink(outside.path(), temp.path().join(".polint/tests/rules")).unwrap();
+    let cargo_sentinel = "# cargo sentinel\n";
+    let main_sentinel = "fn main() { polint::runner::run_cli(vec![]) }\n";
+    fs::write(rules.join("Cargo.toml"), cargo_sentinel).unwrap();
+    fs::write(rules.join("src/main.rs"), main_sentinel).unwrap();
+
+    polint_cmd()
+        .current_dir(temp.path())
+        .args(["new-rule", "ts", "escaped-fixture"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("path escapes repository root"));
+
+    assert!(fs::read_dir(outside.path()).unwrap().next().is_none());
+    assert_eq!(
+        fs::read_to_string(rules.join("Cargo.toml")).unwrap(),
+        cargo_sentinel
+    );
+    assert_eq!(
+        fs::read_to_string(rules.join("src/main.rs")).unwrap(),
+        main_sentinel
+    );
+    assert!(!rules.join("src/escaped_fixture.rs").exists());
+}
+
+#[test]
+fn new_rule_preflights_broken_fixture_parent_without_leaving_partial_pack() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::create_dir_all(temp.path().join(".polint/tests")).unwrap();
+    fs::write(temp.path().join(".polint/tests/rules"), "not a directory").unwrap();
+
+    polint_cmd()
+        .current_dir(temp.path())
+        .args(["new-rule", "go", "transactional-rule"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not a directory"));
+
+    assert!(!temp.path().join(".polint/rules").exists());
+    assert_eq!(
+        fs::read_to_string(temp.path().join(".polint/tests/rules")).unwrap(),
+        "not a directory"
+    );
+}
+
+#[test]
+fn new_rule_rejects_fixture_destination_collision_without_mutating_pack() {
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = temp.path().join(".polint/tests/rules/demo");
+    fs::create_dir_all(&fixture).unwrap();
+    fs::write(fixture.join("sentinel"), "keep").unwrap();
+
+    polint_cmd()
+        .current_dir(temp.path())
+        .args(["new-rule", "ts", "demo"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("rule fixture already exists"));
+
+    assert!(!temp.path().join(".polint/rules").exists());
+    assert_eq!(
+        fs::read_to_string(fixture.join("sentinel")).unwrap(),
+        "keep"
     );
 }
 
@@ -6851,13 +6978,13 @@ fn new_rule_js_uses_js_fixture_files_for_non_template_rules() {
 
     assert!(
         temp.path()
-            .join(".polint/tests/rules/no_debug_name/positive/src/example.js")
+            .join(".polint/tests/rules/no_debug_name/clean/src/example.js")
             .is_file()
     );
     assert!(
         !temp
             .path()
-            .join(".polint/tests/rules/no_debug_name/positive/src/example.ts")
+            .join(".polint/tests/rules/no_debug_name/clean/src/example.ts")
             .exists()
     );
 }
@@ -7636,6 +7763,16 @@ pub(crate) fn no_todo_literals(
         "{stdout}"
     );
     assert!(
+        stdout.contains("jq '.summary.by_rule' .polint/output/latest.json"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "jq '.summary.rules[] | select(.diagnostics_emitted == 0)' .polint/output/latest.json"
+        ),
+        "{stdout}"
+    );
+    assert!(
         stdout.contains(
             "jq '[.diagnostics[] | select(.rule_id==\"custom/no-todo-literals\")][0:20]' .polint/output/latest.json"
         ),
@@ -7665,6 +7802,17 @@ pub(crate) fn no_todo_literals(
         report["summary"]["by_rule"][0]["rule_id"],
         "custom/no-todo-literals"
     );
+    let rules = report["summary"]["rules"]
+        .as_array()
+        .expect("summary.rules must be present");
+    let silent_or_hit = rules
+        .iter()
+        .find(|row| row["rule_id"] == "custom/no-todo-literals");
+    let row = silent_or_hit.expect("registered rule must appear in summary.rules");
+    assert_eq!(row["planned"], true);
+    assert_eq!(row["capabilities_ok"], true);
+    assert!(row["files_in_scope"].as_u64().unwrap() > 0);
+    assert_eq!(row["diagnostics_emitted"], 1);
     assert_eq!(report["examples"].as_array().unwrap().len(), 1);
     assert_eq!(report["examples"][0]["rule_id"], "custom/no-todo-literals");
     assert_eq!(report["examples"][0]["labels"], serde_json::json!([]));
@@ -9662,7 +9810,7 @@ fn kernel_metadata_public_probe(
             "kernel metadata preserved public symbol facts",
         )
         .with_evidence("symbol_name", symbol.name.clone())
-        .with_evidence("symbol_stable_key", symbol.stable_key.clone())
+        .with_evidence("symbol_stable_key", symbols.stable_key(symbol).to_string())
         .with_evidence("reference_count", reference_count.to_string()),
     );
     Ok(())
@@ -12163,4 +12311,130 @@ fn review_requires_local_rule_hosts() {
         .stderr(predicate::str::contains(
             "polint new-rule generic <name> --review",
         ));
+}
+
+#[cfg(not(feature = "lang-go"))]
+#[test]
+fn disabled_go_feature_reports_capability_diagnostic() {
+    let dir = tempfile::tempdir().unwrap();
+    write_file(
+        &dir.path().join("main.go"),
+        "package main\nfunc main() {}\n",
+    );
+
+    let report = stdout_json(
+        polint_cmd()
+            .current_dir(dir.path())
+            .args([
+                "check",
+                "--format",
+                "json",
+                "--fail-on",
+                "none",
+                "--no-cache",
+            ])
+            .assert()
+            .success(),
+    );
+    let diagnostic = diagnostics_for_rule(&report, "polint/capability")
+        .into_iter()
+        .find(|diagnostic| diagnostic_has_evidence(diagnostic, "feature", "lang-go"))
+        .expect("disabled Go frontend should emit a capability diagnostic");
+    assert_eq!(diagnostic["file"], "main.go");
+    assert!(diagnostic_has_evidence(
+        diagnostic,
+        "reason",
+        "language-feature-disabled"
+    ));
+    assert!(diagnostic_has_evidence(diagnostic, "status", "unsupported"));
+}
+
+#[cfg(not(feature = "lang-typescript"))]
+#[test]
+fn disabled_typescript_feature_reports_capability_diagnostic() {
+    let dir = tempfile::tempdir().unwrap();
+    write_file(&dir.path().join("main.ts"), "export const value = 1;\n");
+
+    let report = stdout_json(
+        polint_cmd()
+            .current_dir(dir.path())
+            .args([
+                "check",
+                "--format",
+                "json",
+                "--fail-on",
+                "none",
+                "--no-cache",
+            ])
+            .assert()
+            .success(),
+    );
+    let diagnostic = diagnostics_for_rule(&report, "polint/capability")
+        .into_iter()
+        .find(|diagnostic| diagnostic_has_evidence(diagnostic, "feature", "lang-typescript"))
+        .expect("disabled TypeScript frontend should emit a capability diagnostic");
+    assert_eq!(diagnostic["file"], "main.ts");
+    assert!(diagnostic_has_evidence(
+        diagnostic,
+        "reason",
+        "language-feature-disabled"
+    ));
+    assert!(diagnostic_has_evidence(diagnostic, "status", "unsupported"));
+}
+
+#[cfg(feature = "lang-go")]
+#[test]
+fn enabled_go_feature_does_not_report_feature_disabled() {
+    let dir = tempfile::tempdir().unwrap();
+    write_file(
+        &dir.path().join("main.go"),
+        "package main\nfunc main() {}\n",
+    );
+    let report = stdout_json(
+        polint_cmd()
+            .current_dir(dir.path())
+            .args([
+                "check",
+                "--format",
+                "json",
+                "--fail-on",
+                "none",
+                "--no-cache",
+            ])
+            .assert()
+            .success(),
+    );
+    assert!(
+        diagnostics_for_rule(&report, "polint/capability")
+            .iter()
+            .all(|diagnostic| { !diagnostic_has_evidence(diagnostic, "feature", "lang-go") })
+    );
+}
+
+#[cfg(feature = "lang-typescript")]
+#[test]
+fn enabled_typescript_feature_does_not_report_feature_disabled() {
+    let dir = tempfile::tempdir().unwrap();
+    write_file(&dir.path().join("main.ts"), "export const value = 1;\n");
+    let report = stdout_json(
+        polint_cmd()
+            .current_dir(dir.path())
+            .args([
+                "check",
+                "--format",
+                "json",
+                "--fail-on",
+                "none",
+                "--no-cache",
+            ])
+            .assert()
+            .success(),
+    );
+    assert!(
+        diagnostics_for_rule(&report, "polint/capability")
+            .iter()
+            .all(|diagnostic| {
+                !diagnostic_has_evidence(diagnostic, "feature", "lang-typescript")
+            })
+    );
 }

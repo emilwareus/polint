@@ -1,0 +1,9 @@
+   Compiling polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.9/crates/polint)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.74s
+     Running tests/cli.rs (target/debug/deps/cli-05cf7bb24a423286)
+
+running 1 test
+test new_rule_generates_clean_and_violating_agent_fixtures ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 165 filtered out; finished in 1.74s
+

@@ -1,0 +1,11 @@
+    Checking polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.4/crates/polint)
+warning: unused variable: `module_dependency_output_digest`
+   --> crates/polint/src/analysis_kernel/mod.rs:312:13
+    |
+312 |         let module_dependency_output_digest = module_output_digest.unwrap_or_else(|| {
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_module_dependency_output_digest`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `polint` (lib) generated 1 warning (run `cargo fix --lib -p polint` to apply 1 suggestion)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.16s

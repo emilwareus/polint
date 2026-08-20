@@ -1,0 +1,36 @@
+=== entrypoints ===
+
+test result: ok. 112 passed; 0 failed; 0 ignored; 0 measured; 2232 filtered out; finished in 19.90s
+
+=== data_flow ===
+test result: FAILED. 55 passed; 1 failed; 0 ignored; 0 measured; 2288 filtered out; finished in 2.43s
+
+error: test failed, to rerun pass `-p polint --lib`
+=== semantic_graph ===
+
+test result: ok. 77 passed; 0 failed; 0 ignored; 0 measured; 2267 filtered out; finished in 5.62s
+
+=== evidence ===
+
+test result: ok. 93 passed; 0 failed; 0 ignored; 0 measured; 2251 filtered out; finished in 0.23s
+
+=== go::semantic ===
+
+test result: ok. 70 passed; 0 failed; 0 ignored; 0 measured; 2274 filtered out; finished in 0.04s
+
+=== extensions ===
+
+test result: ok. 49 passed; 0 failed; 0 ignored; 0 measured; 2295 filtered out; finished in 0.06s
+
+=== solver::facts ===
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 2341 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p polint --lib`
+=== solver::provenance ===
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 2338 filtered out; finished in 0.00s
+
+=== symbol_graph ===
+
+test result: ok. 99 passed; 0 failed; 0 ignored; 0 measured; 2245 filtered out; finished in 0.11s
+

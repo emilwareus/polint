@@ -1,9 +1,9 @@
-pub(crate) mod cache_key;
+pub(crate) use crate::analysis_neutral::extensions::EXTENSION_FACTS_SCHEMA_LABEL;
+pub(crate) use crate::analysis_neutral::extensions::manifest;
+pub(crate) use crate::analysis_neutral::extensions::protocol;
+pub(crate) use crate::analysis_neutral::extensions::sinks;
+pub(crate) use crate::analysis_neutral::extensions::store;
 pub(crate) mod discovery;
 pub(crate) mod host;
-pub(crate) mod manifest;
-pub(crate) mod protocol;
 pub(crate) mod provider;
-pub(crate) mod sinks;
-pub(crate) mod store;
-pub(crate) mod validate;
+pub(crate) use crate::analysis_neutral::extensions::validate;

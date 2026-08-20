@@ -1,10 +1,8 @@
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use crate::go::lifecycle::GoAnalysisConfig;
+use crate::go::lifecycle::{self, GoAnalysisConfig};
+use crate::go::process_runner::{GoProcessError, run_bounded};
 use crate::go::semantic::diagnostics::GO_SIDECAR_TIMEOUT;
 use crate::go::semantic::process::{
     GoSemanticProcessError, command_for_frontend, frontend_digest, resolve_go_semantic_frontend,
@@ -12,7 +10,7 @@ use crate::go::semantic::process::{
 use crate::go::semantic::protocol::{GoSemanticOutput, GoSemanticProtocolError, decode_ndjson};
 
 #[derive(Debug)]
-pub(crate) enum GoSemanticClientError {
+pub enum GoSemanticClientError {
     Process(GoSemanticProcessError),
     Protocol(GoSemanticProtocolError),
 }
@@ -41,19 +39,19 @@ impl From<GoSemanticProtocolError> for GoSemanticClientError {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct GoSemanticClient {
+pub struct GoSemanticClient {
     root: PathBuf,
     timeout: Duration,
 }
 
 #[derive(Debug)]
-pub(crate) struct GoSemanticClientRun {
-    pub(crate) output: GoSemanticOutput,
-    pub(crate) frontend_digest: String,
+pub struct GoSemanticClientRun {
+    pub output: GoSemanticOutput,
+    pub frontend_digest: String,
 }
 
 impl GoSemanticClient {
-    pub(crate) fn new(root: PathBuf) -> Self {
+    pub fn new(root: PathBuf) -> Self {
         Self {
             root,
             timeout: Duration::from_secs(30),
@@ -61,17 +59,17 @@ impl GoSemanticClient {
     }
 
     #[cfg(test)]
-    pub(crate) fn with_timeout(root: PathBuf, timeout: Duration) -> Self {
+    pub fn with_timeout(root: PathBuf, timeout: Duration) -> Self {
         Self { root, timeout }
     }
 
-    pub(crate) fn run(
+    pub fn run(
         &self,
         config: &GoAnalysisConfig,
     ) -> Result<GoSemanticClientRun, GoSemanticClientError> {
         let frontend = resolve_go_semantic_frontend()?;
         let digest = frontend_digest(&frontend)?;
-        let mut command = command_for_frontend(&frontend, &self.root)?;
+        let mut command = command_for_frontend(&frontend, &self.root, config.offline)?;
         append_request_args(&mut command, &self.root, config);
         let stdout = run_with_timeout(command, self.timeout, &self.root)?;
         let output = decode_ndjson(&stdout).map_err(GoSemanticClientError::from)?;
@@ -100,131 +98,46 @@ fn append_request_args(
         .arg("--build-tags")
         .arg(config.build_tags.join(","))
         .arg("--ndjson");
-    if config.offline {
-        command.env("GONOSUMDB", "*").env("GOPROXY", "off");
-    }
+    lifecycle::apply_go_offline_env(command, config.offline);
 }
 
 fn run_with_timeout(
-    mut command: std::process::Command,
+    command: std::process::Command,
     timeout: Duration,
     root: &Path,
 ) -> Result<Vec<u8>, GoSemanticProcessError> {
     let _ = root;
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    configure_child_process_group(&mut command);
-    let mut child = command.spawn().map_err(|error| {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            GoSemanticProcessError::CommandUnavailable(
-                "go semantic frontend executable was not found.".to_string(),
-            )
-        } else {
-            GoSemanticProcessError::CommandFailed(format!(
-                "failed to start go semantic frontend: {error}"
-            ))
-        }
-    })?;
-    let mut stdout_reader = child
-        .stdout
-        .take()
-        .map(|stdout| thread::spawn(move || read_all(stdout)));
-    let mut stderr_reader = child
-        .stderr
-        .take()
-        .map(|stderr| thread::spawn(move || read_all(stderr)));
-
-    let deadline = Instant::now() + timeout;
-    loop {
-        if let Some(status) = child.try_wait().map_err(|error| {
-            GoSemanticProcessError::CommandFailed(format!(
-                "failed to poll go semantic frontend: {error}"
-            ))
-        })? {
-            let stdout = join_reader(stdout_reader.take())?;
-            let stderr = join_reader(stderr_reader.take())?;
-            if !status.success() {
-                let stderr_text = String::from_utf8_lossy(&stderr).trim().to_string();
-                let reason = if stderr_text.is_empty() {
-                    format!("go semantic frontend exited with status {status}.")
-                } else {
-                    format!("go semantic frontend exited with status {status}: {stderr_text}")
-                };
-                return Err(GoSemanticProcessError::CommandFailed(reason));
+    let output =
+        run_bounded(command, timeout, "go semantic frontend").map_err(|error| match error {
+            GoProcessError::Unavailable(reason) => {
+                GoSemanticProcessError::CommandUnavailable(reason)
             }
-            return Ok(stdout);
-        }
-        if Instant::now() >= deadline {
-            terminate_child_process_tree(&mut child);
-            let _ = child.wait();
-            let _ = join_reader(stdout_reader.take());
-            let _ = join_reader(stderr_reader.take());
-            return Err(GoSemanticProcessError::Timeout(format!(
-                "{GO_SIDECAR_TIMEOUT}: go semantic frontend exceeded request timeout"
-            )));
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
-fn read_all(mut reader: impl Read) -> std::io::Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    reader.read_to_end(&mut bytes)?;
-    Ok(bytes)
-}
-
-fn join_reader(
-    reader: Option<thread::JoinHandle<std::io::Result<Vec<u8>>>>,
-) -> Result<Vec<u8>, GoSemanticProcessError> {
-    let Some(reader) = reader else {
-        return Ok(Vec::new());
-    };
-    reader
-        .join()
-        .map_err(|_| {
-            GoSemanticProcessError::CommandFailed(
-                "failed to join go semantic frontend output reader".to_string(),
+            GoProcessError::Failed(reason) => GoSemanticProcessError::CommandFailed(reason),
+            GoProcessError::Timeout(reason) => {
+                GoSemanticProcessError::Timeout(format!("{GO_SIDECAR_TIMEOUT}: {reason}"))
+            }
+        })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let reason = if stderr.is_empty() {
+            format!("go semantic frontend exited with status {}.", output.status)
+        } else {
+            format!(
+                "go semantic frontend exited with status {}: {stderr}",
+                output.status
             )
-        })?
-        .map_err(|error| {
-            GoSemanticProcessError::CommandFailed(format!(
-                "failed to read go semantic frontend output: {error}"
-            ))
-        })
-}
-
-#[cfg(unix)]
-fn configure_child_process_group(command: &mut std::process::Command) {
-    use std::os::unix::process::CommandExt;
-
-    command.process_group(0);
-}
-
-#[cfg(not(unix))]
-fn configure_child_process_group(_command: &mut std::process::Command) {}
-
-#[cfg(unix)]
-fn terminate_child_process_tree(child: &mut Child) {
-    let process_group = format!("-{}", child.id());
-    let _ = std::process::Command::new("kill")
-        .args(["-KILL", "--", &process_group])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-    let _ = child.kill();
-}
-
-#[cfg(not(unix))]
-fn terminate_child_process_tree(child: &mut Child) {
-    let _ = child.kill();
+        };
+        return Err(GoSemanticProcessError::CommandFailed(reason));
+    }
+    Ok(output.stdout)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Stdio;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Instant;
 
     static FAKE_STDOUT_FILE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 

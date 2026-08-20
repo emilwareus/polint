@@ -1,0 +1,12 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s
+     Running unittests src/lib.rs (target/debug/deps/polint-af2f858c5d9987a8)
+
+running 5 tests
+test analysis::calls::validate::tests::calls_validation_exercises_all_d10_indexes ... ok
+test analysis::calls::validate::tests::direct_validate_calls_entrypoint_is_empty_until_green_step ... ok
+test analysis::calls::validate::tests::calls_validation_rejects_exact_provider_precision ... ok
+test analysis::calls::validate::tests::calls_validation_rejects_unresolved_target_identity_with_reason ... ok
+test analysis::calls::validate::tests::calls_validation_reports_malformed_rows_with_required_evidence ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 2339 filtered out; finished in 0.00s
+

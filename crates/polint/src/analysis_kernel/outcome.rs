@@ -97,27 +97,6 @@ impl ProviderFailureReason {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ProviderFailureSignal {
-    pub(crate) status: ProviderOutcomeStatus,
-    pub(crate) stage: ProviderFailureStage,
-    pub(crate) reason: ProviderFailureReason,
-}
-
-impl ProviderFailureSignal {
-    pub(crate) fn new(
-        status: ProviderOutcomeStatus,
-        stage: ProviderFailureStage,
-        reason: ProviderFailureReason,
-    ) -> Self {
-        Self {
-            status,
-            stage,
-            reason,
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ProviderOutputIdentity {
     pub(crate) provider_id: String,
@@ -263,6 +242,7 @@ impl ProviderOutcome {
         self.failure_stage = Some(ProviderFailureStage::Validation);
         self.failure_reason = Some(ProviderFailureReason::ValidationRejected);
     }
+    #[cfg(all(test, feature = "lang-go", feature = "lang-typescript"))]
     pub(crate) fn validation_display(&self) -> String {
         match (self.failure_stage, self.failure_reason) {
             (None, None) => self.status.label().to_string(),
@@ -380,9 +360,6 @@ impl ProviderOutcomeTracker {
             .cloned()
             .collect())
     }
-    pub(crate) fn is_pending(&self, provider_id: &str) -> Result<bool, ProviderOutcomeError> {
-        Ok(matches!(self.state(provider_id)?, AttemptState::Pending))
-    }
     pub(crate) fn record_success(
         &mut self,
         provider_id: &str,
@@ -393,6 +370,30 @@ impl ProviderOutcomeTracker {
             AttemptState::ProvisionalSuccess(output_identity),
         )
     }
+    /// Record a provider execution failure before later providers are considered.
+    ///
+    /// Keeping this transition in the tracker makes failed output identities
+    /// unavailable to dependents in the same scheduling pass; sealing remains a
+    /// final consistency check rather than the first point at which failure is
+    /// observed.
+    pub(crate) fn record_failure(
+        &mut self,
+        provider_id: &str,
+        status: ProviderOutcomeStatus,
+        failure_stage: ProviderFailureStage,
+        failure_reason: ProviderFailureReason,
+    ) -> Result<(), ProviderOutcomeError> {
+        let outcome = ProviderOutcome::non_success(
+            provider_id.to_string(),
+            status,
+            failure_stage,
+            failure_reason,
+            Vec::new(),
+        )?;
+        self.replace_pending(provider_id, AttemptState::Final(outcome))
+    }
+
+    #[cfg(test)]
     pub(crate) fn record_non_success(
         &mut self,
         provider_id: &str,
@@ -809,6 +810,33 @@ mod tests {
             .record_dependency_blocked("C", vec!["B".to_string(), "A".to_string()])
             .unwrap();
     }
+    #[test]
+    fn execution_failure_is_recorded_immediately_and_blocks_hard_dependents() {
+        let mut tracker = ProviderOutcomeTracker::for_test(
+            &["upstream", "dependent"],
+            &["upstream", "dependent"],
+            &[("dependent", &["upstream"])],
+        );
+        tracker
+            .record_failure(
+                "upstream",
+                ProviderOutcomeStatus::Failed,
+                ProviderFailureStage::Execution,
+                ProviderFailureReason::ExecutionFailed,
+            )
+            .unwrap();
+
+        assert_eq!(tracker.can_run("dependent").unwrap(), ["upstream"]);
+        tracker
+            .record_dependency_blocked("dependent", vec!["upstream".to_string()])
+            .unwrap();
+        let outcomes = tracker.seal(&ValidationDowngrades::default()).unwrap();
+        assert_eq!(outcomes[0].status, ProviderOutcomeStatus::Failed);
+        assert!(outcomes[0].output_identity.is_none());
+        assert_eq!(outcomes[1].status, ProviderOutcomeStatus::DependencyBlocked);
+        assert!(outcomes[1].output_identity.is_none());
+    }
+
     #[test]
     fn validation_failure_closes_transitively_and_preserves_independent_success() {
         let mut tracker = ProviderOutcomeTracker::for_test(

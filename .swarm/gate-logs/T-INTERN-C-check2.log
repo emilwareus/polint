@@ -1,0 +1,251 @@
+    Checking polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint)
+error[E0277]: the trait bound `&core::stable_key::StableKeyId: Pattern` is not satisfied
+   --> crates/polint/src/metrics.rs:933:72
+    |
+933 |         assert!(db.resolve_stable_key(file_metric.stable_key).contains(&file_key));
+    |                                                               -------- ^^^^^^^^^ unsatisfied trait bound
+    |                                                               |
+    |                                                               required by a bound introduced by this call
+    |
+help: the trait `Fn(char)` is not implemented for `core::stable_key::StableKeyId`
+   --> crates/polint/src/core/stable_key.rs:7:1
+    |
+  7 | pub(crate) struct StableKeyId(pub(crate) u32);
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: the following other types implement trait `Pattern`:
+              &'b [char; N]
+              &'b [char]
+              &'b std::string::String
+              &'b str
+              &'c &'b str
+              [char; N]
+              char
+    = note: required for `&core::stable_key::StableKeyId` to implement `FnOnce(char)`
+    = note: required for `&core::stable_key::StableKeyId` to implement `Pattern`
+note: required by a bound in `core::str::<impl str>::contains`
+   --> /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/str/mod.rs:1367:4
+
+error[E0277]: the trait bound `&core::stable_key::StableKeyId: Pattern` is not satisfied
+   --> crates/polint/src/metrics.rs:934:76
+    |
+934 |         assert!(db.resolve_stable_key(function_metric.stable_key).contains(&function_key));
+    |                                                                   -------- ^^^^^^^^^^^^^ unsatisfied trait bound
+    |                                                                   |
+    |                                                                   required by a bound introduced by this call
+    |
+help: the trait `Fn(char)` is not implemented for `core::stable_key::StableKeyId`
+   --> crates/polint/src/core/stable_key.rs:7:1
+    |
+  7 | pub(crate) struct StableKeyId(pub(crate) u32);
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: the following other types implement trait `Pattern`:
+              &'b [char; N]
+              &'b [char]
+              &'b std::string::String
+              &'b str
+              &'c &'b str
+              [char; N]
+              char
+    = note: required for `&core::stable_key::StableKeyId` to implement `FnOnce(char)`
+    = note: required for `&core::stable_key::StableKeyId` to implement `Pattern`
+note: required by a bound in `core::str::<impl str>::contains`
+   --> /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/str/mod.rs:1367:4
+
+error[E0277]: the trait bound `&core::stable_key::StableKeyId: Pattern` is not satisfied
+   --> crates/polint/src/metrics.rs:937:78
+    |
+937 |         assert!(db.resolve_stable_key(complexity_metric.stable_key).contains(&function_key));
+    |                                                                     -------- ^^^^^^^^^^^^^ unsatisfied trait bound
+    |                                                                     |
+    |                                                                     required by a bound introduced by this call
+    |
+help: the trait `Fn(char)` is not implemented for `core::stable_key::StableKeyId`
+   --> crates/polint/src/core/stable_key.rs:7:1
+    |
+  7 | pub(crate) struct StableKeyId(pub(crate) u32);
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: the following other types implement trait `Pattern`:
+              &'b [char; N]
+              &'b [char]
+              &'b std::string::String
+              &'b str
+              &'c &'b str
+              [char; N]
+              char
+    = note: required for `&core::stable_key::StableKeyId` to implement `FnOnce(char)`
+    = note: required for `&core::stable_key::StableKeyId` to implement `Pattern`
+note: required by a bound in `core::str::<impl str>::contains`
+   --> /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/str/mod.rs:1367:4
+
+error[E0277]: the trait bound `&core::stable_key::StableKeyId: Pattern` is not satisfied
+    --> crates/polint/src/module_graph/mod.rs:3266:69
+     |
+3266 |         assert!(db.resolve_stable_key(resolved.stable_key).contains(&import_key));
+     |                                                            -------- ^^^^^^^^^^^ unsatisfied trait bound
+     |                                                            |
+     |                                                            required by a bound introduced by this call
+     |
+help: the trait `Fn(char)` is not implemented for `core::stable_key::StableKeyId`
+    --> crates/polint/src/core/stable_key.rs:7:1
+     |
+   7 | pub(crate) struct StableKeyId(pub(crate) u32);
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: the following other types implement trait `Pattern`:
+               &'b [char; N]
+               &'b [char]
+               &'b std::string::String
+               &'b str
+               &'c &'b str
+               [char; N]
+               char
+     = note: required for `&core::stable_key::StableKeyId` to implement `FnOnce(char)`
+     = note: required for `&core::stable_key::StableKeyId` to implement `Pattern`
+note: required by a bound in `core::str::<impl str>::contains`
+    --> /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/str/mod.rs:1367:4
+
+error[E0502]: cannot borrow `db` as immutable because it is also borrowed as mutable
+   --> crates/polint/src/analysis/calls/validate.rs:523:29
+    |
+520 |         db.fact_meta_mut_for_test().insert(
+    |         --                          ------ mutable borrow later used by call
+    |         |
+    |         mutable borrow occurs here
+...
+523 |                 stable_key: db.stable_key_interner().intern("call-site:ok"),
+    |                             ^^ immutable borrow occurs here
+
+error[E0502]: cannot borrow `db` as immutable because it is also borrowed as mutable
+   --> crates/polint/src/analysis/entrypoints/validate.rs:480:29
+    |
+477 |         db.fact_meta_mut_for_test().insert(
+    |         --                          ------ mutable borrow later used by call
+    |         |
+    |         mutable borrow occurs here
+...
+480 |                 stable_key: db.stable_key_interner().intern("ep:exact"),
+    |                             ^^ immutable borrow occurs here
+
+error[E0502]: cannot borrow `db` as immutable because it is also borrowed as mutable
+   --> crates/polint/src/analysis/summaries/validate.rs:599:29
+    |
+596 |         db.fact_meta_mut_for_test().insert(
+    |         --                          ------ mutable borrow later used by call
+    |         |
+    |         mutable borrow occurs here
+...
+599 |                 stable_key: db.stable_key_interner().intern("summary:exact"),
+    |                             ^^ immutable borrow occurs here
+
+error[E0502]: cannot borrow `db` as immutable because it is also borrowed as mutable
+   --> crates/polint/src/analysis/summaries/validate.rs:709:29
+    |
+706 |         db.fact_meta_mut_for_test().insert(
+    |         --                          ------ mutable borrow later used by call
+    |         |
+    |         mutable borrow occurs here
+...
+709 |                 stable_key: db.stable_key_interner().intern("summary:scc-exact"),
+    |                             ^^ immutable borrow occurs here
+
+error[E0502]: cannot borrow `db` as immutable because it is also borrowed as mutable
+    --> crates/polint/src/analysis_kernel/validation.rs:1241:29
+     |
+1238 |         db.fact_meta_mut_for_test().insert(
+     |         --                          ------ mutable borrow later used by call
+     |         |
+     |         mutable borrow occurs here
+...
+1241 |                 stable_key: db.stable_key_interner().intern("domain:exact-local-payload"),
+     |                             ^^ immutable borrow occurs here
+
+error[E0502]: cannot borrow `db` as immutable because it is also borrowed as mutable
+    --> crates/polint/src/analysis_kernel/validation.rs:1846:29
+     |
+1843 |         db.fact_meta_mut_for_test().insert(
+     |         --                          ------ mutable borrow later used by call
+     |         |
+     |         mutable borrow occurs here
+...
+1846 |                 stable_key: db.stable_key_interner().intern("body:ok"),
+     |                             ^^ immutable borrow occurs here
+
+error[E0502]: cannot borrow `db` as immutable because it is also borrowed as mutable
+    --> crates/polint/src/analysis_kernel/validation.rs:2186:29
+     |
+2183 |         db.fact_meta_mut_for_test().insert(
+     |         --                          ------ mutable borrow later used by call
+     |         |
+     |         mutable borrow occurs here
+...
+2186 |                 stable_key: db.stable_key_interner().intern("cfg:function:ok"),
+     |                             ^^ immutable borrow occurs here
+
+error[E0502]: cannot borrow `db` as immutable because it is also borrowed as mutable
+    --> crates/polint/src/analysis_kernel/validation.rs:2515:29
+     |
+2512 |         db.fact_meta_mut_for_test().insert(
+     |         --                          ------ mutable borrow later used by call
+     |         |
+     |         mutable borrow occurs here
+...
+2515 |                 stable_key: db.stable_key_interner().intern("call-site:ok"),
+     |                             ^^ immutable borrow occurs here
+
+error[E0502]: cannot borrow `db` as immutable because it is also borrowed as mutable
+    --> crates/polint/src/analysis_kernel/validation.rs:2837:29
+     |
+2834 |         db.fact_meta_mut_for_test().insert(
+     |         --                          ------ mutable borrow later used by call
+     |         |
+     |         mutable borrow occurs here
+...
+2837 |                 stable_key: db.stable_key_interner().intern("generated:answer"),
+     |                             ^^ immutable borrow occurs here
+
+error[E0502]: cannot borrow `db` as immutable because it is also borrowed as mutable
+    --> crates/polint/src/analysis_kernel/validation.rs:5539:23
+     |
+5537 |         db.fact_meta_mut_for_test().insert(
+     |         --                          ------ mutable borrow later used by call
+     |         |
+     |         mutable borrow occurs here
+5538 |             existing,
+5539 |             test_meta(&db, FactFamily::Import, "import:key", "payload:a"),
+     |                       ^^^ immutable borrow occurs here
+
+error[E0502]: cannot borrow `db` as immutable because it is also borrowed as mutable
+    --> crates/polint/src/analysis_kernel/validation.rs:5543:23
+     |
+5541 |         db.fact_meta_mut_for_test().insert(
+     |         --                          ------ mutable borrow later used by call
+     |         |
+     |         mutable borrow occurs here
+5542 |             incoming,
+5543 |             test_meta(&db, FactFamily::Import, "import:key", "payload:b"),
+     |                       ^^^ immutable borrow occurs here
+
+error[E0502]: cannot borrow `db` as immutable because it is also borrowed as mutable
+    --> crates/polint/src/analysis_kernel/validation.rs:5794:29
+     |
+5791 |         db.fact_meta_mut_for_test().insert(
+     |         --                          ------ mutable borrow later used by call
+     |         |
+     |         mutable borrow occurs here
+...
+5794 |                 stable_key: db.stable_key_interner().intern("metric:key"),
+     |                             ^^ immutable borrow occurs here
+
+error[E0502]: cannot borrow `db` as immutable because it is also borrowed as mutable
+    --> crates/polint/src/analysis_kernel/validation.rs:5824:29
+     |
+5821 |         db.fact_meta_mut_for_test().insert(
+     |         --                          ------ mutable borrow later used by call
+     |         |
+     |         mutable borrow occurs here
+...
+5824 |                 stable_key: db.stable_key_interner().intern("metric:key"),
+     |                             ^^ immutable borrow occurs here
+
+Some errors have detailed explanations: E0277, E0502.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `polint` (lib test) due to 17 previous errors

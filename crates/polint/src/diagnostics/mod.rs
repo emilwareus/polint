@@ -1,8 +1,20 @@
-use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
 use std::io::{self, IsTerminal};
 use std::sync::Arc;
+
+pub use crate::internal_core::{
+    Diagnostic, DiagnosticRange as TextRange, Evidence, Fix, Label, Severity, StructuredEvidenceV1,
+    Suggestion,
+};
+pub(crate) use crate::internal_core::{
+    EvidenceBundleId, EvidenceBundleRef, diagnostic_fingerprint, fingerprint,
+};
+
+const _: () = {
+    let _ = std::mem::size_of::<EvidenceBundleId>();
+    let _ = std::mem::size_of::<EvidenceBundleRef>();
+};
 
 /// Public URL of [`crate::diagnostics::PolintReport`] JSON Schema (v1); embedded in `--format json` when present.
 pub const POLINT_REPORT_JSON_SCHEMA_V1_URL: &str =
@@ -11,961 +23,6 @@ pub const POLINT_REPORT_JSON_SCHEMA_V1_URL: &str =
 pub(crate) const POLINT_AI_FRIENDLY_JSON_SCHEMA_V1_URL: &str = "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-ai-friendly-v1.json";
 
 pub(crate) const AI_FRIENDLY_EXAMPLE_LIMIT: usize = 10;
-pub(crate) const STRUCTURED_EVIDENCE_MAX_PATHS: usize = 64;
-pub(crate) const STRUCTURED_EVIDENCE_MAX_EDGES_PER_PATH: usize = 512;
-pub(crate) const STRUCTURED_EVIDENCE_MAX_UNKNOWNS: usize = 512;
-pub(crate) const STRUCTURED_EVIDENCE_MAX_OMITTED_REGIONS: usize = 512;
-pub(crate) const STRUCTURED_EVIDENCE_MAX_NODES_PER_PATH: usize = 4096;
-pub(crate) const STRUCTURED_EVIDENCE_MAX_STRING_CHARS: usize = 4096;
-const EVIDENCE_STATUSES: &[&str] = &[
-    "Present",
-    "Partial",
-    "Unknown",
-    "Unsupported",
-    "SetupMissing",
-    "BudgetExceeded",
-    "Rejected",
-];
-const EVIDENCE_PRECISIONS: &[&str] = &[
-    "Exact",
-    "SetupAware",
-    "Syntax",
-    "Conservative",
-    "Heuristic",
-    "Unknown",
-];
-const EVIDENCE_PROVENANCES: &[&str] = &[
-    "Native",
-    "Summary",
-    "Extension",
-    "Model",
-    "Query",
-    "Synthetic",
-];
-const EVIDENCE_VALIDATIONS: &[&str] = &[
-    "Native",
-    "ReferentiallyValidated",
-    "ExtensionValidated",
-    "BudgetValidated",
-    "RendererValidated",
-    "Rejected",
-];
-const EVIDENCE_CONFIDENCES: &[&str] = &["High", "Medium", "Low"];
-const EVIDENCE_EDGE_KINDS: &[&str] = &[
-    "DataValue",
-    "DataTaint",
-    "DataAddress",
-    "Control",
-    "Call",
-    "Return",
-    "ParameterIn",
-    "ParameterOut",
-    "Summary",
-    "Model",
-    "Alias",
-    "Unknown",
-    "ExplanationOnly",
-];
-const EVIDENCE_EXPANSION_STATES: &[&str] = &["none", "expandable", "opaque", "external_model"];
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Severity {
-    Info,
-    Warn,
-    Error,
-}
-
-impl Severity {
-    pub fn is_at_least(self, threshold: Severity) -> bool {
-        self >= threshold
-    }
-}
-
-impl fmt::Display for Severity {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Severity::Info => f.write_str("info"),
-            Severity::Warn => f.write_str("warn"),
-            Severity::Error => f.write_str("error"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TextRange {
-    pub start_line: u32,
-    pub start_col: u32,
-    pub end_line: u32,
-    pub end_col: u32,
-}
-
-impl TextRange {
-    pub fn point(line: u32, col: u32) -> Self {
-        Self {
-            start_line: line,
-            start_col: col,
-            end_line: line,
-            end_col: col,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct Label {
-    pub range: TextRange,
-    pub message: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct Suggestion {
-    pub message: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct Fix {
-    pub message: String,
-    pub replacement: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct Evidence {
-    pub label: String,
-    pub value: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct StructuredEvidenceV1 {
-    value: serde_json::Value,
-}
-
-impl StructuredEvidenceV1 {
-    pub(crate) fn try_from_value(value: serde_json::Value) -> Result<Self, String> {
-        validate_structured_evidence_v1(&value)?;
-        Ok(Self { value })
-    }
-
-    pub(crate) fn as_value(&self) -> &serde_json::Value {
-        &self.value
-    }
-}
-
-impl Serialize for StructuredEvidenceV1 {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        self.value.serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for StructuredEvidenceV1 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = serde_json::Value::deserialize(deserializer)?;
-        Self::try_from_value(value).map_err(de::Error::custom)
-    }
-}
-
-fn validate_structured_evidence_v1(value: &serde_json::Value) -> Result<(), String> {
-    let object = expect_object(value, "evidence_v1")?;
-    expect_allowed_keys(
-        object,
-        "evidence_v1",
-        &[
-            "version",
-            "bundle",
-            "paths",
-            "unknowns",
-            "omitted_regions",
-            "limits",
-        ],
-    )?;
-    expect_u64_field(object, "version", "evidence_v1").and_then(|version| {
-        if version == 1 {
-            Ok(())
-        } else {
-            Err("evidence_v1.version must be 1".to_string())
-        }
-    })?;
-    validate_evidence_bundle(expect_field(object, "bundle", "evidence_v1")?)?;
-    validate_evidence_paths(expect_field(object, "paths", "evidence_v1")?)?;
-    validate_evidence_unknowns(expect_field(object, "unknowns", "evidence_v1")?)?;
-    validate_evidence_omitted_regions(expect_field(object, "omitted_regions", "evidence_v1")?)?;
-    validate_evidence_limits(expect_field(object, "limits", "evidence_v1")?)?;
-    validate_evidence_count_invariants(object)?;
-    Ok(())
-}
-
-fn validate_evidence_bundle(value: &serde_json::Value) -> Result<(), String> {
-    let object = expect_object(value, "evidence_v1.bundle")?;
-    expect_allowed_keys(
-        object,
-        "evidence_v1.bundle",
-        &[
-            "id",
-            "stable_key",
-            "diagnostic_stable_key",
-            "status",
-            "precision",
-            "provenance",
-            "validation",
-            "confidence",
-            "replay_key",
-        ],
-    )?;
-    expect_u64_field(object, "id", "evidence_v1.bundle")?;
-    expect_bounded_string_field(object, "stable_key", "evidence_v1.bundle")?;
-    expect_bounded_string_field(object, "diagnostic_stable_key", "evidence_v1.bundle")?;
-    expect_enum_field(object, "status", "evidence_v1.bundle", EVIDENCE_STATUSES)?;
-    expect_enum_field(
-        object,
-        "precision",
-        "evidence_v1.bundle",
-        EVIDENCE_PRECISIONS,
-    )?;
-    expect_enum_field(
-        object,
-        "provenance",
-        "evidence_v1.bundle",
-        EVIDENCE_PROVENANCES,
-    )?;
-    expect_enum_field(
-        object,
-        "validation",
-        "evidence_v1.bundle",
-        EVIDENCE_VALIDATIONS,
-    )?;
-    expect_enum_field(
-        object,
-        "confidence",
-        "evidence_v1.bundle",
-        EVIDENCE_CONFIDENCES,
-    )?;
-    expect_optional_bounded_string_field(object, "replay_key", "evidence_v1.bundle")?;
-    Ok(())
-}
-
-fn validate_evidence_paths(value: &serde_json::Value) -> Result<(), String> {
-    let paths = expect_array(value, "evidence_v1.paths")?;
-    expect_len_at_most(
-        paths.len(),
-        STRUCTURED_EVIDENCE_MAX_PATHS,
-        "evidence_v1.paths",
-    )?;
-    for (index, path) in paths.iter().enumerate() {
-        let path_name = format!("evidence_v1.paths[{index}]");
-        let object = expect_object(path, &path_name)?;
-        expect_allowed_keys(
-            object,
-            &path_name,
-            &[
-                "id",
-                "stable_key",
-                "rank",
-                "status",
-                "hidden_node_count",
-                "nodes",
-                "edges",
-                "omitted_regions",
-                "total_edges",
-                "rendered_edges",
-                "edges_truncated",
-            ],
-        )?;
-        expect_u64_field(object, "id", &path_name)?;
-        expect_bounded_string_field(object, "stable_key", &path_name)?;
-        expect_u64_field(object, "rank", &path_name)?;
-        expect_enum_field(object, "status", &path_name, EVIDENCE_STATUSES)?;
-        expect_u64_field(object, "hidden_node_count", &path_name)?;
-        validate_u64_array(
-            expect_field(object, "nodes", &path_name)?,
-            &format!("{path_name}.nodes"),
-            STRUCTURED_EVIDENCE_MAX_NODES_PER_PATH,
-        )?;
-        validate_evidence_edges(expect_field(object, "edges", &path_name)?, &path_name)?;
-        validate_u64_array(
-            expect_field(object, "omitted_regions", &path_name)?,
-            &format!("{path_name}.omitted_regions"),
-            STRUCTURED_EVIDENCE_MAX_OMITTED_REGIONS,
-        )?;
-        expect_u64_field(object, "total_edges", &path_name)?;
-        expect_u64_field(object, "rendered_edges", &path_name)?;
-        expect_bool_field(object, "edges_truncated", &path_name)?;
-    }
-    Ok(())
-}
-
-fn validate_evidence_edges(value: &serde_json::Value, path_name: &str) -> Result<(), String> {
-    let edges = expect_array(value, &format!("{path_name}.edges"))?;
-    expect_len_at_most(
-        edges.len(),
-        STRUCTURED_EVIDENCE_MAX_EDGES_PER_PATH,
-        &format!("{path_name}.edges"),
-    )?;
-    for (index, edge) in edges.iter().enumerate() {
-        let edge_name = format!("{path_name}.edges[{index}]");
-        let object = expect_object(edge, &edge_name)?;
-        expect_allowed_keys(
-            object,
-            &edge_name,
-            &[
-                "id",
-                "stable_key",
-                "kind",
-                "status",
-                "precision",
-                "provenance",
-                "validation",
-                "confidence",
-                "summary_stable_key",
-                "expansion",
-                "location",
-            ],
-        )?;
-        expect_u64_field(object, "id", &edge_name)?;
-        expect_bounded_string_field(object, "stable_key", &edge_name)?;
-        expect_enum_field(object, "kind", &edge_name, EVIDENCE_EDGE_KINDS)?;
-        expect_enum_field(object, "status", &edge_name, EVIDENCE_STATUSES)?;
-        expect_enum_field(object, "precision", &edge_name, EVIDENCE_PRECISIONS)?;
-        expect_enum_field(object, "provenance", &edge_name, EVIDENCE_PROVENANCES)?;
-        expect_enum_field(object, "validation", &edge_name, EVIDENCE_VALIDATIONS)?;
-        expect_enum_field(object, "confidence", &edge_name, EVIDENCE_CONFIDENCES)?;
-        expect_optional_bounded_string_field(object, "summary_stable_key", &edge_name)?;
-        validate_evidence_expansion(expect_field(object, "expansion", &edge_name)?, &edge_name)?;
-        if let Some(location) = object.get("location") {
-            validate_evidence_location(location, &format!("{edge_name}.location"))?;
-        }
-    }
-    Ok(())
-}
-
-fn validate_evidence_expansion(value: &serde_json::Value, edge_name: &str) -> Result<(), String> {
-    let object = expect_object(value, &format!("{edge_name}.expansion"))?;
-    expect_allowed_keys(
-        object,
-        &format!("{edge_name}.expansion"),
-        &["state", "key", "reason", "model"],
-    )?;
-    expect_enum_field(
-        object,
-        "state",
-        &format!("{edge_name}.expansion"),
-        EVIDENCE_EXPANSION_STATES,
-    )?;
-    for key in ["key", "reason", "model"] {
-        expect_optional_bounded_string_field(object, key, &format!("{edge_name}.expansion"))?;
-    }
-    Ok(())
-}
-
-fn validate_evidence_location(value: &serde_json::Value, name: &str) -> Result<(), String> {
-    let object = expect_object(value, name)?;
-    expect_allowed_keys(object, name, &["uri", "range"])?;
-    expect_bounded_string_field(object, "uri", name)?;
-    validate_text_range(
-        expect_field(object, "range", name)?,
-        &format!("{name}.range"),
-    )
-}
-
-fn validate_text_range(value: &serde_json::Value, name: &str) -> Result<(), String> {
-    let object = expect_object(value, name)?;
-    expect_allowed_keys(
-        object,
-        name,
-        &["start_line", "start_col", "end_line", "end_col"],
-    )?;
-    for key in ["start_line", "start_col", "end_line", "end_col"] {
-        expect_u64_field(object, key, name)?;
-    }
-    Ok(())
-}
-
-fn validate_evidence_unknowns(value: &serde_json::Value) -> Result<(), String> {
-    let unknowns = expect_array(value, "evidence_v1.unknowns")?;
-    expect_len_at_most(
-        unknowns.len(),
-        STRUCTURED_EVIDENCE_MAX_UNKNOWNS,
-        "evidence_v1.unknowns",
-    )?;
-    for (index, unknown) in unknowns.iter().enumerate() {
-        let name = format!("evidence_v1.unknowns[{index}]");
-        let object = expect_object(unknown, &name)?;
-        expect_allowed_keys(object, &name, &["stable_key", "reason", "message", "edge"])?;
-        expect_bounded_string_field(object, "stable_key", &name)?;
-        expect_bounded_string_field(object, "reason", &name)?;
-        expect_bounded_string_field(object, "message", &name)?;
-        expect_optional_u64_field(object, "edge", &name)?;
-    }
-    Ok(())
-}
-
-fn validate_evidence_omitted_regions(value: &serde_json::Value) -> Result<(), String> {
-    let regions = expect_array(value, "evidence_v1.omitted_regions")?;
-    expect_len_at_most(
-        regions.len(),
-        STRUCTURED_EVIDENCE_MAX_OMITTED_REGIONS,
-        "evidence_v1.omitted_regions",
-    )?;
-    for (index, region) in regions.iter().enumerate() {
-        let name = format!("evidence_v1.omitted_regions[{index}]");
-        let object = expect_object(region, &name)?;
-        expect_allowed_keys(
-            object,
-            &name,
-            &[
-                "id",
-                "stable_key",
-                "reason",
-                "hidden_node_count",
-                "hidden_edge_count",
-                "budget_label",
-            ],
-        )?;
-        expect_u64_field(object, "id", &name)?;
-        expect_bounded_string_field(object, "stable_key", &name)?;
-        expect_bounded_string_field(object, "reason", &name)?;
-        expect_u64_field(object, "hidden_node_count", &name)?;
-        expect_u64_field(object, "hidden_edge_count", &name)?;
-        expect_optional_bounded_string_field(object, "budget_label", &name)?;
-    }
-    Ok(())
-}
-
-fn validate_evidence_limits(value: &serde_json::Value) -> Result<(), String> {
-    let object = expect_object(value, "evidence_v1.limits")?;
-    expect_allowed_keys(
-        object,
-        "evidence_v1.limits",
-        &[
-            "max_paths",
-            "max_edges_per_path",
-            "max_unknowns",
-            "max_omitted_regions",
-            "total_paths",
-            "rendered_paths",
-            "paths_truncated",
-            "total_unknowns",
-            "rendered_unknowns",
-            "unknowns_truncated",
-            "total_omitted_regions",
-            "rendered_omitted_regions",
-            "omitted_regions_truncated",
-        ],
-    )?;
-    for key in [
-        "max_paths",
-        "max_edges_per_path",
-        "max_unknowns",
-        "max_omitted_regions",
-        "total_paths",
-        "rendered_paths",
-        "total_unknowns",
-        "rendered_unknowns",
-        "total_omitted_regions",
-        "rendered_omitted_regions",
-    ] {
-        expect_u64_field(object, key, "evidence_v1.limits")?;
-    }
-    for key in [
-        "paths_truncated",
-        "unknowns_truncated",
-        "omitted_regions_truncated",
-    ] {
-        expect_bool_field(object, key, "evidence_v1.limits")?;
-    }
-    Ok(())
-}
-
-fn validate_evidence_count_invariants(
-    object: &serde_json::Map<String, serde_json::Value>,
-) -> Result<(), String> {
-    let paths = expect_array(
-        expect_field(object, "paths", "evidence_v1")?,
-        "evidence_v1.paths",
-    )?;
-    let unknowns = expect_array(
-        expect_field(object, "unknowns", "evidence_v1")?,
-        "evidence_v1.unknowns",
-    )?;
-    let omitted_regions = expect_array(
-        expect_field(object, "omitted_regions", "evidence_v1")?,
-        "evidence_v1.omitted_regions",
-    )?;
-    let limits = expect_object(
-        expect_field(object, "limits", "evidence_v1")?,
-        "evidence_v1.limits",
-    )?;
-
-    expect_count_consistency(CountConsistency {
-        name: "paths",
-        max: expect_u64_field(limits, "max_paths", "evidence_v1.limits")?,
-        total: expect_u64_field(limits, "total_paths", "evidence_v1.limits")?,
-        rendered: expect_u64_field(limits, "rendered_paths", "evidence_v1.limits")?,
-        actual_rendered: paths.len() as u64,
-        truncated: expect_bool_value_field(limits, "paths_truncated", "evidence_v1.limits")?,
-    })?;
-    expect_count_consistency(CountConsistency {
-        name: "unknowns",
-        max: expect_u64_field(limits, "max_unknowns", "evidence_v1.limits")?,
-        total: expect_u64_field(limits, "total_unknowns", "evidence_v1.limits")?,
-        rendered: expect_u64_field(limits, "rendered_unknowns", "evidence_v1.limits")?,
-        actual_rendered: unknowns.len() as u64,
-        truncated: expect_bool_value_field(limits, "unknowns_truncated", "evidence_v1.limits")?,
-    })?;
-    expect_count_consistency(CountConsistency {
-        name: "omitted_regions",
-        max: expect_u64_field(limits, "max_omitted_regions", "evidence_v1.limits")?,
-        total: expect_u64_field(limits, "total_omitted_regions", "evidence_v1.limits")?,
-        rendered: expect_u64_field(limits, "rendered_omitted_regions", "evidence_v1.limits")?,
-        actual_rendered: omitted_regions.len() as u64,
-        truncated: expect_bool_value_field(
-            limits,
-            "omitted_regions_truncated",
-            "evidence_v1.limits",
-        )?,
-    })?;
-
-    let max_edges = expect_u64_field(limits, "max_edges_per_path", "evidence_v1.limits")?;
-    for (index, path) in paths.iter().enumerate() {
-        let path_name = format!("evidence_v1.paths[{index}]");
-        let path_object = expect_object(path, &path_name)?;
-        let edges = expect_array(
-            expect_field(path_object, "edges", &path_name)?,
-            &format!("{path_name}.edges"),
-        )?;
-        expect_count_consistency(CountConsistency {
-            name: "edges",
-            max: max_edges,
-            total: expect_u64_field(path_object, "total_edges", &path_name)?,
-            rendered: expect_u64_field(path_object, "rendered_edges", &path_name)?,
-            actual_rendered: edges.len() as u64,
-            truncated: expect_bool_value_field(path_object, "edges_truncated", &path_name)?,
-        })
-        .map_err(|error| format!("{path_name}.{error}"))?;
-    }
-    Ok(())
-}
-
-struct CountConsistency {
-    name: &'static str,
-    max: u64,
-    total: u64,
-    rendered: u64,
-    actual_rendered: u64,
-    truncated: bool,
-}
-
-fn expect_count_consistency(counts: CountConsistency) -> Result<(), String> {
-    if counts.rendered != counts.actual_rendered {
-        return Err(format!(
-            "{} rendered count {} does not match rendered array length {}",
-            counts.name, counts.rendered, counts.actual_rendered
-        ));
-    }
-    if counts.rendered > counts.max {
-        return Err(format!(
-            "{} rendered count {} exceeds max {}",
-            counts.name, counts.rendered, counts.max
-        ));
-    }
-    if counts.total < counts.rendered {
-        return Err(format!(
-            "{} total count {} is less than rendered count {}",
-            counts.name, counts.total, counts.rendered
-        ));
-    }
-    let should_be_truncated = counts.total > counts.rendered;
-    if counts.truncated != should_be_truncated {
-        return Err(format!(
-            "{} truncation flag {} does not match total/rendered counts",
-            counts.name, counts.truncated
-        ));
-    }
-    Ok(())
-}
-
-fn validate_u64_array(value: &serde_json::Value, name: &str, max_len: usize) -> Result<(), String> {
-    let values = expect_array(value, name)?;
-    expect_len_at_most(values.len(), max_len, name)?;
-    for item in values {
-        if !item.is_u64() {
-            return Err(format!("{name} entries must be unsigned integers"));
-        }
-    }
-    Ok(())
-}
-
-fn expect_object<'a>(
-    value: &'a serde_json::Value,
-    name: &str,
-) -> Result<&'a serde_json::Map<String, serde_json::Value>, String> {
-    value
-        .as_object()
-        .ok_or_else(|| format!("{name} must be an object"))
-}
-
-fn expect_array<'a>(
-    value: &'a serde_json::Value,
-    name: &str,
-) -> Result<&'a [serde_json::Value], String> {
-    value
-        .as_array()
-        .map(Vec::as_slice)
-        .ok_or_else(|| format!("{name} must be an array"))
-}
-
-fn expect_field<'a>(
-    object: &'a serde_json::Map<String, serde_json::Value>,
-    key: &str,
-    object_name: &str,
-) -> Result<&'a serde_json::Value, String> {
-    object
-        .get(key)
-        .ok_or_else(|| format!("{object_name}.{key} is required"))
-}
-
-fn expect_allowed_keys(
-    object: &serde_json::Map<String, serde_json::Value>,
-    object_name: &str,
-    allowed: &[&str],
-) -> Result<(), String> {
-    for key in object.keys() {
-        if !allowed.contains(&key.as_str()) {
-            return Err(format!(
-                "{object_name}.{key} is not a supported evidence_v1 field"
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn expect_len_at_most(len: usize, max: usize, name: &str) -> Result<(), String> {
-    if len <= max {
-        Ok(())
-    } else {
-        Err(format!("{name} has {len} entries; maximum is {max}"))
-    }
-}
-
-fn expect_u64_field(
-    object: &serde_json::Map<String, serde_json::Value>,
-    key: &str,
-    object_name: &str,
-) -> Result<u64, String> {
-    expect_field(object, key, object_name)?
-        .as_u64()
-        .ok_or_else(|| format!("{object_name}.{key} must be an unsigned integer"))
-}
-
-fn expect_optional_u64_field(
-    object: &serde_json::Map<String, serde_json::Value>,
-    key: &str,
-    object_name: &str,
-) -> Result<(), String> {
-    match object.get(key) {
-        Some(value) if value.is_null() || value.is_u64() => Ok(()),
-        Some(_) => Err(format!(
-            "{object_name}.{key} must be an unsigned integer or null"
-        )),
-        None => Ok(()),
-    }
-}
-
-fn expect_bool_field(
-    object: &serde_json::Map<String, serde_json::Value>,
-    key: &str,
-    object_name: &str,
-) -> Result<(), String> {
-    if expect_field(object, key, object_name)?.is_boolean() {
-        Ok(())
-    } else {
-        Err(format!("{object_name}.{key} must be a boolean"))
-    }
-}
-
-fn expect_bool_value_field(
-    object: &serde_json::Map<String, serde_json::Value>,
-    key: &str,
-    object_name: &str,
-) -> Result<bool, String> {
-    expect_field(object, key, object_name)?
-        .as_bool()
-        .ok_or_else(|| format!("{object_name}.{key} must be a boolean"))
-}
-
-fn expect_bounded_string_field(
-    object: &serde_json::Map<String, serde_json::Value>,
-    key: &str,
-    object_name: &str,
-) -> Result<(), String> {
-    let value = expect_field(object, key, object_name)?
-        .as_str()
-        .ok_or_else(|| format!("{object_name}.{key} must be a string"))?;
-    expect_bounded_string(value, &format!("{object_name}.{key}"))
-}
-
-fn expect_enum_field(
-    object: &serde_json::Map<String, serde_json::Value>,
-    key: &str,
-    object_name: &str,
-    allowed: &[&str],
-) -> Result<(), String> {
-    let value = expect_field(object, key, object_name)?
-        .as_str()
-        .ok_or_else(|| format!("{object_name}.{key} must be a string"))?;
-    expect_bounded_string(value, &format!("{object_name}.{key}"))?;
-    if allowed.contains(&value) {
-        Ok(())
-    } else {
-        Err(format!(
-            "{object_name}.{key} must be one of: {}",
-            allowed.join(", ")
-        ))
-    }
-}
-
-fn expect_optional_bounded_string_field(
-    object: &serde_json::Map<String, serde_json::Value>,
-    key: &str,
-    object_name: &str,
-) -> Result<(), String> {
-    match object.get(key) {
-        Some(value) if value.is_null() => Ok(()),
-        Some(value) => {
-            let string = value
-                .as_str()
-                .ok_or_else(|| format!("{object_name}.{key} must be a string or null"))?;
-            expect_bounded_string(string, &format!("{object_name}.{key}"))
-        }
-        None => Ok(()),
-    }
-}
-
-fn expect_bounded_string(value: &str, name: &str) -> Result<(), String> {
-    let char_count = value.chars().count();
-    if char_count <= STRUCTURED_EVIDENCE_MAX_STRING_CHARS {
-        Ok(())
-    } else {
-        Err(format!(
-            "{name} has {char_count} characters; maximum is {STRUCTURED_EVIDENCE_MAX_STRING_CHARS}",
-        ))
-    }
-}
-
-/// Construct diagnostics with `Diagnostic::new`, `Diagnostic::error`,
-/// `Diagnostic::warning`, `Diagnostic::info`, and the fluent helpers.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[non_exhaustive]
-pub struct Diagnostic {
-    pub rule_id: String,
-    pub severity: Severity,
-    pub file: String,
-    pub range: TextRange,
-    pub message: String,
-    pub labels: Vec<Label>,
-    pub help: Option<String>,
-    pub evidence: Vec<Evidence>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) evidence_v1: Option<StructuredEvidenceV1>,
-    #[serde(skip)]
-    pub(crate) evidence_bundle: Option<EvidenceBundleRef>,
-    pub suggestions: Vec<Suggestion>,
-    pub fix: Option<Fix>,
-    pub stable_fingerprint: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct EvidenceBundleRef {
-    pub(crate) id: crate::analysis::ids::EvidenceBundleId,
-}
-
-#[derive(Deserialize)]
-struct DiagnosticWire {
-    rule_id: String,
-    severity: Severity,
-    file: String,
-    range: TextRange,
-    message: String,
-    #[serde(default)]
-    labels: Vec<Label>,
-    #[serde(default)]
-    help: Option<String>,
-    #[serde(default)]
-    evidence: Vec<Evidence>,
-    #[serde(default)]
-    evidence_v1: Option<StructuredEvidenceV1>,
-    #[serde(default)]
-    suggestions: Vec<Suggestion>,
-    #[serde(default)]
-    fix: Option<Fix>,
-    #[serde(default)]
-    stable_fingerprint: String,
-}
-
-impl<'de> Deserialize<'de> for Diagnostic {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let wire = DiagnosticWire::deserialize(deserializer)?;
-        let stable_fingerprint = if wire.stable_fingerprint.is_empty() {
-            diagnostic_fingerprint(&wire.rule_id, &wire.file, wire.range, &wire.message)
-        } else {
-            wire.stable_fingerprint
-        };
-
-        Ok(Self {
-            rule_id: wire.rule_id,
-            severity: wire.severity,
-            file: wire.file,
-            range: wire.range,
-            message: wire.message,
-            labels: wire.labels,
-            help: wire.help,
-            evidence: wire.evidence,
-            evidence_v1: wire.evidence_v1,
-            evidence_bundle: None,
-            suggestions: wire.suggestions,
-            fix: wire.fix,
-            stable_fingerprint,
-        })
-    }
-}
-
-impl Diagnostic {
-    pub fn new(
-        rule_id: impl Into<String>,
-        severity: Severity,
-        file: impl Into<String>,
-        range: TextRange,
-        message: impl Into<String>,
-    ) -> Self {
-        let rule_id = rule_id.into();
-        let file = file.into();
-        let message = message.into();
-        let stable_fingerprint = diagnostic_fingerprint(&rule_id, &file, range, &message);
-        Self {
-            rule_id,
-            severity,
-            file,
-            range,
-            message,
-            labels: Vec::new(),
-            help: None,
-            evidence: Vec::new(),
-            evidence_v1: None,
-            evidence_bundle: None,
-            suggestions: Vec::new(),
-            fix: None,
-            stable_fingerprint,
-        }
-    }
-
-    pub fn error(
-        rule_id: impl Into<String>,
-        file: impl Into<String>,
-        range: TextRange,
-        message: impl Into<String>,
-    ) -> Self {
-        Self::new(rule_id, Severity::Error, file, range, message)
-    }
-
-    pub fn warning(
-        rule_id: impl Into<String>,
-        file: impl Into<String>,
-        range: TextRange,
-        message: impl Into<String>,
-    ) -> Self {
-        Self::new(rule_id, Severity::Warn, file, range, message)
-    }
-
-    pub fn info(
-        rule_id: impl Into<String>,
-        file: impl Into<String>,
-        range: TextRange,
-        message: impl Into<String>,
-    ) -> Self {
-        Self::new(rule_id, Severity::Info, file, range, message)
-    }
-
-    pub fn with_label(mut self, range: TextRange, message: impl Into<String>) -> Self {
-        self.labels.push(Label {
-            range,
-            message: message.into(),
-        });
-        self
-    }
-
-    pub fn with_help(mut self, help: impl Into<String>) -> Self {
-        self.help = Some(help.into());
-        self
-    }
-
-    pub fn with_evidence(mut self, label: impl Into<String>, value: impl Into<String>) -> Self {
-        self.evidence.push(Evidence {
-            label: label.into(),
-            value: value.into(),
-        });
-        self
-    }
-
-    #[allow(
-        dead_code,
-        reason = "Internal bundle refs are attached by current render plumbing; tests verify fingerprint compatibility before rule-facing APIs exist."
-    )]
-    pub(crate) fn with_evidence_bundle_ref(
-        mut self,
-        id: crate::analysis::ids::EvidenceBundleId,
-    ) -> Self {
-        self.evidence_bundle = Some(EvidenceBundleRef { id });
-        self
-    }
-
-    #[allow(
-        dead_code,
-        reason = "Structured evidence attachment is wired for current renderers and exercised through diagnostics tests before production call sites attach bundles."
-    )]
-    pub(crate) fn with_structured_evidence_v1(mut self, value: StructuredEvidenceV1) -> Self {
-        self.evidence_v1 = Some(value);
-        self
-    }
-
-    #[allow(
-        dead_code,
-        reason = "Internal bundle refs are read by current render plumbing; tests verify the side-table bridge without making it public SDK."
-    )]
-    pub(crate) fn evidence_bundle_ref(&self) -> Option<EvidenceBundleRef> {
-        self.evidence_bundle
-    }
-
-    pub fn with_suggestion(mut self, message: impl Into<String>) -> Self {
-        self.suggestions.push(Suggestion {
-            message: message.into(),
-        });
-        self
-    }
-
-    pub fn with_fix(mut self, message: impl Into<String>, replacement: Option<String>) -> Self {
-        self.fix = Some(Fix {
-            message: message.into(),
-            replacement,
-        });
-        self
-    }
-
-    pub fn with_fingerprint(mut self, stable_fingerprint: impl Into<String>) -> Self {
-        self.stable_fingerprint = stable_fingerprint.into();
-        self
-    }
-}
 
 pub(crate) fn extension_setup_diagnostic(
     failure_kind: &str,
@@ -999,6 +56,7 @@ fn bounded_extension_summary(summary: &str) -> String {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum OutputFormat {
     Human,
     Github,
@@ -1009,6 +67,7 @@ pub enum OutputFormat {
 
 /// Metadata embedded in `--format json` output (`PolintReport.tool`).
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct JsonReportMeta<'a> {
     pub tool_name: &'a str,
     pub tool_version: &'a str,
@@ -1016,6 +75,7 @@ pub struct JsonReportMeta<'a> {
 
 /// When to emit ANSI colors for `--format human` (honors `NO_COLOR` when [`ColorChoice::Auto`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum ColorChoice {
     #[default]
     Auto,
@@ -1036,15 +96,19 @@ impl ColorChoice {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct RenderOpts<'a> {
     pub json: JsonReportMeta<'a>,
     pub color: ColorChoice,
     /// Indexed by `Diagnostic.file`-style relative paths for human code snippets.
     pub sources: Option<&'a BTreeMap<String, Arc<str>>>,
+    /// Per-rule execution telemetry embedded in `--format json` summary.
+    pub(crate) rule_execution: &'a [RuleExecutionRow],
 }
 
 /// Tool identity in a [`PolintReport`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PolintToolInfo {
     pub name: String,
     pub version: String,
@@ -1052,6 +116,7 @@ pub struct PolintToolInfo {
 
 /// Versioned JSON report for `--format json` and repo-local rule host subprocesses.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PolintReport {
     pub version: u32,
     pub tool: PolintToolInfo,
@@ -1077,7 +142,29 @@ pub(crate) struct AiFriendlySummary {
     pub(crate) rules_triggered: usize,
     pub(crate) by_severity: BTreeMap<String, usize>,
     pub(crate) by_rule: Vec<AiFriendlyRuleSummary>,
+    /// Per registered rule, including zero-finding and capability-skipped rules.
+    pub(crate) rules: Vec<RuleExecutionRow>,
     pub(crate) examples_limit: usize,
+}
+
+/// One row of rule-execution telemetry for silent-rule diagnosis.
+///
+/// `rules_triggered` stays the count of rules with ≥1 diagnostic; this list is
+/// the registry view that also includes rules that planned, ran, and found nothing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct RuleExecutionRow {
+    pub(crate) rule_id: String,
+    /// `true` when the rule survived capability planning and will execute.
+    pub(crate) planned: bool,
+    /// `true` when every requested capability is supported for this run.
+    pub(crate) capabilities_ok: bool,
+    /// Files matching this rule's scope after `files` / `allow_files` filtering
+    /// against the analyzed file set (already narrowed by discovery scope).
+    pub(crate) files_in_scope: usize,
+    pub(crate) diagnostics_emitted: usize,
+    /// Set when `!planned || !capabilities_ok`, using existing capability wording.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) skipped_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1114,7 +201,14 @@ struct PolintReportWire<'a> {
     version: u32,
     schema: &'static str,
     tool: PolintToolWire<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    summary: Option<PolintReportSummaryWire<'a>>,
     diagnostics: &'a [Diagnostic],
+}
+
+#[derive(Serialize)]
+struct PolintReportSummaryWire<'a> {
+    rules: &'a [RuleExecutionRow],
 }
 
 #[derive(Serialize)]
@@ -1123,22 +217,110 @@ struct PolintToolWire<'a> {
     version: &'a str,
 }
 
+#[derive(Debug, Deserialize)]
+struct HostJsonSummary {
+    #[serde(default)]
+    rules: Vec<RuleExecutionRow>,
+}
+
 /// Parse stdout from a `polint-local-rules check --format json` process.
 pub fn diagnostics_from_json_report(s: &str) -> Result<Vec<Diagnostic>, serde_json::Error> {
     let report: PolintReport = serde_json::from_str(s)?;
     Ok(report.diagnostics)
 }
 
-/// Parse public diagnostics from an external rule-host JSON process.
-pub(crate) fn diagnostics_from_public_json_report(
+/// Parse diagnostics plus rule-execution telemetry from a rule-host JSON report.
+///
+/// `evidence_v1` is a trust boundary: validate and keep, or drop and emit an
+/// internal diagnostic. `evidence_bundle` is always cleared — it is an in-process
+/// store reference that cannot cross a process boundary.
+pub(crate) fn diagnostics_and_rule_execution_from_public_json_report(
     s: &str,
-) -> Result<Vec<Diagnostic>, serde_json::Error> {
-    let mut diagnostics = diagnostics_from_json_report(s)?;
-    for diagnostic in &mut diagnostics {
-        diagnostic.evidence_v1 = None;
+) -> Result<(Vec<Diagnostic>, Vec<RuleExecutionRow>), serde_json::Error> {
+    let report: PublicJsonReportWire = serde_json::from_str(s)?;
+    let mut diagnostics = Vec::with_capacity(report.diagnostics.len());
+    let mut internal = Vec::new();
+    for mut wire in report.diagnostics {
+        let raw_evidence = wire.evidence_v1.take();
+        let mut diagnostic = wire.into_diagnostic();
         diagnostic.evidence_bundle = None;
+        diagnostic.evidence_v1 = None;
+        if let Some(value) = raw_evidence {
+            match StructuredEvidenceV1::try_from_value(value) {
+                Ok(evidence) => diagnostic.evidence_v1 = Some(evidence),
+                Err(error) => {
+                    internal.push(Diagnostic::warning(
+                        "polint/internal",
+                        diagnostic.file.clone(),
+                        diagnostic.range,
+                        format!("dropped invalid evidence_v1 from rule host: {error}"),
+                    ));
+                }
+            }
+        }
+        diagnostics.push(diagnostic);
     }
-    Ok(diagnostics)
+    diagnostics.extend(internal);
+    let rules = report
+        .summary
+        .map(|summary| summary.rules)
+        .unwrap_or_default();
+    Ok((diagnostics, rules))
+}
+
+#[derive(Deserialize)]
+struct PublicJsonReportWire {
+    diagnostics: Vec<PublicDiagnosticWire>,
+    #[serde(default)]
+    summary: Option<HostJsonSummary>,
+}
+
+#[derive(Deserialize)]
+struct PublicDiagnosticWire {
+    rule_id: String,
+    severity: Severity,
+    file: String,
+    range: TextRange,
+    message: String,
+    #[serde(default)]
+    labels: Vec<Label>,
+    #[serde(default)]
+    help: Option<String>,
+    #[serde(default)]
+    evidence: Vec<Evidence>,
+    #[serde(default)]
+    evidence_v1: Option<serde_json::Value>,
+    #[serde(default)]
+    suggestions: Vec<Suggestion>,
+    #[serde(default)]
+    fix: Option<Fix>,
+    #[serde(default)]
+    stable_fingerprint: String,
+}
+
+impl PublicDiagnosticWire {
+    fn into_diagnostic(self) -> Diagnostic {
+        let stable_fingerprint = if self.stable_fingerprint.is_empty() {
+            diagnostic_fingerprint(&self.rule_id, &self.file, self.range, &self.message)
+        } else {
+            self.stable_fingerprint
+        };
+        Diagnostic::from_parts(
+            self.rule_id,
+            self.severity,
+            self.file,
+            self.range,
+            self.message,
+            self.labels,
+            self.help,
+            self.evidence,
+            None,
+            None,
+            self.suggestions,
+            self.fix,
+            stable_fingerprint,
+        )
+    }
 }
 
 pub(crate) fn build_ai_friendly_report(
@@ -1146,8 +328,9 @@ pub(crate) fn build_ai_friendly_report(
     persisted_diagnostics: &[Diagnostic],
     json_meta: JsonReportMeta<'_>,
     generated_at: impl Into<String>,
+    rule_execution: &[RuleExecutionRow],
 ) -> AiFriendlyReport {
-    let summary = ai_friendly_summary(diagnostics);
+    let summary = ai_friendly_summary(diagnostics, rule_execution);
     let examples = ai_friendly_examples(diagnostics, &summary.by_rule);
     let truncation = if persisted_diagnostics.len() < diagnostics.len() {
         Some(AiFriendlyTruncation {
@@ -1173,7 +356,10 @@ pub(crate) fn build_ai_friendly_report(
     }
 }
 
-fn ai_friendly_summary(diagnostics: &[Diagnostic]) -> AiFriendlySummary {
+fn ai_friendly_summary(
+    diagnostics: &[Diagnostic],
+    rule_execution: &[RuleExecutionRow],
+) -> AiFriendlySummary {
     let mut by_severity = empty_severity_counts();
     let mut by_rule: BTreeMap<String, RuleSummaryDraft> = BTreeMap::new();
     for diagnostic in diagnostics {
@@ -1214,6 +400,7 @@ fn ai_friendly_summary(diagnostics: &[Diagnostic]) -> AiFriendlySummary {
                 by_severity: draft.by_severity,
             })
             .collect(),
+        rules: rule_execution.to_vec(),
         examples_limit: AI_FRIENDLY_EXAMPLE_LIMIT,
     }
 }
@@ -1309,6 +496,7 @@ fn severity_count_key(severity: Severity) -> &'static str {
         Severity::Error => "error",
         Severity::Warn => "warn",
         Severity::Info => "info",
+        _ => "info",
     }
 }
 
@@ -1317,6 +505,7 @@ fn severity_sort_rank(severity: Severity) -> u8 {
         Severity::Error => 0,
         Severity::Warn => 1,
         Severity::Info => 2,
+        _ => 2,
     }
 }
 
@@ -1365,6 +554,9 @@ pub(crate) fn render_ai_friendly_stdout(report: &AiFriendlyReport, json_path: &s
     );
     out.push_str("Do not read the whole file into an AI prompt. Query it with bounded commands:\n");
     out.push_str(&format!("  jq '.summary.by_rule' {json_path}\n"));
+    out.push_str(&format!(
+        "  jq '.summary.rules[] | select(.diagnostics_emitted == 0)' {json_path}\n"
+    ));
     if let Some(example) = report.examples.first() {
         let rule_id = jq_string_literal(&example.rule_id);
         let file = jq_string_literal(&example.file);
@@ -1434,6 +626,7 @@ fn severity_label(severity: Severity) -> &'static str {
         Severity::Error => "error",
         Severity::Warn => "warn",
         Severity::Info => "info",
+        _ => "info",
     }
 }
 
@@ -1553,10 +746,16 @@ pub(crate) fn render_with_sarif_help(
     match format {
         OutputFormat::Human => render_human(diagnostics, opts.color, opts.sources),
         OutputFormat::Github => render_github(diagnostics),
-        OutputFormat::Json => render_json(diagnostics, opts.json),
+        OutputFormat::Json => render_json(diagnostics, opts.json, opts.rule_execution),
         OutputFormat::Sarif => render_sarif(diagnostics, sarif_rule_help_uri),
         OutputFormat::AiFriendly => {
-            let report = build_ai_friendly_report(diagnostics, diagnostics, opts.json, "unknown");
+            let report = build_ai_friendly_report(
+                diagnostics,
+                diagnostics,
+                opts.json,
+                "unknown",
+                opts.rule_execution,
+            );
             render_ai_friendly_stdout(&report, ".polint/output/latest.json")
         }
     }
@@ -1591,6 +790,7 @@ fn github_command(severity: Severity) -> &'static str {
         Severity::Error => "error",
         Severity::Warn => "warning",
         Severity::Info => "notice",
+        _ => "notice",
     }
 }
 
@@ -1611,7 +811,14 @@ fn escape_github_message(value: &str) -> String {
         .replace('\n', "%0A")
 }
 
-fn render_json(diagnostics: &[Diagnostic], json_meta: JsonReportMeta<'_>) -> String {
+fn render_json(
+    diagnostics: &[Diagnostic],
+    json_meta: JsonReportMeta<'_>,
+    rule_execution: &[RuleExecutionRow],
+) -> String {
+    let summary = (!rule_execution.is_empty()).then_some(PolintReportSummaryWire {
+        rules: rule_execution,
+    });
     let wire = PolintReportWire {
         version: 1,
         schema: POLINT_REPORT_JSON_SCHEMA_V1_URL,
@@ -1619,6 +826,7 @@ fn render_json(diagnostics: &[Diagnostic], json_meta: JsonReportMeta<'_>) -> Str
             name: json_meta.tool_name,
             version: json_meta.tool_version,
         },
+        summary,
         diagnostics,
     };
     serde_json::to_string_pretty(&wire).unwrap_or_else(|_| "{}".to_string())
@@ -1667,6 +875,7 @@ impl HumanPalette {
             Severity::Error => self.red,
             Severity::Warn => self.yellow,
             Severity::Info => self.cyan,
+            _ => self.cyan,
         }
     }
 }
@@ -1813,6 +1022,7 @@ fn format_human_summary_line(diagnostics: &[Diagnostic], p: &HumanPalette) -> St
             Severity::Error => *errors.entry(d.rule_id.clone()).or_insert(0) += 1,
             Severity::Warn => *warns.entry(d.rule_id.clone()).or_insert(0) += 1,
             Severity::Info => *infos.entry(d.rule_id.clone()).or_insert(0) += 1,
+            _ => *infos.entry(d.rule_id.clone()).or_insert(0) += 1,
         }
     }
 
@@ -1831,12 +1041,14 @@ fn format_human_summary_line(diagnostics: &[Diagnostic], p: &HumanPalette) -> St
                 Severity::Error => "error",
                 Severity::Warn => "warning",
                 Severity::Info => "info",
+                _ => "info",
             }
         } else {
             match sev {
                 Severity::Error => "errors",
                 Severity::Warn => "warnings",
                 Severity::Info => "infos",
+                _ => "infos",
             }
         };
         let breakdown: Vec<String> = rules.iter().map(|(id, n)| format!("{id} ({n})")).collect();
@@ -1884,6 +1096,7 @@ pub(crate) fn render_human(
             Severity::Error => "error",
             Severity::Warn => "warn",
             Severity::Info => "info",
+            _ => "info",
         };
         out.push_str(&format!(
             "{}{}{}{}[{}{}{}]: {}{}\n  {}{}{}{} {}{}{}:{}\n",
@@ -2231,6 +1444,7 @@ pub(crate) fn render_sarif(
                     Severity::Info => "note",
                     Severity::Warn => "warning",
                     Severity::Error => "error",
+                    _ => "error",
                 },
                 message: SarifMessage {
                     text: diagnostic.message.clone(),
@@ -2266,40 +1480,6 @@ pub(crate) fn render_sarif(
     serde_json::to_string_pretty(&log).unwrap_or_else(|_| "{}".to_string())
 }
 
-pub(crate) fn fingerprint(parts: &[&str]) -> String {
-    let mut hash = 0xcbf29ce484222325_u64;
-    for part in parts {
-        for byte in part.as_bytes() {
-            hash ^= u64::from(*byte);
-            hash = hash.wrapping_mul(0x100000001b3);
-        }
-        hash ^= 0xff;
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    format!("{hash:016x}")
-}
-
-pub(crate) fn diagnostic_fingerprint(
-    rule_id: &str,
-    file: &str,
-    range: TextRange,
-    message: &str,
-) -> String {
-    let start_line = range.start_line.to_string();
-    let start_col = range.start_col.to_string();
-    let end_line = range.end_line.to_string();
-    let end_col = range.end_col.to_string();
-    fingerprint(&[
-        rule_id,
-        file,
-        &start_line,
-        &start_col,
-        &end_line,
-        &end_col,
-        message,
-    ])
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2315,6 +1495,7 @@ mod tests {
             },
             color: ColorChoice::Never,
             sources: None,
+            rule_execution: &[],
         }
     }
 
@@ -2375,12 +1556,12 @@ mod tests {
         let base = Diagnostic::warning("rule", "src/lib.rs", TextRange::point(1, 1), "message");
         let fingerprint = base.stable_fingerprint.clone();
 
-        let diagnostic = base.with_evidence_bundle_ref(crate::analysis::ids::EvidenceBundleId(42));
+        let diagnostic = base.with_evidence_bundle_ref(EvidenceBundleId(42));
 
         assert_eq!(diagnostic.stable_fingerprint, fingerprint);
         assert_eq!(
             diagnostic.evidence_bundle_ref().expect("bundle").id,
-            crate::analysis::ids::EvidenceBundleId(42)
+            EvidenceBundleId(42)
         );
     }
 
@@ -2497,7 +1678,7 @@ mod tests {
     }
 
     #[test]
-    fn public_json_report_strips_structured_evidence_from_local_rule_output() {
+    fn public_json_report_keeps_validated_structured_evidence_from_local_rule_output() {
         let diagnostic = Diagnostic::warning(
             "local/rule",
             "src/lib.rs",
@@ -2507,12 +1688,83 @@ mod tests {
         .with_structured_evidence_v1(structured(minimal_structured_evidence_value()));
         let json = render(OutputFormat::Json, &[diagnostic], test_opts());
 
-        let diagnostics = diagnostics_from_public_json_report(&json).expect("public diagnostics");
+        let (diagnostics, _rules) = diagnostics_and_rule_execution_from_public_json_report(&json)
+            .expect("public diagnostics");
 
         assert_eq!(diagnostics.len(), 1);
         assert!(
-            diagnostics[0].evidence_v1.is_none(),
-            "external rule-host JSON must not inject internal structured evidence"
+            diagnostics[0].evidence_v1.is_some(),
+            "validated evidence_v1 must survive the rule-host trust boundary"
+        );
+    }
+
+    #[test]
+    fn malformed_evidence_from_a_rule_host_is_dropped_not_propagated() {
+        let json = serde_json::json!({
+            "version": 1,
+            "schema": POLINT_REPORT_JSON_SCHEMA_V1_URL,
+            "tool": { "name": "polint", "version": "0.0.0" },
+            "diagnostics": [{
+                "rule_id": "local/rule",
+                "severity": "warn",
+                "file": "src/lib.rs",
+                "range": { "start_line": 1, "start_col": 1, "end_line": 1, "end_col": 1 },
+                "message": "message",
+                "labels": [],
+                "help": null,
+                "evidence": [],
+                "evidence_v1": {
+                    "version": 1,
+                    "bundle": {
+                        "id": 0,
+                        "stable_key": "bundle:bad",
+                        "diagnostic_stable_key": "diag:bad",
+                        "status": "not-a-real-status",
+                        "precision": "Exact",
+                        "provenance": "Query",
+                        "validation": "RendererValidated",
+                        "confidence": "High",
+                        "replay_key": null
+                    },
+                    "paths": [],
+                    "unknowns": [],
+                    "omitted_regions": [],
+                    "limits": {
+                        "max_paths": 5,
+                        "max_edges_per_path": 96,
+                        "max_unknowns": 32,
+                        "max_omitted_regions": 32,
+                        "total_paths": 0,
+                        "rendered_paths": 0,
+                        "paths_truncated": false,
+                        "total_unknowns": 0,
+                        "rendered_unknowns": 0,
+                        "unknowns_truncated": false,
+                        "total_omitted_regions": 0,
+                        "rendered_omitted_regions": 0,
+                        "omitted_regions_truncated": false
+                    }
+                },
+                "suggestions": [],
+                "fix": null,
+                "stable_fingerprint": "fp"
+            }]
+        })
+        .to_string();
+
+        let (diagnostics, _rules) = diagnostics_and_rule_execution_from_public_json_report(&json)
+            .expect("public diagnostics");
+
+        assert_eq!(diagnostics.len(), 2);
+        assert!(diagnostics[0].evidence_v1.is_none());
+        assert_eq!(diagnostics[0].rule_id, "local/rule");
+        assert_eq!(diagnostics[1].rule_id, "polint/internal");
+        assert!(
+            diagnostics[1]
+                .message
+                .contains("dropped invalid evidence_v1"),
+            "{}",
+            diagnostics[1].message
         );
     }
 
@@ -2538,23 +1790,10 @@ mod tests {
         Diagnostic::error(
             "project/rule",
             "src/lib.rs",
-            TextRange {
-                start_line: 10,
-                start_col: 4,
-                end_line: 10,
-                end_col: 12,
-            },
+            TextRange::new(10, 4, 10, 12),
             "policy failed",
         )
-        .with_label(
-            TextRange {
-                start_line: 11,
-                start_col: 2,
-                end_line: 11,
-                end_col: 8,
-            },
-            "related expression",
-        )
+        .with_label(TextRange::new(11, 2, 11, 8), "related expression")
         .with_evidence("symbol", "unsafe_api")
         .with_suggestion("Prefer safe_api here")
         .with_fix("Replace unsafe_api", Some("safe_api()".to_string()))
@@ -2691,6 +1930,7 @@ mod tests {
             },
             color: ColorChoice::Never,
             sources: Some(&sources),
+            rule_execution: &[],
         };
         insta::assert_snapshot!(
             render(OutputFormat::Human, &[contract_diagnostic()], opts),
@@ -2802,7 +2042,8 @@ mod tests {
         sort_diagnostics(&mut diagnostics);
 
         let persisted = diagnostics[..3].to_vec();
-        let report = build_ai_friendly_report(&diagnostics, &persisted, test_opts().json, "123456");
+        let report =
+            build_ai_friendly_report(&diagnostics, &persisted, test_opts().json, "123456", &[]);
 
         assert_eq!(report.version, 1);
         assert_eq!(report.schema, POLINT_AI_FRIENDLY_JSON_SCHEMA_V1_URL);
@@ -2812,6 +2053,7 @@ mod tests {
         assert_eq!(report.summary.by_severity["warn"], 12);
         assert_eq!(report.summary.by_rule[0].rule_id, "local/rule-05");
         assert_eq!(report.summary.by_rule[0].total, 2);
+        assert!(report.summary.rules.is_empty());
         assert_eq!(report.examples.len(), AI_FRIENDLY_EXAMPLE_LIMIT);
         assert_eq!(report.examples[0].message, "more important");
         assert!(report.examples[0].labels.is_empty());
@@ -2824,7 +2066,7 @@ mod tests {
     fn render_ai_friendly_stdout_is_compact_and_query_oriented() {
         let diagnostics = vec![contract_diagnostic()];
         let report =
-            build_ai_friendly_report(&diagnostics, &diagnostics, test_opts().json, "123456");
+            build_ai_friendly_report(&diagnostics, &diagnostics, test_opts().json, "123456", &[]);
         let rendered = render_ai_friendly_stdout(&report, ".polint/output/latest.json");
 
         assert!(rendered.contains("polint: 1 diagnostic across 1 rule"));
@@ -2837,6 +2079,9 @@ mod tests {
         assert!(rendered.contains("fix: Replace unsafe_api"));
         assert!(rendered.contains("help: Use the safe wrapper before crossing this boundary."));
         assert!(rendered.contains("jq '.summary.by_rule' .polint/output/latest.json"));
+        assert!(rendered.contains(
+            "jq '.summary.rules[] | select(.diagnostics_emitted == 0)' .polint/output/latest.json"
+        ));
         assert!(
             rendered.contains(
                 "jq '[.diagnostics[] | select(.rule_id==\"project/rule\")][0:20]' .polint/output/latest.json"
@@ -2858,12 +2103,7 @@ mod tests {
         let diagnostic = Diagnostic::warning(
             "project/rule,one",
             "src/lib,one.rs",
-            TextRange {
-                start_line: 10,
-                start_col: 4,
-                end_line: 10,
-                end_col: 12,
-            },
+            TextRange::new(10, 4, 10, 12),
             "policy % failed\nuse safe_api",
         );
 
@@ -2916,6 +2156,7 @@ mod tests {
                 },
                 color: ColorChoice::Never,
                 sources: None,
+                rule_execution: &[],
             },
             Some(&help),
         );
@@ -3365,12 +2606,7 @@ mod tests {
         )
         .unwrap();
 
-        let range = TextRange {
-            start_line: 4,
-            start_col: 2,
-            end_line: 4,
-            end_col: 9,
-        };
+        let range = TextRange::new(4, 2, 4, 9);
 
         assert_eq!(diagnostic.rule_id, "project/rule");
         assert_eq!(diagnostic.severity, Severity::Warn);
@@ -3407,18 +2643,8 @@ mod tests {
 
     #[test]
     fn diagnostic_builders_cover_labels_suggestions_fixes_evidence_and_help() {
-        let range = TextRange {
-            start_line: 10,
-            start_col: 4,
-            end_line: 10,
-            end_col: 12,
-        };
-        let label_range = TextRange {
-            start_line: 11,
-            start_col: 2,
-            end_line: 11,
-            end_col: 8,
-        };
+        let range = TextRange::new(10, 4, 10, 12);
+        let label_range = TextRange::new(11, 2, 11, 8);
 
         let diagnostic = Diagnostic::error("project/rule", "src/lib.rs", range, "policy failed")
             .with_label(label_range, "related expression")
@@ -3434,30 +2660,25 @@ mod tests {
         assert_eq!(diagnostic.message, "policy failed");
         assert_eq!(
             diagnostic.labels,
-            vec![Label {
-                range: label_range,
-                message: "related expression".to_string()
-            }]
+            vec![Label::new(label_range, "related expression".to_string())]
         );
         assert_eq!(
             diagnostic.evidence,
-            vec![Evidence {
-                label: "symbol".to_string(),
-                value: "unsafe_api".to_string()
-            }]
+            vec![Evidence::new(
+                "symbol".to_string(),
+                "unsafe_api".to_string(),
+            )]
         );
         assert_eq!(
             diagnostic.suggestions,
-            vec![Suggestion {
-                message: "Prefer safe_api here".to_string()
-            }]
+            vec![Suggestion::new("Prefer safe_api here".to_string())]
         );
         assert_eq!(
             diagnostic.fix,
-            Some(Fix {
-                message: "Replace unsafe_api".to_string(),
-                replacement: Some("safe_api".to_string())
-            })
+            Some(Fix::new(
+                "Replace unsafe_api".to_string(),
+                Some("safe_api".to_string())
+            ))
         );
         assert_eq!(
             diagnostic.help,
@@ -3468,52 +2689,35 @@ mod tests {
 
     #[test]
     fn fingerprint_includes_rule_file_full_range_and_message() {
-        let range = TextRange {
-            start_line: 4,
-            start_col: 2,
-            end_line: 4,
-            end_col: 9,
-        };
+        let range = TextRange::new(4, 2, 4, 9);
         let baseline = Diagnostic::warning("project/rule", "src/lib.rs", range, "policy failed")
             .stable_fingerprint;
 
         let changed_start_line = Diagnostic::warning(
             "project/rule",
             "src/lib.rs",
-            TextRange {
-                start_line: 5,
-                ..range
-            },
+            TextRange::new(5, range.start_col, range.end_line, range.end_col),
             "policy failed",
         )
         .stable_fingerprint;
         let changed_start_col = Diagnostic::warning(
             "project/rule",
             "src/lib.rs",
-            TextRange {
-                start_col: 3,
-                ..range
-            },
+            TextRange::new(range.start_line, 3, range.end_line, range.end_col),
             "policy failed",
         )
         .stable_fingerprint;
         let changed_end_line = Diagnostic::warning(
             "project/rule",
             "src/lib.rs",
-            TextRange {
-                end_line: 5,
-                ..range
-            },
+            TextRange::new(range.start_line, range.start_col, 5, range.end_col),
             "policy failed",
         )
         .stable_fingerprint;
         let changed_end_col = Diagnostic::warning(
             "project/rule",
             "src/lib.rs",
-            TextRange {
-                end_col: 10,
-                ..range
-            },
+            TextRange::new(range.start_line, range.start_col, range.end_line, 10),
             "policy failed",
         )
         .stable_fingerprint;
@@ -3588,12 +2792,12 @@ mod tests {
         Diagnostic::warning(
             rule_id,
             file,
-            TextRange {
-                start_line: line,
-                start_col: col,
-                end_line: line + ((index % 3) as u32),
-                end_col: col + ((index % 5) as u32),
-            },
+            TextRange::new(
+                line,
+                col,
+                line + ((index % 3) as u32),
+                col + ((index % 5) as u32),
+            ),
             format!("message {index:02}"),
         )
     }

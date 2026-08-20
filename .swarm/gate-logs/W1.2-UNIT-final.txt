@@ -1,0 +1,8 @@
+   Compiling polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.2/crates/polint)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.65s
+     Running unittests src/lib.rs (target/debug/deps/polint-af2f858c5d9987a8)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2517 filtered out; finished in 0.00s
+

@@ -1,10 +1,4 @@
-pub(crate) mod cache_key;
-pub(crate) mod direct;
-pub(crate) mod extract;
-pub(crate) mod facts;
-pub(crate) mod js_points_to;
-pub(crate) mod provider;
-pub(crate) mod store;
-pub(crate) mod ts_value_flows;
-pub(crate) mod unresolved;
-pub(crate) mod validate;
+pub(crate) use crate::analysis_neutral::calls::facts;
+pub(crate) use crate::analysis_neutral::calls::provider;
+pub(crate) use crate::analysis_neutral::calls::store;
+pub(crate) use crate::analysis_neutral::calls::validate;

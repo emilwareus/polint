@@ -28,7 +28,7 @@
 //   3. Did the probe crate's dependency on polint break? Restore the probe's
 //      `#![no_implicit_prelude]` and single `use ::polint::sdk::prelude::*;` import.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -108,6 +108,7 @@ const ALLOWED_PRELUDE: &[&str] = &[
     "PolintToolInfo",
     "RenderOpts",
     "Severity",
+    "StructuredEvidenceV1",
     "Suggestion",
     "DiagnosticRange", // re-export alias: `TextRange as DiagnosticRange`
     "diagnostics_from_json_report",
@@ -655,13 +656,218 @@ fn allowlist_has_no_duplicates_and_expected_count() {
         ALLOWED_PRELUDE.len(),
         "ALLOWED_PRELUDE contains duplicate entries"
     );
-    // Locked count derived from sdk/mod.rs after the PolicyConfidence
-    // promotion plus the sanctioned review-rules API addition (ChangedFiles +
-    // ChangeStatus); see docs/API-VISIBILITY-PLAN.md.
+    // Locked count derived from sdk/mod.rs after StructuredEvidenceV1 promotion;
+    // see docs/API-VISIBILITY-PLAN.md.
     assert_eq!(
         ALLOWED_PRELUDE.len(),
-        115,
+        116,
         "ALLOWED_PRELUDE count changed — update this assertion ONLY alongside a sanctioned \
          API promotion record"
     );
+}
+
+/// Internal source roots that intentionally own identifiers re-exported by the facade prelude.
+///
+/// Walking each internal owner tree keeps this gate independent of the current module layout
+/// inside `polint` while excluding examples, benchmarks, and test fixtures from the definition
+/// scan.
+const PRELUDE_OWNER_SOURCE_ROOTS: &[&str] = &[
+    "crates/polint/src/internal_core",
+    "crates/polint/src/ir",
+    "crates/polint/src/analysis_api",
+    "crates/polint/src/frontend_api",
+    "crates/polint/src/go",
+    "crates/polint/src/ts",
+    "crates/polint/src/analysis_neutral",
+    "crates/polint/src",
+];
+
+fn prelude_definition_sources() -> Vec<(PathBuf, String)> {
+    let root = repo_root();
+    let mut sources = Vec::new();
+    for relative_root in PRELUDE_OWNER_SOURCE_ROOTS {
+        let source_root = root.join(relative_root);
+        assert!(
+            source_root.is_dir(),
+            "prelude owner source root missing: {}",
+            source_root.display()
+        );
+        collect_public_tree(&source_root, &mut sources);
+    }
+    sources.retain(|(path, _)| path.extension().and_then(|ext| ext.to_str()) == Some("rs"));
+    sources
+}
+
+/// Prelude-exported structs and enums must stay `#[non_exhaustive]` so adding a
+/// field or variant is not a silent semver break for rule packs.
+///
+/// Type aliases, free functions, and consts in `ALLOWED_PRELUDE` are skipped.
+/// `DiagnosticRange` is the prelude alias for diagnostics `TextRange`.
+#[test]
+fn prelude_structs_and_language_are_non_exhaustive() {
+    let sources = prelude_definition_sources();
+
+    let skip: BTreeSet<&str> = [
+        "RuleConfigValue",
+        "RuleResult",
+        "POLINT_REPORT_JSON_SCHEMA_V1_URL",
+        "collect_go_tests",
+        "diagnostics_from_json_report",
+        "file_in_scope",
+        "file_matches_globs",
+        "glob_matches",
+        // Alias of diagnostics::TextRange — covered under TextRange below.
+        "DiagnosticRange",
+        // Position/identity value types that rule packs legitimately construct when they
+        // compute their own ranges. `#[non_exhaustive]` would forbid the struct literal
+        // while buying nothing: every constructor for these takes all fields positionally,
+        // so adding a field is a breaking change either way. Verified against a real
+        // consumer — these three were the only compile breaks in a 25-rule repo-local pack.
+        // Do NOT add a type here to silence this gate; the exemption is for value types
+        // with total constructors, not for anything inconvenient.
+        "Span",
+        "TextRange",
+        "RuleId",
+        // The `id_newtype!` identity handles, for the same reason: rule packs construct them
+        // directly in their own fixtures (`Span::point(FileId(1), 1, 1)` appears verbatim in a
+        // real consumer pack), and `from_raw` already takes the single field, so the attribute
+        // forbids tuple construction without buying room to add one.
+        "BranchId",
+        "DefinitionId",
+        "FileId",
+        "FunctionId",
+        "ImportId",
+        "ModuleEdgeId",
+        "ModuleNodeId",
+        "NodeId",
+        "PackageId",
+        "ReferenceId",
+        "ResolvedImportId",
+        "SymbolId",
+    ]
+    .into_iter()
+    .collect();
+
+    let mut defs: BTreeMap<String, Vec<(PathBuf, usize, bool)>> = BTreeMap::new();
+    for (path, text) in &sources {
+        let lines: Vec<&str> = text.lines().collect();
+        for (idx, line) in lines.iter().enumerate() {
+            let trimmed = line.trim_start();
+            let Some(rest) = trimmed
+                .strip_prefix("pub struct ")
+                .or_else(|| trimmed.strip_prefix("pub enum "))
+            else {
+                continue;
+            };
+            let name = rest
+                .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                .next()
+                .unwrap_or("");
+            if name.is_empty() {
+                continue;
+            }
+            let has_ne = preceding_item_attrs_include_non_exhaustive(&lines, idx);
+            defs.entry(name.to_string())
+                .or_default()
+                .push((path.clone(), idx + 1, has_ne));
+        }
+        collect_macro_generated_definitions(path, text, &mut defs);
+    }
+
+    let mut missing = Vec::new();
+    for &name in ALLOWED_PRELUDE {
+        if skip.contains(name) {
+            continue;
+        }
+        let Some(sites) = defs.get(name) else {
+            missing.push(format!("{name}: definition not found in SDK source scan"));
+            continue;
+        };
+        // TextRange appears in both core and diagnostics; every definition must
+        // carry the attribute. Other names should be unique.
+        for (path, line, has_ne) in sites {
+            if !has_ne {
+                missing.push(format!(
+                    "{name} at {}:{} lacks #[non_exhaustive]",
+                    path.display(),
+                    line
+                ));
+            }
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "prelude-exported structs/enums must be #[non_exhaustive] (Language included).\n\
+         Missing:\n  {}",
+        missing.join("\n  ")
+    );
+
+    let language = defs
+        .get("Language")
+        .expect("Language must remain a prelude-exported enum");
+    assert!(
+        language.iter().any(|(_, _, has_ne)| *has_ne),
+        "Language must be #[non_exhaustive]"
+    );
+}
+
+/// Accounts for public structs generated by the core ID newtype macro.
+///
+/// The macro body contains the item attribute, while each invocation supplies the concrete
+/// public type name. Recording invocations keeps the source scan honest without requiring a
+/// compiler-expanded AST or a second public-type allow-list.
+fn collect_macro_generated_definitions(
+    path: &Path,
+    text: &str,
+    defs: &mut BTreeMap<String, Vec<(PathBuf, usize, bool)>>,
+) {
+    let lines: Vec<&str> = text.lines().collect();
+    let macro_has_non_exhaustive = lines.iter().enumerate().any(|(idx, line)| {
+        line.trim() == "#[non_exhaustive]"
+            && lines
+                .get(idx + 1)
+                .is_some_and(|next| next.contains("pub struct $name"))
+    });
+    if !macro_has_non_exhaustive {
+        return;
+    }
+
+    for (idx, line) in lines.iter().enumerate() {
+        let Some(rest) = line.trim_start().strip_prefix("id_newtype!(") else {
+            continue;
+        };
+        let name = rest
+            .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+            .next()
+            .unwrap_or("");
+        if name.is_empty() {
+            continue;
+        }
+        defs.entry(name.to_string())
+            .or_default()
+            .push((path.to_path_buf(), idx + 1, true));
+    }
+}
+
+fn preceding_item_attrs_include_non_exhaustive(lines: &[&str], item_idx: usize) -> bool {
+    let mut j = item_idx;
+    while j > 0 {
+        j -= 1;
+        let s = lines[j].trim();
+        if s.is_empty() {
+            continue;
+        }
+        if s.starts_with("///") || s.starts_with("//!") {
+            continue;
+        }
+        if s.starts_with("#[") {
+            if s.contains("non_exhaustive") {
+                return true;
+            }
+            continue;
+        }
+        break;
+    }
+    false
 }

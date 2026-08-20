@@ -1,24 +1,28 @@
 {
   "schema_version": "polint-graph-accuracy-baseline-0",
-  "reference": "pre-store graph, Phase 63 reference; recall/precision are sourced from the Jelly + Go x/tools callgraph adapter runs and regenerated with POLINT_WRITE_GRAPH_BENCH when the gated benchmark clones are present",
+  "reference": "pre-store graph reference; recall/precision are sourced from the Jelly + Go x/tools callgraph adapter runs and regenerated with POLINT_WRITE_GRAPH_BENCH when the gated benchmark clones are present; runtime_ms/peak_rss_bytes are cost columns gated at +20%",
   "rows": [
     {
       "suite_id": "go-x-tools-rta-callgraph",
       "suite_commit": "7743a285e3d261ca235408e013ec5c14cb5170e4",
-      "recall": null,
-      "precision": null,
-      "graph_edges_expected": 0,
-      "graph_edges_observed": 0,
-      "unknown_count": 0
+      "recall": 1.0,
+      "precision": 0.04378698224852071,
+      "graph_edges_expected": 37,
+      "graph_edges_observed": 10233,
+      "unknown_count": 0,
+      "runtime_ms": null,
+      "peak_rss_bytes": null
     },
     {
       "suite_id": "jelly-callgraph-micro",
       "suite_commit": "b799ed4f0d68c670fe398830aaa51dd5c628cf74",
-      "recall": null,
-      "precision": null,
-      "graph_edges_expected": 0,
-      "graph_edges_observed": 0,
-      "unknown_count": 0
+      "recall": 0.6646382691007438,
+      "precision": 0.9742319127849356,
+      "graph_edges_expected": 1479,
+      "graph_edges_observed": 1009,
+      "unknown_count": 529,
+      "runtime_ms": null,
+      "peak_rss_bytes": null
     }
   ]
 }

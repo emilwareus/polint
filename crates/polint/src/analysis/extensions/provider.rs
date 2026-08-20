@@ -10,6 +10,7 @@ use super::sinks::{
 };
 use super::store::{AcceptedExtensionFact, ExtensionActivationRow, ExtensionOutput};
 use super::validate::{ExtensionValidationInput, validate_extension_output};
+use crate::analysis_api::ProviderExecution;
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{CacheStats, Digest, DigestKind, InputSnapshot};
 use crate::core::AnalysisDb;
@@ -20,6 +21,7 @@ pub(crate) struct ExtensionProviderOutput {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) cache_stats: CacheStats,
     pub(crate) output_digest: Option<Digest>,
+    pub(crate) execution: ProviderExecution,
 }
 
 pub(crate) fn derive_extension_provider_outputs_with_cache_stats(
@@ -37,6 +39,7 @@ pub(crate) fn derive_extension_provider_outputs_with_cache_stats(
             diagnostics: Vec::new(),
             cache_stats,
             output_digest: Some(extension_output_digest(manifest, input_snapshot, db)),
+            execution: Default::default(),
         };
     }
 
@@ -45,7 +48,7 @@ pub(crate) fn derive_extension_provider_outputs_with_cache_stats(
     let mut activations = Vec::new();
     let mut accepted = Vec::new();
     let mut rejected = Vec::new();
-    let mut accepted_stable_keys = BTreeSet::new();
+    let mut accepted_stable_keys = BTreeSet::<crate::core::StableKeyId>::new();
 
     for extension in discovered {
         let handshake = match host.handshake(&extension) {
@@ -111,6 +114,7 @@ pub(crate) fn derive_extension_provider_outputs_with_cache_stats(
                                 .into_iter()
                                 .map(|fact| {
                                     extension_candidate_from_wire(
+                                        db,
                                         &response.extension_id,
                                         &response.provider_id,
                                         fact,
@@ -139,8 +143,11 @@ pub(crate) fn derive_extension_provider_outputs_with_cache_stats(
                         &mut accepted_stable_keys,
                         &mut provider_rejected,
                     );
-                    diagnostics
-                        .extend(provider_rejected.iter().map(extension_rejection_diagnostic));
+                    diagnostics.extend(
+                        provider_rejected
+                            .iter()
+                            .map(|fact| extension_rejection_diagnostic(db, fact)),
+                    );
                     activations.push(ExtensionActivationRow {
                         extension_id: response.extension_id,
                         provider_id: Some(response.provider_id),
@@ -184,6 +191,7 @@ pub(crate) fn derive_extension_provider_outputs_with_cache_stats(
         diagnostics,
         cache_stats,
         output_digest: Some(extension_output_digest(manifest, input_snapshot, db)),
+        execution: Default::default(),
     }
 }
 
@@ -221,7 +229,7 @@ fn extension_output_digest(
             fact.extension_id,
             fact.provider_id,
             fact.fact_family,
-            fact.stable_key,
+            db.resolve_stable_key(fact.stable_key),
             fact.payload_digest
         )
     }));
@@ -239,7 +247,7 @@ fn extension_output_digest(
             fact.extension_id,
             fact.provider_id,
             fact.fact_family,
-            fact.stable_key,
+            db.resolve_stable_key(fact.stable_key),
             fact.reason,
             evidence_digest
         )
@@ -251,12 +259,12 @@ fn extension_output_digest(
 
 fn deduplicate_provider_accepted(
     accepted: Vec<AcceptedExtensionFact>,
-    accepted_stable_keys: &mut BTreeSet<String>,
+    accepted_stable_keys: &mut BTreeSet<crate::core::StableKeyId>,
     rejected: &mut Vec<super::store::RejectedExtensionFact>,
 ) -> Vec<AcceptedExtensionFact> {
     let mut deduped = Vec::new();
     for fact in accepted {
-        if accepted_stable_keys.insert(fact.stable_key.clone()) {
+        if accepted_stable_keys.insert(fact.stable_key) {
             deduped.push(fact);
         } else {
             rejected.push(super::store::RejectedExtensionFact {
@@ -299,7 +307,10 @@ fn protocol_diagnostic(
     output
 }
 
-fn extension_rejection_diagnostic(fact: &super::store::RejectedExtensionFact) -> Diagnostic {
+fn extension_rejection_diagnostic(
+    db: &AnalysisDb,
+    fact: &super::store::RejectedExtensionFact,
+) -> Diagnostic {
     Diagnostic::error(
         "polint/extension",
         "<workspace>",
@@ -309,7 +320,10 @@ fn extension_rejection_diagnostic(fact: &super::store::RejectedExtensionFact) ->
     .with_evidence("extension_id", fact.extension_id.clone())
     .with_evidence("provider_id", fact.provider_id.clone())
     .with_evidence("fact_family", fact.fact_family.clone())
-    .with_evidence("stable_key", fact.stable_key.clone())
+    .with_evidence(
+        "stable_key",
+        db.resolve_stable_key(fact.stable_key).to_string(),
+    )
     .with_evidence("reason", format!("{:?}", fact.reason))
 }
 
@@ -347,11 +361,12 @@ fn native_stable_keys(db: &AnalysisDb) -> BTreeSet<String> {
     db.fact_meta()
         .rows()
         .filter(|(_reference, metadata)| !metadata.producer_id.starts_with("polint.extension."))
-        .map(|(_reference, metadata)| metadata.stable_key.clone())
+        .map(|(_reference, metadata)| db.resolve_stable_key(metadata.stable_key).to_string())
         .collect()
 }
 
 fn extension_candidate_from_wire(
+    db: &AnalysisDb,
     extension_id: &str,
     provider_id: &str,
     fact: super::protocol::ExtensionFactCandidateWire,
@@ -366,7 +381,7 @@ fn extension_candidate_from_wire(
         extension_id: extension_id.to_string(),
         provider_id: provider_id.to_string(),
         fact_family: fact.fact_family,
-        stable_key: fact.stable_key,
+        stable_key: db.stable_key_interner().intern(fact.stable_key_text),
         binding_refs: fact.binding_refs,
         span,
         precision: parse_precision(&fact.precision),
@@ -422,7 +437,7 @@ mod tests {
                 extension_id: "demo".to_string(),
                 provider_id: "routes".to_string(),
                 fact_family: "extension.routes".to_string(),
-                stable_key: "route:/a".to_string(),
+                stable_key: crate::core::stable_key_for_test("route:/a"),
                 binding_refs: Vec::new(),
                 precision: ExtensionFactPrecision::Heuristic,
                 confidence: ExtensionFactConfidence::Medium,
@@ -525,11 +540,12 @@ mod tests {
     #[test]
     fn wire_fact_span_is_preserved_for_sink_validation() {
         let candidate = extension_candidate_from_wire(
+            &crate::core::AnalysisDb::new(),
             "demo",
             "routes",
             ExtensionFactCandidateWire {
                 fact_family: "extension.routes".to_string(),
-                stable_key: "route:/a".to_string(),
+                stable_key_text: "route:/a".to_string(),
                 binding_refs: Vec::new(),
                 span: Some(ExtensionSpanWire {
                     relative_path: "src/app.ts".to_string(),

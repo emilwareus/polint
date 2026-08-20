@@ -1,0 +1,105 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/polint-af2f858c5d9987a8)
+
+running 1 test
+
+thread 'analysis_kernel::validation::calls::calls_validation_exercises_all_d10_indexes' (36999821) panicked at crates/polint/src/core/stable_key.rs:51:36:
+unknown stable-key id 0
+stack backtrace:
+   0:        0x107737e0c - std[bb513d90a5cee88a]::backtrace_rs::backtrace::libunwind::trace
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/../../backtrace/src/backtrace/libunwind.rs:117:9
+   1:        0x107737e0c - std[bb513d90a5cee88a]::backtrace_rs::backtrace::trace_unsynchronized::<std[bb513d90a5cee88a]::sys::backtrace::_print_fmt::{closure#1}>
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/../../backtrace/src/backtrace/mod.rs:66:14
+   2:        0x107737e0c - std[bb513d90a5cee88a]::sys::backtrace::_print_fmt
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/backtrace.rs:74:9
+   3:        0x107737e0c - <<std[bb513d90a5cee88a]::sys::backtrace::BacktraceLock>::print::DisplayBacktrace as core[f63e075e1375d836]::fmt::Display>::fmt
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/backtrace.rs:44:26
+   4:        0x10774d66c - <core[f63e075e1375d836]::fmt::rt::Argument>::fmt
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/fmt/rt.rs:152:76
+   5:        0x10774d66c - core[f63e075e1375d836]::fmt::write
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/fmt/mod.rs:1686:22
+   6:        0x10773d2b4 - std[bb513d90a5cee88a]::io::default_write_fmt::<std[bb513d90a5cee88a]::sys::stdio::unix::Stderr>
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/io/mod.rs:639:11
+   7:        0x10773d2b4 - <std[bb513d90a5cee88a]::sys::stdio::unix::Stderr as std[bb513d90a5cee88a]::io::Write>::write_fmt
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/io/mod.rs:1994:13
+   8:        0x107719bfc - <std[bb513d90a5cee88a]::sys::backtrace::BacktraceLock>::print
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/backtrace.rs:47:25
+   9:        0x107719bfc - std[bb513d90a5cee88a]::panicking::default_hook::{closure#0}
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/panicking.rs:292:27
+  10:        0x10772fc9c - std[bb513d90a5cee88a]::panicking::default_hook
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/panicking.rs:319:9
+  11:        0x10772ffc4 - std[bb513d90a5cee88a]::panicking::panic_with_hook
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/panicking.rs:825:13
+  12:        0x107719ca8 - std[bb513d90a5cee88a]::panicking::panic_handler::{closure#0}
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/panicking.rs:698:13
+  13:        0x107710b9c - std[bb513d90a5cee88a]::sys::backtrace::__rust_end_short_backtrace::<std[bb513d90a5cee88a]::panicking::panic_handler::{closure#0}, !>
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/backtrace.rs:182:18
+  14:        0x10771a918 - __rustc[b7974e8690430dd9]::rust_begin_unwind
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/panicking.rs:689:5
+  15:        0x1077aca18 - core[f63e075e1375d836]::panicking::panic_fmt
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/panicking.rs:80:14
+  16:        0x106b2d504 - polint::core::stable_key::StableKeyInterner::resolve::{{closure}}::he4ef465d6a3bd47f
+                               at /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/stable_key.rs:51:36
+  17:        0x1061457cc - core::option::Option<T>::unwrap_or_else::hcd6c69142ba8fb8b
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/option.rs:1067:21
+  18:        0x106224018 - polint::core::stable_key::StableKeyInterner::resolve::ha0967710623b8512
+                               at /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/stable_key.rs:51:18
+  19:        0x10625ff90 - polint::analysis::calls::store::CallStore::from_output::h77655a26d51498ab
+                               at /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/calls/store.rs:88:34
+  20:        0x1059da5c0 - polint::analysis_kernel::validation::calls::calls_validation_exercises_all_d10_indexes::h3232dc19d422d5d9
+                               at /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis_kernel/validation.rs:2578:23
+  21:        0x1068d3a4c - polint::analysis_kernel::validation::calls::calls_validation_exercises_all_d10_indexes::{{closure}}::h9d3b3a6700f0f0db
+                               at /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis_kernel/validation.rs:2548:52
+  22:        0x1057bfd0c - core::ops::function::FnOnce::call_once::h611f2d395dff569c
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/ops/function.rs:250:5
+  23:        0x106c7d388 - <fn() -> core[f63e075e1375d836]::result::Result<(), alloc[1519c0c6343f008f]::string::String> as core[f63e075e1375d836]::ops::function::FnOnce<()>>::call_once
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/ops/function.rs:250:5
+  24:        0x106c7d388 - test[83d61c8db1bee592]::__rust_begin_short_backtrace::<core[f63e075e1375d836]::result::Result<(), alloc[1519c0c6343f008f]::string::String>, fn() -> core[f63e075e1375d836]::result::Result<(), alloc[1519c0c6343f008f]::string::String>>
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/test/src/lib.rs:663:18
+  25:        0x106c87594 - test[83d61c8db1bee592]::run_test_in_process::{closure#0}
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/test/src/lib.rs:686:74
+  26:        0x106c87594 - <core[f63e075e1375d836]::panic::unwind_safe::AssertUnwindSafe<test[83d61c8db1bee592]::run_test_in_process::{closure#0}> as core[f63e075e1375d836]::ops::function::FnOnce<()>>::call_once
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/panic/unwind_safe.rs:274:9
+  27:        0x106c87594 - std[bb513d90a5cee88a]::panicking::catch_unwind::do_call::<core[f63e075e1375d836]::panic::unwind_safe::AssertUnwindSafe<test[83d61c8db1bee592]::run_test_in_process::{closure#0}>, core[f63e075e1375d836]::result::Result<(), alloc[1519c0c6343f008f]::string::String>>
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/panicking.rs:581:40
+  28:        0x106c87594 - std[bb513d90a5cee88a]::panicking::catch_unwind::<core[f63e075e1375d836]::result::Result<(), alloc[1519c0c6343f008f]::string::String>, core[f63e075e1375d836]::panic::unwind_safe::AssertUnwindSafe<test[83d61c8db1bee592]::run_test_in_process::{closure#0}>>
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/panicking.rs:544:19
+  29:        0x106c87594 - std[bb513d90a5cee88a]::panic::catch_unwind::<core[f63e075e1375d836]::panic::unwind_safe::AssertUnwindSafe<test[83d61c8db1bee592]::run_test_in_process::{closure#0}>, core[f63e075e1375d836]::result::Result<(), alloc[1519c0c6343f008f]::string::String>>
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/panic.rs:359:14
+  30:        0x106c87594 - test[83d61c8db1bee592]::run_test_in_process
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/test/src/lib.rs:686:27
+  31:        0x106c87594 - test[83d61c8db1bee592]::run_test::{closure#0}
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/test/src/lib.rs:607:43
+  32:        0x106c82fd8 - test[83d61c8db1bee592]::run_test::{closure#1}
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/test/src/lib.rs:637:41
+  33:        0x106c82fd8 - std[bb513d90a5cee88a]::sys::backtrace::__rust_begin_short_backtrace::<test[83d61c8db1bee592]::run_test::{closure#1}, ()>
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/backtrace.rs:166:18
+  34:        0x106c8986c - std[bb513d90a5cee88a]::thread::lifecycle::spawn_unchecked::<test[83d61c8db1bee592]::run_test::{closure#1}, ()>::{closure#1}::{closure#0}
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/thread/lifecycle.rs:91:13
+  35:        0x106c8986c - <core[f63e075e1375d836]::panic::unwind_safe::AssertUnwindSafe<std[bb513d90a5cee88a]::thread::lifecycle::spawn_unchecked<test[83d61c8db1bee592]::run_test::{closure#1}, ()>::{closure#1}::{closure#0}> as core[f63e075e1375d836]::ops::function::FnOnce<()>>::call_once
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/panic/unwind_safe.rs:274:9
+  36:        0x106c8986c - std[bb513d90a5cee88a]::panicking::catch_unwind::do_call::<core[f63e075e1375d836]::panic::unwind_safe::AssertUnwindSafe<std[bb513d90a5cee88a]::thread::lifecycle::spawn_unchecked<test[83d61c8db1bee592]::run_test::{closure#1}, ()>::{closure#1}::{closure#0}>, ()>
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/panicking.rs:581:40
+  37:        0x106c8986c - std[bb513d90a5cee88a]::panicking::catch_unwind::<(), core[f63e075e1375d836]::panic::unwind_safe::AssertUnwindSafe<std[bb513d90a5cee88a]::thread::lifecycle::spawn_unchecked<test[83d61c8db1bee592]::run_test::{closure#1}, ()>::{closure#1}::{closure#0}>>
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/panicking.rs:544:19
+  38:        0x106c8986c - std[bb513d90a5cee88a]::panic::catch_unwind::<core[f63e075e1375d836]::panic::unwind_safe::AssertUnwindSafe<std[bb513d90a5cee88a]::thread::lifecycle::spawn_unchecked<test[83d61c8db1bee592]::run_test::{closure#1}, ()>::{closure#1}::{closure#0}>, ()>
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/panic.rs:359:14
+  39:        0x106c8986c - std[bb513d90a5cee88a]::thread::lifecycle::spawn_unchecked::<test[83d61c8db1bee592]::run_test::{closure#1}, ()>::{closure#1}
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/thread/lifecycle.rs:89:26
+  40:        0x106c8986c - <std[bb513d90a5cee88a]::thread::lifecycle::spawn_unchecked<test[83d61c8db1bee592]::run_test::{closure#1}, ()>::{closure#1} as core[f63e075e1375d836]::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/ops/function.rs:250:5
+  41:        0x1077370c0 - <alloc[1519c0c6343f008f]::boxed::Box<dyn core[f63e075e1375d836]::ops::function::FnOnce<(), Output = ()> + core[f63e075e1375d836]::marker::Send> as core[f63e075e1375d836]::ops::function::FnOnce<()>>::call_once
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/alloc/src/boxed.rs:2240:9
+  42:        0x1077370c0 - <std[bb513d90a5cee88a]::sys::thread::unix::Thread>::new::thread_start
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/thread/unix.rs:118:17
+  43:        0x185529c58 - __pthread_cond_wait
+test analysis_kernel::validation::calls::calls_validation_exercises_all_d10_indexes ... FAILED
+
+failures:
+
+failures:
+    analysis_kernel::validation::calls::calls_validation_exercises_all_d10_indexes
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2343 filtered out; finished in 0.04s
+
+error: test failed, to rerun pass `-p polint --lib`

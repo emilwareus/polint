@@ -1,11 +1,8 @@
-pub(crate) mod builder;
-pub(crate) mod cache_key;
-pub(crate) mod derived;
-pub(crate) mod facts;
-pub(crate) mod graph;
-pub(crate) mod ids;
-pub(crate) mod lower_go;
-pub(crate) mod lower_ts;
-pub(crate) mod provider;
-pub(crate) mod store;
-pub(crate) mod validate;
+pub(crate) use crate::analysis_neutral::cfg::facts;
+pub(crate) use crate::analysis_neutral::cfg::ids;
+pub(crate) use crate::analysis_neutral::cfg::provider;
+pub(crate) use crate::analysis_neutral::cfg::store;
+pub(crate) use crate::analysis_neutral::cfg::validate;
+
+#[cfg(all(test, feature = "lang-typescript"))]
+mod lower_ts_tests;

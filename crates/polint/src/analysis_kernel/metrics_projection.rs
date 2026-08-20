@@ -3,9 +3,10 @@ use super::outcome::ProviderOutcomeError;
 use super::{
     ProviderManifest, ProviderOutcome, ProviderOutcomeStatus, ProviderOutputIdentity, provider,
 };
+use crate::analysis_api::is_synthetic_ts_js_module_function;
 use crate::core::{
     AnalysisDb, ComplexityMetricFact, FileId, FileMetricFact, FunctionFact, FunctionId,
-    FunctionMetricFact, Language, Span, is_synthetic_ts_js_module_function,
+    FunctionMetricFact, Language, Span,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -506,6 +507,7 @@ pub(crate) const fn language_label(language: Language) -> &'static str {
         Language::JavaScript => "javascript",
         Language::Jsx => "jsx",
         Language::Unknown => "unknown",
+        _ => "unknown",
     }
 }
 #[cfg(test)]
@@ -525,28 +527,20 @@ mod tests {
             let file = db.add_file(path.into(), path.to_string(), source.clone());
             let start = source.find(name).expect("function name") as u32;
             for _ in 0..duplicates.max(1) {
-                db.push_function(FunctionFact {
-                    id: FunctionId(99),
+                db.push_function(FunctionFact::new(
+                    FunctionId::from_raw(99),
                     file,
-                    name: name.to_string(),
-                    span: Span {
-                        file,
-                        start_byte: start,
-                        end_byte: source.len() as u32,
-                        start_line: 1,
-                        start_col: 1,
-                        end_line: 1,
-                        end_col: 1,
-                    },
-                    language: Language::TypeScript,
-                    is_test: excluded_seed,
-                    is_exported: !excluded_seed,
-                    cyclomatic_complexity: 2,
-                    calls: excluded_seed
+                    name.to_string(),
+                    Span::new(file, start, source.len() as u32, 1, 1, 1, 1),
+                    Language::TypeScript,
+                    excluded_seed,
+                    !excluded_seed,
+                    2,
+                    excluded_seed
                         .then(|| "ignored".into())
                         .into_iter()
                         .collect(),
-                });
+                ));
             }
         }
         crate::metrics::derive_requested_metrics(

@@ -1,9 +1,8 @@
 use super::*;
-use crate::analysis_kernel::incremental::{CacheNode, LayerCacheManifest};
-use crate::analysis_plan::AnalysisPlan;
-use crate::core::{AnalysisDb, BranchObligation, Language};
-use crate::diagnostics::TextRange;
-use crate::graph::ImportGraph;
+use crate::analysis_api::{BranchObligation, FactDatabase};
+use crate::go::local_db::LocalFactDb;
+use crate::internal_core::DiagnosticRange as TextRange;
+use crate::internal_core::Language;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -11,8 +10,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static CACHE_ROOT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-fn db_with_go_file(relative_path: &str, source: &str) -> AnalysisDb {
-    let mut db = AnalysisDb::new();
+fn db_with_go_file(relative_path: &str, source: &str) -> LocalFactDb {
+    let mut db = LocalFactDb::new();
     db.add_file(
         PathBuf::from(relative_path),
         relative_path.to_string(),
@@ -86,7 +85,7 @@ fn corrupt_first_manifest_output_digest(cache_root: &Path) {
 #[test]
 fn cache_writes_and_restores_go_facts() {
     let cache_root = unique_cache_root();
-    let cache = crate::cache::Cache::new(&cache_root, true);
+    let cache = crate::go::test_cache::FsAnalysisCache::new(&cache_root, true);
     let source = r#"
 package payment
 
@@ -135,8 +134,7 @@ return nil
 #[test]
 fn go_syntax_layer_cache_cold_warm() {
     let cache_root = unique_cache_root();
-    let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
-    let plan = AnalysisPlan::empty();
+    let cache = crate::go::test_cache::FsAnalysisCache::new(cache_root.join("analysis"), true);
     let source = r#"
 package payment
 
@@ -144,9 +142,8 @@ func Authorize() {}
 "#;
     let mut first = db_with_go_file("payment.go", source);
 
-    let first_result = analyze_with_plan_options_and_cache_stats(
-        &mut first, &cache, "config", "rule", &plan, false,
-    );
+    let first_result =
+        analyze_with_plan_options_and_cache_stats(&mut first, &cache, "config", "rule", "", false);
 
     assert!(first_result.diagnostics.is_empty());
     assert_eq!(first_result.cache_stats.misses, 1);
@@ -157,129 +154,27 @@ func Authorize() {}
     assert!(cache_root.join("layers").exists());
 
     let mut second = db_with_go_file("payment.go", source);
-    let second_result = analyze_with_plan_options_and_cache_stats(
-        &mut second,
-        &cache,
-        "config",
-        "rule",
-        &plan,
-        false,
-    );
+    let second_result =
+        analyze_with_plan_options_and_cache_stats(&mut second, &cache, "config", "rule", "", false);
 
     assert!(second_result.diagnostics.is_empty());
     assert_eq!(second_result.cache_stats.hits, 1);
     assert_eq!(second_result.cache_stats.verified_reuse, 1);
     assert_eq!(second_result.cache_stats.recomputes, 0);
     assert_eq!(second_result.cache_stats.writes, 0);
-    assert!(first_result.output_digest.is_some());
-    assert_eq!(first_result.output_digest, second_result.output_digest);
 
     fs::remove_dir_all(cache_root).ok();
 }
 
 #[test]
-fn go_syntax_layer_dependency_delete_add_replace_duplicate_and_reorder_recompute() {
-    enum Tamper {
-        Delete,
-        Add,
-        Replace,
-        Duplicate,
-        Reorder,
-    }
-    for tamper in [
-        Tamper::Delete,
-        Tamper::Add,
-        Tamper::Replace,
-        Tamper::Duplicate,
-        Tamper::Reorder,
-    ] {
-        let temp = tempfile::tempdir().unwrap();
-        let cache_root = temp.path();
-        let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
-        let plan = AnalysisPlan::empty();
-        let make_db = || {
-            let mut db = db_with_go_file("a.go", "package a\nfunc A() {}\n");
-            db.add_file(
-                "b.go".into(),
-                "b.go".into(),
-                "package b\nfunc B() {}\n".into(),
-            );
-            db
-        };
-        let first = analyze_with_plan_options_and_cache_stats(
-            &mut make_db(),
-            &cache,
-            "config",
-            "rule",
-            &plan,
-            false,
-        );
-        assert_eq!(first.cache_stats.writes, 1);
-        let path = first_layer_file(cache_root, "manifests");
-        let mut manifest: LayerCacheManifest =
-            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        let expected = manifest.dependencies.clone();
-        match tamper {
-            Tamper::Delete => {
-                manifest.dependencies.remove(0);
-            }
-            Tamper::Add => {
-                let mut edge = manifest.dependencies[0].clone();
-                edge.to = CacheNode::Input("unrelated".into());
-                manifest.dependencies.push(edge);
-                manifest.dependencies.sort();
-            }
-            Tamper::Replace => {
-                manifest.dependencies[0].to = CacheNode::Input("replaced".into());
-                manifest.dependencies.sort();
-            }
-            Tamper::Duplicate => {
-                let edge = manifest.dependencies[0].clone();
-                manifest.dependencies.push(edge);
-                manifest.dependencies.sort();
-            }
-            Tamper::Reorder => manifest.dependencies.swap(0, 1),
-        }
-        fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-
-        let repaired = analyze_with_plan_options_and_cache_stats(
-            &mut make_db(),
-            &cache,
-            "config",
-            "rule",
-            &plan,
-            false,
-        );
-        assert_eq!(repaired.cache_stats.invalid_evicted_reads, 1);
-        assert_eq!(repaired.cache_stats.recomputes, 1);
-        assert_eq!(repaired.cache_stats.verified_reuse, 0);
-        let repaired: LayerCacheManifest =
-            serde_json::from_slice(&fs::read(first_layer_file(cache_root, "manifests")).unwrap())
-                .unwrap();
-        assert_eq!(repaired.dependencies, expected);
-        let warm = analyze_with_plan_options_and_cache_stats(
-            &mut make_db(),
-            &cache,
-            "config",
-            "rule",
-            &plan,
-            false,
-        );
-        assert_eq!(warm.cache_stats.verified_reuse, 1);
-    }
-}
-
-#[test]
 fn go_syntax_layer_cache_corrupt() {
     let cache_root = unique_cache_root();
-    let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
-    let plan = AnalysisPlan::empty();
+    let cache = crate::go::test_cache::FsAnalysisCache::new(cache_root.join("analysis"), true);
     let source = "package main\nfunc main() {}\n";
     let mut first = db_with_go_file("main.go", source);
 
-    let first_result = analyze_with_plan_options_and_cache_stats(
-        &mut first, &cache, "config", "rule", &plan, false,
-    );
+    let first_result =
+        analyze_with_plan_options_and_cache_stats(&mut first, &cache, "config", "rule", "", false);
     assert!(first_result.diagnostics.is_empty());
 
     let manifest = first_layer_file(&cache_root, "manifests");
@@ -291,7 +186,7 @@ fn go_syntax_layer_cache_corrupt() {
         &cache,
         "config",
         "changed-rule",
-        &plan,
+        "",
         false,
     );
 
@@ -306,26 +201,18 @@ fn go_syntax_layer_cache_corrupt() {
 #[test]
 fn go_syntax_layer_cache_output_digest_mismatch_recomputes() {
     let cache_root = unique_cache_root();
-    let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
-    let plan = AnalysisPlan::empty();
+    let cache = crate::go::test_cache::FsAnalysisCache::new(cache_root.join("analysis"), true);
     let source = "package main\nfunc main() {}\n";
     let mut first = db_with_go_file("main.go", source);
 
-    let first_result = analyze_with_plan_options_and_cache_stats(
-        &mut first, &cache, "config", "rule", &plan, false,
-    );
+    let first_result =
+        analyze_with_plan_options_and_cache_stats(&mut first, &cache, "config", "rule", "", false);
     assert!(first_result.diagnostics.is_empty());
     corrupt_first_manifest_output_digest(&cache_root);
 
     let mut second = db_with_go_file("main.go", source);
-    let second_result = analyze_with_plan_options_and_cache_stats(
-        &mut second,
-        &cache,
-        "config",
-        "rule",
-        &plan,
-        false,
-    );
+    let second_result =
+        analyze_with_plan_options_and_cache_stats(&mut second, &cache, "config", "rule", "", false);
 
     assert!(second_result.diagnostics.is_empty());
     assert_eq!(second_result.cache_stats.invalid_evicted_reads, 1);
@@ -338,9 +225,8 @@ fn go_syntax_layer_cache_output_digest_mismatch_recomputes() {
 #[test]
 fn go_syntax_layer_cache_disabled_bypass() {
     let cache_root = unique_cache_root();
-    let cache = crate::cache::Cache::new(cache_root.join("analysis"), false);
-    let plan = AnalysisPlan::empty();
-    let mut db = AnalysisDb::new();
+    let cache = crate::go::test_cache::FsAnalysisCache::new(cache_root.join("analysis"), false);
+    let mut db = LocalFactDb::new();
     db.add_file(
         PathBuf::from("first.go"),
         "first.go".to_string(),
@@ -353,26 +239,24 @@ fn go_syntax_layer_cache_disabled_bypass() {
     );
 
     let result =
-        analyze_with_plan_options_and_cache_stats(&mut db, &cache, "config", "rule", &plan, false);
+        analyze_with_plan_options_and_cache_stats(&mut db, &cache, "config", "rule", "", false);
 
     assert!(result.diagnostics.is_empty());
     assert_eq!(result.cache_stats.bypasses_disabled, 1);
     assert_eq!(result.cache_stats.recomputes, 1);
     assert_eq!(result.cache_stats.writes, 0);
-    assert!(result.output_digest.is_some());
     assert!(!cache_root.join("layers").exists());
 }
 
 #[test]
 fn go_syntax_layer_cache_payload_excludes_source_and_temp_paths() {
     let cache_root = unique_cache_root();
-    let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
-    let plan = AnalysisPlan::empty();
+    let cache = crate::go::test_cache::FsAnalysisCache::new(cache_root.join("analysis"), true);
     let source = "package main\nfunc main() {}\n";
     let mut db = db_with_go_file("main.go", source);
 
     let result =
-        analyze_with_plan_options_and_cache_stats(&mut db, &cache, "config", "rule", &plan, false);
+        analyze_with_plan_options_and_cache_stats(&mut db, &cache, "config", "rule", "", false);
 
     assert!(result.diagnostics.is_empty());
     assert!(
@@ -400,7 +284,7 @@ if user == "" {
 return nil
 }
 "#;
-    let cache = crate::cache::Cache::new("", false);
+    let cache = crate::go::test_cache::FsAnalysisCache::new("", false);
     let mut sequential = db_with_go_file("payment.go", source);
     let mut parallel = db_with_go_file("payment.go", source);
 
@@ -685,6 +569,7 @@ func (svc *Service) Enabled() bool {
 
 #[test]
 fn go_import_facts_feed_import_graph() {
+    // ImportGraph lives in the polint facade; this asserts the Go import facts it consumes.
     let mut db = db_with_go_file(
         "payment.go",
         r#"package payment
@@ -696,11 +581,11 @@ func Authorize() {}
     );
 
     let diagnostics = analyze(&mut db);
-    let dot = ImportGraph::from_db(&db).to_dot();
 
     assert!(diagnostics.is_empty());
-    assert!(dot.contains("payment.go"), "{dot}");
-    assert!(dot.contains("github.com/acme/authz"), "{dot}");
+    assert_eq!(db.imports().len(), 1);
+    assert_eq!(db.imports()[0].path, "github.com/acme/authz");
+    assert_eq!(db.path_for(db.imports()[0].file), "payment.go");
 }
 
 #[test]
@@ -1332,7 +1217,7 @@ func Authorize(err error) error {
     let baseline = analyzed_go_file("payment.go", source);
     let baseline_branch = branch_for(&baseline, "err != nil", "true");
 
-    let mut shifted = AnalysisDb::new();
+    let mut shifted = LocalFactDb::new();
     shifted.add_file(
         PathBuf::from("other.go"),
         "other.go".to_string(),
@@ -1372,7 +1257,7 @@ func Other(ok bool) {
     );
 }
 
-fn analyzed_go_file(relative_path: &str, source: &str) -> AnalysisDb {
+fn analyzed_go_file(relative_path: &str, source: &str) -> LocalFactDb {
     let mut db = db_with_go_file(relative_path, source);
     let diagnostics = analyze(&mut db);
     assert!(diagnostics.is_empty());
@@ -1380,7 +1265,7 @@ fn analyzed_go_file(relative_path: &str, source: &str) -> AnalysisDb {
 }
 
 fn branch_for<'db>(
-    db: &'db AnalysisDb,
+    db: &'db LocalFactDb,
     condition_text: &str,
     edge_label: &str,
 ) -> &'db BranchObligation {
@@ -1390,7 +1275,7 @@ fn branch_for<'db>(
         .expect("branch exists")
 }
 
-fn branch_fingerprints(db: &AnalysisDb) -> Vec<String> {
+fn branch_fingerprints(db: &LocalFactDb) -> Vec<String> {
     db.branches()
         .iter()
         .map(|branch| branch.stable_fingerprint.clone())

@@ -1,0 +1,24 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.2/crates/polint)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 18.96s
+     Running tests/golden.rs (target/debug/deps/golden-0b79c88cdf5488ee)
+
+running 1 test
+test characterization_goldens_match_cli has been running for over 60 seconds
+
+thread 'characterization_goldens_match_cli' (4920806) panicked at crates/polint/tests/golden.rs:494:9:
+golden cost budget breached for `examples/basic/json`:
+  wall_clock_ms: measured 116 exceeds budget (baseline 16, ratio 7.2500, max 1.2, abs floor +50)
+baseline=GoldenCostRecord { schema_version: "polint-golden-cost-1", wall_clock_ms: 16, peak_rss_bytes: 25116672, peak_rss_delta_bytes: 18137088 }
+measured=GoldenCostRecord { schema_version: "polint-golden-cost-1", wall_clock_ms: 116, peak_rss_bytes: 25477120, peak_rss_delta_bytes: 18432000 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test characterization_goldens_match_cli ... FAILED
+
+failures:
+
+failures:
+    characterization_goldens_match_cli
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 174.13s
+
+error: test failed, to rerun pass `-p polint --test golden`

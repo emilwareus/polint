@@ -24,7 +24,6 @@ func GoDomain(flag bool, input *int) string {
 	} else {
 		out = "cool"
 	}
-	// POLINT-FEATURE abstract-domains/go/loop-widening
 	for count < unknownInt() {
 		count = count + 1
 		if count > 2 {

@@ -1,31 +1,41 @@
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
+#[cfg(unix)]
+use crate::go::embedded_cache::write_private_file;
+use crate::go::embedded_cache::{
+    materialize_embedded_sources, read_verified_private_file, verify_private_file,
+};
+use crate::go::lifecycle;
+use crate::go::process_runner::{GO_SUBPROCESS_TIMEOUT, GoProcessError, run_bounded};
 use crate::go::semantic::protocol::GO_SEMANTIC_SCHEMA;
 
-pub(crate) const GO_SEMANTIC_FRONTEND_ENV: &str = "POLINT_GO_FRONTEND";
+pub const GO_SEMANTIC_FRONTEND_ENV: &str = "POLINT_GO_FRONTEND";
 const EMBEDDED_GO_FRONTEND_FILES: &[(&str, &str)] = &[
     (
         "go.mod",
-        include_str!("../../../go-sidecar/polint-go-frontend/go.mod"),
+        include_str!("../../go-sidecar/polint-go-frontend/go.mod"),
     ),
     (
         "go.sum",
-        include_str!("../../../go-sidecar/polint-go-frontend/go.sum"),
+        include_str!("../../go-sidecar/polint-go-frontend/go.sum"),
     ),
     (
         "main.go",
-        include_str!("../../../go-sidecar/polint-go-frontend/main.go"),
+        include_str!("../../go-sidecar/polint-go-frontend/main.go"),
     ),
     (
         "internal/semantic/emit.go",
-        include_str!("../../../go-sidecar/polint-go-frontend/internal/semantic/emit.go"),
+        include_str!("../../go-sidecar/polint-go-frontend/internal/semantic/emit.go"),
     ),
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum GoSemanticProcessError {
+pub enum GoSemanticProcessError {
     CommandFailed(String),
     CommandUnavailable(String),
     VersionUnsupported(String),
@@ -46,12 +56,12 @@ impl std::fmt::Display for GoSemanticProcessError {
 impl std::error::Error for GoSemanticProcessError {}
 
 #[derive(Debug, Clone)]
-pub(crate) enum GoSemanticCommand {
+pub enum GoSemanticCommand {
     Binary(PathBuf),
     SourceDir(PathBuf),
 }
 
-pub(crate) fn resolve_go_semantic_frontend() -> Result<GoSemanticCommand, GoSemanticProcessError> {
+pub fn resolve_go_semantic_frontend() -> Result<GoSemanticCommand, GoSemanticProcessError> {
     if let Ok(path) = std::env::var(GO_SEMANTIC_FRONTEND_ENV)
         && !path.trim().is_empty()
     {
@@ -63,7 +73,7 @@ pub(crate) fn resolve_go_semantic_frontend() -> Result<GoSemanticCommand, GoSema
     materialize_embedded_frontend().map(GoSemanticCommand::SourceDir)
 }
 
-pub(crate) fn command_for_path(path: PathBuf) -> Result<GoSemanticCommand, GoSemanticProcessError> {
+pub fn command_for_path(path: PathBuf) -> Result<GoSemanticCommand, GoSemanticProcessError> {
     if path.is_file() {
         return Ok(GoSemanticCommand::Binary(path));
     }
@@ -97,125 +107,33 @@ fn frontend_binary_name() -> &'static str {
 }
 
 fn materialize_embedded_frontend() -> Result<PathBuf, GoSemanticProcessError> {
-    let hash = embedded_frontend_hash();
-    let parent = std::env::temp_dir()
-        .join("polint-go-frontend")
-        .join(env!("CARGO_PKG_VERSION"));
-    let directory = parent.join(&hash);
-    let marker = directory.join(".complete");
-    if marker.is_file() {
-        return Ok(directory);
-    }
-    if directory.exists() && embedded_frontend_files_match(&directory) {
-        fs::write(&marker, "").map_err(|error| {
-            GoSemanticProcessError::CommandFailed(format!(
-                "failed to mark embedded Go semantic frontend `{}` complete: {error}",
-                directory.display()
-            ))
-        })?;
-        return Ok(directory);
-    }
-    if directory.exists() {
-        fs::remove_dir_all(&directory).map_err(|error| {
-            GoSemanticProcessError::CommandFailed(format!(
-                "failed to replace incomplete embedded Go semantic frontend `{}`: {error}",
-                directory.display()
-            ))
-        })?;
-    }
-    fs::create_dir_all(&parent).map_err(|error| {
+    materialize_embedded_sources(
+        "semantic",
+        env!("CARGO_PKG_VERSION"),
+        &embedded_frontend_hash(),
+        EMBEDDED_GO_FRONTEND_FILES,
+    )
+    .map_err(|reason| {
         GoSemanticProcessError::CommandFailed(format!(
-            "failed to create embedded Go semantic frontend cache `{}`: {error}",
-            parent.display()
+            "failed to materialize embedded Go semantic frontend: {reason}"
         ))
-    })?;
-    let staging = parent.join(format!(
-        ".{hash}-{}-{}",
-        std::process::id(),
-        unique_materialization_suffix()
-    ));
-    if staging.exists() {
-        fs::remove_dir_all(&staging).map_err(|error| {
-            GoSemanticProcessError::CommandFailed(format!(
-                "failed to clear stale embedded Go semantic frontend staging directory `{}`: {error}",
-                staging.display()
-            ))
-        })?;
-    }
-    write_embedded_frontend_files(&staging)?;
-    fs::write(staging.join(".complete"), "").map_err(|error| {
-        GoSemanticProcessError::CommandFailed(format!(
-            "failed to write embedded Go semantic frontend completion marker `{}`: {error}",
-            staging.display()
-        ))
-    })?;
-    match fs::rename(&staging, &directory) {
-        Ok(()) => Ok(directory),
-        Err(_) if marker.is_file() => {
-            let _ = fs::remove_dir_all(&staging);
-            Ok(directory)
-        }
-        Err(error) => Err(GoSemanticProcessError::CommandFailed(format!(
-            "failed to publish embedded Go semantic frontend directory `{}`: {error}",
-            directory.display()
-        ))),
-    }
+    })
 }
 
-fn embedded_frontend_files_match(directory: &Path) -> bool {
-    EMBEDDED_GO_FRONTEND_FILES
-        .iter()
-        .all(|(relative_path, contents)| {
-            fs::read_to_string(directory.join(relative_path))
-                .as_deref()
-                .is_ok_and(|existing| existing == *contents)
-        })
-}
-
-fn write_embedded_frontend_files(directory: &Path) -> Result<(), GoSemanticProcessError> {
-    for (relative_path, contents) in EMBEDDED_GO_FRONTEND_FILES {
-        let path = directory.join(relative_path);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|error| {
-                GoSemanticProcessError::CommandFailed(format!(
-                    "failed to create embedded Go semantic frontend directory `{}`: {error}",
-                    parent.display()
-                ))
-            })?;
-        }
-        fs::write(&path, contents).map_err(|error| {
-            GoSemanticProcessError::CommandFailed(format!(
-                "failed to write embedded Go semantic frontend file `{}`: {error}",
-                path.display()
-            ))
-        })?;
-    }
-    Ok(())
-}
-
-fn unique_materialization_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default()
-}
-
-pub(crate) fn embedded_frontend_hash() -> String {
+pub fn embedded_frontend_hash() -> String {
     let mut parts = Vec::new();
     parts.push(GO_SEMANTIC_SCHEMA.to_string());
     for (relative_path, contents) in EMBEDDED_GO_FRONTEND_FILES {
         parts.push(format!(
             "{relative_path}:{}",
-            crate::cache::stable_hash(&[*contents])
+            crate::go::hash::stable_hash(&[*contents])
         ));
     }
     let part_refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
-    crate::cache::stable_hash(&part_refs)
+    crate::go::hash::stable_hash(&part_refs)
 }
 
-pub(crate) fn frontend_digest(
-    frontend: &GoSemanticCommand,
-) -> Result<String, GoSemanticProcessError> {
+pub fn frontend_digest(frontend: &GoSemanticCommand) -> Result<String, GoSemanticProcessError> {
     match frontend {
         GoSemanticCommand::Binary(path) => {
             let bytes = fs::read(path).map_err(|error| {
@@ -250,7 +168,7 @@ fn source_dir_digest(path: &Path) -> Result<String, GoSemanticProcessError> {
         ));
     }
     let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
-    Ok(crate::cache::stable_hash(&refs))
+    Ok(crate::go::hash::stable_hash(&refs))
 }
 
 fn collect_frontend_source_files(
@@ -316,9 +234,10 @@ fn stable_bytes_hash(bytes: &[u8]) -> String {
     format!("{hash:016x}")
 }
 
-pub(crate) fn command_for_frontend(
+pub fn command_for_frontend(
     frontend: &GoSemanticCommand,
     root: &Path,
+    offline: bool,
 ) -> Result<Command, GoSemanticProcessError> {
     match frontend {
         GoSemanticCommand::Binary(path) => {
@@ -327,12 +246,7 @@ pub(crate) fn command_for_frontend(
             Ok(command)
         }
         GoSemanticCommand::SourceDir(path) => {
-            // Build the frontend binary once (cached next to the materialized
-            // source) and run that, rather than `go run .` on every request. The
-            // cold compile of x/tools can approach the per-request timeout, so
-            // building here — outside the timed analysis request — keeps the
-            // timeout covering only analysis and avoids flaky CI timeouts.
-            let binary = ensure_frontend_binary(path)?;
+            let binary = ensure_frontend_binary(path, offline, GO_SUBPROCESS_TIMEOUT)?;
             let mut command = Command::new(binary);
             command.current_dir(root);
             Ok(command)
@@ -340,86 +254,346 @@ pub(crate) fn command_for_frontend(
     }
 }
 
-/// Build the embedded frontend into a cached `polint-go-frontend` binary next to
-/// its materialized source, returning the binary path. Concurrent builds are
-/// made safe by compiling to a unique staging path and atomically renaming.
-fn ensure_frontend_binary(source_dir: &Path) -> Result<PathBuf, GoSemanticProcessError> {
-    let binary = source_dir.join(frontend_binary_name());
-    if binary.is_file() {
+fn ensure_frontend_binary(
+    source_dir: &Path,
+    offline: bool,
+    timeout: Duration,
+) -> Result<PathBuf, GoSemanticProcessError> {
+    ensure_frontend_binary_with_program(source_dir, offline, timeout, OsStr::new("go"))
+}
+
+fn ensure_frontend_binary_with_program(
+    source_dir: &Path,
+    offline: bool,
+    timeout: Duration,
+    go_program: &OsStr,
+) -> Result<PathBuf, GoSemanticProcessError> {
+    ensure_frontend_binary_with_program_and_hooks(
+        source_dir,
+        offline,
+        timeout,
+        go_program,
+        || {},
+        || {},
+    )
+}
+
+fn ensure_frontend_binary_with_program_and_hooks<AfterPublish, OnContention>(
+    source_dir: &Path,
+    offline: bool,
+    timeout: Duration,
+    go_program: &OsStr,
+    after_binary_publish: AfterPublish,
+    on_lock_contention: OnContention,
+) -> Result<PathBuf, GoSemanticProcessError>
+where
+    AfterPublish: FnOnce(),
+    OnContention: FnOnce(),
+{
+    let toolchain = local_go_toolchain_version_with_program(go_program)?;
+    if !go_version_at_least(&toolchain, 1, 25) {
+        return Err(GoSemanticProcessError::VersionUnsupported(format!(
+            "polint-go-frontend source mode requires Go 1.25 or newer on PATH; found {toolchain}"
+        )));
+    }
+    let (goos, goarch) = execution_host_go_target()?;
+    verify_local_go_target_with_program(go_program, offline, goos, goarch)?;
+    let cache_key = frontend_binary_cache_key(
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        &toolchain,
+        goos,
+        goarch,
+    );
+    let binary = source_dir.join(format!(".{}-{cache_key}", frontend_binary_name()));
+    let receipt_path = source_dir.join(format!(".binary-receipt-{cache_key}"));
+    if cached_binary_matches(&binary, &receipt_path, &cache_key) {
         return Ok(binary);
     }
-    ensure_local_go_toolchain_supported()?;
+
+    let _cache_lock = lock_frontend_binary_cache(source_dir, &cache_key, on_lock_contention)?;
+    if cached_binary_matches(&binary, &receipt_path, &cache_key) {
+        return Ok(binary);
+    }
+    if binary.exists() || receipt_path.exists() {
+        return Err(GoSemanticProcessError::CommandFailed(format!(
+            "embedded frontend cache contains an unverifiable immutable entry `{}`",
+            binary.display()
+        )));
+    }
+
     let staging = source_dir.join(format!(
-        ".build-{}-{}",
+        ".build-{cache_key}-{}-{}",
         std::process::id(),
-        unique_materialization_suffix()
+        unique_build_suffix()
     ));
-    let output = Command::new("go")
-        .arg("build")
-        .arg("-o")
-        .arg(&staging)
-        .arg(".")
-        .current_dir(source_dir)
-        .env("GOWORK", "off")
-        .env("GOTOOLCHAIN", "local")
-        .output()
-        .map_err(|error| {
-            GoSemanticProcessError::CommandFailed(format!(
-                "failed to start go build of embedded frontend: {error}"
-            ))
-        })?;
+    let command = frontend_build_command(go_program, source_dir, &staging, offline, goos, goarch);
+    let output = run_bounded(command, timeout, "go build of embedded semantic frontend")
+        .map_err(map_process_error)?;
     if !output.status.success() {
         let _ = fs::remove_file(&staging);
-        // If another process already published the binary, use it.
-        if binary.is_file() {
-            return Ok(binary);
-        }
         return Err(GoSemanticProcessError::CommandFailed(format!(
             "go build of embedded frontend failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
-    match fs::rename(&staging, &binary) {
-        Ok(()) => Ok(binary),
-        Err(_) if binary.is_file() => {
-            let _ = fs::remove_file(&staging);
-            Ok(binary)
+    make_binary_private_executable(&staging)?;
+
+    // Platforms where cache-file ownership cannot be verified never execute a
+    // persistent binary from the cache. The unique just-built output is used
+    // once and will not be selected by a later invocation.
+    #[cfg(not(unix))]
+    {
+        after_binary_publish();
+        Ok(staging)
+    }
+
+    #[cfg(unix)]
+    {
+        let bytes = fs::read(&staging).map_err(|error| {
+            GoSemanticProcessError::CommandFailed(format!(
+                "failed to hash built embedded frontend `{}`: {error}",
+                staging.display()
+            ))
+        })?;
+        let digest = stable_bytes_hash(&bytes);
+
+        match fs::hard_link(&staging, &binary) {
+            Ok(()) => {
+                let _ = fs::remove_file(&staging);
+                after_binary_publish();
+                publish_binary_receipt(&receipt_path, &cache_key, &digest)?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                let _ = fs::remove_file(&staging);
+                if cached_binary_matches(&binary, &receipt_path, &cache_key) {
+                    return Ok(binary);
+                }
+                return Err(GoSemanticProcessError::CommandFailed(format!(
+                    "embedded frontend cache contains an unverifiable immutable binary `{}`",
+                    binary.display()
+                )));
+            }
+            Err(error) => {
+                let _ = fs::remove_file(&staging);
+                return Err(GoSemanticProcessError::CommandFailed(format!(
+                    "failed to publish embedded frontend binary `{}`: {error}",
+                    binary.display()
+                )));
+            }
         }
-        Err(error) => {
-            let _ = fs::remove_file(&staging);
-            Err(GoSemanticProcessError::CommandFailed(format!(
-                "failed to publish embedded frontend binary `{}`: {error}",
+        if !cached_binary_matches(&binary, &receipt_path, &cache_key) {
+            return Err(GoSemanticProcessError::CommandFailed(format!(
+                "published embedded frontend binary `{}` failed receipt or ownership verification",
                 binary.display()
-            )))
+            )));
         }
+        Ok(binary)
     }
 }
 
-fn ensure_local_go_toolchain_supported() -> Result<(), GoSemanticProcessError> {
-    let version = local_go_toolchain_version()?;
-    if !go_version_at_least(&version, 1, 25) {
-        return Err(GoSemanticProcessError::VersionUnsupported(format!(
-            "polint-go-frontend source mode requires Go 1.25 or newer on PATH; found {version}"
-        )));
+fn frontend_binary_cache_key(
+    execution_os: &str,
+    execution_arch: &str,
+    toolchain: &str,
+    goos: &str,
+    goarch: &str,
+) -> String {
+    let build_environment = [
+        "GOENV",
+        "GOFLAGS",
+        "CGO_ENABLED",
+        "CC",
+        "CXX",
+        "GOTOOLDIR",
+        "GOROOT",
+    ]
+    .map(|name| {
+        format!(
+            "{name}={}",
+            std::env::var_os(name).unwrap_or_default().to_string_lossy()
+        )
+    });
+    let mut context = vec![
+        "polint-go-frontend-binary-v2",
+        execution_os,
+        execution_arch,
+        toolchain,
+        goos,
+        goarch,
+    ];
+    context.extend(build_environment.iter().map(String::as_str));
+    crate::go::hash::stable_hash(&context)
+}
+
+fn lock_frontend_binary_cache(
+    source_dir: &Path,
+    cache_context: &str,
+    on_contention: impl FnOnce(),
+) -> Result<fs::File, GoSemanticProcessError> {
+    let lock_path = source_dir.join(format!(".binary-lock-{cache_context}"));
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
     }
+    let lock = options.open(&lock_path).map_err(|error| {
+        GoSemanticProcessError::CommandFailed(format!(
+            "failed to open embedded frontend binary cache lock `{}`: {error}",
+            lock_path.display()
+        ))
+    })?;
+    // Do not read the lock through a second handle: on Windows an existing
+    // byte-range lock rejects that read with ERROR_LOCK_VIOLATION. The lock's
+    // contents are irrelevant; only its private regular-file identity matters.
+    verify_private_file(&lock_path).map_err(|reason| {
+        GoSemanticProcessError::CommandFailed(format!(
+            "refusing untrusted embedded frontend binary cache lock `{}`: {reason}",
+            lock_path.display()
+        ))
+    })?;
+
+    match lock.try_lock() {
+        Ok(()) => {}
+        Err(fs::TryLockError::WouldBlock) => {
+            on_contention();
+            lock.lock().map_err(|error| {
+                GoSemanticProcessError::CommandFailed(format!(
+                    "failed to wait for embedded frontend binary cache lock `{}`: {error}",
+                    lock_path.display()
+                ))
+            })?;
+        }
+        Err(fs::TryLockError::Error(error)) => {
+            return Err(GoSemanticProcessError::CommandFailed(format!(
+                "failed to acquire embedded frontend binary cache lock `{}`: {error}",
+                lock_path.display()
+            )));
+        }
+    }
+    Ok(lock)
+}
+
+fn frontend_build_command(
+    go_program: &OsStr,
+    source_dir: &Path,
+    staging: &Path,
+    offline: bool,
+    goos: &str,
+    goarch: &str,
+) -> Command {
+    let mut command = Command::new(go_program);
+    command
+        .arg("build")
+        .arg("-o")
+        .arg(staging)
+        .arg(".")
+        .current_dir(source_dir)
+        .env("GOWORK", "off")
+        .env("GOTOOLCHAIN", "local")
+        .env_remove("GOOS")
+        .env_remove("GOARCH")
+        .env("GOOS", goos)
+        .env("GOARCH", goarch);
+    lifecycle::apply_go_offline_env(&mut command, offline);
+    command
+}
+
+#[cfg(unix)]
+fn cached_binary_matches(binary: &Path, receipt_path: &Path, cache_key: &str) -> bool {
+    let Ok(actual_receipt) = read_verified_private_file(receipt_path) else {
+        return false;
+    };
+    let Ok(bytes) = read_verified_private_file(binary) else {
+        return false;
+    };
+    actual_receipt == binary_receipt(cache_key, &stable_bytes_hash(&bytes)).as_bytes()
+}
+
+#[cfg(not(unix))]
+fn cached_binary_matches(_binary: &Path, _receipt_path: &Path, _cache_key: &str) -> bool {
+    false
+}
+
+fn binary_receipt(cache_key: &str, digest: &str) -> String {
+    format!("polint-go-frontend-receipt-v1\n{cache_key}\n{digest}\n")
+}
+
+#[cfg(unix)]
+fn publish_binary_receipt(
+    path: &Path,
+    cache_key: &str,
+    digest: &str,
+) -> Result<(), GoSemanticProcessError> {
+    let staging = path.with_extension(format!(
+        "receipt-{}-{}",
+        std::process::id(),
+        unique_build_suffix()
+    ));
+    write_private_file(&staging, binary_receipt(cache_key, digest).as_bytes()).map_err(
+        |reason| {
+            GoSemanticProcessError::CommandFailed(format!(
+                "failed to stage embedded frontend binary receipt: {reason}"
+            ))
+        },
+    )?;
+    let result = fs::hard_link(&staging, path).map_err(|error| {
+        GoSemanticProcessError::CommandFailed(format!(
+            "failed to publish immutable embedded frontend binary receipt `{}`: {error}",
+            path.display()
+        ))
+    });
+    let _ = fs::remove_file(&staging);
+    result
+}
+
+fn make_binary_private_executable(path: &Path) -> Result<(), GoSemanticProcessError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(|error| {
+            GoSemanticProcessError::CommandFailed(format!(
+                "failed to secure embedded frontend binary `{}`: {error}",
+                path.display()
+            ))
+        })?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
 
-pub(crate) fn local_go_toolchain_version() -> Result<String, GoSemanticProcessError> {
-    let output = Command::new("go")
-        .arg("version")
-        .output()
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                GoSemanticProcessError::CommandUnavailable(
-                    "go executable was not found for the Go semantic frontend.".to_string(),
-                )
-            } else {
-                GoSemanticProcessError::CommandFailed(format!(
-                    "failed to run `go version` for Go semantic frontend: {error}"
-                ))
-            }
-        })?;
+fn unique_build_suffix() -> String {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    format!("{nanos}-{}", NEXT.fetch_add(1, Ordering::Relaxed))
+}
+
+fn map_process_error(error: GoProcessError) -> GoSemanticProcessError {
+    match error {
+        GoProcessError::Unavailable(reason) => GoSemanticProcessError::CommandUnavailable(reason),
+        GoProcessError::Failed(reason) => GoSemanticProcessError::CommandFailed(reason),
+        GoProcessError::Timeout(reason) => GoSemanticProcessError::Timeout(reason),
+    }
+}
+
+pub fn local_go_toolchain_version() -> Result<String, GoSemanticProcessError> {
+    local_go_toolchain_version_with_program(OsStr::new("go"))
+}
+
+fn local_go_toolchain_version_with_program(
+    go_program: &OsStr,
+) -> Result<String, GoSemanticProcessError> {
+    let mut command = Command::new(go_program);
+    command.arg("version").env("GOTOOLCHAIN", "local");
+    lifecycle::apply_go_offline_env(&mut command, true);
+    let output =
+        run_bounded(command, GO_SUBPROCESS_TIMEOUT, "go version").map_err(map_process_error)?;
     if !output.status.success() {
         return Err(GoSemanticProcessError::CommandFailed(format!(
             "`go version` exited with status {}",
@@ -433,6 +607,92 @@ pub(crate) fn local_go_toolchain_version() -> Result<String, GoSemanticProcessEr
             stdout.trim()
         ))
     })
+}
+
+fn execution_host_go_target() -> Result<(&'static str, &'static str), GoSemanticProcessError> {
+    let goos = match std::env::consts::OS {
+        "macos" => "darwin",
+        "linux" => "linux",
+        "windows" => "windows",
+        "freebsd" => "freebsd",
+        "openbsd" => "openbsd",
+        "netbsd" => "netbsd",
+        "dragonfly" => "dragonfly",
+        "solaris" => "solaris",
+        "illumos" => "illumos",
+        "aix" => "aix",
+        "android" => "android",
+        "ios" => "ios",
+        other => {
+            return Err(GoSemanticProcessError::CommandFailed(format!(
+                "cannot map execution host OS `{other}` to a Go build target"
+            )));
+        }
+    };
+    let goarch = match std::env::consts::ARCH {
+        "x86_64" => "amd64",
+        "x86" => "386",
+        "aarch64" => "arm64",
+        "arm" => "arm",
+        "powerpc64" => "ppc64",
+        "powerpc64le" => "ppc64le",
+        "s390x" => "s390x",
+        "riscv64" => "riscv64",
+        "loongarch64" => "loong64",
+        other => {
+            return Err(GoSemanticProcessError::CommandFailed(format!(
+                "cannot map execution host architecture `{other}` to a Go build target"
+            )));
+        }
+    };
+    Ok((goos, goarch))
+}
+
+fn verify_local_go_target_with_program(
+    go_program: &OsStr,
+    offline: bool,
+    host_goos: &str,
+    host_goarch: &str,
+) -> Result<(), GoSemanticProcessError> {
+    let mut command = Command::new(go_program);
+    command
+        .args(["env", "GOOS", "GOARCH"])
+        .env_remove("GOOS")
+        .env_remove("GOARCH")
+        .env("GOOS", host_goos)
+        .env("GOARCH", host_goarch)
+        .env("GOTOOLCHAIN", "local");
+    lifecycle::apply_go_offline_env(&mut command, offline);
+    let output = run_bounded(command, GO_SUBPROCESS_TIMEOUT, "go env GOOS GOARCH")
+        .map_err(map_process_error)?;
+    if !output.status.success() {
+        return Err(GoSemanticProcessError::CommandFailed(format!(
+            "`go env GOOS GOARCH` exited with status {}",
+            output.status
+        )));
+    }
+    let actual = parse_go_target(&String::from_utf8_lossy(&output.stdout)).ok_or_else(|| {
+        GoSemanticProcessError::CommandFailed(
+            "failed to parse GOOS and GOARCH from `go env GOOS GOARCH`".to_string(),
+        )
+    })?;
+    if actual.0 != host_goos || actual.1 != host_goarch {
+        return Err(GoSemanticProcessError::CommandFailed(format!(
+            "refusing cross-target embedded frontend build for {}/{}; execution host requires {host_goos}/{host_goarch}",
+            actual.0, actual.1
+        )));
+    }
+    Ok(())
+}
+
+fn parse_go_target(output: &str) -> Option<(String, String)> {
+    let mut values = output
+        .lines()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let goos = values.next()?.to_string();
+    let goarch = values.next()?.to_string();
+    values.next().is_none().then_some((goos, goarch))
 }
 
 fn parse_go_version(output: &str) -> Option<String> {
@@ -477,7 +737,7 @@ mod tests {
     #[test]
     fn embedded_go_frontend_sources_match_workspace_sources() {
         let workspace_frontend =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("go-sidecar/polint-go-frontend");
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("src/go-sidecar/polint-go-frontend");
         for (relative_path, embedded) in EMBEDDED_GO_FRONTEND_FILES {
             let workspace = fs::read_to_string(workspace_frontend.join(relative_path))
                 .unwrap_or_else(|error| panic!("read workspace frontend {relative_path}: {error}"));
@@ -513,6 +773,407 @@ mod tests {
     }
 
     #[test]
+    fn cold_frontend_build_honors_offline_policy() {
+        use std::ffi::OsStr;
+
+        let command = frontend_build_command(
+            OsStr::new("go"),
+            Path::new("source"),
+            Path::new("binary"),
+            true,
+            "linux",
+            "amd64",
+        );
+        let environment = command
+            .get_envs()
+            .collect::<std::collections::BTreeMap<_, _>>();
+        for (key, expected) in [
+            ("GOENV", "off"),
+            ("GOPROXY", "off"),
+            ("GOSUMDB", "off"),
+            ("GOPRIVATE", "none"),
+            ("GONOPROXY", "none"),
+            ("GONOSUMDB", "none"),
+            ("GOINSECURE", "none"),
+            ("GOVCS", "*:off"),
+            ("GOAUTH", "off"),
+            ("GOTOOLCHAIN", "local"),
+            ("GOOS", "linux"),
+            ("GOARCH", "amd64"),
+        ] {
+            assert_eq!(
+                environment.get(OsStr::new(key)).copied().flatten(),
+                Some(OsStr::new(expected)),
+                "unexpected offline value for {key}"
+            );
+        }
+        assert_eq!(
+            environment.get(OsStr::new("GOCACHEPROG")),
+            Some(&None),
+            "offline commands must remove inherited external cache helpers"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inherited_windows_target_is_replaced_with_execution_host_target() {
+        use std::os::unix::fs::PermissionsExt;
+
+        const CHILD_MARKER: &str = "POLINT_OFFLINE_ENV_REGRESSION_CHILD";
+        if std::env::var_os(CHILD_MARKER).is_none() {
+            let current_thread = std::thread::current();
+            let test_name = current_thread.name().expect("test harness thread name");
+            let status = Command::new(std::env::current_exe().expect("current test executable"))
+                .arg("--exact")
+                .arg(test_name)
+                .env(CHILD_MARKER, "1")
+                .env("GOENV", "/fatal/inherited/go/env")
+                .env("GOPROXY", "direct")
+                .env("GOSUMDB", "sum.golang.org")
+                .env("GOPRIVATE", "*")
+                .env("GONOPROXY", "*")
+                .env("GONOSUMDB", "*")
+                .env("GOINSECURE", "*")
+                .env("GOVCS", "*:all")
+                .env("GOAUTH", "fatal-auth-helper")
+                .env("GOTOOLCHAIN", "auto")
+                .env("GOCACHEPROG", "fatal-cache-helper")
+                .env("GOOS", "windows")
+                .env("GOARCH", "386")
+                .status()
+                .expect("spawn isolated inherited-environment regression");
+            assert!(
+                status.success(),
+                "isolated regression test failed: {status}"
+            );
+            return;
+        }
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("source");
+        fs::create_dir(&source).expect("create source");
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o700)).expect("secure source");
+        let fake_go = temp.path().join("fake-go");
+        fs::write(
+            &fake_go,
+            r#"#!/bin/sh
+[ "$GOENV" = "off" ] || exit 81
+[ "$GOPROXY" = "off" ] || exit 82
+[ "$GOSUMDB" = "off" ] || exit 83
+[ "$GOPRIVATE" = "none" ] || exit 84
+[ "$GONOPROXY" = "none" ] || exit 85
+[ "$GONOSUMDB" = "none" ] || exit 86
+[ "$GOINSECURE" = "none" ] || exit 87
+[ "$GOVCS" = "*:off" ] || exit 88
+[ "$GOAUTH" = "off" ] || exit 89
+[ "$GOTOOLCHAIN" = "local" ] || exit 90
+[ -z "$GOCACHEPROG" ] || exit 91
+if [ "$1" = "version" ]; then
+  echo 'go version go1.25.0 test/arch'
+  exit 0
+fi
+if [ "$1" = "env" ]; then
+  printf '%s\n%s\n' "$GOOS" "$GOARCH"
+  exit 0
+fi
+out=''
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-o" ]; then shift; out="$1"; fi
+  shift
+done
+[ -n "$out" ] || exit 92
+printf '#!/bin/sh\nprintf "%%s\\n" "%s/%s"\n' "$GOOS" "$GOARCH" > "$out"
+"#,
+        )
+        .expect("write fake go");
+        fs::set_permissions(&fake_go, fs::Permissions::from_mode(0o700)).expect("chmod fake go");
+
+        let binary = ensure_frontend_binary_with_program(
+            &source,
+            true,
+            Duration::from_secs(5),
+            fake_go.as_os_str(),
+        )
+        .expect("cold offline build");
+        let output = Command::new(&binary)
+            .output()
+            .expect("execute host frontend binary");
+        assert!(output.status.success());
+        let (host_goos, host_goarch) = execution_host_go_target().expect("host Go target");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            format!("{host_goos}/{host_goarch}")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn competing_frontend_publisher_waits_for_binary_receipt_pair() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::mpsc;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("source");
+        fs::create_dir(&source).expect("create source");
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o700)).expect("secure source");
+        let build_log = temp.path().join("build.log");
+        let fake_go = temp.path().join("fake-go");
+        fs::write(
+            &fake_go,
+            format!(
+                r#"#!/bin/sh
+if [ "$1" = "version" ]; then
+  echo 'go version go1.25.0 test/arch'
+  exit 0
+fi
+if [ "$1" = "env" ]; then
+  printf '%s\n%s\n' "$GOOS" "$GOARCH"
+  exit 0
+fi
+out=''
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-o" ]; then shift; out="$1"; fi
+  shift
+done
+[ -n "$out" ] || exit 92
+printf 'build\n' >> '{}'
+printf 'fake concurrent frontend' > "$out"
+"#,
+                build_log.display()
+            ),
+        )
+        .expect("write fake go");
+        fs::set_permissions(&fake_go, fs::Permissions::from_mode(0o700)).expect("chmod fake go");
+
+        let (published_tx, published_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let first_source = source.clone();
+        let first_go = fake_go.clone();
+        let first = std::thread::spawn(move || {
+            ensure_frontend_binary_with_program_and_hooks(
+                &first_source,
+                true,
+                Duration::from_secs(5),
+                first_go.as_os_str(),
+                move || {
+                    published_tx.send(()).expect("signal binary publication");
+                    release_rx.recv().expect("wait before receipt publication");
+                },
+                || {},
+            )
+        });
+        published_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("first publisher reached binary/receipt interleaving");
+
+        let (host_goos, host_goarch) = execution_host_go_target().expect("host Go target");
+        let cache_key = frontend_binary_cache_key(
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            "go1.25.0",
+            host_goos,
+            host_goarch,
+        );
+        let binary = source.join(format!(".{}-{cache_key}", frontend_binary_name()));
+        let receipt = source.join(format!(".binary-receipt-{cache_key}"));
+        assert!(binary.is_file());
+        assert!(!receipt.exists());
+
+        let (contention_tx, contention_rx) = mpsc::channel();
+        let second_source = source;
+        let second_go = fake_go;
+        let second = std::thread::spawn(move || {
+            ensure_frontend_binary_with_program_and_hooks(
+                &second_source,
+                true,
+                Duration::from_secs(5),
+                second_go.as_os_str(),
+                || panic!("waiting publisher must reuse the completed pair"),
+                move || contention_tx.send(()).expect("signal lock contention"),
+            )
+        });
+        contention_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("second publisher observed the in-progress publication");
+
+        assert!(binary.is_file());
+        assert!(!receipt.exists());
+        release_tx.send(()).expect("release first publisher");
+
+        let first_binary = first
+            .join()
+            .expect("first publisher thread")
+            .expect("publish");
+        let second_binary = second
+            .join()
+            .expect("second publisher thread")
+            .expect("reuse published pair");
+        assert_eq!(first_binary, second_binary);
+        assert!(cached_binary_matches(&second_binary, &receipt, &cache_key));
+        assert_eq!(
+            fs::read_to_string(build_log)
+                .expect("read build log")
+                .lines()
+                .count(),
+            1
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cached_frontend_binary_requires_matching_private_receipt() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let binary = temp.path().join("polint-go-frontend");
+        let receipt = temp.path().join(".binary-receipt");
+        let cache_key =
+            frontend_binary_cache_key("test-os", "test-arch", "go1.25", "goos", "goarch");
+        write_private_file(&binary, b"trusted binary").expect("write binary");
+        make_binary_private_executable(&binary).expect("secure binary");
+        write_private_file(
+            &receipt,
+            binary_receipt(&cache_key, &stable_bytes_hash(b"trusted binary")).as_bytes(),
+        )
+        .expect("write receipt");
+        assert!(cached_binary_matches(&binary, &receipt, &cache_key));
+
+        fs::write(&binary, b"changed binary").expect("tamper binary");
+        assert!(!cached_binary_matches(&binary, &receipt, &cache_key));
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn adjacent_attacker_receipt_never_authorizes_binary_reuse() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let binary = temp.path().join(frontend_binary_name());
+        let receipt = temp.path().join(".binary-receipt");
+        fs::write(&binary, b"attacker binary").expect("write binary");
+        fs::write(
+            &receipt,
+            binary_receipt("attacker-key", &stable_bytes_hash(b"attacker binary")),
+        )
+        .expect("write receipt");
+
+        assert!(!cached_binary_matches(&binary, &receipt, "attacker-key"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn concurrent_frontend_contexts_publish_distinct_immutable_binaries() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("source");
+        fs::create_dir(&source).expect("create source");
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o700)).expect("secure source");
+
+        let write_fake_go = |name: &str, version: &str, ready: &str, peer: &str, payload: &str| {
+            let path = temp.path().join(name);
+            fs::write(
+                &path,
+                format!(
+                    r#"#!/bin/sh
+if [ "$1" = "version" ]; then
+  echo 'go version {version} test/arch'
+  exit 0
+fi
+if [ "$1" = "env" ]; then
+  printf '%s\n%s\n' "$GOOS" "$GOARCH"
+  exit 0
+fi
+out=''
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-o" ]; then shift; out="$1"; fi
+  shift
+done
+touch '{}'
+i=0
+while [ ! -f '{}' ]; do
+  i=$((i + 1)); [ "$i" -lt 500 ] || exit 93
+  sleep 0.01
+done
+printf '{payload}' > "$out"
+"#,
+                    temp.path().join(ready).display(),
+                    temp.path().join(peer).display(),
+                ),
+            )
+            .expect("write fake go");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).expect("chmod fake go");
+            path
+        };
+        let first_go = write_fake_go("fake-go-a", "go1.25.0", "ready-a", "ready-b", "first");
+        let second_go = write_fake_go("fake-go-b", "go1.26.0", "ready-b", "ready-a", "second");
+
+        let first_source = source.clone();
+        let first = std::thread::spawn(move || {
+            ensure_frontend_binary_with_program(
+                &first_source,
+                true,
+                Duration::from_secs(10),
+                first_go.as_os_str(),
+            )
+        });
+        let second_source = source;
+        let second = std::thread::spawn(move || {
+            ensure_frontend_binary_with_program(
+                &second_source,
+                true,
+                Duration::from_secs(10),
+                second_go.as_os_str(),
+            )
+        });
+
+        let first_binary = first
+            .join()
+            .expect("first context thread")
+            .expect("first build");
+        let second_binary = second
+            .join()
+            .expect("second context thread")
+            .expect("second build");
+        assert_ne!(first_binary, second_binary);
+        assert_eq!(
+            fs::read(&first_binary).expect("read first binary"),
+            b"first"
+        );
+        assert_eq!(
+            fs::read(&second_binary).expect("read second binary"),
+            b"second"
+        );
+        assert_eq!(
+            fs::read(&first_binary).expect("reread first binary"),
+            b"first"
+        );
+        assert!(
+            first_binary
+                .file_name()
+                .expect("first filename")
+                .to_string_lossy()
+                .contains(&frontend_binary_cache_key(
+                    std::env::consts::OS,
+                    std::env::consts::ARCH,
+                    "go1.25.0",
+                    execution_host_go_target().expect("host target").0,
+                    execution_host_go_target().expect("host target").1,
+                ))
+        );
+    }
+
+    #[test]
+    fn frontend_binary_cache_key_covers_execution_and_go_context() {
+        let baseline = frontend_binary_cache_key("linux", "x86_64", "go1.25.0", "linux", "amd64");
+        for changed in [
+            frontend_binary_cache_key("darwin", "x86_64", "go1.25.0", "linux", "amd64"),
+            frontend_binary_cache_key("linux", "aarch64", "go1.25.0", "linux", "amd64"),
+            frontend_binary_cache_key("linux", "x86_64", "go1.26.0", "linux", "amd64"),
+            frontend_binary_cache_key("linux", "x86_64", "go1.25.0", "darwin", "amd64"),
+            frontend_binary_cache_key("linux", "x86_64", "go1.25.0", "linux", "arm64"),
+        ] {
+            assert_ne!(baseline, changed);
+        }
+    }
+
+    #[test]
     fn go_toolchain_version_parser_accepts_go_version_output() {
         assert_eq!(
             parse_go_version("go version go1.26.2 darwin/arm64"),
@@ -520,5 +1181,10 @@ mod tests {
         );
         assert!(go_version_at_least("go1.25.0", 1, 25));
         assert!(!go_version_at_least("go1.24.9", 1, 25));
+        assert_eq!(
+            parse_go_target("darwin\narm64\n"),
+            Some(("darwin".to_string(), "arm64".to_string()))
+        );
+        assert_eq!(parse_go_target("darwin\n"), None);
     }
 }

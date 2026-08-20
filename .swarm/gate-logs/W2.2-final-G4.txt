@@ -1,0 +1,12 @@
+   Compiling polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.2-finish/crates/polint)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.41s
+     Running tests/capability_matrix.rs (target/debug/deps/capability_matrix-441e0c8f9504482f)
+
+running 4 tests
+test capability_matrix_inventory_covers_full_prelude ... ok
+test capability_matrix_typescript_supported_views_are_non_empty ... ok
+test capability_matrix_go_supported_views_are_non_empty ... ok
+test capability_matrix_changed_files_review_only ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 54.19s
+

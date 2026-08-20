@@ -1,0 +1,26 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (target/debug/deps/polint-af2f858c5d9987a8)
+
+running 16 tests
+test fs::tests::detects_language_from_path ... ok
+test repo_fs::tests::read_repo_file_rejects_absolute_inputs ... ok
+test repo_fs::tests::ensure_no_symlink_ancestors_rejects_missing_path_below_file ... ok
+test repo_fs::tests::read_repo_file_with_limit_rejects_oversized_files ... ok
+test repo_fs::tests::write_repo_file_atomic_rejects_symlink_parent_escape ... ok
+test repo_fs::tests::read_repo_file_rejects_symlink_escape ... ok
+test fs::tests::discovery_can_bypass_gitignore_for_explicit_internal_target_files ... ok
+test fs::tests::discovery_is_deterministic ... ok
+test fs::tests::discovery_order_is_root_relative_and_stable_with_nested_files ... ok
+test fs::tests::oversized_source_file_is_skipped_with_capability_diagnostic ... ok
+test fs::tests::load_analysis_files_parallel_preserves_file_ids ... ok
+test fs::tests::load_analysis_files_preserves_discovery_order_in_file_ids ... ok
+test fs::tests::discovery_filters_before_sorting ... ok
+test analysis_kernel::tests::run_surfaces_oversized_source_as_capability_diagnostic ... ok
+test fs::tests::load_analysis_files_parallel_matches_sequential_order ... ok
+test fs::tests::discovery_include_exclude_decision_is_stable ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 2494 filtered out; finished in 0.18s
+
+real 0.30
+user 0.25
+sys 0.10

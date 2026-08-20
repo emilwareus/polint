@@ -1,34 +1,19 @@
-use std::collections::BTreeSet;
-use std::sync::Arc;
+//! Facade composition for the identity provider.
 
-use crate::analysis::calls::facts::CallSiteFact;
-use crate::analysis::identity::cache_key::identity_provider_parameter_digest;
-use crate::analysis::identity::dedup::dedup_identity_records;
-use crate::analysis::identity::facts::{
-    IdentityKind, IdentityRecord, IdentityRecordId, LanguageTag, compute_identity_stable_key,
-    compute_signature_digest,
+use std::collections::BTreeMap;
+
+use crate::analysis_api::{Digest, InputSnapshot, ProviderManifest};
+
+use crate::analysis::identity::facts::IdentityRecord;
+use crate::core::{AnalysisDb, FileId};
+
+pub(crate) use crate::analysis_neutral::identity::provider::{
+    IdentityProviderRunOutput, valid_call_site_ids,
 };
-use crate::analysis::identity::store::IdentityProviderOutput;
-use crate::analysis::ids::CallSiteId;
-use crate::analysis_kernel::ProviderManifest;
-use crate::analysis_kernel::incremental::{CacheStats, Digest, DigestKind, InputSnapshot};
-use crate::core::{AnalysisDb, FunctionFact, Language, Span};
-use crate::diagnostics::{Diagnostic, TextRange};
 
-#[derive(Debug, Clone, Default)]
-pub(crate) struct IdentityProviderRunOutput {
-    pub(crate) diagnostics: Vec<Diagnostic>,
-    pub(crate) cache_stats: CacheStats,
-    pub(crate) output_digest: Option<Digest>,
-}
+#[cfg(test)]
+pub(crate) use crate::analysis::identity::facts::{LanguageTag, compute_identity_stable_key};
 
-/// Identity provider entry point (Pattern E).
-///
-/// Five-stage pipeline: extract identity records by projecting existing
-/// `analysis::calls` and function facts (no mutation, D-04) -> dedup (D-09) ->
-/// assign dense IDs after sort+dedup -> normalize -> compute output digest over
-/// stable payloads (Pattern F) and replace identity facts.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn derive_identity_with_cache_stats(
     db: &mut AnalysisDb,
     input_snapshot: &InputSnapshot,
@@ -36,290 +21,80 @@ pub(crate) fn derive_identity_with_cache_stats(
     calls_provider_output_digest: Digest,
     go_semantic_output_digest: Digest,
 ) -> IdentityProviderRunOutput {
-    // Step: extract.
-    let mut records = extract_identity_records(db);
-    // Step: dedup.
-    records = dedup_identity_records(records);
-    // Step: assign dense IDs after sort+dedup.
-    for (index, record) in records.iter_mut().enumerate() {
-        record.id = IdentityRecordId(index as u64);
-    }
-    // Step: normalize (dedup already sorts, but normalize keeps the contract
-    // single-sourced through IdentityProviderOutput).
-    let output = IdentityProviderOutput { records }.normalized();
-    // Step: digest.
-    let output_digest = identity_output_digest(
-        manifest,
-        input_snapshot,
-        &calls_provider_output_digest,
-        &go_semantic_output_digest,
-        &output,
-    );
-
-    let mut cache_stats = CacheStats::default();
-    cache_stats.record_recompute();
-
-    match db.replace_identity_facts(output) {
-        Ok(()) => IdentityProviderRunOutput {
-            diagnostics: Vec::new(),
-            cache_stats,
-            output_digest: Some(output_digest),
-        },
-        Err(error) => IdentityProviderRunOutput {
-            diagnostics: vec![provider_error_diagnostic(error.to_string())],
-            cache_stats,
-            output_digest: Some(output_digest),
-        },
-    }
-}
-
-/// Projects existing function and call-site facts into identity records.
-fn extract_identity_records(db: &AnalysisDb) -> Vec<IdentityRecord> {
-    let mut records = Vec::new();
-
-    for function in db.functions() {
-        if let Some(record) = function_identity_record(db, function) {
-            records.push(record);
-        }
-    }
-
-    for site in db.call_sites() {
-        if let Some(record) = callsite_identity_record(db, site) {
-            records.push(record);
-        }
-    }
-
-    records
-}
-
-fn function_identity_record(db: &AnalysisDb, function: &FunctionFact) -> Option<IdentityRecord> {
-    let language = language_tag(function.language)?;
-    let package_or_module: Arc<str> = Arc::from(package_or_module_for_record(
-        db,
-        function.language,
-        function.file,
-    ));
-    let container_path: Arc<str> = Arc::from(function.name.as_str());
-    let display_name: Arc<str> = Arc::from(function.name.as_str());
-    Some(build_record(
-        IdentityKind::Function,
-        function.file,
-        &function.span,
-        language,
-        package_or_module,
-        container_path,
-        display_name,
-        None,
-    ))
-}
-
-fn callsite_identity_record(db: &AnalysisDb, site: &CallSiteFact) -> Option<IdentityRecord> {
-    let language = language_tag(site.language)?;
-    let package_or_module: Arc<str> =
-        Arc::from(package_or_module_for_record(db, site.language, site.file));
-    let container_path: Arc<str> = Arc::from(callsite_container_path(db, site));
-    let display_name: Arc<str> = Arc::from(callsite_display_name(site));
-    Some(build_record(
-        IdentityKind::Callsite,
-        site.file,
-        &site.span,
-        language,
-        package_or_module,
-        container_path,
-        display_name,
-        Some(site.id),
-    ))
-}
-
-#[allow(clippy::too_many_arguments)]
-fn build_record(
-    kind: IdentityKind,
-    file: crate::core::FileId,
-    span: &Span,
-    language: LanguageTag,
-    package_or_module: Arc<str>,
-    container_path: Arc<str>,
-    display_name: Arc<str>,
-    originating_call_site_id: Option<CallSiteId>,
-) -> IdentityRecord {
-    let signature_digest = compute_signature_digest(
-        language,
-        &package_or_module,
-        &container_path,
-        &display_name,
-        None,
-        None,
-    );
-    let stable_key = compute_identity_stable_key(
-        kind,
-        language,
-        &package_or_module,
-        &container_path,
-        file,
-        span,
-    );
-    IdentityRecord {
-        id: IdentityRecordId(0),
-        kind,
-        file_id: file,
-        span: span.clone(),
-        language,
-        package_or_module,
-        container_path,
-        display_name,
-        signature_digest,
-        multiplicity: 1,
-        stable_key,
-        originating_call_site_id,
-        originating_call_target_id: None,
-    }
-}
-
-fn callsite_container_path(db: &AnalysisDb, site: &CallSiteFact) -> String {
-    // The container is the enclosing caller function. Fall back to a file-scoped
-    // container when the caller cannot be resolved by name.
-    db.functions()
+    let go_semantic_package_paths = db
+        .go_semantic_packages()
         .iter()
-        .find(|function| function.id == site.caller)
-        .map(|function| function.name.clone())
-        .unwrap_or_else(|| format!("{}#<anon>", package_or_module_for_file(db, site.file)))
-}
-
-fn callsite_display_name(site: &CallSiteFact) -> String {
-    use crate::analysis::calls::facts::CallCallee;
-    match &site.callee {
-        CallCallee::Identifier { name, .. } => name.clone(),
-        CallCallee::Member { property, .. } => property.clone(),
-        CallCallee::Constructor { name, .. } => {
-            name.clone().unwrap_or_else(|| "<ctor>".to_string())
-        }
-        CallCallee::Index { .. } => "<index>".to_string(),
-        CallCallee::Super => "super".to_string(),
-        CallCallee::Import => "import".to_string(),
-        CallCallee::FunctionValue { .. } => "<function-value>".to_string(),
-        CallCallee::Unknown { .. } => "<unknown>".to_string(),
-    }
-}
-
-/// Resolves the `package_or_module` string for a record's language and file.
-///
-/// For `Language::Go` records this prefers the semantic frontend's full
-/// Go package import path when a validated package row covers the file. It falls
-/// back to the Go package-clause name, then the workspace-relative file path, so
-/// missing semantic setup preserves the earlier panic-free behavior.
-fn package_or_module_for_record(
-    db: &AnalysisDb,
-    language: Language,
-    file: crate::core::FileId,
-) -> String {
-    match language {
-        Language::Go => semantic_package_path_for_go_file(db, file)
-            .or_else(|| package_name_for_go_file(db, file))
-            .unwrap_or_else(|| package_or_module_for_file(db, file)),
-        _ => package_or_module_for_file(db, file),
-    }
-}
-
-fn semantic_package_path_for_go_file(db: &AnalysisDb, file: crate::core::FileId) -> Option<String> {
-    let path = db.path_for(file);
-    db.go_semantic_packages()
-        .iter()
-        .find(|package| {
-            package
-                .files
-                .iter()
-                .any(|package_file| package_file == &path)
+        .flat_map(|package| {
+            package.files.iter().filter_map(|path| {
+                db.files()
+                    .iter()
+                    .find(|file| file.relative_path == *path)
+                    .map(|file| (file.id, package.package_path.clone()))
+            })
         })
-        .map(|package| package.package_path.clone())
-        .filter(|package_path| !package_path.is_empty())
+        .collect::<BTreeMap<FileId, String>>();
+    crate::analysis_neutral::identity::provider::derive_identity_with_cache_stats(
+        db,
+        input_snapshot,
+        manifest,
+        calls_provider_output_digest,
+        go_semantic_output_digest,
+        &go_semantic_package_paths,
+    )
 }
 
-/// Returns the Go package-clause name (e.g. `main` / `foo`) for a file by
-/// scanning `db.packages()` for the first Go [`PackageFact`] on that file.
-fn package_name_for_go_file(db: &AnalysisDb, file: crate::core::FileId) -> Option<String> {
-    db.packages()
+#[cfg(test)]
+fn function_identity_record(
+    db: &AnalysisDb,
+    interner: &crate::core::StableKeyInterner,
+    function: &crate::core::FunctionFact,
+) -> Option<IdentityRecord> {
+    let go_semantic_package_paths = db
+        .go_semantic_packages()
         .iter()
-        .find(|package| package.file == file && package.language == Language::Go)
-        .map(|package| package.name.clone())
+        .flat_map(|package| {
+            package.files.iter().filter_map(|path| {
+                db.files()
+                    .iter()
+                    .find(|file| file.relative_path == *path)
+                    .map(|file| (file.id, package.package_path.clone()))
+            })
+        })
+        .collect::<BTreeMap<FileId, String>>();
+    crate::analysis_neutral::identity::provider::function_identity_record(
+        db,
+        interner,
+        function,
+        &go_semantic_package_paths,
+    )
 }
 
-fn package_or_module_for_file(db: &AnalysisDb, file: crate::core::FileId) -> String {
-    db.path_for(file)
-}
-
-fn language_tag(language: Language) -> Option<LanguageTag> {
-    match language {
-        Language::Go => Some(LanguageTag::Go),
-        Language::TypeScript | Language::Tsx => Some(LanguageTag::TypeScript),
-        Language::JavaScript | Language::Jsx => Some(LanguageTag::JavaScript),
-        Language::Unknown => None,
-    }
-}
-
-/// Output digest over stable payloads, never dense IDs (Pattern F, T-42-02).
+#[cfg(test)]
 fn identity_output_digest(
+    interner: &crate::core::StableKeyInterner,
     manifest: &ProviderManifest,
     input_snapshot: &InputSnapshot,
     calls_provider_output_digest: &Digest,
     go_semantic_output_digest: &Digest,
-    output: &IdentityProviderOutput,
+    output: &crate::analysis::identity::store::IdentityProviderOutput,
 ) -> Digest {
-    let mut parts = vec![
-        format!("provider_id={}", manifest.id),
-        format!("provider_version={}", manifest.provider_version()),
-        format!("schema={}", manifest.primary_schema_label()),
-        format!("parameters={}", identity_provider_parameter_digest()),
-        format!("config={}", input_snapshot.config.digest),
-        format!("calls_output={calls_provider_output_digest}"),
-        format!("go_semantic_output={go_semantic_output_digest}"),
-    ];
-    parts.extend(output.records.iter().map(|record| {
-        format!(
-            "identity_record={} language={} package_or_module={} container={} digest={} kind={:?} multiplicity={}",
-            record.stable_key,
-            record.language.as_str(),
-            record.package_or_module,
-            record.container_path,
-            encode_digest_hex(record.signature_digest.0),
-            record.kind,
-            record.multiplicity,
-        )
-    }));
-    if output.records.is_empty() {
-        parts.push("identity_output=empty".to_string());
-    }
-    parts.sort();
-    let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
-    Digest::from_parts(DigestKind::ProviderOutput, "identity_output", &refs)
-}
-
-fn encode_digest_hex(bytes: [u8; 16]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(32);
-    for byte in bytes {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    out
-}
-
-fn provider_error_diagnostic(message: String) -> Diagnostic {
-    Diagnostic::error(
-        "polint/internal",
-        "<workspace>",
-        TextRange::point(1, 1),
-        format!("Identity provider failed: {message}"),
+    crate::analysis_neutral::identity::provider::identity_output_digest(
+        interner,
+        manifest,
+        input_snapshot,
+        calls_provider_output_digest,
+        go_semantic_output_digest,
+        output,
     )
 }
 
-/// Valid call-site ID set for store validation by the kernel caller.
-pub(crate) fn valid_call_site_ids(db: &AnalysisDb) -> BTreeSet<CallSiteId> {
-    db.call_sites().iter().map(|site| site.id).collect()
-}
-
 #[cfg(test)]
-pub(crate) fn identity_output_digest_for_test(parts: &[&str]) -> Digest {
-    Digest::from_parts(DigestKind::ProviderOutput, "identity_output", parts)
+fn identity_output_digest_for_test(parts: &[&str]) -> Digest {
+    Digest::from_parts(
+        crate::analysis_api::DigestKind::ProviderOutput,
+        "identity_output",
+        parts,
+    )
 }
 
 #[cfg(test)]
@@ -330,7 +105,7 @@ mod tests {
     };
     use crate::analysis::identity::store::IdentityProviderOutput;
     use crate::analysis_kernel::AnalysisKernel;
-    use crate::analysis_kernel::incremental::{Digest, DigestKind, InputSnapshot};
+    use crate::analysis_kernel::incremental::{Digest, DigestKind};
     use crate::analysis_plan::AnalysisPlan;
     use crate::config::load_config;
     use crate::core::{
@@ -353,27 +128,28 @@ mod tests {
             "package foo\nfunc Bar() {}\n".to_string(),
         );
         if let Some(name) = package_name {
-            db.push_package(PackageFact {
-                id: PackageId(0),
+            db.push_package(PackageFact::new(
+                PackageId::from_raw(0),
                 file,
-                name: name.to_string(),
-                span: Span::point(file, 1, 1),
-                language: Language::Go,
-            });
+                name.to_string(),
+                Span::point(file, 1, 1),
+                Language::Go,
+            ));
         }
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "Bar".to_string(),
-            span: Span::point(file, 2, 1),
-            language: Language::Go,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "Bar".to_string(),
+            Span::point(file, 2, 1),
+            Language::Go,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
         let function = db.functions().first().expect("pushed function").clone();
-        super::function_identity_record(&db, &function).expect("Go function builds a record")
+        super::function_identity_record(&db, &db.stable_key_interner(), &function)
+            .expect("Go function builds a record")
     }
 
     #[test]
@@ -390,17 +166,18 @@ mod tests {
             "src/main.go".to_string(),
             "package foo\nfunc Bar() {}\n".to_string(),
         );
-        db.push_package(PackageFact {
-            id: PackageId(0),
+        db.push_package(PackageFact::new(
+            PackageId::from_raw(0),
             file,
-            name: "foo".to_string(),
-            span: Span::point(file, 1, 1),
-            language: Language::Go,
-        });
+            "foo".to_string(),
+            Span::point(file, 1, 1),
+            Language::Go,
+        ));
+        let package_stable_key = db.stable_key_interner().intern("pkg");
         db.replace_go_semantic_facts(GoSemanticFactsOutput {
             packages: vec![GoSemanticPackageFact {
                 id: GoSemanticPackageId(0),
-                stable_key: "pkg".to_string(),
+                stable_key: package_stable_key,
                 package_id: "github.com/acme/project/pkg".to_string(),
                 package_path: "github.com/acme/project/pkg".to_string(),
                 package_name: "foo".to_string(),
@@ -410,21 +187,21 @@ mod tests {
             ..GoSemanticFactsOutput::default()
         })
         .expect("semantic facts replace");
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "Bar".to_string(),
-            span: Span::point(file, 2, 1),
-            language: Language::Go,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "Bar".to_string(),
+            Span::point(file, 2, 1),
+            Language::Go,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
 
         let function = db.functions().first().expect("pushed function").clone();
-        let record =
-            super::function_identity_record(&db, &function).expect("Go function builds a record");
+        let record = super::function_identity_record(&db, &db.stable_key_interner(), &function)
+            .expect("Go function builds a record");
         assert_eq!(
             record.package_or_module.as_ref(),
             "github.com/acme/project/pkg"
@@ -446,37 +223,37 @@ mod tests {
             "export function bar() {}\n".to_string(),
         );
         // A stray PackageFact must not redirect a non-Go record to a package name.
-        db.push_package(PackageFact {
-            id: PackageId(0),
+        db.push_package(PackageFact::new(
+            PackageId::from_raw(0),
             file,
-            name: "should-be-ignored".to_string(),
-            span: Span::point(file, 1, 1),
-            language: Language::Go,
-        });
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
+            "should-be-ignored".to_string(),
+            Span::point(file, 1, 1),
+            Language::Go,
+        ));
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "bar".to_string(),
-            span: Span::point(file, 1, 1),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "bar".to_string(),
+            Span::point(file, 1, 1),
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
         let function = db.functions().first().expect("pushed function").clone();
-        let record =
-            super::function_identity_record(&db, &function).expect("TS function builds a record");
+        let record = super::function_identity_record(&db, &db.stable_key_interner(), &function)
+            .expect("TS function builds a record");
         assert_eq!(record.package_or_module.as_ref(), "src/app.ts");
     }
 
     fn identity_record(id: u64, container: &str, multiplicity: u32) -> IdentityRecord {
         let language = LanguageTag::Go;
-        let span = Span::point(FileId(0), 1, 1);
+        let span = Span::point(FileId::from_raw(0), 1, 1);
         IdentityRecord {
             id: IdentityRecordId(id),
             kind: IdentityKind::Function,
-            file_id: FileId(0),
+            file_id: FileId::from_raw(0),
             span: span.clone(),
             language,
             package_or_module: Arc::from("pkg"),
@@ -486,14 +263,14 @@ mod tests {
                 language, "pkg", container, container, None, None,
             ),
             multiplicity,
-            stable_key: compute_identity_stable_key(
+            stable_key: crate::core::stable_key_for_test(&compute_identity_stable_key(
                 IdentityKind::Function,
                 language,
                 "pkg",
                 container,
-                FileId(0),
+                "src/main.go",
                 &span,
-            ),
+            )),
             originating_call_site_id: None,
             originating_call_target_id: None,
         }
@@ -504,7 +281,7 @@ mod tests {
         fs::write(temp.path().join(".polint.toml"), "").expect("config");
         let loaded = load_config(temp.path()).expect("config loads");
         let db = AnalysisDb::new();
-        let snapshot = InputSnapshot::from_run_inputs(
+        let snapshot = crate::analysis_kernel::incremental::input_snapshot_from_run_inputs(
             &loaded,
             &db,
             "config-a",
@@ -517,6 +294,7 @@ mod tests {
             .find(|manifest| manifest.id == "polint.identity")
             .expect("identity manifest");
         super::identity_output_digest(
+            &db.stable_key_interner(),
             manifest,
             &snapshot,
             &Digest::from_parts(DigestKind::ProviderOutput, "polint.calls", &["a"]),
@@ -565,22 +343,22 @@ mod tests {
             "src/main.go".to_string(),
             "package main\nfunc main() {}\n".to_string(),
         );
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "main".to_string(),
-            span: Span::point(file, 2, 1),
-            language: Language::Go,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "main".to_string(),
+            Span::point(file, 2, 1),
+            Language::Go,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
 
         let temp = tempdir().expect("tempdir");
         fs::write(temp.path().join(".polint.toml"), "").expect("config");
         let loaded = load_config(temp.path()).expect("config loads");
-        let snapshot = InputSnapshot::from_run_inputs(
+        let snapshot = crate::analysis_kernel::incremental::input_snapshot_from_run_inputs(
             &loaded,
             &db,
             "config-a",
@@ -617,17 +395,17 @@ mod tests {
             "src/main.go".to_string(),
             "package main\nfunc main() {}\n".to_string(),
         );
-        db2.push_function(FunctionFact {
-            id: FunctionId(0),
-            file: file2,
-            name: "main".to_string(),
-            span: Span::point(file2, 2, 1),
-            language: Language::Go,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+        db2.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
+            file2,
+            "main".to_string(),
+            Span::point(file2, 2, 1),
+            Language::Go,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
         let second = super::derive_identity_with_cache_stats(
             &mut db2,
             &snapshot,
@@ -655,29 +433,29 @@ mod tests {
             "src/foo.go".to_string(),
             "package foo\nfunc Bar() {}\n".to_string(),
         );
-        db.push_package(PackageFact {
-            id: PackageId(0),
+        db.push_package(PackageFact::new(
+            PackageId::from_raw(0),
             file,
-            name: "foo".to_string(),
-            span: Span::point(file, 1, 1),
-            language: Language::Go,
-        });
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
+            "foo".to_string(),
+            Span::point(file, 1, 1),
+            Language::Go,
+        ));
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(0),
             file,
-            name: "Bar".to_string(),
-            span: Span::point(file, 2, 1),
-            language: Language::Go,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+            "Bar".to_string(),
+            Span::point(file, 2, 1),
+            Language::Go,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
 
         let temp = tempdir().expect("tempdir");
         fs::write(temp.path().join(".polint.toml"), "").expect("config");
         let loaded = load_config(temp.path()).expect("config loads");
-        let snapshot = InputSnapshot::from_run_inputs(
+        let snapshot = crate::analysis_kernel::incremental::input_snapshot_from_run_inputs(
             &loaded,
             &db,
             "config-a",

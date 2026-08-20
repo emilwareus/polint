@@ -202,7 +202,7 @@ Follow-up hints may mention:
 - **Manifest** — invalid `Cargo.toml` or workspace layout under `.polint/rules`.
 - **Missing rustc** — install Rust or set `POLINT_RULES_TOOLCHAIN`.
 
-See also the [README](../README.md) **Versions** table.
+See also the [README Versions](../README.md#versions) table.
 
 ## SARIF rule metadata
 

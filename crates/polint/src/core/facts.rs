@@ -1,0 +1,11 @@
+pub(crate) use crate::analysis_api::CachedFileFacts;
+pub use crate::analysis_api::{
+    BranchObligation, ComplexityMetricFact, CoverageFact, DefinitionFact, DefinitionKind,
+    FileMetricFact, FunctionFact, FunctionMetricFact, ImportFact, JsxAttributeFact, ModuleEdge,
+    ModuleEdgeKind, ModuleNode, ModuleNodeKind, PackageFact, ReferenceFact, ReferenceKind,
+    ResolutionPrecision, ResolutionStatus, ResolvedImportFact, SourceFile, StringLiteralFact,
+    SymbolFact, SymbolKind, SymbolNamespace, SymbolPrecision, SymbolResolutionStatus, TestFact,
+    TsClassFact, TsComponentFact, UnresolvedReason,
+};
+#[cfg(test)]
+pub(crate) use crate::analysis_api::{CachedFileAnalysis, TS_JS_MODULE_FUNCTION_NAME};

@@ -1,0 +1,82 @@
+    Blocking waiting for file lock on build directory
+crates/polint/src/core/mod.rs:1:5: warning: unused import: `crate::analysis::access_paths::facts::AccessPathFact`
+crates/polint/src/core/mod.rs:2:5: warning: unused import: `crate::analysis::access_paths::store::AccessPathStore`
+crates/polint/src/core/mod.rs:3:42: warning: unused imports: `AcceptedModelFact` and `RejectedModelFact`
+crates/polint/src/core/mod.rs:4:5: warning: unused import: `crate::analysis::aliases::facts::AliasAnswerFact`
+crates/polint/src/core/mod.rs:5:5: warning: unused import: `crate::analysis::aliases::store::AliasStore`
+crates/polint/src/core/mod.rs:7:5: warning: unused imports: `CallSiteFact`, `CallTargetFact`, `CallTargetStatus`, `UnresolvedCallFact`, and `UnresolvedCallReason`
+crates/polint/src/core/mod.rs:9:37: warning: unused imports: `CallOutput` and `CallStore`
+crates/polint/src/core/mod.rs:11:5: warning: unused imports: `BasicBlockFact`, `CfgEdgeFact`, `CfgFunctionFact`, `CfgNodeFact`, `ControlDependenceFact`, `DominatorFact`, `PostDominatorFact`, `ReachabilityFact`, and `UnsupportedControlFlowFact`
+crates/polint/src/core/mod.rs:14:5: warning: unused import: `crate::analysis::cfg::store::CfgOutput`
+crates/polint/src/core/mod.rs:16:5: warning: unused imports: `DataFlowBudgetFact`, `DataFlowConfidence`, `DataFlowEdgeFact`, `DataFlowModelFact`, `DataFlowNodeFact`, `DataFlowPrecision`, `DataFlowStatus`, and `DataFlowValidation`
+crates/polint/src/core/mod.rs:19:5: warning: unused import: `crate::analysis::data_flow::provider::DATA_FLOW_PROVIDER_ID`
+crates/polint/src/core/mod.rs:20:41: warning: unused imports: `DataFlowOutput` and `DataFlowStore`
+crates/polint/src/core/mod.rs:21:39: warning: unused imports: `DomainEventFact` and `DomainObservationFact`
+crates/polint/src/core/mod.rs:22:39: warning: unused imports: `DomainOutput` and `DomainStore`
+crates/polint/src/core/mod.rs:24:5: warning: unused imports: `EntrypointFact`, `EntrypointStatus`, `FrameworkDispatchEdgeFact`, `TrustBoundaryFact`, and `UnresolvedFrameworkFact`
+crates/polint/src/core/mod.rs:27:43: warning: unused imports: `EntrypointOutput` and `EntrypointStore`
+crates/polint/src/core/mod.rs:28:5: warning: unused import: `crate::analysis::error::AnalysisError`
+crates/polint/src/core/mod.rs:30:5: warning: unused imports: `EvidenceBundleFact`, `EvidenceEdgeFact`, `EvidenceNodeFact`, `EvidenceOmittedRegionFact`, `EvidencePathFact`, `EvidencePrecision`, `EvidenceReplayKeyFact`, `EvidenceSliceFact`, and `EvidenceUnknownFact`
+crates/polint/src/core/mod.rs:34:5: warning: unused import: `crate::analysis::evidence::provider::EVIDENCE_PROVIDER_ID`
+crates/polint/src/core/mod.rs:35:40: warning: unused imports: `EvidenceOutput` and `EvidenceStore`
+crates/polint/src/core/mod.rs:37:5: warning: unused imports: `AcceptedExtensionFact`, `ExtensionActivationRow`, `ExtensionOutput`, and `RejectedExtensionFact`
+crates/polint/src/core/mod.rs:39:5: warning: unused import: `crate::analysis::identity::facts::IdentityRecord`
+crates/polint/src/core/mod.rs:40:5: warning: unused import: `crate::analysis::identity::provider::valid_call_site_ids`
+crates/polint/src/core/mod.rs:41:40: warning: unused imports: `IdentityProviderOutput` and `IdentityStore`
+crates/polint/src/core/mod.rs:42:5: warning: unused import: `crate::analysis::ids::CallSiteId`
+crates/polint/src/core/mod.rs:43:34: warning: unused imports: `MirBody`, `MirOutput`, and `MirStatus`
+crates/polint/src/core/mod.rs:44:32: warning: unused imports: `MirOperation` and `UnsupportedSemanticFact`
+crates/polint/src/core/mod.rs:45:31: warning: unused imports: `PlaceFact` and `PlaceStatus`
+crates/polint/src/core/mod.rs:46:41: warning: unused imports: `PointsToConstraintFact` and `PointsToSetFact`
+crates/polint/src/core/mod.rs:47:5: warning: unused import: `crate::analysis::points_to::store::PointsToStore`
+crates/polint/src/core/mod.rs:48:44: warning: unused imports: `CallReachabilityFact` and `ReachabilityRootFact`
+crates/polint/src/core/mod.rs:49:44: warning: unused imports: `ReachabilityProviderOutput` and `ReachabilityStore`
+crates/polint/src/core/mod.rs:50:5: warning: unused import: `crate::analysis::refined_calls::facts::RefinedCallEdgeFact`
+crates/polint/src/core/mod.rs:51:5: warning: unused import: `crate::analysis::refined_calls::provider::REFINED_CALLS_PROVIDER_ID`
+crates/polint/src/core/mod.rs:52:45: warning: unused imports: `RefinedCallOutput` and `RefinedCallStore`
+crates/polint/src/core/mod.rs:53:5: warning: unused import: `crate::analysis::semantic_graph::constraints::ConstraintFact`
+crates/polint/src/core/mod.rs:54:46: warning: unused imports: `SemanticEdgeFact` and `SemanticNodeFact`
+crates/polint/src/core/mod.rs:55:5: warning: unused import: `crate::analysis::semantic_graph::store::SemanticGraphOutput`
+crates/polint/src/core/mod.rs:56:5: warning: unused import: `crate::analysis::solver::budget::BudgetStatus`
+crates/polint/src/core/mod.rs:57:5: warning: unused import: `crate::analysis::solver::facts::DerivedEdgeFact`
+crates/polint/src/core/mod.rs:58:38: warning: unused imports: `SolverOutput` and `SolverStore`
+crates/polint/src/core/mod.rs:59:5: warning: unused import: `crate::analysis::store::SemanticStore`
+crates/polint/src/core/mod.rs:60:41: warning: unused imports: `SummaryEventFact` and `SummaryFact`
+crates/polint/src/core/mod.rs:61:41: warning: unused imports: `SummaryOutput` and `SummaryStore`
+crates/polint/src/core/mod.rs:62:37: warning: unused imports: `NarrowedTypeFact` and `TypeFact`
+crates/polint/src/core/mod.rs:63:5: warning: unused import: `crate::analysis::types::provider::TYPE_VALUE_ALIAS_PROVIDER_ID`
+crates/polint/src/core/mod.rs:64:37: warning: unused imports: `TypeStore` and `TypeValueAliasOutput`
+crates/polint/src/core/mod.rs:65:38: warning: unused imports: `AllocationTokenFact` and `ValueFact`
+crates/polint/src/core/mod.rs:66:5: warning: unused import: `crate::analysis::values::store::ValueStore`
+crates/polint/src/core/mod.rs:68:5: warning: unused imports: `FactConfidence`, `FactFamily`, `FactMetaStore`, `FactMeta`, `FactPrecision`, `FactRef`, `MissingFactMeta`, `ValidationStatus`, `resolution_metadata`, `resolution_status_metadata`, `stable_key_from_parts`, and `symbol_metadata`
+crates/polint/src/core/mod.rs:72:5: warning: unused import: `crate::diagnostics::fingerprint`
+crates/polint/src/core/mod.rs:74:5: warning: unused imports: `GoSemanticAddressTakenFact`, `GoSemanticCallsiteFact`, `GoSemanticDynamicDispatchFact`, `GoSemanticFunctionFact`, `GoSemanticInstantiatedTypeFact`, `GoSemanticMethodSetFact`, `GoSemanticPackageErrorFact`, `GoSemanticPackageFact`, and `GoSemanticRtaEdgeFact`
+crates/polint/src/core/mod.rs:78:34: warning: unused imports: `GoSemanticFactsOutput`, `GoSemanticStoreReport`, and `GoSemanticStore`
+crates/polint/src/core/mod.rs:80:5: warning: unused imports: `DependencyRequirementFact`, `ImportToPackageFact`, `RepoTopologyOverlayFact`, `ResolvedDependencyEdgeFact`, `SourceSetFact`, `TopologyOutput`, `TopologyPackageFact`, `TopologyPrecision`, and `WorkspaceRootFact`
+crates/polint/src/core/mod.rs:85:5: warning: unused imports: `AliasFact`, `AliasId`, `ExportFact`, `ExportId`, `GeneratedSymbolFact`, `GeneratedSymbolId`, `ResolutionFact`, `ResolutionId`, `ScopeFact`, `ScopeId`, `SemanticImportFact`, `SemanticImportId`, `SemanticStatus`, `StableExportId`, and `StableExportIdentity`
+crates/polint/src/core/mod.rs:90:5: warning: unused imports: `TsObjectAllocationFact`, `TsPropertyReadFact`, `TsPropertyWriteFact`, `TsPrototypeLinkFact`, and `TsReceiverBindingFact`
+crates/polint/src/core/mod.rs:93:38: warning: unused imports: `TsObjectModelOutput` and `TsObjectModelStore`
+crates/polint/src/core/mod.rs:94:13: warning: unused imports: `Deserialize` and `Serialize`
+crates/polint/src/core/mod.rs:95:24: warning: unused imports: `BTreeMap` and `BTreeSet`
+crates/polint/src/core/mod.rs:96:5: warning: unused import: `std::path::PathBuf`
+crates/polint/src/core/mod.rs:97:5: warning: unused import: `std::sync::Arc`
+crates/polint/src/core/db.rs:47:54: warning: unused import: `MirStatus`
+crates/polint/src/core/db.rs:49:42: warning: unused import: `PlaceStatus`
+crates/polint/src/core/db.rs:86:5: warning: unused import: `TopologyPrecision`
+crates/polint/src/core/db.rs:104:75: warning: unused imports: `DefinitionKind`, `ModuleEdgeKind`, `ModuleNodeKind`, `ReferenceKind`, `ResolutionPrecision`, `ResolutionStatus`, `SymbolKind`, `SymbolNamespace`, `SymbolPrecision`, `SymbolResolutionStatus`, and `UnresolvedReason`
+crates/polint/src/core/db.rs:112:5: warning: unused imports: `CachedFileAnalysis`, `TS_JS_MODULE_FUNCTION_NAME`, and `is_synthetic_ts_js_module_function`
+crates/polint/src/core/db.rs:116:15: warning: unused imports: `DefinitionId`, `NodeId`, `ReferenceId`, and `RuleId`
+crates/polint/src/core/db.rs:122:25: warning: unused import: `TextRange`
+crates/polint/src/core/db.rs:127:68: warning: unused import: `SOURCE_PROVIDER_ID`
+crates/polint/src/core/mod.rs:144:5: warning: unused import: `labels::*`
+crates/polint/src/core/mod.rs:145:5: warning: unused import: `metadata::*`
+warning: `polint` (lib) generated 71 warnings (run `cargo fix --lib -p polint` to apply 71 suggestions)
+crates/polint/src/core/mod.rs:16:5: warning: unused imports: `DataFlowBudgetFact` and `DataFlowEdgeFact`
+crates/polint/src/core/mod.rs:20:57: warning: unused import: `DataFlowStore`
+crates/polint/src/core/mod.rs:30:5: warning: unused imports: `EvidenceBundleFact`, `EvidenceEdgeFact`, `EvidenceOmittedRegionFact`, `EvidencePathFact`, `EvidenceReplayKeyFact`, `EvidenceSliceFact`, and `EvidenceUnknownFact`
+crates/polint/src/core/mod.rs:58:52: warning: unused import: `SolverStore`
+crates/polint/src/core/mod.rs:64:37: warning: unused import: `TypeStore`
+crates/polint/src/core/mod.rs:65:38: warning: unused import: `AllocationTokenFact`
+crates/polint/src/core/mod.rs:68:5: warning: unused imports: `FactConfidence`, `FactFamily`, `FactMetaStore`, `FactMeta`, `FactPrecision`, `FactRef`, `ValidationStatus`, `resolution_metadata`, `resolution_status_metadata`, `stable_key_from_parts`, and `symbol_metadata`
+warning: `polint` (lib test) generated 64 warnings (57 duplicates) (run `cargo fix --lib -p polint --tests` to apply 7 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 12.15s

@@ -19,13 +19,13 @@ use std::time::{Duration, Instant};
 pub struct PipelineBreakdown {
     /// Config load + digest + empty rule/options setup.
     pub config_and_hashes: Duration,
-    /// File discovery, parallel read, and DB/hash (`polint_fs::load_analysis_files` sub-stages).
+    /// File discovery, parallel read, and DB/hash (`polint::_bench::fs::load_analysis_files` sub-stages).
     pub load_sources: LoadSourcesTimings,
-    /// `polint_go::analyze_with_options` (parse + facts; cache disabled).
+    /// `polint::_bench::go::analyze_with_options` (parse + facts; cache disabled).
     pub go_analysis: Duration,
-    /// `polint_ts::analyze_with_options` (parse + facts; cache disabled).
+    /// `polint::_bench::ts::analyze_with_options` (parse + facts; cache disabled).
     pub ts_analysis: Duration,
-    /// `polint_core::run_rules` (empty rule list in bench harness).
+    /// `polint::_bench::core::run_rules` (empty rule list in bench harness).
     pub run_rules: Duration,
 }
 

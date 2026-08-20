@@ -64,7 +64,12 @@ Bench-only and internal hooks should stay namespaced (**`_bench`**, **`#[doc(hid
 <!-- GSD:architecture-start source:ARCHITECTURE.md -->
 ## Architecture
 
-Architecture not yet mapped. Follow existing patterns found in the codebase. For **crate visibility and public API discipline**, follow the Conventions above and [`docs/API-VISIBILITY-PLAN.md`](docs/API-VISIBILITY-PLAN.md) when tightening `pub` / `pub(crate)` boundaries.
+The landed two-package graph, private module layering, composition root, provider/fact/frontend contracts,
+identity model, lifecycle adapters, determinism rules, and extension guidance
+are documented in [`ARCHITECTURE.md`](ARCHITECTURE.md). Keep public visibility
+narrow and follow [`docs/API-VISIBILITY-PLAN.md`](docs/API-VISIBILITY-PLAN.md)
+when tightening `pub` / `pub(crate)` boundaries; the supported rule-author
+surface remains `polint::sdk` and `polint::runner`.
 <!-- GSD:architecture-end -->
 
 <!-- GSD:skills-start source:skills/ -->

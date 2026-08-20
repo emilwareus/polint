@@ -1,0 +1,163 @@
+   Compiling polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.69s
+     Running tests/cli.rs (target/debug/deps/cli-05cf7bb24a423286)
+
+running 20 tests
+
+thread 'capability_planning::check_reports_unsupported_reserved_capability' (7996585) panicked at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/ops/function.rs:250:5:
+Unexpected failure.
+code=2
+stderr=``````
+polint: polint: rules host: failed: /private/var/folders/29/pcyz866953x2yj32jdbd6wbc0000gn/T/.tmphyvveM/.polint/rules/Cargo.toml
+status: exit status: 101
+stdout:
+
+stderr:
+error[E0423]: cannot initialize a tuple struct which contains private fields
+  --> src/main.rs:22:22
+   |
+22 |         &Span::point(FileId(0), 1, 1),
+   |                      ^^^^^^
+
+For more information about this error, try `rustc --explain E0423`.
+error: could not compile `polint-local-rules-97cab100f500d0ce` (bin \"polint-local-rules-97cab100f500d0ce\") due to 1 previous error
+```
+```
+command=`cd "/var/folders/29/pcyz866953x2yj32jdbd6wbc0000gn/T/.tmphyvveM" && CARGO_TARGET_DIR="/Users/emilwareus/conductor/workspaces/exlint/biarritz/target/polint-cli-test-cargo" POLINT_RULES_PROFILE="dev" POLINT_RULES_TARGET_DIR="/Users/emilwareus/conductor/workspaces/exlint/biarritz/target/polint-cli-test-rules" "/Users/emilwareus/conductor/workspaces/exlint/biarritz/target/debug/polint" "check" "--format" "json" "--fail-on" "none"`
+code=2
+stdout=""
+stderr=```
+polint: polint: rules host: failed: /private/var/folders/29/pcyz866953x2yj32jdbd6wbc0000gn/T/.tmphyvveM/.polint/rules/Cargo.toml
+status: exit status: 101
+stdout:
+
+stderr:
+error[E0423]: cannot initialize a tuple struct which contains private fields
+  --> src/main.rs:22:22
+   |
+22 |         &Span::point(FileId(0), 1, 1),
+   |                      ^^^^^^
+
+For more information about this error, try `rustc --explain E0423`.
+error: could not compile `polint-local-rules-97cab100f500d0ce` (bin \"polint-local-rules-97cab100f500d0ce\") due to 1 previous error
+```
+
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test capability_planning::check_reports_unsupported_reserved_capability ... FAILED
+test capability_planning::relationship_capability_rule_runs_on_empty_repo ... ok
+
+thread 'capability_planning::check_only_rule_keeps_selected_capability_diagnostic' (7996584) panicked at crates/polint/tests/common/mod.rs:76:33:
+stdout was not parseable JSON: EOF while parsing a value at line 1 column 0
+stdout:
+
+test capability_planning::check_only_rule_keeps_selected_capability_diagnostic ... FAILED
+test capability_planning::call_graph_capability_remains_unsupported ... ok
+
+thread 'capability_planning::reserved_cfg_and_call_graph_remain_unsupported' (7996596) panicked at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/ops/function.rs:250:5:
+Unexpected failure.
+code=2
+stderr=``````
+polint: polint: rules host: failed: /private/var/folders/29/pcyz866953x2yj32jdbd6wbc0000gn/T/.tmpXnhGog/.polint/rules/Cargo.toml
+status: exit status: 101
+stdout:
+
+stderr:
+error[E0423]: cannot initialize a tuple struct which contains private fields
+  --> src/main.rs:22:22
+   |
+22 |         &Span::point(FileId(0), 1, 1),
+   |                      ^^^^^^
+
+For more information about this error, try `rustc --explain E0423`.
+error: could not compile `polint-local-rules-8e1d40d4afd46652` (bin \"polint-local-rules-8e1d40d4afd46652\") due to 1 previous error
+```
+```
+command=`cd "/var/folders/29/pcyz866953x2yj32jdbd6wbc0000gn/T/.tmpXnhGog" && CARGO_TARGET_DIR="/Users/emilwareus/conductor/workspaces/exlint/biarritz/target/polint-cli-test-cargo" POLINT_RULES_PROFILE="dev" POLINT_RULES_TARGET_DIR="/Users/emilwareus/conductor/workspaces/exlint/biarritz/target/polint-cli-test-rules" "/Users/emilwareus/conductor/workspaces/exlint/biarritz/target/debug/polint" "check" "--format" "json" "--fail-on" "none"`
+code=2
+stdout=""
+stderr=```
+polint: polint: rules host: failed: /private/var/folders/29/pcyz866953x2yj32jdbd6wbc0000gn/T/.tmpXnhGog/.polint/rules/Cargo.toml
+status: exit status: 101
+stdout:
+
+stderr:
+error[E0423]: cannot initialize a tuple struct which contains private fields
+  --> src/main.rs:22:22
+   |
+22 |         &Span::point(FileId(0), 1, 1),
+   |                      ^^^^^^
+
+For more information about this error, try `rustc --explain E0423`.
+error: could not compile `polint-local-rules-8e1d40d4afd46652` (bin \"polint-local-rules-8e1d40d4afd46652\") due to 1 previous error
+```
+
+
+test capability_planning::reserved_cfg_and_call_graph_remain_unsupported ... FAILED
+test capability_planning::provider_setup_missing_support_blocks_requesting_rule ... ok
+
+thread 'capability_planning::cfg_capability_remains_unsupported' (7996583) panicked at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/ops/function.rs:250:5:
+Unexpected failure.
+code=2
+stderr=``````
+polint: polint: rules host: failed: /private/var/folders/29/pcyz866953x2yj32jdbd6wbc0000gn/T/.tmpAkXcWZ/.polint/rules/Cargo.toml
+status: exit status: 101
+stdout:
+
+stderr:
+error[E0423]: cannot initialize a tuple struct which contains private fields
+  --> src/main.rs:22:22
+   |
+22 |         &Span::point(FileId(0), 1, 1),
+   |                      ^^^^^^
+
+For more information about this error, try `rustc --explain E0423`.
+error: could not compile `polint-local-rules-7668e447b713bae9` (bin \"polint-local-rules-7668e447b713bae9\") due to 1 previous error
+```
+```
+command=`cd "/var/folders/29/pcyz866953x2yj32jdbd6wbc0000gn/T/.tmpAkXcWZ" && CARGO_TARGET_DIR="/Users/emilwareus/conductor/workspaces/exlint/biarritz/target/polint-cli-test-cargo" POLINT_RULES_PROFILE="dev" POLINT_RULES_TARGET_DIR="/Users/emilwareus/conductor/workspaces/exlint/biarritz/target/polint-cli-test-rules" "/Users/emilwareus/conductor/workspaces/exlint/biarritz/target/debug/polint" "check" "--format" "json" "--fail-on" "none"`
+code=2
+stdout=""
+stderr=```
+polint: polint: rules host: failed: /private/var/folders/29/pcyz866953x2yj32jdbd6wbc0000gn/T/.tmpAkXcWZ/.polint/rules/Cargo.toml
+status: exit status: 101
+stdout:
+
+stderr:
+error[E0423]: cannot initialize a tuple struct which contains private fields
+  --> src/main.rs:22:22
+   |
+22 |         &Span::point(FileId(0), 1, 1),
+   |                      ^^^^^^
+
+For more information about this error, try `rustc --explain E0423`.
+error: could not compile `polint-local-rules-7668e447b713bae9` (bin \"polint-local-rules-7668e447b713bae9\") due to 1 previous error
+```
+
+
+test capability_planning::cfg_capability_remains_unsupported ... FAILED
+test capability_planning::external_rule_consumes_go_symbols_from_multiple_monorepo_modules_with_one_polint_setup ... ok
+test capability_planning::external_rule_consumes_go_symbols_and_references_through_public_sdk ... ok
+test capability_planning::kernel_delegation_preserves_existing_rule_facts ... ok
+test capability_planning::external_rule_consumes_go_symbols_from_monorepo_submodule_without_repo_go_mod ... ok
+test capability_planning::external_rule_consumes_module_relationship_facts_through_public_sdk ... ok
+test capability_planning::external_rule_consumes_ts_symbols_and_references_through_public_sdk ... ok
+test capability_planning::symbol_provider_support_allows_requesting_rule_before_supported_rules ... ok
+test capability_planning::symbol_reference_cache_and_setup_reports_go_setup_missing ... ok
+test capability_planning::kernel_metadata_preserves_public_check_behavior ... ok
+test capability_planning::capability_change_changes_cache_entries ... ok
+test capability_planning::symbol_reference_cache_and_setup_keeps_stable_ids_across_cached_runs ... ok
+test capability_planning::symbol_reference_macro_mapping_and_determinism ... ok
+test capability_planning::module_relationship_setup_missing_and_determinism ... ok
+
+failures:
+
+failures:
+    capability_planning::cfg_capability_remains_unsupported
+    capability_planning::check_only_rule_keeps_selected_capability_diagnostic
+    capability_planning::check_reports_unsupported_reserved_capability
+    capability_planning::reserved_cfg_and_call_graph_remain_unsupported
+
+test result: FAILED. 16 passed; 4 failed; 0 ignored; 0 measured; 146 filtered out; finished in 46.82s
+
+error: test failed, to rerun pass `-p polint --test cli`

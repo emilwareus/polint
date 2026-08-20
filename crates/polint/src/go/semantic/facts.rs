@@ -1,105 +1,105 @@
-use crate::core::{FileId, Span};
+use crate::internal_core::{FileId, Span, StableKeyId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct GoSemanticPackageId(pub(crate) u64);
+pub struct GoSemanticPackageId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct GoSemanticFunctionId(pub(crate) u64);
+pub struct GoSemanticFunctionId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct GoSemanticCallsiteId(pub(crate) u64);
+pub struct GoSemanticCallsiteId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct GoSemanticMethodSetId(pub(crate) u64);
+pub struct GoSemanticMethodSetId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct GoSemanticPackageErrorId(pub(crate) u64);
+pub struct GoSemanticPackageErrorId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct GoSemanticAddressTakenId(pub(crate) u64);
+pub struct GoSemanticAddressTakenId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct GoSemanticInstantiatedTypeId(pub(crate) u64);
+pub struct GoSemanticInstantiatedTypeId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct GoSemanticDynamicDispatchId(pub(crate) u64);
+pub struct GoSemanticDynamicDispatchId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct GoSemanticRtaEdgeId(pub(crate) u64);
+pub struct GoSemanticRtaEdgeId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) enum GoSemanticFunctionKind {
+pub enum GoSemanticFunctionKind {
     Function,
     Method,
     Init,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) enum GoSemanticCallStatus {
+pub enum GoSemanticCallStatus {
     ResolvedStatic,
     UnresolvedDynamic,
     Unsupported,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct GoSemanticPackageFact {
-    pub(crate) id: GoSemanticPackageId,
-    pub(crate) stable_key: String,
-    pub(crate) package_id: String,
-    pub(crate) package_path: String,
-    pub(crate) package_name: String,
-    pub(crate) module_path: String,
-    pub(crate) files: Vec<String>,
+pub struct GoSemanticPackageFact {
+    pub id: GoSemanticPackageId,
+    pub stable_key: StableKeyId,
+    pub package_id: String,
+    pub package_path: String,
+    pub package_name: String,
+    pub module_path: String,
+    pub files: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct GoSemanticFunctionFact {
-    pub(crate) id: GoSemanticFunctionId,
-    pub(crate) stable_key: String,
-    pub(crate) package_id: String,
-    pub(crate) package_path: String,
-    pub(crate) name: String,
-    pub(crate) qualified: String,
-    pub(crate) signature: String,
-    pub(crate) kind: GoSemanticFunctionKind,
-    pub(crate) receiver: Option<String>,
-    pub(crate) relative_file: Option<String>,
-    pub(crate) file: Option<FileId>,
-    pub(crate) span: Option<Span>,
+pub struct GoSemanticFunctionFact {
+    pub id: GoSemanticFunctionId,
+    pub stable_key: StableKeyId,
+    pub package_id: String,
+    pub package_path: String,
+    pub name: String,
+    pub qualified: String,
+    pub signature: String,
+    pub kind: GoSemanticFunctionKind,
+    pub receiver: Option<String>,
+    pub relative_file: Option<String>,
+    pub file: Option<FileId>,
+    pub span: Option<Span>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct GoSemanticCallsiteFact {
-    pub(crate) id: GoSemanticCallsiteId,
-    pub(crate) stable_key: String,
-    pub(crate) package_id: String,
-    pub(crate) package_path: String,
-    pub(crate) caller: String,
-    pub(crate) static_callee: Option<String>,
-    pub(crate) status: GoSemanticCallStatus,
-    pub(crate) reason: Option<String>,
-    pub(crate) relative_file: Option<String>,
-    pub(crate) file: Option<FileId>,
-    pub(crate) span: Option<Span>,
+pub struct GoSemanticCallsiteFact {
+    pub id: GoSemanticCallsiteId,
+    pub stable_key: StableKeyId,
+    pub package_id: String,
+    pub package_path: String,
+    pub caller: String,
+    pub static_callee: Option<String>,
+    pub status: GoSemanticCallStatus,
+    pub reason: Option<String>,
+    pub relative_file: Option<String>,
+    pub file: Option<FileId>,
+    pub span: Option<Span>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct GoSemanticMethodSetFact {
-    pub(crate) id: GoSemanticMethodSetId,
-    pub(crate) stable_key: String,
-    pub(crate) package_id: String,
-    pub(crate) package_path: String,
-    pub(crate) type_name: String,
-    pub(crate) methods: Vec<String>,
+pub struct GoSemanticMethodSetFact {
+    pub id: GoSemanticMethodSetId,
+    pub stable_key: StableKeyId,
+    pub package_id: String,
+    pub package_path: String,
+    pub type_name: String,
+    pub methods: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct GoSemanticPackageErrorFact {
-    pub(crate) id: GoSemanticPackageErrorId,
-    pub(crate) stable_key: String,
-    pub(crate) package_id: String,
-    pub(crate) package_path: String,
-    pub(crate) message: String,
+pub struct GoSemanticPackageErrorFact {
+    pub id: GoSemanticPackageErrorId,
+    pub stable_key: StableKeyId,
+    pub package_id: String,
+    pub package_path: String,
+    pub message: String,
 }
 
 /// An address-taken Go function — the RTA dispatch-candidate set for func-value
@@ -107,12 +107,12 @@ pub(crate) struct GoSemanticPackageErrorFact {
 /// operands in the sidecar. `function` is the official `ssa.Function` `.String()`
 /// identity; `stable_key` is length-prefixed from that identity (D-12/D-13).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct GoSemanticAddressTakenFact {
-    pub(crate) id: GoSemanticAddressTakenId,
-    pub(crate) stable_key: String,
-    pub(crate) package_id: String,
-    pub(crate) package_path: String,
-    pub(crate) function: String,
+pub struct GoSemanticAddressTakenFact {
+    pub id: GoSemanticAddressTakenId,
+    pub stable_key: StableKeyId,
+    pub package_id: String,
+    pub package_path: String,
+    pub function: String,
 }
 
 /// An instantiated runtime type — the RTA "rapid type" set: a concrete type converted
@@ -120,12 +120,12 @@ pub(crate) struct GoSemanticAddressTakenFact {
 /// instantiated-type filter is what distinguishes RTA from coarse CHA. `type_name` is the
 /// official `go/types` `.String()` identity; `stable_key` is length-prefixed from it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct GoSemanticInstantiatedTypeFact {
-    pub(crate) id: GoSemanticInstantiatedTypeId,
-    pub(crate) stable_key: String,
-    pub(crate) package_id: String,
-    pub(crate) package_path: String,
-    pub(crate) type_name: String,
+pub struct GoSemanticInstantiatedTypeFact {
+    pub id: GoSemanticInstantiatedTypeId,
+    pub stable_key: StableKeyId,
+    pub package_id: String,
+    pub package_path: String,
+    pub type_name: String,
 }
 
 /// Dynamic-callsite dispatch detail — the discriminant Plan 2's RTA driver needs to
@@ -134,16 +134,16 @@ pub(crate) struct GoSemanticInstantiatedTypeFact {
 /// honest `None` otherwise (D-08/D-15 — no fabricated discriminant). `callsite_stable_key`
 /// joins this detail back to the originating [`GoSemanticCallsiteFact`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct GoSemanticDynamicDispatchFact {
-    pub(crate) id: GoSemanticDynamicDispatchId,
-    pub(crate) stable_key: String,
-    pub(crate) package_id: String,
-    pub(crate) package_path: String,
-    pub(crate) caller: String,
-    pub(crate) callsite_stable_key: String,
-    pub(crate) interface_type: Option<String>,
-    pub(crate) method: Option<String>,
-    pub(crate) signature: Option<String>,
+pub struct GoSemanticDynamicDispatchFact {
+    pub id: GoSemanticDynamicDispatchId,
+    pub stable_key: StableKeyId,
+    pub package_id: String,
+    pub package_path: String,
+    pub caller: String,
+    pub callsite_stable_key: StableKeyId,
+    pub interface_type: Option<String>,
+    pub method: Option<String>,
+    pub signature: Option<String>,
 }
 
 /// A direct x/tools RTA call-graph edge emitted by the Go sidecar.
@@ -154,12 +154,12 @@ pub(crate) struct GoSemanticDynamicDispatchFact {
 /// reflection synthetic calls. The external x/tools benchmark therefore consumes this
 /// fact directly instead of forcing those oracle identities through source-only facts.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct GoSemanticRtaEdgeFact {
-    pub(crate) id: GoSemanticRtaEdgeId,
-    pub(crate) stable_key: String,
-    pub(crate) package_id: String,
-    pub(crate) package_path: String,
-    pub(crate) caller: String,
-    pub(crate) callee: String,
-    pub(crate) edge_kind: String,
+pub struct GoSemanticRtaEdgeFact {
+    pub id: GoSemanticRtaEdgeId,
+    pub stable_key: StableKeyId,
+    pub package_id: String,
+    pub package_path: String,
+    pub caller: String,
+    pub callee: String,
+    pub edge_kind: String,
 }

@@ -7,7 +7,7 @@ use crate::analysis::calls::facts::{
     CallTargetStatus, UnresolvedCallReason,
 };
 use crate::analysis::cfg::facts::{CfgEdgeKind, CfgPrecision, CfgStatus, CfgView};
-use crate::analysis::domains::facts::{
+use crate::analysis_neutral::domains::facts::{
     DomainLocation, DomainPrecision, DomainSlot, DomainStatus, DomainValue,
 };
 use crate::analysis::mir::body::MirStatus;
@@ -49,7 +49,12 @@ pub(crate) fn metadata_debug_json_with_demand_trace_for_test(
         data_flow: crate::analysis::data_flow::debug::data_flow_debug_json_for_test(db),
         evidence: db
             .evidence_store()
-            .map(crate::analysis::evidence::debug::evidence_debug_report)
+            .map(|store| {
+                crate::analysis::evidence::debug::evidence_debug_report(
+                    store,
+                    &db.stable_key_interner(),
+                )
+            })
             .map(|report| serde_json::to_value(report).expect("evidence debug report serializes"))
             .unwrap_or_else(empty_evidence_debug_report),
         entrypoints: crate::analysis::entrypoints::debug::metadata_debug_json_for_test(db),
@@ -120,7 +125,8 @@ struct MetadataDebugReport<'a> {
 struct MetadataDebugFields<'a> {
     family: &'static str,
     run_id: u64,
-    stable_key: &'a str,
+    #[serde(rename = "stable_key")]
+    stable_key_text: String,
     producer_id: &'a str,
     layer_id: &'a str,
     precision: &'static str,
@@ -189,7 +195,8 @@ struct SemanticDebugReport {
 struct SemanticDebugRow {
     family: &'static str,
     run_id: u64,
-    stable_key: String,
+    #[serde(rename = "stable_key")]
+    stable_key_text: String,
     producer_id: &'static str,
     layer_id: &'static str,
     status: &'static str,
@@ -287,7 +294,8 @@ struct ExtensionFactDebugRow {
     extension_id: String,
     provider_id: String,
     fact_family: String,
-    stable_key: String,
+    #[serde(rename = "stable_key")]
+    stable_key_text: String,
     precision: String,
     confidence: String,
     evidence_count: usize,
@@ -299,7 +307,8 @@ struct ExtensionRejectedDebugRow {
     extension_id: String,
     provider_id: String,
     fact_family: String,
-    stable_key: String,
+    #[serde(rename = "stable_key")]
+    stable_key_text: String,
     reason: String,
     evidence_count: usize,
 }
@@ -326,14 +335,16 @@ struct SccScheduleDebugSection {
 
 #[derive(Serialize)]
 struct SccDebugEntry {
-    member_stable_keys: Vec<String>,
+    #[serde(rename = "member_stable_keys")]
+    member_stable_keys_text: Vec<String>,
     is_recursive: bool,
     size: usize,
 }
 
 #[derive(Serialize)]
 struct SccIterationDebugEntry {
-    member_stable_keys: Vec<String>,
+    #[serde(rename = "member_stable_keys")]
+    member_stable_keys_text: Vec<String>,
     iterations: u32,
 }
 
@@ -356,25 +367,29 @@ struct DemandQueryDebugEntry {
 
 #[derive(Serialize)]
 struct SummaryDebugRow {
-    callable_stable_key: String,
+    #[serde(rename = "callable_stable_key")]
+    callable_stable_key_text: String,
     domain: String,
     status: String,
     precision: String,
     provenance: String,
     payload_digest: String,
     tito_flows: Vec<crate::analysis::summaries::facts::SummaryFlowEdge>,
-    stable_key: String,
+    #[serde(rename = "stable_key")]
+    stable_key_text: String,
 }
 
 #[derive(Serialize)]
 struct SummaryEventDebugRow {
-    callable_stable_key: String,
+    #[serde(rename = "callable_stable_key")]
+    callable_stable_key_text: String,
     domain: String,
     event_kind: String,
     reason: String,
     status: String,
     precision: String,
-    stable_key: String,
+    #[serde(rename = "stable_key")]
+    stable_key_text: String,
 }
 
 #[derive(Default, Serialize)]
@@ -391,7 +406,8 @@ struct SummaryCounts {
 #[derive(Serialize)]
 struct AbstractDomainMetadata {
     family: &'static str,
-    stable_key: String,
+    #[serde(rename = "stable_key")]
+    stable_key_text: String,
     producer_id: &'static str,
     layer_id: &'static str,
     status: String,
@@ -438,7 +454,8 @@ struct CallDebugCounts {
 #[derive(Serialize)]
 struct CallDebugMetadata {
     family: &'static str,
-    stable_key: String,
+    #[serde(rename = "stable_key")]
+    stable_key_text: String,
     producer_id: &'static str,
     layer_id: &'static str,
     status: String,
@@ -485,7 +502,8 @@ struct UnresolvedCallDebugRow {
 struct CfgDebugRow {
     family: &'static str,
     run_id: u64,
-    stable_key: String,
+    #[serde(rename = "stable_key")]
+    stable_key_text: String,
     producer_id: &'static str,
     layer_id: &'static str,
     status: &'static str,
@@ -501,7 +519,8 @@ struct CfgDebugRow {
 struct SemanticMirDebugRow {
     family: &'static str,
     run_id: u64,
-    stable_key: String,
+    #[serde(rename = "stable_key")]
+    stable_key_text: String,
     producer_id: &'static str,
     layer_id: &'static str,
     status: String,
@@ -541,9 +560,9 @@ fn file_rows(db: &AnalysisDb) -> Vec<FileDebugRow<'_>> {
         })
         .collect::<Vec<_>>();
     rows.sort_by(|left, right| {
-        (left.path, left.metadata.stable_key, left.metadata.run_id).cmp(&(
+        (left.path, left.metadata.stable_key_text.as_str(), left.metadata.run_id).cmp(&(
             right.path,
-            right.metadata.stable_key,
+            right.metadata.stable_key_text.as_str(),
             right.metadata.run_id,
         ))
     });
@@ -570,14 +589,14 @@ fn import_rows(db: &AnalysisDb) -> Vec<ImportDebugRow<'_>> {
             left.path,
             left.span.start_byte,
             left.import_path,
-            left.metadata.stable_key,
+            left.metadata.stable_key_text.as_str(),
             left.metadata.run_id,
         )
             .cmp(&(
                 right.path,
                 right.span.start_byte,
                 right.import_path,
-                right.metadata.stable_key,
+                right.metadata.stable_key_text.as_str(),
                 right.metadata.run_id,
             ))
     });
@@ -606,14 +625,14 @@ fn symbol_rows(db: &AnalysisDb) -> Vec<SymbolDebugRow<'_>> {
             left.path.unwrap_or(""),
             span_start(left.span),
             left.name,
-            left.metadata.stable_key,
+            left.metadata.stable_key_text.as_str(),
             left.metadata.run_id,
         )
             .cmp(&(
                 right.path.unwrap_or(""),
                 span_start(right.span),
                 right.name,
-                right.metadata.stable_key,
+                right.metadata.stable_key_text.as_str(),
                 right.metadata.run_id,
             ))
     });
@@ -645,14 +664,14 @@ fn reference_rows(db: &AnalysisDb) -> Vec<ReferenceDebugRow<'_>> {
             left.path.unwrap_or(""),
             span_start(left.span),
             left.name,
-            left.metadata.stable_key,
+            left.metadata.stable_key_text.as_str(),
             left.metadata.run_id,
         )
             .cmp(&(
                 right.path.unwrap_or(""),
                 span_start(right.span),
                 right.name,
-                right.metadata.stable_key,
+                right.metadata.stable_key_text.as_str(),
                 right.metadata.run_id,
             ))
     });
@@ -668,7 +687,7 @@ fn semantic_report(db: &AnalysisDb) -> SemanticDebugReport {
                 db,
                 FactFamily::Scope,
                 fact.id.0,
-                fact.stable_key.as_str(),
+                db.resolve_stable_key(fact.stable_key).as_ref(),
                 fact.status,
                 fact.file,
                 None,
@@ -688,7 +707,7 @@ fn semantic_report(db: &AnalysisDb) -> SemanticDebugReport {
                 db,
                 FactFamily::SemanticImport,
                 fact.id.0,
-                fact.stable_key.as_str(),
+                db.resolve_stable_key(fact.stable_key).as_ref(),
                 fact.status,
                 fact.file,
                 None,
@@ -712,7 +731,7 @@ fn semantic_report(db: &AnalysisDb) -> SemanticDebugReport {
                 db,
                 FactFamily::Export,
                 fact.id.0,
-                fact.stable_key.as_str(),
+                db.resolve_stable_key(fact.stable_key).as_ref(),
                 fact.status,
                 fact.file,
                 None,
@@ -732,14 +751,17 @@ fn semantic_report(db: &AnalysisDb) -> SemanticDebugReport {
                 db,
                 FactFamily::Alias,
                 fact.id.0,
-                fact.stable_key.as_str(),
+                db.resolve_stable_key(fact.stable_key).as_ref(),
                 fact.status,
                 fact.file,
                 None,
                 None,
                 None,
-                Some(fact.source_symbol_stable_key.clone()),
-                fact.target_symbol_stable_keys.clone(),
+                Some(db.resolve_stable_key(fact.source_symbol_stable_key).to_string()),
+                fact.target_symbol_stable_keys
+                    .iter()
+                    .map(|key| db.resolve_stable_key(*key).to_string())
+                    .collect(),
                 None,
             )
         })
@@ -752,14 +774,17 @@ fn semantic_report(db: &AnalysisDb) -> SemanticDebugReport {
                 db,
                 FactFamily::Resolution,
                 fact.id.0,
-                fact.stable_key.as_str(),
+                db.resolve_stable_key(fact.stable_key).as_ref(),
                 fact.status,
                 fact.file,
                 None,
                 None,
                 None,
-                Some(fact.source_stable_key.clone()),
-                fact.target_stable_keys.clone(),
+                Some(db.resolve_stable_key(fact.source_stable_key).to_string()),
+                fact.target_stable_keys
+                    .iter()
+                    .map(|key| db.resolve_stable_key(*key).to_string())
+                    .collect(),
                 None,
             )
         })
@@ -772,13 +797,13 @@ fn semantic_report(db: &AnalysisDb) -> SemanticDebugReport {
                 db,
                 FactFamily::GeneratedSymbol,
                 fact.id.0,
-                fact.stable_key.as_str(),
+                db.resolve_stable_key(fact.stable_key).as_ref(),
                 fact.status,
                 fact.file,
                 fact.span.as_ref().map(debug_span),
-                Some(fact.symbol_stable_key.clone()),
+                Some(db.resolve_stable_key(fact.symbol_stable_key).to_string()),
                 None,
-                Some(fact.source_stable_key.clone()),
+                Some(db.resolve_stable_key(fact.source_stable_key).to_string()),
                 Vec::new(),
                 Some(fact.generated_discriminator.clone()),
             )
@@ -792,13 +817,13 @@ fn semantic_report(db: &AnalysisDb) -> SemanticDebugReport {
                 db,
                 FactFamily::StableExport,
                 fact.id.0,
-                fact.stable_key.as_str(),
+                db.resolve_stable_key(fact.stable_key).as_ref(),
                 fact.status,
                 None,
                 None,
                 None,
                 Some(fact.export_name.clone()),
-                Some(fact.symbol_stable_key.clone()),
+                Some(db.resolve_stable_key(fact.symbol_stable_key).to_string()),
                 Vec::new(),
                 fact.generated_discriminator.clone(),
             )
@@ -842,7 +867,7 @@ fn mir_body_rows(db: &AnalysisDb) -> Vec<SemanticMirDebugRow> {
                 SemanticMirDebugRow {
                     family: FactFamily::MirBody.label(),
                     run_id: body.id.0,
-                    stable_key: body.stable_key.clone(),
+                    stable_key_text: db.resolve_stable_key(body.stable_key).to_string(),
                     producer_id: metadata.producer_id,
                     layer_id: metadata.layer_id,
                     status: mir_status_label(body.status).to_string(),
@@ -876,7 +901,7 @@ fn mir_operation_rows(db: &AnalysisDb) -> Vec<SemanticMirDebugRow> {
                 SemanticMirDebugRow {
                     family: FactFamily::MirOperation.label(),
                     run_id: operation.id.0,
-                    stable_key: operation.stable_key.clone(),
+                    stable_key_text: db.resolve_stable_key(operation.stable_key).to_string(),
                     producer_id: metadata.producer_id,
                     layer_id: metadata.layer_id,
                     status: mir_status_label(operation.status).to_string(),
@@ -908,7 +933,7 @@ fn mir_place_rows(db: &AnalysisDb) -> Vec<SemanticMirDebugRow> {
                 SemanticMirDebugRow {
                     family: FactFamily::Place.label(),
                     run_id: place.id.0,
-                    stable_key: place.stable_key.clone(),
+                    stable_key_text: db.resolve_stable_key(place.stable_key).to_string(),
                     producer_id: metadata.producer_id,
                     layer_id: metadata.layer_id,
                     status: place_status_label(place.status).to_string(),
@@ -942,7 +967,7 @@ fn mir_unsupported_rows(db: &AnalysisDb) -> Vec<SemanticMirDebugRow> {
                 SemanticMirDebugRow {
                     family: FactFamily::UnsupportedSemantic.label(),
                     run_id: row.id.0,
-                    stable_key: row.stable_key.clone(),
+                    stable_key_text: db.resolve_stable_key(row.stable_key).to_string(),
                     producer_id: metadata.producer_id,
                     layer_id: metadata.layer_id,
                     status: mir_status_label(row.status).to_string(),
@@ -1010,7 +1035,7 @@ fn abstract_domain_observation_rows(db: &AnalysisDb) -> Vec<AbstractDomainObserv
                 db,
                 FactFamily::DomainObservation,
                 row.id.0,
-                row.stable_key.as_str(),
+                db.resolve_stable_key(row.stable_key).as_ref(),
                 domain_status_label(row.status),
                 domain_precision_label(row.precision),
                 domain_file(db, row.body),
@@ -1051,7 +1076,7 @@ fn abstract_domain_event_rows(db: &AnalysisDb) -> Vec<AbstractDomainEventDebugRo
                 db,
                 FactFamily::DomainEvent,
                 row.id.0,
-                row.stable_key.as_str(),
+                db.resolve_stable_key(row.stable_key).as_ref(),
                 domain_status_label(row.status),
                 domain_precision_label(row.precision),
                 domain_file(db, row.body),
@@ -1092,7 +1117,7 @@ fn abstract_domain_metadata_row(
     let meta = db.metadata_for(FactRef::new(family, run_id))?;
     Some(AbstractDomainMetadata {
         family: family.label(),
-        stable_key: stable_key.to_string(),
+        stable_key_text: stable_key.to_string(),
         producer_id: meta.producer_id,
         layer_id: meta.layer_id,
         status: status.to_string(),
@@ -1106,7 +1131,7 @@ fn abstract_domain_metadata_order(row: &AbstractDomainMetadata) -> (&str, u32, &
     (
         row.path.as_deref().unwrap_or(""),
         span_start(row.span),
-        row.stable_key.as_str(),
+        row.stable_key_text.as_str(),
     )
 }
 
@@ -1232,36 +1257,37 @@ fn abstract_domain_index_counts(db: &AnalysisDb) -> BTreeMap<&'static str, usize
 fn summaries_report(db: &AnalysisDb) -> SummaryDebugReport {
     use crate::analysis::summaries::facts::{SummaryDomainKind, SummaryStatus};
 
+    let interner = db.stable_key_interner();
     let mut summaries: Vec<SummaryDebugRow> = db
         .summary_facts()
         .iter()
         .map(|fact| SummaryDebugRow {
-            callable_stable_key: fact.callable_stable_key.clone(),
+            callable_stable_key_text: interner.resolve(fact.callable_stable_key).to_string(),
             domain: fact.domain.as_str().to_string(),
             status: fact.status.as_str().to_string(),
             precision: fact.precision.as_str().to_string(),
             provenance: fact.provenance.as_str().to_string(),
             payload_digest: fact.payload_digest.clone(),
             tito_flows: fact.tito_flows.clone(),
-            stable_key: fact.stable_key.clone(),
+            stable_key_text: interner.resolve(fact.stable_key).to_string(),
         })
         .collect();
-    summaries.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    summaries.sort_by(|left, right| left.stable_key_text.cmp(&right.stable_key_text));
 
     let mut events: Vec<SummaryEventDebugRow> = db
         .summary_events()
         .iter()
         .map(|event| SummaryEventDebugRow {
-            callable_stable_key: event.callable_stable_key.clone(),
+            callable_stable_key_text: interner.resolve(event.callable_stable_key).to_string(),
             domain: event.domain.as_str().to_string(),
             event_kind: event.event_kind.clone(),
             reason: event.reason.clone(),
             status: event.status.as_str().to_string(),
             precision: event.precision.as_str().to_string(),
-            stable_key: event.stable_key.clone(),
+            stable_key_text: interner.resolve(event.stable_key).to_string(),
         })
         .collect();
-    events.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    events.sort_by(|left, right| left.stable_key_text.cmp(&right.stable_key_text));
 
     let mut counts = SummaryCounts {
         total: db.summary_facts().len() as u32,
@@ -1304,6 +1330,7 @@ fn summaries_report(db: &AnalysisDb) -> SummaryDebugReport {
 }
 
 fn extensions_report(db: &AnalysisDb) -> ExtensionDebugReport {
+    let interner = db.stable_key_interner();
     let mut activations = db
         .extension_activations()
         .iter()
@@ -1332,14 +1359,14 @@ fn extensions_report(db: &AnalysisDb) -> ExtensionDebugReport {
             extension_id: fact.extension_id.clone(),
             provider_id: fact.provider_id.clone(),
             fact_family: fact.fact_family.clone(),
-            stable_key: fact.stable_key.clone(),
+            stable_key_text: interner.resolve(fact.stable_key).to_string(),
             precision: format!("{:?}", fact.precision),
             confidence: format!("{:?}", fact.confidence),
             evidence_count: fact.evidence.len(),
             payload_digest: fact.payload_digest.clone(),
         })
         .collect::<Vec<_>>();
-    accepted.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    accepted.sort_by(|left, right| left.stable_key_text.cmp(&right.stable_key_text));
 
     let mut rejected = db
         .rejected_extension_facts()
@@ -1348,12 +1375,12 @@ fn extensions_report(db: &AnalysisDb) -> ExtensionDebugReport {
             extension_id: fact.extension_id.clone(),
             provider_id: fact.provider_id.clone(),
             fact_family: fact.fact_family.clone(),
-            stable_key: fact.stable_key.clone(),
+            stable_key_text: interner.resolve(fact.stable_key).to_string(),
             reason: format!("{:?}", fact.reason),
             evidence_count: fact.evidence.len(),
         })
         .collect::<Vec<_>>();
-    rejected.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    rejected.sort_by(|left, right| left.stable_key_text.cmp(&right.stable_key_text));
 
     ExtensionDebugReport {
         counts: ExtensionDebugCounts {
@@ -1381,7 +1408,7 @@ fn scc_schedule_report(
                 .scc_iteration_counts
                 .iter()
                 .map(|(members, iterations)| SccIterationDebugEntry {
-                    member_stable_keys: members.clone(),
+                    member_stable_keys_text: members.clone(),
                     iterations: *iterations,
                 })
                 .collect()
@@ -1398,7 +1425,11 @@ fn scc_schedule_report(
             .sccs
             .into_iter()
             .map(|scc| SccDebugEntry {
-                member_stable_keys: scc.member_stable_keys,
+                member_stable_keys_text: scc
+                    .member_stable_keys
+                    .iter()
+                    .map(|key| db.resolve_stable_key(*key).to_string())
+                    .collect(),
                 is_recursive: scc.is_recursive,
                 size: scc.size,
             })
@@ -1468,7 +1499,7 @@ fn call_site_rows(db: &AnalysisDb) -> Vec<CallSiteDebugRow> {
                 db,
                 FactFamily::CallSite,
                 row.id.0,
-                row.stable_key.as_str(),
+                &db.resolve_stable_key(row.stable_key),
                 call_status_label(row.status),
                 call_precision_label(row.precision),
                 Some(row.file),
@@ -1490,7 +1521,7 @@ fn call_target_rows(db: &AnalysisDb) -> Vec<CallTargetDebugRow> {
     let site_keys = db
         .call_sites()
         .iter()
-        .map(|site| (site.id, site.stable_key.clone()))
+        .map(|site| (site.id, db.resolve_stable_key(site.stable_key).to_string()))
         .collect::<BTreeMap<_, _>>();
     let mut rows = db
         .call_targets()
@@ -1501,7 +1532,7 @@ fn call_target_rows(db: &AnalysisDb) -> Vec<CallTargetDebugRow> {
                 db,
                 FactFamily::CallTarget,
                 row.id.0,
-                row.stable_key.as_str(),
+                &db.resolve_stable_key(row.stable_key),
                 call_status_label(row.status),
                 call_precision_label(row.precision),
                 site.map(|site| site.file),
@@ -1532,7 +1563,7 @@ fn unresolved_call_rows(db: &AnalysisDb) -> Vec<UnresolvedCallDebugRow> {
     let site_keys = db
         .call_sites()
         .iter()
-        .map(|site| (site.id, site.stable_key.clone()))
+        .map(|site| (site.id, db.resolve_stable_key(site.stable_key).to_string()))
         .collect::<BTreeMap<_, _>>();
     let mut rows = db
         .unresolved_calls()
@@ -1544,7 +1575,7 @@ fn unresolved_call_rows(db: &AnalysisDb) -> Vec<UnresolvedCallDebugRow> {
                 db,
                 FactFamily::UnresolvedCall,
                 index as u64,
-                row.stable_key.as_str(),
+                &db.resolve_stable_key(row.stable_key),
                 call_status_label(row.status),
                 call_precision_label(row.precision),
                 site.map(|site| site.file),
@@ -1578,7 +1609,7 @@ fn call_metadata_row(
     let meta = db.metadata_for(FactRef::new(family, run_id))?;
     Some(CallDebugMetadata {
         family: family.label(),
-        stable_key: stable_key.to_string(),
+        stable_key_text: stable_key.to_string(),
         producer_id: meta.producer_id,
         layer_id: meta.layer_id,
         status: status.to_string(),
@@ -1592,13 +1623,13 @@ fn call_metadata_order(row: &CallDebugMetadata) -> (&str, u32, &str) {
     (
         row.path.as_deref().unwrap_or(""),
         span_start(row.span),
-        row.stable_key.as_str(),
+        row.stable_key_text.as_str(),
     )
 }
 
 fn stable_key_for(db: &AnalysisDb, family: FactFamily, run_id: u64) -> Option<String> {
     db.metadata_for(FactRef::new(family, run_id))
-        .map(|metadata| metadata.stable_key.clone())
+        .map(|metadata| db.resolve_stable_key(metadata.stable_key).to_string())
 }
 
 fn call_index_counts(db: &AnalysisDb) -> BTreeMap<&'static str, usize> {
@@ -1750,7 +1781,7 @@ fn cfg_function_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
             cfg_metadata_row(db, FactFamily::CfgFunction, row.id.0).map(|metadata| CfgDebugRow {
                 family: FactFamily::CfgFunction.label(),
                 run_id: row.id.0,
-                stable_key: row.stable_key.clone(),
+                stable_key_text: db.resolve_stable_key(row.stable_key).to_string(),
                 producer_id: metadata.producer_id,
                 layer_id: metadata.layer_id,
                 status: cfg_status_label(row.status),
@@ -1775,7 +1806,7 @@ fn cfg_node_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
             cfg_metadata_row(db, FactFamily::CfgNode, row.id.0).map(|metadata| CfgDebugRow {
                 family: FactFamily::CfgNode.label(),
                 run_id: row.id.0,
-                stable_key: row.stable_key.clone(),
+                stable_key_text: db.resolve_stable_key(row.stable_key).to_string(),
                 producer_id: metadata.producer_id,
                 layer_id: metadata.layer_id,
                 status: cfg_status_label(row.status),
@@ -1800,7 +1831,7 @@ fn cfg_block_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
             cfg_metadata_row(db, FactFamily::BasicBlock, row.id.0).map(|metadata| CfgDebugRow {
                 family: FactFamily::BasicBlock.label(),
                 run_id: row.id.0,
-                stable_key: row.stable_key.clone(),
+                stable_key_text: db.resolve_stable_key(row.stable_key).to_string(),
                 producer_id: metadata.producer_id,
                 layer_id: metadata.layer_id,
                 status: cfg_status_label(row.status),
@@ -1825,7 +1856,7 @@ fn cfg_edge_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
             cfg_metadata_row(db, FactFamily::CfgEdge, row.id.0).map(|metadata| CfgDebugRow {
                 family: FactFamily::CfgEdge.label(),
                 run_id: row.id.0,
-                stable_key: row.stable_key.clone(),
+                stable_key_text: db.resolve_stable_key(row.stable_key).to_string(),
                 producer_id: metadata.producer_id,
                 layer_id: metadata.layer_id,
                 status: cfg_status_label(row.status),
@@ -1850,7 +1881,7 @@ fn cfg_reachability_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
         cfg_metadata_row(db, FactFamily::CfgReachability, row.id.0).map(|metadata| CfgDebugRow {
             family: FactFamily::CfgReachability.label(),
             run_id: row.id.0,
-            stable_key: row.stable_key.clone(),
+            stable_key_text: db.resolve_stable_key(row.stable_key).to_string(),
             producer_id: metadata.producer_id,
             layer_id: metadata.layer_id,
             status: cfg_status_label(row.status),
@@ -1871,7 +1902,7 @@ fn cfg_dominator_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
         cfg_metadata_row(db, FactFamily::CfgDominator, row.id.0).map(|metadata| CfgDebugRow {
             family: FactFamily::CfgDominator.label(),
             run_id: row.id.0,
-            stable_key: row.stable_key.clone(),
+            stable_key_text: db.resolve_stable_key(row.stable_key).to_string(),
             producer_id: metadata.producer_id,
             layer_id: metadata.layer_id,
             status: cfg_status_label(row.status),
@@ -1892,7 +1923,7 @@ fn cfg_postdominator_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
         cfg_metadata_row(db, FactFamily::CfgPostDominator, row.id.0).map(|metadata| CfgDebugRow {
             family: FactFamily::CfgPostDominator.label(),
             run_id: row.id.0,
-            stable_key: row.stable_key.clone(),
+            stable_key_text: db.resolve_stable_key(row.stable_key).to_string(),
             producer_id: metadata.producer_id,
             layer_id: metadata.layer_id,
             status: cfg_status_label(row.status),
@@ -1913,7 +1944,7 @@ fn cfg_control_dependence_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
         cfg_metadata_row(db, FactFamily::CfgControlDependence, row.id.0).map(|metadata| CfgDebugRow {
             family: FactFamily::CfgControlDependence.label(),
             run_id: row.id.0,
-            stable_key: row.stable_key.clone(),
+            stable_key_text: db.resolve_stable_key(row.stable_key).to_string(),
             producer_id: metadata.producer_id,
             layer_id: metadata.layer_id,
             status: cfg_status_label(row.status),
@@ -1934,7 +1965,7 @@ fn cfg_unsupported_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
         cfg_metadata_row(db, FactFamily::UnsupportedControlFlow, row.id.0).map(|metadata| CfgDebugRow {
             family: FactFamily::UnsupportedControlFlow.label(),
             run_id: row.id.0,
-            stable_key: row.stable_key.clone(),
+            stable_key_text: db.resolve_stable_key(row.stable_key).to_string(),
             producer_id: metadata.producer_id,
             layer_id: metadata.layer_id,
             status: cfg_status_label(row.status),
@@ -1984,7 +2015,7 @@ fn semantic_row(
     Some(SemanticDebugRow {
         family: family.label(),
         run_id,
-        stable_key: stable_key.to_string(),
+        stable_key_text: stable_key.to_string(),
         producer_id: meta.producer_id,
         layer_id: meta.layer_id,
         status: semantic_status_label(status),
@@ -2016,7 +2047,7 @@ fn sort_semantic_rows(rows: &mut [SemanticDebugRow]) {
             left.name.as_deref().unwrap_or(""),
             left.export_name.as_deref().unwrap_or(""),
             left.status,
-            left.stable_key.as_str(),
+            left.stable_key_text.as_str(),
             left.run_id,
         )
             .cmp(&(
@@ -2025,7 +2056,7 @@ fn sort_semantic_rows(rows: &mut [SemanticDebugRow]) {
                 right.name.as_deref().unwrap_or(""),
                 right.export_name.as_deref().unwrap_or(""),
                 right.status,
-                right.stable_key.as_str(),
+                right.stable_key_text.as_str(),
                 right.run_id,
             ))
     });
@@ -2036,13 +2067,13 @@ fn sort_mir_rows(rows: &mut [SemanticMirDebugRow]) {
         (
             left.path.as_deref().unwrap_or(""),
             span_start(left.span),
-            left.stable_key.as_str(),
+            left.stable_key_text.as_str(),
             left.run_id,
         )
             .cmp(&(
                 right.path.as_deref().unwrap_or(""),
                 span_start(right.span),
-                right.stable_key.as_str(),
+                right.stable_key_text.as_str(),
                 right.run_id,
             ))
     });
@@ -2055,7 +2086,7 @@ fn sort_cfg_rows(rows: &mut [CfgDebugRow]) {
             span_start(left.span),
             left.function,
             left.view.unwrap_or(""),
-            left.stable_key.as_str(),
+            left.stable_key_text.as_str(),
             left.run_id,
         )
             .cmp(&(
@@ -2063,7 +2094,7 @@ fn sort_cfg_rows(rows: &mut [CfgDebugRow]) {
                 span_start(right.span),
                 right.function,
                 right.view.unwrap_or(""),
-                right.stable_key.as_str(),
+                right.stable_key_text.as_str(),
                 right.run_id,
             ))
     });
@@ -2075,10 +2106,11 @@ fn metadata_fields(
     run_id: u64,
 ) -> Option<MetadataDebugFields<'_>> {
     let meta = db.metadata_for(FactRef::new(family, run_id))?;
-    Some(metadata_debug_fields(family, run_id, meta))
+    Some(metadata_debug_fields(db, family, run_id, meta))
 }
 
 fn metadata_debug_fields<'a>(
+    db: &AnalysisDb,
     family: FactFamily,
     run_id: u64,
     meta: &'a FactMeta,
@@ -2086,7 +2118,7 @@ fn metadata_debug_fields<'a>(
     MetadataDebugFields {
         family: family.label(),
         run_id,
-        stable_key: meta.stable_key.as_str(),
+        stable_key_text: db.resolve_stable_key(meta.stable_key).to_string(),
         producer_id: meta.producer_id,
         layer_id: meta.layer_id,
         precision: fact_precision_label(meta.precision),
@@ -2167,6 +2199,7 @@ fn symbol_precision_label(precision: SymbolPrecision) -> &'static str {
         SymbolPrecision::Ambiguous => "ambiguous",
         SymbolPrecision::SetupMissing => "setup_missing",
         SymbolPrecision::Unsupported => "unsupported",
+        _ => "unknown",
     }
 }
 
@@ -2177,6 +2210,7 @@ fn symbol_resolution_status_label(status: SymbolResolutionStatus) -> &'static st
         SymbolResolutionStatus::Ambiguous => "ambiguous",
         SymbolResolutionStatus::SetupMissing => "setup_missing",
         SymbolResolutionStatus::Unsupported => "unsupported",
+        _ => "unknown",
     }
 }
 
@@ -2285,6 +2319,7 @@ fn call_language_label(language: Language) -> &'static str {
         Language::JavaScript => "JavaScript",
         Language::Jsx => "Jsx",
         Language::Unknown => "Unknown",
+        _ => "Unknown",
     }
 }
 
@@ -2418,8 +2453,6 @@ fn call_algorithm_label(algorithm: CallAlgorithm) -> &'static str {
         CallAlgorithm::GoCha => "GoCha",
         CallAlgorithm::GoRta => "GoRta",
         CallAlgorithm::GoVta => "GoVta",
-        CallAlgorithm::FunctionTokenFlow => "FunctionTokenFlow",
-        CallAlgorithm::ThisMethodFlow => "ThisMethodFlow",
         CallAlgorithm::TypeHierarchy => "TypeHierarchy",
         CallAlgorithm::PointsTo => "PointsTo",
         CallAlgorithm::SummaryAssisted => "SummaryAssisted",
@@ -2568,6 +2601,7 @@ fn symbol_kind_label(kind: crate::core::SymbolKind) -> &'static str {
         crate::core::SymbolKind::Import => "import",
         crate::core::SymbolKind::Export => "export",
         crate::core::SymbolKind::Unknown => "unknown",
+        _ => "unknown",
     }
 }
 
@@ -2579,6 +2613,7 @@ fn symbol_namespace_label(namespace: crate::core::SymbolNamespace) -> &'static s
         crate::core::SymbolNamespace::Package => "package",
         crate::core::SymbolNamespace::Module => "module",
         crate::core::SymbolNamespace::Unknown => "unknown",
+        _ => "unknown",
     }
 }
 
@@ -2604,28 +2639,41 @@ mod cfg_debug_json {
             "src/app.ts".to_string(),
             "export function app() { return 1; }\n".to_string(),
         );
+        let interner = db.stable_key_interner();
         db.replace_cfg_facts(CfgOutput {
             functions: vec![CfgFunctionFact {
                 id: CfgFunctionId(0),
                 body: MirBodyId(0),
-                function: FunctionId(0),
+                function: FunctionId::from_raw(0),
                 language: Language::TypeScript,
                 file,
                 span: span(file),
                 entry_node: CfgNodeId(0),
                 normal_exit_node: CfgNodeId(1),
                 exceptional_exit_node: None,
-                stable_key: "cfg:function:app".to_string(),
+                stable_key: interner.intern("cfg:function:app"),
                 status: CfgStatus::Resolved,
                 precision: CfgPrecision::ExactLowered,
             }],
             nodes: vec![
-                node(0, CfgNodeKind::Entry, "cfg:node:entry"),
-                node(1, CfgNodeKind::ExitNormal, "cfg:node:exit"),
+                node(&interner, 0, CfgNodeKind::Entry, "cfg:node:entry"),
+                node(&interner, 1, CfgNodeKind::ExitNormal, "cfg:node:exit"),
             ],
             blocks: vec![
-                block(0, BasicBlockKind::Entry, CfgNodeId(0), "cfg:block:entry"),
-                block(1, BasicBlockKind::ExitNormal, CfgNodeId(1), "cfg:block:exit"),
+                block(
+                    &interner,
+                    0,
+                    BasicBlockKind::Entry,
+                    CfgNodeId(0),
+                    "cfg:block:entry",
+                ),
+                block(
+                    &interner,
+                    1,
+                    BasicBlockKind::ExitNormal,
+                    CfgNodeId(1),
+                    "cfg:block:exit",
+                ),
             ],
             edges: vec![CfgEdgeFact {
                 id: CfgEdgeId(0),
@@ -2637,7 +2685,7 @@ mod cfg_debug_json {
                 to_block: BasicBlockId(1),
                 kind: CfgEdgeKind::Normal,
                 label: None,
-                stable_key: "cfg:edge:entry-exit".to_string(),
+                stable_key: interner.intern("cfg:edge:entry-exit"),
                 status: CfgStatus::Resolved,
                 precision: CfgPrecision::ExactLowered,
             }],
@@ -2648,7 +2696,7 @@ mod cfg_debug_json {
                 controlling_edge: CfgEdgeId(0),
                 controlling_edge_kind: CfgEdgeKind::Normal,
                 controlled_block: BasicBlockId(1),
-                stable_key: "cfg:dependence:entry-exit".to_string(),
+                stable_key: interner.intern("cfg:dependence:entry-exit"),
                 status: CfgStatus::Resolved,
                 precision: CfgPrecision::ExactLowered,
             }],
@@ -2687,7 +2735,12 @@ mod cfg_debug_json {
         assert!(!report.to_string().contains(env!("CARGO_MANIFEST_DIR")));
     }
 
-    fn node(id: u64, kind: CfgNodeKind, stable_key: &str) -> CfgNodeFact {
+    fn node(
+        interner: &crate::core::StableKeyInterner,
+        id: u64,
+        kind: CfgNodeKind,
+        stable_key: &str,
+    ) -> CfgNodeFact {
         CfgNodeFact {
             id: CfgNodeId(id),
             cfg_function: CfgFunctionId(0),
@@ -2695,16 +2748,17 @@ mod cfg_debug_json {
             operation: None,
             block: BasicBlockId(id),
             kind,
-            span: Some(span(FileId(0))),
+            span: Some(span(FileId::from_raw(0))),
             generated: true,
             operation_ordinal: id as u32,
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key),
             status: CfgStatus::Resolved,
             precision: CfgPrecision::ExactLowered,
         }
     }
 
     fn block(
+        interner: &crate::core::StableKeyInterner,
         id: u64,
         kind: BasicBlockKind,
         node: CfgNodeId,
@@ -2718,22 +2772,14 @@ mod cfg_debug_json {
             last_node: Some(node),
             reachable: true,
             reverse_postorder: id as u32,
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key),
             status: CfgStatus::Resolved,
             precision: CfgPrecision::ExactLowered,
         }
     }
 
     fn span(file: FileId) -> Span {
-        Span {
-            file,
-            start_byte: 0,
-            end_byte: 10,
-            start_line: 1,
-            start_col: 1,
-            end_line: 1,
-            end_col: 11,
-        }
+        Span::new(file, 0, 10, 1, 1, 1, 11)
     }
 }
 
@@ -2833,13 +2879,13 @@ mod calls_debug_json {
             targets: Vec::new(),
             unresolved: vec![UnresolvedCallFact {
                 site: CallSiteId(0),
-                caller: FunctionId(0),
+                caller: FunctionId::from_raw(0),
                 status: CallTargetStatus::Unresolved,
                 reason: UnresolvedCallReason::FunctionValue,
                 algorithm: CallAlgorithm::SyntaxOnly,
                 provenance: CallProvenance::MirShape,
                 precision: CallPrecision::Unknown,
-                stable_key: "call-unresolved:function-value".to_string(),
+                stable_key: crate::core::stable_key_for_test("call-unresolved:function-value"),
             }],
         })
         .expect("call rows should store");
@@ -2882,30 +2928,14 @@ mod calls_debug_json {
             "src/app.ts".to_string(),
             "export function app() { target(); dynamic[name](); }\n".to_string(),
         );
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
-            file,
-            name: "app".to_string(),
-            span: span(file),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
-        db.push_function(FunctionFact {
-            id: FunctionId(1),
-            file,
-            name: "target".to_string(),
-            span: span(file),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+        db.push_function(FunctionFact::new(FunctionId::from_raw(0), file, "app".to_string(), span(file), Language::TypeScript, false, true, 1, Vec::new()));
+        db.push_function(FunctionFact::new(FunctionId::from_raw(1), file, "target".to_string(), span(file), Language::TypeScript, false, true, 1, Vec::new()));
+        let interner = db.stable_key_interner();
         db.replace_symbol_graph_facts(
-            vec![symbol(SymbolId(0), file, "app"), symbol(SymbolId(1), file, "target")],
+            vec![
+                symbol(&interner, SymbolId::from_raw(0), file, "app"),
+                symbol(&interner, SymbolId::from_raw(1), file, "target"),
+            ],
             Vec::new(),
             Vec::new(),
         );
@@ -2917,12 +2947,12 @@ mod calls_debug_json {
             in_throw: false,
             id: CallSiteId(id),
             language: Language::TypeScript,
-            file: FileId(0),
-            caller: FunctionId(0),
-            owner_symbol: Some(SymbolId(0)),
+            file: FileId::from_raw(0),
+            caller: FunctionId::from_raw(0),
+            owner_symbol: Some(SymbolId::from_raw(0)),
             body: MirBodyId(0),
             operation: MirOpId(0),
-            span: span(FileId(0)),
+            span: span(FileId::from_raw(0)),
             kind: CallSyntaxKind::Function,
             callee: CallCallee::Identifier {
                 reference: None,
@@ -2933,7 +2963,7 @@ mod calls_debug_json {
             result: None,
             status: CallTargetStatus::Resolved,
             precision: CallPrecision::SetupAware,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
@@ -2941,71 +2971,61 @@ mod calls_debug_json {
         CallTargetFact {
             id: CallTargetId(id),
             site: CallSiteId(0),
-            caller: FunctionId(0),
-            target_function: Some(FunctionId(1)),
-            target_symbol: Some(SymbolId(1)),
+            caller: FunctionId::from_raw(0),
+            target_function: Some(FunctionId::from_raw(1)),
+            target_symbol: Some(SymbolId::from_raw(1)),
             edge_kind: CallEdgeKind::Direct,
             algorithm: CallAlgorithm::DirectReference,
             status: CallTargetStatus::Resolved,
             reason: None,
             provenance: CallProvenance::Native,
             precision: CallPrecision::SetupAware,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
     fn unresolved(stable_key: &str) -> UnresolvedCallFact {
         UnresolvedCallFact {
             site: CallSiteId(0),
-            caller: FunctionId(0),
+            caller: FunctionId::from_raw(0),
             status: CallTargetStatus::Unresolved,
             reason: UnresolvedCallReason::DynamicProperty,
             algorithm: CallAlgorithm::SyntaxOnly,
             provenance: CallProvenance::MirShape,
             precision: CallPrecision::Unknown,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
-    fn symbol(id: SymbolId, file: FileId, name: &str) -> SymbolFact {
-        SymbolFact {
-            id,
-            language: Language::TypeScript,
-            name: name.to_string(),
-            qualified_name: name.to_string(),
-            kind: SymbolKind::Function,
-            namespace: SymbolNamespace::Value,
-            file: Some(file),
-            package: None,
-            module: None,
-            owner: None,
-            primary_span: Some(span(file)),
-            is_exported: true,
-            stable_key: format!("symbol:{name}"),
-            precision: SymbolPrecision::ExactLocal,
-        }
+    fn symbol(
+        interner: &crate::core::StableKeyInterner,
+        id: SymbolId,
+        file: FileId,
+        name: &str,
+    ) -> SymbolFact {
+        SymbolFact::new(id, Language::TypeScript, name.to_string(), name.to_string(), SymbolKind::Function, SymbolNamespace::Value, Some(file), None, None, None, Some(span(file)), true, interner.intern(format!("symbol:{name}")), SymbolPrecision::ExactLocal)
     }
 
     fn span(file: FileId) -> Span {
-        Span {
-            file,
-            start_byte: 0,
-            end_byte: 10,
-            start_line: 1,
-            start_col: 1,
-            end_line: 1,
-            end_col: 11,
-        }
+        Span::new(file, 0, 10, 1, 1, 1, 11)
     }
 }
 
 mod semantic_debug_json {
+    #[cfg(feature = "lang-typescript")]
     use super::super::{AnalysisKernel, KernelInput};
+    #[cfg(feature = "lang-typescript")]
     use crate::analysis_plan::AnalysisPlan;
+    #[cfg(feature = "lang-typescript")]
     use crate::cache::Cache;
+    #[cfg(feature = "lang-typescript")]
     use crate::config::load_config;
+    #[cfg(feature = "lang-typescript")]
     use serde_json::Value;
+    #[cfg(feature = "lang-typescript")]
     use std::fs;
+
+    #[cfg(feature = "lang-typescript")]
 
     #[test]
     fn metadata_debug_json_contains_semantic_index_families() {
@@ -3041,6 +3061,8 @@ mod semantic_debug_json {
         );
     }
 
+    #[cfg(feature = "lang-typescript")]
+
     #[test]
     fn semantic_debug_json_rows_include_status_fact_precision_and_nested_metadata() {
         let report = debug_report_from_kernel_run();
@@ -3072,6 +3094,7 @@ mod semantic_debug_json {
         }
     }
 
+    #[cfg(feature = "lang-typescript")]
     fn debug_report_from_kernel_run() -> Value {
         let temp = tempfile::tempdir().expect("tempdir");
         fs::create_dir_all(temp.path().join("src")).expect("create src directory");
@@ -3143,46 +3166,37 @@ mod semantic_mir_debug_json {
     #[test]
     fn metadata_debug_json_contains_deterministic_semantic_mir_rows() {
         let mut db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
         let file = db.add_file(
             PathBuf::from("src/app.ts"),
             "src/app.ts".to_string(),
             "export function app(value: number) { return value + 1; }\n".to_string(),
         );
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
-            file,
-            name: "app".to_string(),
-            span: span(file, 0, 54),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+        db.push_function(FunctionFact::new(FunctionId::from_raw(0), file, "app".to_string(), span(file, 0, 54), Language::TypeScript, false, true, 1, Vec::new()));
         db.replace_semantic_mir(MirOutput {
             bodies: vec![MirBody {
                 id: MirBodyId(0),
                 language: Language::TypeScript,
                 file,
-                function: FunctionId(0),
+                function: FunctionId::from_raw(0),
                 package: None,
                 module: None,
-                owner_stable_key: "function:app".to_string(),
+                owner_stable_key: interner.intern("function:app".to_string()),
                 span: span(file, 0, 54),
-                stable_key: "body:app".to_string(),
+                stable_key: interner.intern("body:app".to_string()),
                 status: MirStatus::Partial,
             }],
             places: vec![PlaceFact {
                 id: PlaceId(0),
                 language: Language::TypeScript,
                 file: Some(file),
-                function: Some(FunctionId(0)),
+                function: Some(FunctionId::from_raw(0)),
                 root: PlaceRoot::Local {
-                    function: FunctionId(0),
+                    function: FunctionId::from_raw(0),
                     name: "value".to_string(),
                 },
                 projections: vec![PlaceProjection::Property("count".to_string())],
-                stable_key: "place:value".to_string(),
+                stable_key: interner.intern("place:value".to_string()),
                 status: PlaceStatus::Partial,
             }],
             operations: vec![MirOperation {
@@ -3197,7 +3211,7 @@ mod semantic_mir_debug_json {
                     },
                     mode: AssignMode::Overwrite,
                 },
-                stable_key: "op:assign".to_string(),
+                stable_key: interner.intern("op:assign".to_string()),
                 status: MirStatus::Partial,
             }],
             unsupported: vec![UnsupportedSemanticFact {
@@ -3214,9 +3228,10 @@ mod semantic_mir_debug_json {
                 conservative_action: ConservativeAction::HavocAffectedPlaces,
                 precision: UnsupportedPrecision::Unsupported,
                 status: MirStatus::Unsupported,
-                stable_key: "unsupported:dynamic-write".to_string(),
+                stable_key: interner.intern("unsupported:dynamic-write".to_string()),
             }],
-        })
+            ..MirOutput::default()
+})
         .expect("store semantic MIR rows");
 
         let report = AnalysisKernel::metadata_debug_json_for_test(&db);
@@ -3247,15 +3262,7 @@ mod semantic_mir_debug_json {
     }
 
     fn span(file: FileId, start_byte: u32, end_byte: u32) -> Span {
-        Span {
-            file,
-            start_byte,
-            end_byte,
-            start_line: 1,
-            start_col: start_byte + 1,
-            end_line: 1,
-            end_col: end_byte + 1,
-        }
+        Span::new(file, start_byte, end_byte, 1, start_byte + 1, 1, end_byte + 1)
     }
 }
 
@@ -3263,11 +3270,11 @@ mod semantic_mir_debug_json {
 mod abstract_domains_debug_json {
     use super::{metadata_debug_json_for_test, metadata_debug_json_with_demand_trace_for_test};
     use crate::analysis::cfg::ids::BasicBlockId;
-    use crate::analysis::domains::facts::{
+    use crate::analysis_neutral::domains::facts::{
         DomainEventFact, DomainLocation, DomainObservationFact, DomainPrecision, DomainSlot,
         DomainStatus, DomainValue,
     };
-    use crate::analysis::domains::store::DomainOutput;
+    use crate::analysis_neutral::domains::store::DomainOutput;
     use crate::analysis::ids::{DomainEventId, DomainObservationId, MirBodyId, MirOpId, PlaceId};
     use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
     use crate::analysis::mir::op::{AssignMode, MirOperation, MirOperationKind, MirValue};
@@ -3280,6 +3287,7 @@ mod abstract_domains_debug_json {
     #[test]
     fn abstract_domains_debug_json_exposes_compact_deterministic_rows() {
         let mut db = base_db();
+        let interner = db.stable_key_interner();
         db.replace_abstract_domain_facts(DomainOutput {
             observations: vec![DomainObservationFact {
                 id: DomainObservationId(0),
@@ -3292,7 +3300,7 @@ mod abstract_domains_debug_json {
                 value: DomainValue::TopReason("unknown_value".to_string()),
                 status: DomainStatus::Unknown,
                 precision: DomainPrecision::Unknown,
-                stable_key: "domain:observation:value".to_string(),
+                stable_key: interner.intern("domain:observation:value"),
             }],
             events: vec![DomainEventFact {
                 id: DomainEventId(0),
@@ -3303,7 +3311,7 @@ mod abstract_domains_debug_json {
                 status: DomainStatus::BudgetExceeded,
                 precision: DomainPrecision::Unknown,
                 reason: "budget_exceeded".to_string(),
-                stable_key: "domain:event:budget".to_string(),
+                stable_key: interner.intern("domain:event:budget"),
             }],
         });
 
@@ -3356,39 +3364,39 @@ mod abstract_domains_debug_json {
             summaries: vec![
                 SummaryFact {
                     id: SummaryId(0),
-                    callable_stable_key: "func::app".to_string(),
-                    function: FunctionId(0),
+                    callable_stable_key: crate::core::stable_key_for_test("func::app"),
+                    function: FunctionId::from_raw(0),
                     domain: SummaryDomainKind::ControlEffects,
                     status: SummaryStatus::Present,
                     precision: SummaryPrecision::Local,
                     provenance: SummaryProvenance::NativeLocal,
                     payload_digest: "digest:control".to_string(),
             tito_flows: Vec::new(),
-                    stable_key: "summary:control:app".to_string(),
+                    stable_key: crate::core::stable_key_for_test("summary:control:app"),
                 },
                 SummaryFact {
                     id: SummaryId(1),
-                    callable_stable_key: "func::app".to_string(),
-                    function: FunctionId(0),
+                    callable_stable_key: crate::core::stable_key_for_test("func::app"),
+                    function: FunctionId::from_raw(0),
                     domain: SummaryDomainKind::MemoryEffects,
                     status: SummaryStatus::Unknown,
                     precision: SummaryPrecision::UnknownTop,
                     provenance: SummaryProvenance::NativeLocal,
                     payload_digest: "digest:memory".to_string(),
             tito_flows: Vec::new(),
-                    stable_key: "summary:memory:app".to_string(),
+                    stable_key: crate::core::stable_key_for_test("summary:memory:app"),
                 },
             ],
             events: vec![SummaryEventFact {
                 id: SummaryEventId(0),
-                callable_stable_key: "func::app".to_string(),
-                function: FunctionId(0),
+                callable_stable_key: crate::core::stable_key_for_test("func::app"),
+                function: FunctionId::from_raw(0),
                 domain: SummaryDomainKind::CallEffects,
                 event_kind: "unresolved_callee".to_string(),
                 reason: "dynamic".to_string(),
                 status: SummaryStatus::Unknown,
                 precision: SummaryPrecision::UnknownTop,
-                stable_key: "summary_event:call:app:0".to_string(),
+                stable_key: crate::core::stable_key_for_test("summary_event:call:app:0"),
             }],
         });
 
@@ -3456,26 +3464,26 @@ mod abstract_domains_debug_json {
         db.replace_summary_facts(SummaryOutput {
             summaries: vec![SummaryFact {
                 id: SummaryId(0),
-                callable_stable_key: "func::app".to_string(),
-                function: FunctionId(0),
+                callable_stable_key: crate::core::stable_key_for_test("func::app"),
+                function: FunctionId::from_raw(0),
                 domain: SummaryDomainKind::ControlEffects,
                 status: SummaryStatus::Present,
                 precision: SummaryPrecision::Local,
                 provenance: SummaryProvenance::NativeLocal,
                 payload_digest: "digest:control".to_string(),
             tito_flows: Vec::new(),
-                stable_key: "summary:control:app".to_string(),
+                stable_key: crate::core::stable_key_for_test("summary:control:app"),
             }],
             events: vec![SummaryEventFact {
                 id: SummaryEventId(0),
-                callable_stable_key: "func::app".to_string(),
-                function: FunctionId(0),
+                callable_stable_key: crate::core::stable_key_for_test("func::app"),
+                function: FunctionId::from_raw(0),
                 domain: SummaryDomainKind::CallEffects,
                 event_kind: "unresolved_callee".to_string(),
                 reason: "dynamic".to_string(),
                 status: SummaryStatus::Unknown,
                 precision: SummaryPrecision::UnknownTop,
-                stable_key: "summary_event:call:app:0".to_string(),
+                stable_key: crate::core::stable_key_for_test("summary_event:call:app:0"),
             }],
         });
 
@@ -3528,15 +3536,15 @@ mod abstract_domains_debug_json {
         db.replace_summary_facts(SummaryOutput {
             summaries: vec![SummaryFact {
                 id: SummaryId(0),
-                callable_stable_key: "func::app".to_string(),
-                function: FunctionId(0),
+                callable_stable_key: crate::core::stable_key_for_test("func::app"),
+                function: FunctionId::from_raw(0),
                 domain: SummaryDomainKind::ControlEffects,
                 status: SummaryStatus::Present,
                 precision: SummaryPrecision::Local,
                 provenance: SummaryProvenance::NativeLocal,
                 payload_digest: "digest:control".to_string(),
             tito_flows: Vec::new(),
-                stable_key: "summary:control:app".to_string(),
+                stable_key: crate::core::stable_key_for_test("summary:control:app"),
             }],
             events: Vec::new(),
         });
@@ -3661,46 +3669,37 @@ mod abstract_domains_debug_json {
 
     fn base_db() -> AnalysisDb {
         let mut db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
         let file = db.add_file(
             PathBuf::from("src/app.ts"),
             "src/app.ts".to_string(),
             "export function app() { let value = 1; return value; }\n".to_string(),
         );
-        db.push_function(FunctionFact {
-            id: FunctionId(0),
-            file,
-            name: "app".to_string(),
-            span: span(file),
-            language: Language::TypeScript,
-            is_test: false,
-            is_exported: true,
-            cyclomatic_complexity: 1,
-            calls: Vec::new(),
-        });
+        db.push_function(FunctionFact::new(FunctionId::from_raw(0), file, "app".to_string(), span(file), Language::TypeScript, false, true, 1, Vec::new()));
         db.replace_semantic_mir(MirOutput {
             bodies: vec![MirBody {
                 id: MirBodyId(0),
                 language: Language::TypeScript,
                 file,
-                function: FunctionId(0),
+                function: FunctionId::from_raw(0),
                 package: None,
                 module: None,
-                owner_stable_key: "function:app".to_string(),
+                owner_stable_key: interner.intern("function:app".to_string()),
                 span: span(file),
-                stable_key: "body:app".to_string(),
+                stable_key: interner.intern("body:app".to_string()),
                 status: MirStatus::Partial,
             }],
             places: vec![PlaceFact {
                 id: PlaceId(0),
                 language: Language::TypeScript,
                 file: Some(file),
-                function: Some(FunctionId(0)),
+                function: Some(FunctionId::from_raw(0)),
                 root: PlaceRoot::Local {
-                    function: FunctionId(0),
+                    function: FunctionId::from_raw(0),
                     name: "value".to_string(),
                 },
                 projections: Vec::new(),
-                stable_key: "place:value".to_string(),
+                stable_key: interner.intern("place:value".to_string()),
                 status: PlaceStatus::Partial,
             }],
             operations: vec![MirOperation {
@@ -3715,25 +3714,18 @@ mod abstract_domains_debug_json {
                     },
                     mode: AssignMode::DeclarationBinding,
                 },
-                stable_key: "op:assign".to_string(),
+                stable_key: interner.intern("op:assign".to_string()),
                 status: MirStatus::Partial,
             }],
             unsupported: Vec::new(),
-        })
+            ..MirOutput::default()
+})
         .expect("semantic MIR rows should store");
         db
     }
 
     fn span(file: FileId) -> Span {
-        Span {
-            file,
-            start_byte: 0,
-            end_byte: 10,
-            start_line: 1,
-            start_col: 1,
-            end_line: 1,
-            end_col: 11,
-        }
+        Span::new(file, 0, 10, 1, 1, 1, 11)
     }
 }
 
@@ -3810,7 +3802,7 @@ export const value = answer();
         }
     }
 
-    fn debug_report_from_kernel_run() -> (tempfile::TempDir, Value) {
+        fn debug_report_from_kernel_run() -> (tempfile::TempDir, Value) {
         let fixture = debug_fixture();
         let report = AnalysisKernel::metadata_debug_json_for_test(&fixture.db);
         (fixture.temp, report)
@@ -3852,6 +3844,8 @@ export const value = answer();
             collect_files(&entry, files);
         }
     }
+
+    #[cfg(feature = "lang-typescript")]
 
     #[test]
     fn metadata_debug_json_contains_files_imports_symbols_and_references() {
@@ -3942,13 +3936,17 @@ export const value = answer();
         ]
         .join("\n");
 
+        // Keep provenance/metadata module names out of the supported rule-author
+        // surface. Do not use the bare token `validation` — evidence_v1 JSON uses
+        // that field name for renderer status, which is intentional public schema.
         for forbidden in [
             "FactMeta",
             "FactMetaStore",
             "metadata_debug_json_for_test",
             "producer_id",
             "layer_id",
-            "validation",
+            "analysis_kernel::validation",
+            "pub mod validation",
             "provenance metadata",
         ] {
             assert!(

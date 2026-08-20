@@ -15,7 +15,6 @@ export function tsDomain(flag: boolean, input: string | null | undefined) {
   } else {
     label = "falsy";
   }
-  // POLINT-FEATURE abstract-domains/ts/loop-widening
   while (count < 4) {
     count = count + 1;
   }

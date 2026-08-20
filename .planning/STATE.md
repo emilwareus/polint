@@ -59,6 +59,10 @@ Add `public surface leak gate (ubuntu-latest)` AND `public surface leak gate (ma
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260811-t-intern-c-factmeta | PRE-SHIP T-INTERN-C: migrate FactMeta/stable_key_owners to StableKeyId | 2026-08-11 | 932cfd0b | [260811-t-intern-c-factmeta](./quick/260811-t-intern-c-factmeta/) |
+| 260810-t-intern-b-solver-summaries-audit-fix | PRE-SHIP T-INTERN-B solver/summaries audit-fix: StableKeyId Ord/serde/normalize findings | 2026-08-10 | 39097eeb | [260810-t-intern-b-solver-summaries-audit-fix](./quick/260810-t-intern-b-solver-summaries-audit-fix/) |
+| 260810-t-intern-b-rest-solver-summaries | PRE-SHIP T-INTERN-B rest-solver-summaries: intern solver/summaries/slicing identities | 2026-08-10 | 1a2d6238 | [260810-t-intern-b-rest-solver-summaries](./quick/260810-t-intern-b-rest-solver-summaries/) |
+| 260810-t-intern-b | PRE-SHIP T-INTERN-B rest-small-facts: intern small fact family identities | 2026-08-10 | 15aaf817 | [260810-t-intern-b-rest-small-facts](./quick/260810-t-intern-b-rest-small-facts/) |
 | 260811-inc | Configure a bounded sccache compiler cache shared across worktrees and disable per-worktree incremental compilation | 2026-08-11 | 3b1e3193 | [260811-inc-configure-a-bounded-sccache-compiler-cac](./quick/260811-inc-configure-a-bounded-sccache-compiler-cac/) |
 | 260719-t2i | Parallelize eval fixture coverage tests and inspect remaining serial test bottlenecks without running tests locally | 2026-07-19 | 71ef10ae | [260719-t2i-parallelize-eval-fixture-coverage-tests-](./quick/260719-t2i-parallelize-eval-fixture-coverage-tests-/) |
 | 260719-rld | Optimize polint integration test suite speed by reducing cli.rs subprocess invocations without building or running tests | 2026-07-19 | 4650d753 | [260719-rld-optimize-polint-integration-test-suite-s](./quick/260719-rld-optimize-polint-integration-test-suite-s/) |

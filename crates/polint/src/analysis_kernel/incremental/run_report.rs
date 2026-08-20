@@ -1,15 +1,20 @@
-use super::demand::DemandQueryTrace;
 use super::{CacheStats, Digest, DigestKind, InputSnapshot, PrecisionTier, ProviderTelemetry};
 #[cfg(test)]
 use crate::analysis::summaries::provider::SccClosureDebugSnapshot;
 use crate::analysis_kernel::{PrecisionCeiling, ProviderManifest};
 use crate::analysis_kernel::{ProviderOutcome, ProviderOutputIdentity, StoreStatus};
+use crate::analysis_neutral::demand::DemandQueryTrace;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct KernelRunReport {
     pub(crate) input_snapshot: InputSnapshot,
+    /// Sealed provider outcomes are the authoritative execution contract.
     pub(crate) provider_outcomes: Vec<ProviderOutcome>,
     pub(crate) provider_telemetry: Vec<ProviderTelemetry>,
+    /// Legacy cache-detail projection retained for existing internal cache diagnostics.
+    /// It is not used for provider scheduling or capability decisions.
+    #[allow(dead_code)]
+    pub(crate) provider_outputs: Vec<super::ProviderOutputMeta>,
     pub(crate) cache_stats: CacheStats,
     pub(crate) demand_query_trace: DemandQueryTrace,
     store_status: StoreStatus,
@@ -44,6 +49,7 @@ impl KernelRunReport {
             input_snapshot,
             provider_outcomes,
             provider_telemetry,
+            provider_outputs: Vec::new(),
             cache_stats,
             demand_query_trace,
             store_status,
@@ -53,10 +59,10 @@ impl KernelRunReport {
     }
 
     #[cfg_attr(
-        not(test),
+        any(not(test), not(all(feature = "lang-go", feature = "lang-typescript"))),
         expect(
             dead_code,
-            reason = "demand trace is currently surfaced through test-only metadata debug output"
+            reason = "demand trace is surfaced by polyglot metadata debug coverage"
         )
     )]
     pub(crate) fn demand_query_trace(&self) -> &DemandQueryTrace {
@@ -69,7 +75,7 @@ impl KernelRunReport {
         self
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "lang-go", feature = "lang-typescript"))]
     pub(crate) fn scc_closure_debug(&self) -> Option<&SccClosureDebugSnapshot> {
         self.scc_closure_debug.as_ref()
     }
@@ -89,6 +95,32 @@ pub(crate) fn provider_output_identity_from_manifest(
         output_digest,
         precision_tier(manifest.precision_ceiling),
     )
+}
+
+pub(crate) fn provider_output_from_manifest(
+    manifest: &ProviderManifest,
+    output_digest: Digest,
+    cache_stats: CacheStats,
+) -> super::ProviderOutputMeta {
+    super::ProviderOutputMeta::new(
+        manifest.id,
+        manifest.provider_version(),
+        manifest.primary_schema_label(),
+        output_digest,
+        precision_tier(manifest.precision_ceiling),
+        "native_trusted",
+        dependency_inputs_from_manifest(manifest),
+        cache_stats,
+    )
+}
+
+fn dependency_inputs_from_manifest(manifest: &ProviderManifest) -> Vec<Digest> {
+    let mut inputs = manifest.inputs.to_vec();
+    inputs.sort();
+    inputs
+        .into_iter()
+        .map(|input| Digest::from_parts(DigestKind::DependencyLayer, "dependency_input", &[input]))
+        .collect()
 }
 
 pub(crate) fn provider_output_digest_from_manifest(
@@ -177,9 +209,10 @@ mod tests {
         TsJsLifecycleSnapshot,
     };
     use crate::analysis_kernel::{
-        CachePolicy, LanguageScope, PrecisionCeiling, ProviderKind, ProviderManifest,
-        ProviderOutcomeStatus, ProviderOutcomeTracker, SchemaVersion, ValidationDowngrades,
+        CachePolicy, PrecisionCeiling, ProviderKind, ProviderManifest, ProviderOutcomeStatus,
+        ProviderOutcomeTracker, SchemaVersion, ValidationDowngrades,
     };
+    use crate::internal_core::LanguageId;
     use std::collections::BTreeSet;
 
     #[test]
@@ -381,13 +414,13 @@ mod tests {
             kind: ProviderKind::LanguageSyntax,
             inputs: &["source_files"],
             outputs: &["example_facts"],
-            language_scope: LanguageScope::Go,
+            language_ids: &[LanguageId::GO],
             cache_policy: CachePolicy::NoCache,
             schema_versions: SCHEMAS,
             precision_ceiling: PrecisionCeiling::Syntax,
         };
         let scope_changed = ProviderManifest {
-            language_scope: LanguageScope::TypeScriptJavaScript,
+            language_ids: &[LanguageId::TS],
             ..base
         };
         let policy_changed = ProviderManifest {

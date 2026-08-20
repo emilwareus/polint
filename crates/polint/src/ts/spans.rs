@@ -2,7 +2,7 @@ use oxc_ast::AstKind;
 use oxc_ast::ast::{CallExpression, Expression, NewExpression, TaggedTemplateExpression};
 use oxc_span::{GetSpan, Span as OxcSpan};
 
-pub(crate) fn normalized_callsite_span(source: &str, kind: AstKind<'_>) -> Option<OxcSpan> {
+pub fn normalized_callsite_span(source: &str, kind: AstKind<'_>) -> Option<OxcSpan> {
     match kind {
         AstKind::CallExpression(call) => Some(normalized_call_expression_span(source, call)),
         AstKind::NewExpression(expression) => {
@@ -19,9 +19,7 @@ pub(crate) fn normalized_callsite_span(source: &str, kind: AstKind<'_>) -> Optio
 /// The call-site span of a tagged template `tag`…``. Jelly ends the span at the
 /// closing backtick (its last character), whereas oxc's `span.end` is exclusive
 /// (one past it), so trim the trailing byte to match the oracle.
-pub(crate) fn normalized_tagged_template_span(
-    expression: &TaggedTemplateExpression<'_>,
-) -> OxcSpan {
+pub fn normalized_tagged_template_span(expression: &TaggedTemplateExpression<'_>) -> OxcSpan {
     let span = expression.span;
     if span.end > span.start {
         OxcSpan::new(span.start, span.end - 1)
@@ -30,7 +28,7 @@ pub(crate) fn normalized_tagged_template_span(
     }
 }
 
-pub(crate) fn normalized_call_expression_span(source: &str, call: &CallExpression<'_>) -> OxcSpan {
+pub fn normalized_call_expression_span(source: &str, call: &CallExpression<'_>) -> OxcSpan {
     let mut span = call.span;
     if let Some(start) = normalized_callee_start(&call.callee) {
         span.start = start;
@@ -42,10 +40,7 @@ pub(crate) fn normalized_call_expression_span(source: &str, call: &CallExpressio
     expand_single_parenthesized_expression(source, span)
 }
 
-pub(crate) fn normalized_new_expression_span(
-    source: &str,
-    expression: &NewExpression<'_>,
-) -> OxcSpan {
+pub fn normalized_new_expression_span(source: &str, expression: &NewExpression<'_>) -> OxcSpan {
     expand_single_parenthesized_expression(source, expression.span)
 }
 

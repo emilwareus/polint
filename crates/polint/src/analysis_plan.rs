@@ -212,6 +212,53 @@ impl AnalysisPlan {
         &self.support_view
     }
 
+    /// Build per-rule execution rows for silent-rule diagnosis.
+    ///
+    /// One row per planned rule. `files_in_scope` counts analyzed files that pass
+    /// this rule's `files` / `allow_files` filters (post-discovery). Capability
+    /// skips set `planned = false` and copy the existing `polint/capability`
+    /// diagnostic message into `skipped_reason`.
+    pub(crate) fn rule_execution_rows(
+        &self,
+        options: &BTreeMap<String, RuleOptions>,
+        file_paths: &[&str],
+        diagnostics: &[Diagnostic],
+    ) -> Vec<crate::diagnostics::RuleExecutionRow> {
+        self.rules
+            .iter()
+            .map(|rule| {
+                let capabilities_ok = !self.support_view.entries().iter().any(|entry| {
+                    entry.rules.iter().any(|id| id == &rule.id)
+                        && entry.status != CapabilitySupportStatus::Supported
+                });
+                let planned = capabilities_ok;
+                let default_options = RuleOptions::default();
+                let rule_options = options.get(&rule.id).unwrap_or(&default_options);
+                let files_in_scope = file_paths
+                    .iter()
+                    .filter(|path| crate::sdk::scope::file_matches_globs(rule_options, path))
+                    .count();
+                let diagnostics_emitted = diagnostics
+                    .iter()
+                    .filter(|diagnostic| diagnostic.rule_id == rule.id)
+                    .count();
+                let skipped_reason = if planned && capabilities_ok {
+                    None
+                } else {
+                    capability_skip_reason_from_diagnostics(&rule.id, diagnostics)
+                };
+                crate::diagnostics::RuleExecutionRow {
+                    rule_id: rule.id.clone(),
+                    planned,
+                    capabilities_ok,
+                    files_in_scope,
+                    diagnostics_emitted,
+                    skipped_reason,
+                }
+            })
+            .collect()
+    }
+
     pub(crate) fn diagnostics(&self) -> Vec<Diagnostic> {
         self.capabilities
             .iter()
@@ -283,9 +330,9 @@ impl AnalysisPlan {
     /// pipeline (module/symbol graphs + the interprocedural/semantic stages + the
     /// metric stages). Use this in tests and eval fixtures that assert on deep
     /// facts (call graph, points-to, reachability, semantic graph, RTA, …) so the
-    /// kernel's `run_semantic_pipeline` gate stays enabled. Mirrors what a rule
-    /// requesting a graph capability would trigger in production.
-    #[cfg(test)]
+    /// kernel's capability-closure schedule includes the deep providers. Mirrors
+    /// what a rule requesting a graph capability would trigger in production.
+    #[cfg(all(test, feature = "lang-go", feature = "lang-typescript"))]
     pub(crate) fn full_pipeline_for_test() -> Self {
         Self::from_capability_names_for_test(&[
             "dataflow",
@@ -580,6 +627,22 @@ fn capability_diagnostic(capability: &PlannedCapability, rule_id: &str) -> Diagn
     .with_help(help)
 }
 
+fn capability_skip_reason_from_diagnostics(
+    rule_id: &str,
+    diagnostics: &[Diagnostic],
+) -> Option<String> {
+    diagnostics.iter().find_map(|diagnostic| {
+        if diagnostic.rule_id != "polint/capability" {
+            return None;
+        }
+        let about_rule = diagnostic
+            .evidence
+            .iter()
+            .any(|evidence| evidence.label == "rule" && evidence.value == rule_id);
+        about_rule.then(|| diagnostic.message.clone())
+    })
+}
+
 #[cfg(test)]
 fn setup_check_message(check: &SetupCheck) -> String {
     match (&check.reason, &check.hint) {
@@ -857,6 +920,7 @@ fn language_name(language: Language) -> &'static str {
         Language::JavaScript => "javascript",
         Language::Jsx => "jsx",
         Language::Unknown => "unknown",
+        _ => "unknown",
     }
 }
 
@@ -1249,14 +1313,14 @@ mod tests {
             Capabilities::new().dataflow(),
         )];
         let plan = AnalysisPlan::from_rules(&rules, None, &BTreeMap::new());
-        let file = SourceFile {
-            id: crate::core::FileId(0),
-            path: "src/app.go".into(),
-            relative_path: "src/app.go".to_string(),
-            language: Language::Go,
-            source: "".into(),
-            content_hash: "hash".to_string(),
-        };
+        let file = SourceFile::new(
+            crate::core::FileId::from_raw(0),
+            "src/app.go".into(),
+            "src/app.go".to_string(),
+            Language::Go,
+            "".into(),
+            "hash".to_string(),
+        );
         let files = [&file];
 
         assert_eq!(
@@ -1619,5 +1683,80 @@ mod tests {
         );
 
         assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn a_rule_that_matches_nothing_appears_in_the_summary() {
+        let rules = vec![rule(
+            "local/silent",
+            "Never matches",
+            Severity::Warn,
+            Capabilities::new().imports(),
+        )];
+        let plan = AnalysisPlan::from_rules(&rules, None, &BTreeMap::new());
+        let diagnostics = plan.diagnostics();
+        let rows =
+            plan.rule_execution_rows(&BTreeMap::new(), &["src/a.ts", "src/b.ts"], &diagnostics);
+        let row = rows
+            .iter()
+            .find(|row| row.rule_id == "local/silent")
+            .expect("silent rule row");
+        assert!(row.planned);
+        assert!(row.capabilities_ok);
+        assert!(row.files_in_scope > 0);
+        assert_eq!(row.diagnostics_emitted, 0);
+        assert_eq!(row.skipped_reason, None);
+    }
+
+    #[test]
+    fn a_rule_dropped_by_capability_planning_reports_why() {
+        let rules = vec![rule(
+            "local/needs-cfg",
+            "Needs cfg",
+            Severity::Warn,
+            Capabilities::new().cfg(),
+        )];
+        let plan = AnalysisPlan::from_rules(&rules, None, &BTreeMap::new());
+        let diagnostics = plan.diagnostics();
+        let rows = plan.rule_execution_rows(&BTreeMap::new(), &["src/a.ts"], &diagnostics);
+        let row = rows
+            .iter()
+            .find(|row| row.rule_id == "local/needs-cfg")
+            .expect("capability-dropped row");
+        assert!(!row.planned);
+        assert!(!row.capabilities_ok);
+        assert_eq!(row.diagnostics_emitted, 0);
+        let reason = row.skipped_reason.as_deref().expect("skipped_reason");
+        assert!(!reason.is_empty());
+        assert!(reason.contains("unsupported capability `cfg`"), "{reason}");
+    }
+
+    #[test]
+    fn a_rule_whose_scope_excludes_everything_reports_zero_files() {
+        let rules = vec![rule(
+            "local/scoped",
+            "Scoped away",
+            Severity::Warn,
+            Capabilities::new().imports(),
+        )];
+        let mut options = BTreeMap::new();
+        options.insert(
+            "local/scoped".to_string(),
+            RuleOptions {
+                files: vec!["does-not-exist/**".to_string()],
+                ..RuleOptions::default()
+            },
+        );
+        let plan = AnalysisPlan::from_rules(&rules, None, &options);
+        let diagnostics = plan.diagnostics();
+        let rows = plan.rule_execution_rows(&options, &["src/a.ts", "src/b.ts"], &diagnostics);
+        let row = rows
+            .iter()
+            .find(|row| row.rule_id == "local/scoped")
+            .expect("scoped rule row");
+        assert_eq!(row.files_in_scope, 0);
+        assert!(row.planned);
+        assert!(row.capabilities_ok);
+        assert_eq!(row.diagnostics_emitted, 0);
     }
 }

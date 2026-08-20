@@ -1,0 +1,13 @@
+   Compiling polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 44.27s
+     Running unittests src/lib.rs (target/debug/deps/polint-af2f858c5d9987a8)
+
+running 5 tests
+test golden_cost::tests::budget_passes_within_ratio ... ok
+test golden_cost::tests::timed_run_measure_feeds_cost_record ... ok
+test golden_cost::tests::budget_fails_over_twenty_percent ... ok
+test golden_cost::tests::cost_record_round_trips_json ... ok
+test golden_cost::tests::write_timed_run_creates_sidecar_file ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 2501 filtered out; finished in 0.00s
+

@@ -1,15 +1,14 @@
-use crate::analysis_kernel::incremental::{
-    CacheStats, Digest, DigestKind, LayerCacheManifest, LayerCacheReadStatus, LayerCacheStore,
-    LayerCacheWriteStatus, LayerKey, LayerKind, PrecisionTier,
+use crate::analysis_api::{
+    AnalysisCache, CacheStats, CachedFileAnalysis, Digest, DigestKind, DisabledAnalysisCache,
+    FactDatabase, FileCacheKeyParts, FileCacheReadStatus, FunctionFact, ImportFact,
+    JsxAttributeFact, LayerCacheKeyParts, LayerCacheKind, LayerCachePrecision,
+    LayerCacheReadStatus, LayerCacheWriteStatus, ProviderRunResult, SourceFile, StringLiteralFact,
+    TS_JS_MODULE_FUNCTION_NAME, TsClassFact, TsComponentFact,
 };
-use crate::analysis_plan::AnalysisPlan;
-use crate::cache::CacheReadStatus;
-use crate::core::{
-    AnalysisDb, CachedFileAnalysis, FileId, FunctionFact, FunctionId, ImportFact, JsxAttributeFact,
-    Language, SourceFile, Span, StringLiteralFact, TS_JS_MODULE_FUNCTION_NAME, TsClassFact,
-    TsComponentFact, span_from_byte_range,
+use crate::internal_core::{
+    Diagnostic, DiagnosticRange as TextRange, FileId, FunctionId, Language, Span,
+    span_from_byte_range,
 };
-use crate::diagnostics::{Diagnostic, TextRange};
 use anyhow::{Context, Result};
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
@@ -21,31 +20,29 @@ use oxc_ast::ast::{
     ObjectPropertyKind, Program, PropertyKey, RegExpLiteral, Statement, TemplateLiteral,
     VariableDeclarator,
 };
-use oxc_parser::Parser;
-use oxc_span::{GetSpan, SourceType};
+use oxc_span::GetSpan;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
-use std::path::Path;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
+
+use crate::ts::local_db::LocalFactDb;
+use crate::ts::parse::{parse_ts_source, source_type};
 
 const TS_CACHE_SCHEMA: &str = "ts-facts-v15";
 const TS_PROVIDER_ID: &str = "polint.ts.syntax";
 const TS_SYNTAX_LAYER_SCHEMA: &str = "ts-syntax-layer-v11";
 
 // Relationship resolution converts this non-string import expression sentinel to Dynamic.
-pub(crate) const DYNAMIC_IMPORT_SPECIFIER: &str = "<dynamic>";
-const ANONYMOUS_CALLABLE_PREFIX: &str = "<polint:anonymous:";
+pub const DYNAMIC_IMPORT_SPECIFIER: &str = "<dynamic>";
 
-pub(crate) fn anonymous_callable_name(start: u32, end: u32) -> String {
-    format!("{ANONYMOUS_CALLABLE_PREFIX}{start}:{end}>")
-}
+pub(crate) use crate::analysis_api::anonymous_callable_name;
 
 /// The callable name for a class: its own identifier if named, otherwise the
 /// anonymous-callable name derived from its span. Shared by the frontend
 /// (FunctionFact emission) and MIR lowering so their names always agree — if they
 /// diverge, class-expression method bodies stop matching their facts.
-pub(crate) fn class_callable_name(class: &Class<'_>) -> String {
+pub fn class_callable_name(class: &Class<'_>) -> String {
     class
         .id
         .as_ref()
@@ -53,120 +50,142 @@ pub(crate) fn class_callable_name(class: &Class<'_>) -> String {
         .unwrap_or_else(|| anonymous_callable_name(class.span.start, class.span.end))
 }
 
-pub(crate) fn is_anonymous_callable_name(value: &str) -> bool {
-    value.starts_with(ANONYMOUS_CALLABLE_PREFIX) && value.ends_with('>')
-}
-
 /// Convenience wrapper used by TS-adapter unit tests (no cache, sequential).
 #[cfg(test)]
-pub(crate) fn analyze(db: &mut AnalysisDb) -> Vec<Diagnostic> {
-    let cache = crate::cache::Cache::new("", false);
+pub(crate) fn analyze(db: &mut dyn FactDatabase) -> Vec<Diagnostic> {
+    let cache = DisabledAnalysisCache;
     analyze_with_options(db, &cache, "", "", false)
 }
 
 /// Sequential, cache-aware analysis used by TS-adapter unit tests only.
 #[cfg(test)]
 pub(crate) fn analyze_with_cache(
-    db: &mut AnalysisDb,
-    cache: &crate::cache::Cache,
+    db: &mut dyn FactDatabase,
+    cache: &dyn AnalysisCache,
     config_hash: &str,
     rule_hash: &str,
 ) -> Vec<Diagnostic> {
     analyze_with_options(db, cache, config_hash, rule_hash, false)
 }
 
-// `pub` for `polint::_bench::ts` / `polint-bench`, not for direct downstream use.
+/// Used by `polint::_bench::ts` / `polint-bench`.
 #[allow(dead_code, unreachable_pub)]
 pub fn analyze_with_options(
-    db: &mut AnalysisDb,
-    cache: &crate::cache::Cache,
+    db: &mut dyn FactDatabase,
+    cache: &dyn AnalysisCache,
     config_hash: &str,
     rule_hash: &str,
     parallel: bool,
 ) -> Vec<Diagnostic> {
-    let plan = AnalysisPlan::empty();
-    analyze_with_plan_options(db, cache, config_hash, rule_hash, &plan, parallel)
+    analyze_with_plan_options(db, cache, config_hash, rule_hash, "", parallel)
 }
 
-pub(crate) fn analyze_with_plan_options(
-    db: &mut AnalysisDb,
-    cache: &crate::cache::Cache,
+pub fn analyze_with_plan_options(
+    db: &mut dyn FactDatabase,
+    cache: &dyn AnalysisCache,
     config_hash: &str,
     rule_hash: &str,
-    plan: &AnalysisPlan,
+    plan_digest: &str,
     parallel: bool,
 ) -> Vec<Diagnostic> {
-    analyze_with_plan_options_and_cache_stats(db, cache, config_hash, rule_hash, plan, parallel)
-        .diagnostics
+    analyze_with_plan_options_and_cache_stats(
+        db,
+        cache,
+        config_hash,
+        rule_hash,
+        plan_digest,
+        parallel,
+    )
+    .diagnostics
 }
 
-#[allow(dead_code)]
-pub(crate) struct ProviderAnalysisResult {
-    pub(crate) diagnostics: Vec<Diagnostic>,
-    pub(crate) cache_stats: CacheStats,
-    pub(crate) output_digest: Option<Digest>,
-}
-
-pub(crate) fn analyze_with_plan_options_and_cache_stats(
-    db: &mut AnalysisDb,
-    cache: &crate::cache::Cache,
+pub fn analyze_with_plan_options_and_cache_stats(
+    db: &mut dyn FactDatabase,
+    cache: &dyn AnalysisCache,
     config_hash: &str,
     rule_hash: &str,
-    plan: &AnalysisPlan,
+    plan_digest: &str,
     parallel: bool,
-) -> ProviderAnalysisResult {
-    let files: Vec<&SourceFile> = db
+) -> ProviderRunResult {
+    let owned: Vec<SourceFile> = db
         .files()
         .iter()
         .filter(|file| file.language.is_ts_family())
+        .cloned()
         .collect();
+    let files: Vec<&SourceFile> = owned.iter().collect();
+    analyze_files_with_plan_options_and_cache_stats(
+        db,
+        &files,
+        cache,
+        config_hash,
+        rule_hash,
+        plan_digest,
+        parallel,
+    )
+}
 
+pub fn analyze_files_with_plan_options_and_cache_stats(
+    db: &mut dyn FactDatabase,
+    files: &[&SourceFile],
+    cache: &dyn AnalysisCache,
+    config_hash: &str,
+    rule_hash: &str,
+    plan_digest: &str,
+    parallel: bool,
+) -> ProviderRunResult {
     let mut cache_stats = CacheStats::default();
     if files.is_empty() {
-        return ProviderAnalysisResult {
+        return ProviderRunResult {
             diagnostics: Vec::new(),
             cache_stats,
             output_digest: None,
+            execution: Default::default(),
         };
     }
 
-    let layer_store = cache.layer_cache_store();
-    let layer_key = ts_syntax_layer_key(&files, config_hash);
-    let read = layer_store.read_json_validated::<SyntaxLayerPayload, _>(
-        &layer_key,
-        |payload, manifest| {
-            validate_syntax_layer_payload(payload, manifest, TS_SYNTAX_LAYER_SCHEMA, &files)
-        },
-    );
+    let layer_key = ts_syntax_layer_key(files, config_hash);
+    let mut validate = |bytes: &[u8], output_digest: Option<&Digest>| -> bool {
+        let Ok(payload) = serde_json::from_slice::<SyntaxLayerPayload>(bytes) else {
+            return false;
+        };
+        validate_syntax_layer_payload(&payload, output_digest, TS_SYNTAX_LAYER_SCHEMA, files)
+    };
+    let read = cache.read_layer_json(&layer_key, &mut validate);
 
     match read.status {
         LayerCacheReadStatus::Hit => {
             cache_stats.record_hit();
             cache_stats.record_verified_reuse();
-            let payload = read
-                .value
-                .expect("layer cache hit should include syntax payload");
-            ProviderAnalysisResult {
+            let payload = serde_json::from_slice::<SyntaxLayerPayload>(
+                &read
+                    .value
+                    .expect("layer cache hit should include syntax payload"),
+            )
+            .expect("layer cache hit payload validated");
+            ProviderRunResult {
                 diagnostics: restore_syntax_layer_payload(db, payload),
                 cache_stats,
                 output_digest: read.output_digest,
+                execution: Default::default(),
             }
         }
         LayerCacheReadStatus::BypassedDisabled => {
             cache_stats.record_disabled_bypass();
             cache_stats.record_recompute();
             let payload = parse_ts_syntax_layer_payload(
-                &files,
+                files,
                 cache,
                 config_hash,
                 rule_hash,
-                plan,
+                plan_digest,
                 parallel,
             );
-            ProviderAnalysisResult {
+            ProviderRunResult {
                 diagnostics: restore_syntax_layer_payload(db, payload),
                 cache_stats,
                 output_digest: None,
+                execution: Default::default(),
             }
         }
         LayerCacheReadStatus::Miss | LayerCacheReadStatus::InvalidEvicted => {
@@ -177,27 +196,28 @@ pub(crate) fn analyze_with_plan_options_and_cache_stats(
             }
             cache_stats.record_recompute();
             let payload = parse_ts_syntax_layer_payload(
-                &files,
+                files,
                 cache,
                 config_hash,
                 rule_hash,
-                plan,
+                plan_digest,
                 parallel,
             );
             let mut write_diagnostics = Vec::new();
             let output_digest = write_syntax_layer_payload(
-                &layer_store,
-                layer_key,
+                cache,
+                &layer_key,
                 &payload,
                 &mut cache_stats,
                 &mut write_diagnostics,
             );
             let mut diagnostics = restore_syntax_layer_payload(db, payload);
             diagnostics.extend(write_diagnostics);
-            ProviderAnalysisResult {
+            ProviderRunResult {
                 diagnostics,
                 cache_stats,
                 output_digest,
+                execution: Default::default(),
             }
         }
     }
@@ -207,7 +227,7 @@ struct TsFileAnalysis {
     relative_path: String,
     content_hash: String,
     diagnostics: Vec<Diagnostic>,
-    facts: Option<crate::core::CachedFileFacts>,
+    facts: Option<crate::analysis_api::CachedFileFacts>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -221,25 +241,25 @@ struct SyntaxLayerFile {
     relative_path: String,
     content_hash: String,
     diagnostics: Vec<Diagnostic>,
-    facts: Option<crate::core::CachedFileFacts>,
+    facts: Option<crate::analysis_api::CachedFileFacts>,
 }
 
-fn ts_syntax_layer_key(files: &[&SourceFile], config_hash: &str) -> LayerKey {
-    LayerKey::syntax_layer_key(
-        LayerKind::TsSyntax,
-        TS_PROVIDER_ID,
-        env!("CARGO_PKG_VERSION"),
-        TS_CACHE_SCHEMA,
-        files.iter().map(|file| source_text_digest(file)).collect(),
-        Digest::from_parts(DigestKind::Config, "config_hash", &[config_hash]),
-        Digest::absent(DigestKind::TsJsLifecycle, "ts_syntax_lifecycle_absent"),
-        Digest::from_parts(
+fn ts_syntax_layer_key(files: &[&SourceFile], config_hash: &str) -> LayerCacheKeyParts {
+    LayerCacheKeyParts {
+        layer_kind: LayerCacheKind::TsSyntax,
+        provider_id: TS_PROVIDER_ID.to_string(),
+        provider_version: env!("CARGO_PKG_VERSION").to_string(),
+        schema_version: TS_CACHE_SCHEMA.to_string(),
+        parameter_digest: parser_parameter_digest(files),
+        lifecycle_digest: Digest::absent(DigestKind::TsJsLifecycle, "ts_syntax_lifecycle_absent"),
+        config_digest: Digest::from_parts(DigestKind::Config, "config_hash", &[config_hash]),
+        toolchain_digest: Digest::from_parts(
             DigestKind::ToolInvocation,
             "ts_syntax_parser_toolchain",
             &[env!("CARGO_PKG_VERSION")],
         ),
-        parser_parameter_digest(files),
-    )
+        input_digests: files.iter().map(|file| source_text_digest(file)).collect(),
+    }
 }
 
 fn source_text_digest(file: &SourceFile) -> Digest {
@@ -258,7 +278,7 @@ fn parser_parameter_digest(files: &[&SourceFile]) -> Digest {
                 "{}={:?}:{:?}",
                 file.relative_path,
                 file.language,
-                parse_source_type(&file.path)
+                source_type(&file.path)
             )
         })
         .collect::<Vec<_>>();
@@ -273,7 +293,7 @@ fn parser_parameter_digest(files: &[&SourceFile]) -> Digest {
 
 fn validate_syntax_layer_payload(
     payload: &SyntaxLayerPayload,
-    manifest: &LayerCacheManifest,
+    output_digest: Option<&Digest>,
     schema: &str,
     files: &[&SourceFile],
 ) -> bool {
@@ -290,26 +310,28 @@ fn validate_syntax_layer_payload(
         .iter()
         .map(|file| (file.relative_path.as_str(), file.content_hash.as_str()))
         .collect::<Vec<_>>();
-    actual == expected && manifest.output_digest == ts_syntax_output_digest_for_payload(payload)
+    actual == expected
+        && output_digest
+            .is_some_and(|digest| digest == &ts_syntax_output_digest_for_payload(payload))
 }
 
 fn parse_ts_syntax_layer_payload(
     files: &[&SourceFile],
-    cache: &crate::cache::Cache,
+    cache: &dyn AnalysisCache,
     config_hash: &str,
     rule_hash: &str,
-    plan: &AnalysisPlan,
+    plan_digest: &str,
     parallel: bool,
 ) -> SyntaxLayerPayload {
     let mut results = if parallel {
         files
             .par_iter()
-            .map(|file| analyze_ts_source_file(file, cache, config_hash, rule_hash, plan.digest()))
+            .map(|file| analyze_ts_source_file(file, cache, config_hash, rule_hash, plan_digest))
             .collect::<Vec<_>>()
     } else {
         files
             .iter()
-            .map(|file| analyze_ts_source_file(file, cache, config_hash, rule_hash, plan.digest()))
+            .map(|file| analyze_ts_source_file(file, cache, config_hash, rule_hash, plan_digest))
             .collect::<Vec<_>>()
     };
     results.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
@@ -329,62 +351,84 @@ fn parse_ts_syntax_layer_payload(
 }
 
 fn restore_syntax_layer_payload(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     payload: SyntaxLayerPayload,
 ) -> Vec<Diagnostic> {
-    let mut diagnostics = Vec::new();
-    for file in payload.files {
-        let Some(file_id) = db
+    let restores: Vec<(FileId, Option<_>, Vec<Diagnostic>)> = {
+        let file_id_by_path: HashMap<&str, FileId> = db
             .files()
             .iter()
-            .find(|source| source.relative_path == file.relative_path)
-            .map(|source| source.id)
-        else {
-            continue;
-        };
-        if let Some(facts) = file.facts {
+            .map(|source| (source.relative_path.as_str(), source.id))
+            .collect();
+        payload
+            .files
+            .into_iter()
+            .filter_map(|file| {
+                let &file_id = file_id_by_path.get(file.relative_path.as_str())?;
+                Some((file_id, file.facts, file.diagnostics))
+            })
+            .collect()
+    };
+    let mut diagnostics = Vec::new();
+    for (file_id, facts, file_diagnostics) in restores {
+        if let Some(facts) = facts {
             db.restore_file_facts(file_id, facts);
         }
-        diagnostics.extend(file.diagnostics);
+        diagnostics.extend(file_diagnostics);
     }
     diagnostics
 }
 
 fn write_syntax_layer_payload(
-    store: &LayerCacheStore,
-    layer_key: LayerKey,
+    cache: &dyn AnalysisCache,
+    layer_key: &LayerCacheKeyParts,
     payload: &SyntaxLayerPayload,
     stats: &mut CacheStats,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<Digest> {
-    let payload_digest = match LayerCacheStore::payload_digest_for_json(payload) {
+    let payload_bytes = match serde_json::to_vec(payload) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            diagnostics.push(cache_write_diagnostic(
+                "ts syntax layer",
+                anyhow::anyhow!(error),
+            ));
+            return None;
+        }
+    };
+    let payload_digest = match cache.payload_digest_for_json_bytes(&payload_bytes) {
         Ok(digest) => digest,
         Err(error) => {
-            diagnostics.push(cache_write_diagnostic("ts syntax layer", error));
+            diagnostics.push(cache_write_diagnostic(
+                "ts syntax layer",
+                anyhow::anyhow!(error),
+            ));
             return None;
         }
     };
     let output_digest = ts_syntax_output_digest(&payload_digest);
-    let manifest = LayerCacheManifest::new(
+    match cache.write_layer_json(
         layer_key,
-        output_digest.clone(),
-        payload_digest,
-        Vec::new(),
-        PrecisionTier::Syntax,
+        &output_digest,
+        &payload_digest,
+        LayerCachePrecision::Syntax,
         "native_trusted",
-        Vec::new(),
-    );
-
-    match store.write_json(&manifest, payload) {
+        &payload_bytes,
+    ) {
         Ok(LayerCacheWriteStatus::Written) => stats.record_write(),
         Ok(LayerCacheWriteStatus::BypassedDisabled) => stats.record_disabled_bypass(),
-        Err(error) => diagnostics.push(cache_write_diagnostic("ts syntax layer", error)),
+        Err(error) => diagnostics.push(cache_write_diagnostic(
+            "ts syntax layer",
+            anyhow::anyhow!(error),
+        )),
     }
     Some(output_digest)
 }
 
 fn ts_syntax_output_digest_for_payload(payload: &SyntaxLayerPayload) -> Digest {
-    let payload_digest = LayerCacheStore::payload_digest_for_json(payload)
+    let payload_bytes = serde_json::to_vec(payload).unwrap_or_default();
+    let payload_digest = DisabledAnalysisCache
+        .payload_digest_for_json_bytes(&payload_bytes)
         .unwrap_or_else(|_| Digest::unsupported(DigestKind::LayerOutput, "ts_syntax", "json"));
     ts_syntax_output_digest(&payload_digest)
 }
@@ -399,22 +443,23 @@ fn ts_syntax_output_digest(payload_digest: &Digest) -> Digest {
 
 fn analyze_ts_source_file(
     file: &SourceFile,
-    cache: &crate::cache::Cache,
+    cache: &dyn AnalysisCache,
     config_hash: &str,
     rule_hash: &str,
     plan_hash: &str,
 ) -> TsFileAnalysis {
-    let key = crate::cache::CacheKey::for_file(
-        file.relative_path.as_str(),
-        file.content_hash.as_str(),
-        config_hash,
-        rule_hash,
-        plan_hash,
-        TS_CACHE_SCHEMA,
-    );
-    let read = cache.read_json_with_status::<CachedFileAnalysis>(&key);
-    if read.status == CacheReadStatus::Hit
-        && let Some(cached) = read.value
+    let key = FileCacheKeyParts {
+        relative_path: file.relative_path.clone(),
+        content_hash: file.content_hash.clone(),
+        config_hash: config_hash.to_string(),
+        rule_hash: rule_hash.to_string(),
+        plan_hash: plan_hash.to_string(),
+        schema: TS_CACHE_SCHEMA.to_string(),
+    };
+    let read = cache.read_file_json(&key);
+    if read.status == FileCacheReadStatus::Hit
+        && let Some(bytes) = read.value
+        && let Ok(cached) = serde_json::from_slice::<CachedFileAnalysis>(&bytes)
         && cached.schema == TS_CACHE_SCHEMA
     {
         return TsFileAnalysis {
@@ -425,15 +470,16 @@ fn analyze_ts_source_file(
         };
     }
 
-    let mut local_db = AnalysisDb::new();
-    let local_file = local_db.add_source_file(
+    let mut local_db = LocalFactDb::new();
+    let local_file = FactDatabase::add_source_file(
+        &mut local_db,
         file.path.clone(),
         file.relative_path.clone(),
         file.language,
         Arc::clone(&file.source),
         file.content_hash.clone(),
     );
-    let mut diagnostics = match parse_ts_file(&mut local_db, local_file) {
+    let mut diagnostics = match extract_ts_file_facts(&mut local_db, local_file) {
         Ok(file_diagnostics) => file_diagnostics,
         Err(error) => {
             return TsFileAnalysis {
@@ -455,8 +501,13 @@ fn analyze_ts_source_file(
         diagnostics: diagnostics.clone(),
         facts: facts.clone(),
     };
-    if let Err(error) = cache.write_json(&key, &cached) {
-        diagnostics.push(cache_write_diagnostic(file.relative_path.as_str(), error));
+    if let Ok(bytes) = serde_json::to_vec(&cached)
+        && let Err(error) = cache.write_file_json(&key, &bytes)
+    {
+        diagnostics.push(cache_write_diagnostic(
+            file.relative_path.as_str(),
+            anyhow::anyhow!(error),
+        ));
     }
     TsFileAnalysis {
         relative_path: file.relative_path.clone(),
@@ -475,42 +526,33 @@ fn cache_write_diagnostic(path: &str, error: anyhow::Error) -> Diagnostic {
     )
 }
 
-fn parse_ts_file(db: &mut AnalysisDb, file_id: FileId) -> Result<Vec<Diagnostic>> {
+fn extract_ts_file_facts(db: &mut dyn FactDatabase, file_id: FileId) -> Result<Vec<Diagnostic>> {
     let (source, language, path) = {
         let file = db.file(file_id).context("missing source file")?;
         (Arc::clone(&file.source), file.language, file.path.clone())
     };
     let source = source.as_ref();
     let allocator = Allocator::default();
-    let source_type = parse_source_type(&path);
-    let parsed = Parser::new(&allocator, source, source_type).parse();
+    let parsed = parse_ts_source(&allocator, &path, source);
     let mut diagnostics = Vec::new();
 
     for error in &parsed.errors {
-        let range = error
-            .labels
-            .as_ref()
-            .and_then(|labels| labels.first())
-            .map(|label| {
-                span_from_byte_range(
-                    file_id,
-                    source,
-                    label.offset(),
-                    label.offset() + label.len(),
-                )
-                .diagnostic_range()
-            })
-            .unwrap_or_else(|| TextRange::point(1, 1));
+        let range = match (error.start_byte, error.end_byte) {
+            (Some(start), Some(end)) => {
+                span_from_byte_range(file_id, source, start, end).diagnostic_range()
+            }
+            _ => TextRange::point(1, 1),
+        };
 
         diagnostics.push(Diagnostic::error(
             "parser/ts",
             db.path_for(file_id),
             range,
-            format!("TS/JS parser reported a syntax error: {error}"),
+            format!("TS/JS parser reported a syntax error: {}", error.message),
         ));
     }
 
-    if parsed.panicked && parsed.program.body.is_empty() && diagnostics.is_empty() {
+    if parsed.is_catastrophic() && diagnostics.is_empty() {
         diagnostics.push(Diagnostic::error(
             "parser/ts",
             db.path_for(file_id),
@@ -520,9 +562,10 @@ fn parse_ts_file(db: &mut AnalysisDb, file_id: FileId) -> Result<Vec<Diagnostic>
     }
 
     let import_count = db.imports().len();
-    extract_from_program(db, file_id, source, language, &parsed.program);
+    extract_from_program(db, file_id, source, language, parsed.program());
     if db.imports().len() == import_count {
         let mut module_requests = parsed
+            .raw
             .module_record
             .requested_modules
             .iter()
@@ -547,12 +590,8 @@ fn parse_ts_file(db: &mut AnalysisDb, file_id: FileId) -> Result<Vec<Diagnostic>
     Ok(diagnostics)
 }
 
-fn parse_source_type(path: &Path) -> SourceType {
-    SourceType::from_path(path).unwrap_or_default()
-}
-
 fn extract_from_program(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     file_id: FileId,
     source: &str,
     language: Language,
@@ -568,7 +607,7 @@ fn span_from_oxc(file: FileId, source: &str, span: oxc_span::Span) -> Span {
 }
 
 fn extract_imports_and_exports(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     file: FileId,
     source: &str,
     language: Language,
@@ -612,7 +651,7 @@ fn extract_imports_and_exports(
 }
 
 fn extract_commonjs_require_imports(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     file: FileId,
     source: &str,
     language: Language,
@@ -629,7 +668,7 @@ fn extract_commonjs_require_imports(
 }
 
 fn collect_require_imports_from_statement(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     ctx: TsAstCtx<'_>,
     statement: &Statement<'_>,
 ) {
@@ -737,7 +776,7 @@ fn collect_require_imports_from_statement(
 }
 
 fn collect_require_imports_from_expression(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     ctx: TsAstCtx<'_>,
     expression: &Expression<'_>,
 ) {
@@ -863,7 +902,7 @@ fn collect_require_imports_from_expression(
 }
 
 fn collect_require_imports_from_declaration(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     ctx: TsAstCtx<'_>,
     declaration: &Declaration<'_>,
 ) {
@@ -886,7 +925,7 @@ fn collect_require_imports_from_declaration(
 }
 
 fn collect_require_imports_from_export_default(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     ctx: TsAstCtx<'_>,
     declaration: &ExportDefaultDeclarationKind<'_>,
 ) {
@@ -918,7 +957,7 @@ fn collect_require_imports_from_export_default(
 }
 
 fn collect_require_imports_from_function(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     ctx: TsAstCtx<'_>,
     function: &Function<'_>,
 ) {
@@ -930,7 +969,7 @@ fn collect_require_imports_from_function(
 }
 
 fn collect_require_imports_from_arrow_function(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     ctx: TsAstCtx<'_>,
     function: &ArrowFunctionExpression<'_>,
 ) {
@@ -943,7 +982,11 @@ fn collect_require_imports_from_arrow_function(
     }
 }
 
-fn collect_require_imports_from_class(db: &mut AnalysisDb, ctx: TsAstCtx<'_>, class: &Class<'_>) {
+fn collect_require_imports_from_class(
+    db: &mut dyn FactDatabase,
+    ctx: TsAstCtx<'_>,
+    class: &Class<'_>,
+) {
     if let Some(super_class) = &class.super_class {
         collect_require_imports_from_expression(db, ctx, super_class);
     }
@@ -973,7 +1016,7 @@ fn collect_require_imports_from_class(db: &mut AnalysisDb, ctx: TsAstCtx<'_>, cl
 }
 
 fn collect_require_imports_from_for_init(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     ctx: TsAstCtx<'_>,
     init: &ForStatementInit<'_>,
 ) {
@@ -1009,7 +1052,7 @@ fn collect_require_imports_from_for_init(
 }
 
 fn collect_require_imports_from_argument(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     ctx: TsAstCtx<'_>,
     argument: &Argument<'_>,
 ) {
@@ -1044,7 +1087,7 @@ fn collect_require_imports_from_argument(
 }
 
 fn push_dynamic_import_expression(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     ctx: TsAstCtx<'_>,
     import_expression: &oxc_ast::ast::ImportExpression<'_>,
 ) {
@@ -1071,7 +1114,7 @@ fn push_dynamic_import_expression(
 }
 
 fn collect_require_imports_from_array_element(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     ctx: TsAstCtx<'_>,
     element: &ArrayExpressionElement<'_>,
 ) {
@@ -1083,20 +1126,20 @@ fn collect_require_imports_from_array_element(
 }
 
 fn push_module_import(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     file: FileId,
     path: &str,
     span: Span,
     language: Language,
 ) {
-    db.push_import(ImportFact {
-        id: crate::core::ImportId(0),
+    db.push_import(ImportFact::new(
+        crate::internal_core::ImportId::from_raw(0),
         file,
-        package: None,
-        path: path.to_string(),
+        None,
+        path.to_string(),
         span,
         language,
-    });
+    ));
 }
 
 #[derive(Clone, Copy)]
@@ -1107,7 +1150,7 @@ struct TsAstCtx<'a> {
 }
 
 fn extract_declarations(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     file: FileId,
     source: &str,
     language: Language,
@@ -1208,22 +1251,22 @@ fn extract_declarations(
     }
 }
 
-fn push_ts_module_function(db: &mut AnalysisDb, ctx: TsAstCtx<'_>) -> FunctionId {
-    db.push_function(FunctionFact {
-        id: FunctionId(0),
-        file: ctx.file,
-        name: TS_JS_MODULE_FUNCTION_NAME.to_string(),
-        span: span_from_byte_range(ctx.file, ctx.source, 0, ctx.source.len()),
-        language: ctx.language,
-        is_test: false,
-        is_exported: false,
-        cyclomatic_complexity: 1,
-        calls: Vec::new(),
-    })
+fn push_ts_module_function(db: &mut dyn FactDatabase, ctx: TsAstCtx<'_>) -> FunctionId {
+    db.push_function(FunctionFact::new(
+        FunctionId::from_raw(0),
+        ctx.file,
+        TS_JS_MODULE_FUNCTION_NAME.to_string(),
+        span_from_byte_range(ctx.file, ctx.source, 0, ctx.source.len()),
+        ctx.language,
+        false,
+        false,
+        1,
+        Vec::new(),
+    ))
 }
 
 fn extract_commonjs_exported_function_assignment(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     ctx: TsAstCtx<'_>,
     expression: &Expression<'_>,
 ) {
@@ -1271,7 +1314,7 @@ fn commonjs_export_property_name(target: &AssignmentTarget<'_>) -> Option<String
 }
 
 fn extract_declaration(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     file: FileId,
     source: &str,
     language: Language,
@@ -1326,7 +1369,7 @@ fn extract_declaration(
 }
 
 fn extract_variable_declarator(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     file: FileId,
     source: &str,
     language: Language,
@@ -1387,7 +1430,7 @@ fn extract_variable_declarator(
 }
 
 fn extract_anonymous_callables_from_statement(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     ctx: TsAstCtx<'_>,
     statement: &Statement<'_>,
 ) {
@@ -1549,7 +1592,7 @@ fn extract_anonymous_callables_from_statement(
 }
 
 fn extract_anonymous_callables_from_declaration(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     ctx: TsAstCtx<'_>,
     declaration: &Declaration<'_>,
 ) {
@@ -1577,7 +1620,7 @@ fn extract_anonymous_callables_from_declaration(
 /// `[b = expr]`) and extract any anonymous callables they contain, so a default
 /// arrow/function flows to the bound name as a resolvable call target.
 fn extract_anonymous_callables_from_binding_pattern(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     ctx: TsAstCtx<'_>,
     pattern: &BindingPattern<'_>,
 ) {
@@ -1607,7 +1650,7 @@ fn extract_anonymous_callables_from_binding_pattern(
 }
 
 fn extract_anonymous_callables_from_class(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     ctx: TsAstCtx<'_>,
     class: &Class<'_>,
 ) {
@@ -1642,7 +1685,7 @@ fn extract_anonymous_callables_from_class(
 }
 
 fn extract_anonymous_callables_from_function_body(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     ctx: TsAstCtx<'_>,
     body: &FunctionBody<'_>,
 ) {
@@ -1652,7 +1695,7 @@ fn extract_anonymous_callables_from_function_body(
 }
 
 fn extract_anonymous_callables_from_expression(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     ctx: TsAstCtx<'_>,
     expression: &Expression<'_>,
     include_self: bool,
@@ -1819,7 +1862,7 @@ fn extract_anonymous_callables_from_expression(
 }
 
 fn extract_anonymous_callables_from_chain_element(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     ctx: TsAstCtx<'_>,
     element: &oxc_ast::ast::ChainElement<'_>,
 ) {
@@ -1847,7 +1890,7 @@ fn extract_anonymous_callables_from_chain_element(
 }
 
 fn extract_anonymous_callables_from_argument(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     ctx: TsAstCtx<'_>,
     argument: &Argument<'_>,
 ) {
@@ -1940,7 +1983,7 @@ struct TsFunctionSpec {
 }
 
 fn push_ts_function(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     ctx: TsAstCtx<'_>,
     mut spec: TsFunctionSpec,
 ) -> FunctionId {
@@ -1959,33 +2002,33 @@ fn push_ts_function(
     }) {
         return existing.id;
     }
-    let function_id = db.push_function(FunctionFact {
-        id: FunctionId(0),
-        file: ctx.file,
-        name: spec.name.clone(),
-        span: span.clone(),
-        language: ctx.language,
-        is_test: spec.name.contains("test") || spec.name.contains("spec"),
-        is_exported: spec.is_exported,
-        cyclomatic_complexity: spec.cyclomatic_complexity,
-        calls: spec.calls,
-    });
+    let function_id = db.push_function(FunctionFact::new(
+        FunctionId::from_raw(0),
+        ctx.file,
+        spec.name.clone(),
+        span.clone(),
+        ctx.language,
+        spec.name.contains("test") || spec.name.contains("spec"),
+        spec.is_exported,
+        spec.cyclomatic_complexity,
+        spec.calls,
+    ));
 
     if spec.is_component_like {
         // syntax-level component heuristic: PascalCase or JSX-returning syntax only.
-        db.push_ts_component(TsComponentFact {
-            file: ctx.file,
-            function: Some(function_id),
-            name: spec.name,
+        db.push_ts_component(TsComponentFact::new(
+            ctx.file,
+            Some(function_id),
+            spec.name,
             span,
-        });
+        ));
     }
 
     function_id
 }
 
 fn push_ts_class(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     file: FileId,
     source: &str,
     language: Language,
@@ -2007,13 +2050,13 @@ fn push_ts_class(
     }) {
         return;
     }
-    db.push_ts_class(TsClassFact {
+    db.push_ts_class(TsClassFact::new(
         file,
-        name: name.clone(),
-        span: span.clone(),
+        name.clone(),
+        span.clone(),
         is_exported,
         is_component_like,
-    });
+    ));
     push_ts_function(
         db,
         TsAstCtx {
@@ -2033,12 +2076,7 @@ fn push_ts_class(
 
     if is_component_like {
         // syntax-level component heuristic: PascalCase classes are component-like only.
-        db.push_ts_component(TsComponentFact {
-            file,
-            function: None,
-            name: name.clone(),
-            span,
-        });
+        db.push_ts_component(TsComponentFact::new(file, None, name.clone(), span));
     }
 
     for element in &class.body.body {
@@ -2174,7 +2212,7 @@ fn constant_property_key_expression(expression: &Expression<'_>) -> Option<Strin
 }
 
 fn extract_anonymous_callables_from_object_property(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     ctx: TsAstCtx<'_>,
     property: &ObjectProperty<'_>,
 ) {
@@ -3519,7 +3557,7 @@ fn expression_is_jsx(expression: &Expression<'_>) -> bool {
 }
 
 fn extract_literals_and_jsx(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     file: FileId,
     source: &str,
     language: Language,
@@ -3543,7 +3581,11 @@ fn extract_literals_and_jsx(
     }
 }
 
-fn walk_statement_for_literals(db: &mut AnalysisDb, ctx: TsAstCtx<'_>, statement: &Statement<'_>) {
+fn walk_statement_for_literals(
+    db: &mut dyn FactDatabase,
+    ctx: TsAstCtx<'_>,
+    statement: &Statement<'_>,
+) {
     match statement {
         Statement::BlockStatement(block) => {
             for statement in &block.body {
@@ -3672,7 +3714,7 @@ fn walk_statement_for_literals(db: &mut AnalysisDb, ctx: TsAstCtx<'_>, statement
 }
 
 fn walk_expression_for_literals(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     ctx: TsAstCtx<'_>,
     expression: &Expression<'_>,
 ) {
@@ -3798,21 +3840,21 @@ fn walk_expression_for_literals(
 }
 
 fn push_string_literal_from_oxc(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     ctx: TsAstCtx<'_>,
     value: String,
     span: oxc_span::Span,
 ) {
-    db.push_string_literal(StringLiteralFact {
-        file: ctx.file,
+    db.push_string_literal(StringLiteralFact::new(
+        ctx.file,
         value,
-        span: span_from_oxc(ctx.file, ctx.source, span),
-        language: ctx.language,
-    });
+        span_from_oxc(ctx.file, ctx.source, span),
+        ctx.language,
+    ));
 }
 
 fn push_regex_literal_from_oxc(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     ctx: TsAstCtx<'_>,
     literal: &RegExpLiteral<'_>,
 ) {
@@ -3824,7 +3866,7 @@ fn push_regex_literal_from_oxc(
 }
 
 fn extract_jsx_element_attributes(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     ctx: TsAstCtx<'_>,
     element: &JSXElement<'_>,
 ) {
@@ -3832,12 +3874,12 @@ fn extract_jsx_element_attributes(
         match item {
             JSXAttributeItem::Attribute(attribute) => {
                 if let Some(name) = jsx_attribute_name(&attribute.name) {
-                    db.push_jsx_attribute(JsxAttributeFact {
-                        file: ctx.file,
+                    db.push_jsx_attribute(JsxAttributeFact::new(
+                        ctx.file,
                         name,
-                        value: attribute.value.as_ref().and_then(jsx_attribute_value),
-                        span: span_from_oxc(ctx.file, ctx.source, attribute.span),
-                    });
+                        attribute.value.as_ref().and_then(jsx_attribute_value),
+                        span_from_oxc(ctx.file, ctx.source, attribute.span),
+                    ));
                 }
                 if let Some(value) = &attribute.value {
                     walk_jsx_attribute_value_for_literals(db, ctx, value);
@@ -3873,7 +3915,7 @@ fn jsx_attribute_value(value: &JSXAttributeValue<'_>) -> Option<String> {
 }
 
 fn push_template_literal_from_oxc(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     ctx: TsAstCtx<'_>,
     template: &TemplateLiteral<'_>,
 ) {
@@ -3911,7 +3953,7 @@ fn template_element_value(element: &oxc_ast::ast::TemplateElement<'_>) -> String
 }
 
 fn walk_declaration_for_literals(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     ctx: TsAstCtx<'_>,
     declaration: &Declaration<'_>,
 ) {
@@ -3930,7 +3972,7 @@ fn walk_declaration_for_literals(
 }
 
 fn walk_export_default_for_literals(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     ctx: TsAstCtx<'_>,
     declaration: &ExportDefaultDeclarationKind<'_>,
 ) {
@@ -3961,7 +4003,7 @@ fn walk_export_default_for_literals(
 }
 
 fn walk_variable_declaration_for_literals(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     ctx: TsAstCtx<'_>,
     variable: &oxc_ast::ast::VariableDeclaration<'_>,
 ) {
@@ -3972,14 +4014,18 @@ fn walk_variable_declaration_for_literals(
     }
 }
 
-fn walk_function_for_literals(db: &mut AnalysisDb, ctx: TsAstCtx<'_>, function: &Function<'_>) {
+fn walk_function_for_literals(
+    db: &mut dyn FactDatabase,
+    ctx: TsAstCtx<'_>,
+    function: &Function<'_>,
+) {
     if let Some(body) = function.body.as_deref() {
         walk_function_body_for_literals(db, ctx, body);
     }
 }
 
 fn walk_function_body_for_literals(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     ctx: TsAstCtx<'_>,
     body: &FunctionBody<'_>,
 ) {
@@ -3996,7 +4042,7 @@ fn walk_function_body_for_literals(
     }
 }
 
-fn walk_class_for_literals(db: &mut AnalysisDb, ctx: TsAstCtx<'_>, class: &Class<'_>) {
+fn walk_class_for_literals(db: &mut dyn FactDatabase, ctx: TsAstCtx<'_>, class: &Class<'_>) {
     if let Some(super_class) = &class.super_class {
         walk_expression_for_literals(db, ctx, super_class);
     }
@@ -4028,7 +4074,11 @@ fn walk_class_for_literals(db: &mut AnalysisDb, ctx: TsAstCtx<'_>, class: &Class
     }
 }
 
-fn walk_for_init_for_literals(db: &mut AnalysisDb, ctx: TsAstCtx<'_>, init: &ForStatementInit<'_>) {
+fn walk_for_init_for_literals(
+    db: &mut dyn FactDatabase,
+    ctx: TsAstCtx<'_>,
+    init: &ForStatementInit<'_>,
+) {
     match init {
         ForStatementInit::VariableDeclaration(variable) => {
             walk_variable_declaration_for_literals(db, ctx, variable);
@@ -4046,13 +4096,21 @@ fn walk_for_init_for_literals(db: &mut AnalysisDb, ctx: TsAstCtx<'_>, init: &For
     }
 }
 
-fn walk_for_left_for_literals(db: &mut AnalysisDb, ctx: TsAstCtx<'_>, left: &ForStatementLeft<'_>) {
+fn walk_for_left_for_literals(
+    db: &mut dyn FactDatabase,
+    ctx: TsAstCtx<'_>,
+    left: &ForStatementLeft<'_>,
+) {
     if let ForStatementLeft::VariableDeclaration(variable) = left {
         walk_variable_declaration_for_literals(db, ctx, variable);
     }
 }
 
-fn walk_argument_for_literals(db: &mut AnalysisDb, ctx: TsAstCtx<'_>, argument: &Argument<'_>) {
+fn walk_argument_for_literals(
+    db: &mut dyn FactDatabase,
+    ctx: TsAstCtx<'_>,
+    argument: &Argument<'_>,
+) {
     match argument {
         Argument::SpreadElement(spread) => walk_expression_for_literals(db, ctx, &spread.argument),
         Argument::RegExpLiteral(literal) => {
@@ -4121,7 +4179,7 @@ fn walk_argument_for_literals(db: &mut AnalysisDb, ctx: TsAstCtx<'_>, argument: 
 }
 
 fn walk_array_element_for_literals(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     ctx: TsAstCtx<'_>,
     element: &ArrayExpressionElement<'_>,
 ) {
@@ -4161,7 +4219,11 @@ fn walk_array_element_for_literals(
     }
 }
 
-fn walk_property_key_for_literals(db: &mut AnalysisDb, ctx: TsAstCtx<'_>, key: &PropertyKey<'_>) {
+fn walk_property_key_for_literals(
+    db: &mut dyn FactDatabase,
+    ctx: TsAstCtx<'_>,
+    key: &PropertyKey<'_>,
+) {
     match key {
         PropertyKey::RegExpLiteral(literal) => {
             push_regex_literal_from_oxc(db, ctx, literal);
@@ -4175,7 +4237,7 @@ fn walk_property_key_for_literals(db: &mut AnalysisDb, ctx: TsAstCtx<'_>, key: &
 }
 
 fn walk_jsx_attribute_value_for_literals(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     ctx: TsAstCtx<'_>,
     value: &JSXAttributeValue<'_>,
 ) {
@@ -4191,7 +4253,7 @@ fn walk_jsx_attribute_value_for_literals(
     }
 }
 
-fn walk_jsx_child_for_literals(db: &mut AnalysisDb, ctx: TsAstCtx<'_>, child: &JSXChild<'_>) {
+fn walk_jsx_child_for_literals(db: &mut dyn FactDatabase, ctx: TsAstCtx<'_>, child: &JSXChild<'_>) {
     match child {
         JSXChild::Element(element) => extract_jsx_element_attributes(db, ctx, element),
         JSXChild::Fragment(fragment) => walk_jsx_fragment_for_literals(db, ctx, fragment),
@@ -4204,7 +4266,7 @@ fn walk_jsx_child_for_literals(db: &mut AnalysisDb, ctx: TsAstCtx<'_>, child: &J
 }
 
 fn walk_jsx_fragment_for_literals(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     ctx: TsAstCtx<'_>,
     fragment: &JSXFragment<'_>,
 ) {
@@ -4214,7 +4276,7 @@ fn walk_jsx_fragment_for_literals(
 }
 
 fn walk_jsx_expression_for_literals(
-    db: &mut AnalysisDb,
+    db: &mut dyn FactDatabase,
     ctx: TsAstCtx<'_>,
     expression: &JSXExpression<'_>,
 ) {

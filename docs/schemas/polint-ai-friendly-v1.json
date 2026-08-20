@@ -43,6 +43,7 @@
         "rules_triggered",
         "by_severity",
         "by_rule",
+        "rules",
         "examples_limit"
       ],
       "additionalProperties": false,
@@ -53,6 +54,11 @@
         "by_rule": {
           "type": "array",
           "items": { "$ref": "#/$defs/ruleSummary" }
+        },
+        "rules": {
+          "type": "array",
+          "description": "Per registered rule, including zero-finding and capability-skipped rules.",
+          "items": { "$ref": "#/$defs/ruleExecution" }
         },
         "examples_limit": { "type": "integer", "const": 10 }
       }
@@ -111,6 +117,38 @@
         "rule_id": { "type": "string" },
         "total": { "type": "integer", "minimum": 0 },
         "by_severity": { "$ref": "#/$defs/severityCounts" }
+      }
+    },
+    "ruleExecution": {
+      "type": "object",
+      "required": [
+        "rule_id",
+        "planned",
+        "capabilities_ok",
+        "files_in_scope",
+        "diagnostics_emitted"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "rule_id": { "type": "string" },
+        "planned": {
+          "type": "boolean",
+          "description": "True when the rule survived capability planning and will execute."
+        },
+        "capabilities_ok": {
+          "type": "boolean",
+          "description": "True when every requested capability is supported for this run."
+        },
+        "files_in_scope": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Analyzed files matching this rule's files/allow_files filters."
+        },
+        "diagnostics_emitted": { "type": "integer", "minimum": 0 },
+        "skipped_reason": {
+          "type": "string",
+          "description": "Present when planned or capabilities_ok is false; uses polint/capability wording."
+        }
       }
     },
     "example": {

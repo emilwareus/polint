@@ -1,0 +1,1644 @@
+    Checking polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.2/crates/polint)
+warning: unused imports: `DefinitionKind`, `ModuleEdgeKind`, `ModuleNodeKind`, `ReferenceKind`, `ResolutionPrecision`, `ResolutionStatus`, `SymbolKind`, `SymbolNamespace`, `SymbolPrecision`, `SymbolResolutionStatus`, and `UnresolvedReason`
+   --> crates/polint/src/core/db.rs:104:75
+    |
+104 |     BranchObligation, ComplexityMetricFact, CoverageFact, DefinitionFact, DefinitionKind,
+    |                                                                           ^^^^^^^^^^^^^^
+105 |     FileMetricFact, FunctionFact, FunctionMetricFact, ImportFact, JsxAttributeFact, ModuleEdge,
+106 |     ModuleEdgeKind, ModuleNode, ModuleNodeKind, PackageFact, ReferenceFact, ReferenceKind,
+    |     ^^^^^^^^^^^^^^              ^^^^^^^^^^^^^^                              ^^^^^^^^^^^^^
+107 |     ResolutionPrecision, ResolutionStatus, ResolvedImportFact, SourceFile, StringLiteralFact,
+    |     ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^
+108 |     SymbolFact, SymbolKind, SymbolNamespace, SymbolPrecision, SymbolResolutionStatus, TestFact,
+    |                 ^^^^^^^^^^  ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^
+109 |     TsClassFact, TsComponentFact, UnresolvedReason,
+    |                                   ^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `CachedFileAnalysis`, `TS_JS_MODULE_FUNCTION_NAME`, and `is_synthetic_ts_js_module_function`
+   --> crates/polint/src/core/db.rs:112:5
+    |
+112 |     CachedFileAnalysis, CachedFileFacts, TS_JS_MODULE_FUNCTION_NAME,
+    |     ^^^^^^^^^^^^^^^^^^                   ^^^^^^^^^^^^^^^^^^^^^^^^^^
+113 |     is_synthetic_ts_js_module_function,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: cannot find macro `proptest` in this scope
+    --> crates/polint/src/core/mod.rs:3441:5
+     |
+3441 |     proptest! {
+     |     ^^^^^^^^
+     |
+     = note: `proptest` is in scope, but it is a crate, not a macro
+
+error: cannot find macro `anyhow` in this scope
+   --> crates/polint/src/core/mod.rs:317:48
+    |
+317 |                 TestRuleBehavior::Error => Err(anyhow!("intentional rule error").into()),
+    |                                                ^^^^^^
+    |
+    = note: `anyhow` is in scope, but it is a crate, not a macro
+
+error[E0425]: cannot find type `Severity` in this scope
+   --> crates/polint/src/core/mod.rs:178:19
+    |
+178 |         severity: Severity,
+    |                   ^^^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+ 62 +     use crate::diagnostics::Severity;
+    |
+
+error[E0425]: cannot find type `Duration` in this scope
+   --> crates/polint/src/core/mod.rs:181:16
+    |
+181 |         delay: Duration,
+    |                ^^^^^^^^ not found in this scope
+    |
+    = note: struct `crate::go::semantic::client::tests::Duration` exists but is inaccessible
+help: consider importing this struct
+    |
+ 62 +     use std::time::Duration;
+    |
+
+error[E0425]: cannot find type `Severity` in this scope
+   --> crates/polint/src/core/mod.rs:211:47
+    |
+211 |         fn report(id: &'static str, severity: Severity, fingerprint: &'static str) -> Self {
+    |                                               ^^^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+ 62 +     use crate::diagnostics::Severity;
+    |
+
+error[E0433]: cannot find type `Duration` in this scope
+   --> crates/polint/src/core/mod.rs:218:24
+    |
+218 |                 delay: Duration::ZERO,
+    |                        ^^^^^^^^ use of undeclared type `Duration`
+    |
+    = note: struct `crate::go::semantic::client::tests::Duration` exists but is inaccessible
+help: consider importing this struct
+    |
+ 62 +     use std::time::Duration;
+    |
+
+error[E0425]: cannot find type `Duration` in this scope
+   --> crates/polint/src/core/mod.rs:233:40
+    |
+233 |         fn with_delay(mut self, delay: Duration) -> Self {
+    |                                        ^^^^^^^^ not found in this scope
+    |
+    = note: struct `crate::go::semantic::client::tests::Duration` exists but is inaccessible
+help: consider importing this struct
+    |
+ 62 +     use std::time::Duration;
+    |
+
+error[E0433]: cannot find type `Severity` in this scope
+   --> crates/polint/src/core/mod.rs:242:27
+    |
+242 |                 severity: Severity::Error,
+    |                           ^^^^^^^^ use of undeclared type `Severity`
+    |
+help: consider importing this enum
+    |
+ 62 +     use crate::diagnostics::Severity;
+    |
+
+error[E0433]: cannot find type `Duration` in this scope
+   --> crates/polint/src/core/mod.rs:245:24
+    |
+245 |                 delay: Duration::ZERO,
+    |                        ^^^^^^^^ use of undeclared type `Duration`
+    |
+    = note: struct `crate::go::semantic::client::tests::Duration` exists but is inaccessible
+help: consider importing this struct
+    |
+ 62 +     use std::time::Duration;
+    |
+
+error[E0433]: cannot find type `Severity` in this scope
+   --> crates/polint/src/core/mod.rs:254:27
+    |
+254 |                 severity: Severity::Error,
+    |                           ^^^^^^^^ use of undeclared type `Severity`
+    |
+help: consider importing this enum
+    |
+ 62 +     use crate::diagnostics::Severity;
+    |
+
+error[E0433]: cannot find type `Duration` in this scope
+   --> crates/polint/src/core/mod.rs:257:24
+    |
+257 |                 delay: Duration::ZERO,
+    |                        ^^^^^^^^ use of undeclared type `Duration`
+    |
+    = note: struct `crate::go::semantic::client::tests::Duration` exists but is inaccessible
+help: consider importing this struct
+    |
+ 62 +     use std::time::Duration;
+    |
+
+error[E0433]: cannot find type `Severity` in this scope
+   --> crates/polint/src/core/mod.rs:266:27
+    |
+266 |                 severity: Severity::Error,
+    |                           ^^^^^^^^ use of undeclared type `Severity`
+    |
+help: consider importing this enum
+    |
+ 62 +     use crate::diagnostics::Severity;
+    |
+
+error[E0433]: cannot find type `Duration` in this scope
+   --> crates/polint/src/core/mod.rs:269:24
+    |
+269 |                 delay: Duration::ZERO,
+    |                        ^^^^^^^^ use of undeclared type `Duration`
+    |
+    = note: struct `crate::go::semantic::client::tests::Duration` exists but is inaccessible
+help: consider importing this struct
+    |
+ 62 +     use std::time::Duration;
+    |
+
+error[E0425]: cannot find type `RuleResult` in this scope
+   --> crates/polint/src/core/mod.rs:298:48
+    |
+298 |         fn run(self, ctx: &mut RuleCtx<'_>) -> RuleResult {
+    |                                                ^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this type alias
+    |
+ 62 +     use crate::rule_error::RuleResult;
+    |
+
+error[E0433]: cannot find module or crate `thread` in this scope
+   --> crates/polint/src/core/mod.rs:300:17
+    |
+300 |                 thread::sleep(self.delay);
+    |                 ^^^^^^ use of unresolved module or unlinked crate `thread`
+    |
+    = help: if you wanted to use a crate named `thread`, use `cargo add thread` to add it to your `Cargo.toml`
+    = note: module `crate::go::semantic::client::tests::thread` exists but is inaccessible
+help: consider importing this module
+    |
+ 62 +     use std::thread;
+    |
+
+error[E0433]: cannot find type `Diagnostic` in this scope
+   --> crates/polint/src/core/mod.rs:306:25
+    |
+306 |                         Diagnostic::new(
+    |                         ^^^^^^^^^^ use of undeclared type `Diagnostic`
+    |
+help: a tool attribute with a similar name exists
+    |
+306 -                         Diagnostic::new(
+306 +                         diagnostic::new(
+    |
+help: consider importing this struct
+    |
+ 62 +     use crate::diagnostics::Diagnostic;
+    |
+
+error[E0433]: cannot find type `DiagnosticRange` in this scope
+   --> crates/polint/src/core/mod.rs:310:29
+    |
+310 | ...                   DiagnosticRange::point(1, 1),
+    |                       ^^^^^^^^^^^^^^^ use of undeclared type `DiagnosticRange`
+    |
+help: consider importing this struct through its public re-export
+    |
+ 62 +     use crate::sdk::prelude::DiagnosticRange;
+    |
+
+error[E0433]: cannot find type `ScopeKind` in this scope
+   --> crates/polint/src/core/mod.rs:351:17
+    |
+351 |                 ScopeKind::Function,
+    |                 ^^^^^^^^^ use of undeclared type `ScopeKind`
+    |
+help: a struct with a similar name exists
+    |
+351 -                 ScopeKind::Function,
+351 +                 ScopeId::Function,
+    |
+help: consider importing this enum
+    |
+ 62 +     use crate::symbol_graph::semantic::ScopeKind;
+    |
+
+error[E0433]: cannot find type `ScopeKind` in this scope
+   --> crates/polint/src/core/mod.rs:355:19
+    |
+355 |             kind: ScopeKind::Function,
+    |                   ^^^^^^^^^ use of undeclared type `ScopeKind`
+    |
+help: a struct with a similar name exists
+    |
+355 -             kind: ScopeKind::Function,
+355 +             kind: ScopeId::Function,
+    |
+help: consider importing this enum
+    |
+ 62 +     use crate::symbol_graph::semantic::ScopeKind;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `MirBodyId` in this scope
+   --> crates/polint/src/core/mod.rs:362:17
+    |
+362 |             id: MirBodyId(id),
+    |                 ^^^^^^^^^ not found in this scope
+    |
+help: consider importing this tuple struct
+    |
+ 62 +     use crate::analysis::ids::MirBodyId;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `PlaceId` in this scope
+   --> crates/polint/src/core/mod.rs:377:17
+    |
+377 |             id: PlaceId(id),
+    |                 ^^^^^^^ not found in this scope
+    |
+help: consider importing this tuple struct
+    |
+ 62 +     use crate::analysis::ids::PlaceId;
+    |
+
+error[E0433]: cannot find type `PlaceRoot` in this scope
+   --> crates/polint/src/core/mod.rs:381:19
+    |
+381 |             root: PlaceRoot::Local {
+    |                   ^^^^^^^^^ use of undeclared type `PlaceRoot`
+    |
+help: a struct with a similar name exists
+    |
+381 -             root: PlaceRoot::Local {
+381 +             root: PlaceFact::Local {
+    |
+help: consider importing this enum
+    |
+ 62 +     use crate::analysis::places::PlaceRoot;
+    |
+
+error[E0425]: cannot find type `MirBodyId` in this scope
+   --> crates/polint/src/core/mod.rs:393:15
+    |
+393 |         body: MirBodyId,
+    |               ^^^^^^^^^
+    |
+   ::: crates/polint/src/analysis/mir/body.rs:11:1
+    |
+ 11 | pub(crate) struct MirBody {
+    | ------------------------- similarly named struct `MirBody` defined here
+    |
+help: a struct with a similar name exists
+    |
+393 -         body: MirBodyId,
+393 +         body: MirBody,
+    |
+help: consider importing this struct
+    |
+ 62 +     use crate::analysis::ids::MirBodyId;
+    |
+
+error[E0425]: cannot find type `PlaceId` in this scope
+   --> crates/polint/src/core/mod.rs:394:16
+    |
+394 |         place: PlaceId,
+    |                ^^^^^^^ not found in this scope
+    |
+help: consider importing this struct
+    |
+ 62 +     use crate::analysis::ids::PlaceId;
+    |
+
+error[E0425]: cannot find type `PlaceId` in this scope
+   --> crates/polint/src/core/mod.rs:395:16
+    |
+395 |         value: PlaceId,
+    |                ^^^^^^^ not found in this scope
+    |
+help: consider importing this struct
+    |
+ 62 +     use crate::analysis::ids::PlaceId;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `MirOpId` in this scope
+   --> crates/polint/src/core/mod.rs:399:17
+    |
+399 |             id: MirOpId(id),
+    |                 ^^^^^^^ not found in this scope
+    |
+help: consider importing this tuple struct
+    |
+ 62 +     use crate::analysis::ids::MirOpId;
+    |
+
+error[E0433]: cannot find type `MirOperationKind` in this scope
+   --> crates/polint/src/core/mod.rs:403:19
+    |
+403 |             kind: MirOperationKind::Assign {
+    |                   ^^^^^^^^^^^^^^^^ use of undeclared type `MirOperationKind`
+    |
+help: a struct with a similar name exists
+    |
+403 -             kind: MirOperationKind::Assign {
+403 +             kind: MirOperation::Assign {
+    |
+help: consider importing this enum
+    |
+ 62 +     use crate::analysis::mir::op::MirOperationKind;
+    |
+
+error[E0433]: cannot find type `MirValue` in this scope
+   --> crates/polint/src/core/mod.rs:405:24
+    |
+405 |                 value: MirValue::Place(value),
+    |                        ^^^^^^^^ use of undeclared type `MirValue`
+    |
+help: consider importing this enum
+    |
+ 62 +     use crate::analysis::mir::op::MirValue;
+    |
+
+error[E0433]: cannot find type `AssignMode` in this scope
+   --> crates/polint/src/core/mod.rs:406:23
+    |
+406 |                 mode: AssignMode::Overwrite,
+    |                       ^^^^^^^^^^ use of undeclared type `AssignMode`
+    |
+help: consider importing this enum
+    |
+ 62 +     use crate::analysis::mir::op::AssignMode;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `UnsupportedId` in this scope
+   --> crates/polint/src/core/mod.rs:415:17
+    |
+415 |             id: UnsupportedId(
+    |                 ^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this tuple struct
+    |
+ 62 +     use crate::analysis::ids::UnsupportedId;
+    |
+
+error[E0433]: cannot find type `UnsupportedDomain` in this scope
+   --> crates/polint/src/core/mod.rs:428:36
+    |
+428 |             affected_domains: vec![UnsupportedDomain::Mir],
+    |                                    ^^^^^^^^^^^^^^^^^ use of undeclared type `UnsupportedDomain`
+    |
+help: consider importing this enum
+    |
+ 62 +     use crate::analysis::mir::op::UnsupportedDomain;
+    |
+
+error[E0433]: cannot find type `ConservativeAction` in this scope
+   --> crates/polint/src/core/mod.rs:429:34
+    |
+429 |             conservative_action: ConservativeAction::HavocAffectedPlaces,
+    |                                  ^^^^^^^^^^^^^^^^^^ use of undeclared type `ConservativeAction`
+    |
+help: consider importing this enum
+    |
+ 62 +     use crate::analysis::mir::op::ConservativeAction;
+    |
+
+error[E0433]: cannot find type `UnsupportedPrecision` in this scope
+   --> crates/polint/src/core/mod.rs:430:24
+    |
+430 |             precision: UnsupportedPrecision::Unsupported,
+    |                        ^^^^^^^^^^^^^^^^^^^^ use of undeclared type `UnsupportedPrecision`
+    |
+help: consider importing this enum
+    |
+ 62 +     use crate::analysis::mir::op::UnsupportedPrecision;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `MirBodyId` in this scope
+   --> crates/polint/src/core/mod.rs:453:19
+    |
+453 |             body: MirBodyId(id),
+    |                   ^^^^^^^^^ not found in this scope
+    |
+help: consider importing this tuple struct
+    |
+ 62 +     use crate::analysis::ids::MirBodyId;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `MirOpId` in this scope
+   --> crates/polint/src/core/mod.rs:454:24
+    |
+454 |             operation: MirOpId(id),
+    |                        ^^^^^^^ not found in this scope
+    |
+help: consider importing this tuple struct
+    |
+ 62 +     use crate::analysis::ids::MirOpId;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `MirBodyId` in this scope
+    --> crates/polint/src/core/mod.rs:1064:21
+     |
+1064 |                     MirBodyId(9),
+     |                     ^^^^^^^^^ not found in this scope
+     |
+help: consider importing this tuple struct
+     |
+1049 +         use crate::analysis::ids::MirBodyId;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `PlaceId` in this scope
+    --> crates/polint/src/core/mod.rs:1065:21
+     |
+1065 |                     PlaceId(9),
+     |                     ^^^^^^^ not found in this scope
+     |
+help: consider importing this tuple struct
+     |
+1049 +         use crate::analysis::ids::PlaceId;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `PlaceId` in this scope
+    --> crates/polint/src/core/mod.rs:1066:21
+     |
+1066 |                     PlaceId(9),
+     |                     ^^^^^^^ not found in this scope
+     |
+help: consider importing this tuple struct
+     |
+1049 +         use crate::analysis::ids::PlaceId;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `MirBodyId` in this scope
+    --> crates/polint/src/core/mod.rs:1076:21
+     |
+1076 |                     MirBodyId(4),
+     |                     ^^^^^^^^^ not found in this scope
+     |
+help: consider importing this tuple struct
+     |
+1049 +         use crate::analysis::ids::MirBodyId;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `PlaceId` in this scope
+    --> crates/polint/src/core/mod.rs:1077:21
+     |
+1077 |                     PlaceId(4),
+     |                     ^^^^^^^ not found in this scope
+     |
+help: consider importing this tuple struct
+     |
+1049 +         use crate::analysis::ids::PlaceId;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `PlaceId` in this scope
+    --> crates/polint/src/core/mod.rs:1078:21
+     |
+1078 |                     PlaceId(4),
+     |                     ^^^^^^^ not found in this scope
+     |
+help: consider importing this tuple struct
+     |
+1049 +         use crate::analysis::ids::PlaceId;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `MirBodyId` in this scope
+    --> crates/polint/src/core/mod.rs:1092:23
+     |
+1092 |                 vec![(MirBodyId(0), "body:second")]
+     |                       ^^^^^^^^^ not found in this scope
+     |
+help: consider importing this tuple struct
+     |
+1049 +         use crate::analysis::ids::MirBodyId;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `MirBodyId` in this scope
+    --> crates/polint/src/core/mod.rs:1117:44
+     |
+1117 |                     test_mir_operation(20, MirBodyId(20), PlaceId(20), PlaceId(10), "op:z"),
+     |                                            ^^^^^^^^^ not found in this scope
+     |
+help: consider importing this tuple struct
+     |
+1049 +         use crate::analysis::ids::MirBodyId;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `PlaceId` in this scope
+    --> crates/polint/src/core/mod.rs:1117:59
+     |
+1117 |                     test_mir_operation(20, MirBodyId(20), PlaceId(20), PlaceId(10), "op:z"),
+     |                                                           ^^^^^^^ not found in this scope
+     |
+help: consider importing this tuple struct
+     |
+1049 +         use crate::analysis::ids::PlaceId;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `PlaceId` in this scope
+    --> crates/polint/src/core/mod.rs:1117:72
+     |
+1117 |                     test_mir_operation(20, MirBodyId(20), PlaceId(20), PlaceId(10), "op:z"),
+     |                                                                        ^^^^^^^ not found in this scope
+     |
+help: consider importing this tuple struct
+     |
+1049 +         use crate::analysis::ids::PlaceId;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `MirBodyId` in this scope
+    --> crates/polint/src/core/mod.rs:1118:44
+     |
+1118 |                     test_mir_operation(10, MirBodyId(10), PlaceId(10), PlaceId(20), "op:a"),
+     |                                            ^^^^^^^^^ not found in this scope
+     |
+help: consider importing this tuple struct
+     |
+1049 +         use crate::analysis::ids::MirBodyId;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `PlaceId` in this scope
+    --> crates/polint/src/core/mod.rs:1118:59
+     |
+1118 |                     test_mir_operation(10, MirBodyId(10), PlaceId(10), PlaceId(20), "op:a"),
+     |                                                           ^^^^^^^ not found in this scope
+     |
+help: consider importing this tuple struct
+     |
+1049 +         use crate::analysis::ids::PlaceId;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `PlaceId` in this scope
+    --> crates/polint/src/core/mod.rs:1118:72
+     |
+1118 |                     test_mir_operation(10, MirBodyId(10), PlaceId(10), PlaceId(20), "op:a"),
+     |                                                                        ^^^^^^^ not found in this scope
+     |
+help: consider importing this tuple struct
+     |
+1049 +         use crate::analysis::ids::PlaceId;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `MirBodyId` in this scope
+    --> crates/polint/src/core/mod.rs:1134:23
+     |
+1134 |                 vec![(MirBodyId(0), "body:a"), (MirBodyId(1), "body:z")]
+     |                       ^^^^^^^^^ not found in this scope
+     |
+help: consider importing this tuple struct
+     |
+1049 +         use crate::analysis::ids::MirBodyId;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `MirBodyId` in this scope
+    --> crates/polint/src/core/mod.rs:1134:49
+     |
+1134 |                 vec![(MirBodyId(0), "body:a"), (MirBodyId(1), "body:z")]
+     |                                                 ^^^^^^^^^ not found in this scope
+     |
+help: consider importing this tuple struct
+     |
+1049 +         use crate::analysis::ids::MirBodyId;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `MirOpId` in this scope
+    --> crates/polint/src/core/mod.rs:1142:22
+     |
+1142 |                     (MirOpId(0), MirBodyId(0), "op:a"),
+     |                      ^^^^^^^ not found in this scope
+     |
+help: consider importing this tuple struct
+     |
+1049 +         use crate::analysis::ids::MirOpId;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `MirBodyId` in this scope
+    --> crates/polint/src/core/mod.rs:1142:34
+     |
+1142 |                     (MirOpId(0), MirBodyId(0), "op:a"),
+     |                                  ^^^^^^^^^ not found in this scope
+     |
+help: consider importing this tuple struct
+     |
+1049 +         use crate::analysis::ids::MirBodyId;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `MirOpId` in this scope
+    --> crates/polint/src/core/mod.rs:1143:22
+     |
+1143 |                     (MirOpId(1), MirBodyId(1), "op:z"),
+     |                      ^^^^^^^ not found in this scope
+     |
+help: consider importing this tuple struct
+     |
+1049 +         use crate::analysis::ids::MirOpId;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `MirBodyId` in this scope
+    --> crates/polint/src/core/mod.rs:1143:34
+     |
+1143 |                     (MirOpId(1), MirBodyId(1), "op:z"),
+     |                                  ^^^^^^^^^ not found in this scope
+     |
+help: consider importing this tuple struct
+     |
+1049 +         use crate::analysis::ids::MirBodyId;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `PlaceId` in this scope
+    --> crates/polint/src/core/mod.rs:1151:23
+     |
+1151 |                 vec![(PlaceId(0), "place:a"), (PlaceId(1), "place:z")]
+     |                       ^^^^^^^ not found in this scope
+     |
+help: consider importing this tuple struct
+     |
+1049 +         use crate::analysis::ids::PlaceId;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `PlaceId` in this scope
+    --> crates/polint/src/core/mod.rs:1151:48
+     |
+1151 |                 vec![(PlaceId(0), "place:a"), (PlaceId(1), "place:z")]
+     |                                                ^^^^^^^ not found in this scope
+     |
+help: consider importing this tuple struct
+     |
+1049 +         use crate::analysis::ids::PlaceId;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `UnsupportedId` in this scope
+    --> crates/polint/src/core/mod.rs:1159:22
+     |
+1159 |                     (UnsupportedId(0), "unsupported:a"),
+     |                      ^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this tuple struct
+     |
+1049 +         use crate::analysis::ids::UnsupportedId;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `UnsupportedId` in this scope
+    --> crates/polint/src/core/mod.rs:1160:22
+     |
+1160 |                     (UnsupportedId(1), "unsupported:z"),
+     |                      ^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this tuple struct
+     |
+1049 +         use crate::analysis::ids::UnsupportedId;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `MirBodyId` in this scope
+    --> crates/polint/src/core/mod.rs:1166:31
+     |
+1166 |                     .mir_body(MirBodyId(1))
+     |                               ^^^^^^^^^ not found in this scope
+     |
+help: consider importing this tuple struct
+     |
+1049 +         use crate::analysis::ids::MirBodyId;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `MirOpId` in this scope
+    --> crates/polint/src/core/mod.rs:1172:36
+     |
+1172 |                     .mir_operation(MirOpId(0))
+     |                                    ^^^^^^^ not found in this scope
+     |
+help: consider importing this tuple struct
+     |
+1049 +         use crate::analysis::ids::MirOpId;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `PlaceId` in this scope
+    --> crates/polint/src/core/mod.rs:1178:28
+     |
+1178 |                     .place(PlaceId(0))
+     |                            ^^^^^^^ not found in this scope
+     |
+help: consider importing this tuple struct
+     |
+1049 +         use crate::analysis::ids::PlaceId;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `UnsupportedId` in this scope
+    --> crates/polint/src/core/mod.rs:1184:43
+     |
+1184 |                     .unsupported_semantic(UnsupportedId(1))
+     |                                           ^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this tuple struct
+     |
+1049 +         use crate::analysis::ids::UnsupportedId;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `MirBodyId` in this scope
+    --> crates/polint/src/core/mod.rs:1203:21
+     |
+1203 |                     MirBodyId(99),
+     |                     ^^^^^^^^^ not found in this scope
+     |
+help: consider importing this tuple struct
+     |
+1049 +         use crate::analysis::ids::MirBodyId;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `PlaceId` in this scope
+    --> crates/polint/src/core/mod.rs:1204:21
+     |
+1204 |                     PlaceId(0),
+     |                     ^^^^^^^ not found in this scope
+     |
+help: consider importing this tuple struct
+     |
+1049 +         use crate::analysis::ids::PlaceId;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `PlaceId` in this scope
+    --> crates/polint/src/core/mod.rs:1205:21
+     |
+1205 |                     PlaceId(0),
+     |                     ^^^^^^^ not found in this scope
+     |
+help: consider importing this tuple struct
+     |
+1049 +         use crate::analysis::ids::PlaceId;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `MirBodyId` in this scope
+    --> crates/polint/src/core/mod.rs:1228:21
+     |
+1228 |                     MirBodyId(2),
+     |                     ^^^^^^^^^ not found in this scope
+     |
+help: consider importing this tuple struct
+     |
+1220 +         use crate::analysis::ids::MirBodyId;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `PlaceId` in this scope
+    --> crates/polint/src/core/mod.rs:1229:21
+     |
+1229 |                     PlaceId(2),
+     |                     ^^^^^^^ not found in this scope
+     |
+help: consider importing this tuple struct
+     |
+1220 +         use crate::analysis::ids::PlaceId;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `PlaceId` in this scope
+    --> crates/polint/src/core/mod.rs:1230:21
+     |
+1230 |                     PlaceId(2),
+     |                     ^^^^^^^ not found in this scope
+     |
+help: consider importing this tuple struct
+     |
+1220 +         use crate::analysis::ids::PlaceId;
+     |
+
+error[E0433]: cannot find type `Severity` in this scope
+    --> crates/polint/src/core/mod.rs:1825:27
+     |
+1825 |                 severity: Severity::Warn,
+     |                           ^^^^^^^^ use of undeclared type `Severity`
+     |
+help: consider importing this enum
+     |
+  62 +     use crate::diagnostics::Severity;
+     |
+
+error[E0433]: cannot find type `Severity` in this scope
+    --> crates/polint/src/core/mod.rs:1863:27
+     |
+1863 |                 severity: Severity::Warn,
+     |                           ^^^^^^^^ use of undeclared type `Severity`
+     |
+help: consider importing this enum
+     |
+  62 +     use crate::diagnostics::Severity;
+     |
+
+error[E0433]: cannot find type `Diagnostic` in this scope
+    --> crates/polint/src/core/mod.rs:1871:32
+     |
+1871 |                     ctx.report(Diagnostic::warning(
+     |                                ^^^^^^^^^^ use of undeclared type `Diagnostic`
+     |
+help: a tool attribute with a similar name exists
+     |
+1871 -                     ctx.report(Diagnostic::warning(
+1871 +                     ctx.report(diagnostic::warning(
+     |
+help: consider importing this struct
+     |
+  62 +     use crate::diagnostics::Diagnostic;
+     |
+
+error[E0433]: cannot find type `DiagnosticRange` in this scope
+    --> crates/polint/src/core/mod.rs:1874:25
+     |
+1874 |                         DiagnosticRange::point(1, 1),
+     |                         ^^^^^^^^^^^^^^^ use of undeclared type `DiagnosticRange`
+     |
+help: consider importing this struct through its public re-export
+     |
+  62 +     use crate::sdk::prelude::DiagnosticRange;
+     |
+
+error[E0433]: cannot find type `Severity` in this scope
+    --> crates/polint/src/core/mod.rs:1911:52
+     |
+1911 |             TestRule::report("examples/needs-cfg", Severity::Warn, "cfg")
+     |                                                    ^^^^^^^^ use of undeclared type `Severity`
+     |
+help: consider importing this enum
+     |
+  62 +     use crate::diagnostics::Severity;
+     |
+
+error[E0433]: cannot find type `Severity` in this scope
+    --> crates/polint/src/core/mod.rs:1917:50
+     |
+1917 |             TestRule::report("examples/imports", Severity::Warn, "imports")
+     |                                                  ^^^^^^^^ use of undeclared type `Severity`
+     |
+help: consider importing this enum
+     |
+  62 +     use crate::diagnostics::Severity;
+     |
+
+error[E0433]: cannot find type `TsClasses` in this scope
+    --> crates/polint/src/core/mod.rs:2150:23
+     |
+2150 |         let classes = TsClasses::build(&db);
+     |                       ^^^^^^^^^ use of undeclared type `TsClasses`
+     |
+help: consider importing this struct through its public re-export
+     |
+  62 +     use crate::sdk::prelude::TsClasses;
+     |
+
+error[E0433]: cannot find type `Packages` in this scope
+    --> crates/polint/src/core/mod.rs:2258:24
+     |
+2258 |         let packages = Packages::build(&db);
+     |                        ^^^^^^^^ use of undeclared type `Packages`
+     |
+help: a struct with a similar name exists
+     |
+2258 -         let packages = Packages::build(&db);
+2258 +         let packages = PackageId::build(&db);
+     |
+help: consider importing this struct through its public re-export
+     |
+  62 +     use crate::sdk::prelude::Packages;
+     |
+
+error[E0433]: cannot find type `SourceFiles` in this scope
+    --> crates/polint/src/core/mod.rs:2259:21
+     |
+2259 |         let files = SourceFiles::build(&db);
+     |                     ^^^^^^^^^^^ use of undeclared type `SourceFiles`
+     |
+help: a struct with a similar name exists
+     |
+2259 -         let files = SourceFiles::build(&db);
+2259 +         let files = SourceFile::build(&db);
+     |
+help: consider importing this struct through its public re-export
+     |
+  62 +     use crate::sdk::prelude::SourceFiles;
+     |
+
+error[E0433]: cannot find type `Functions` in this scope
+    --> crates/polint/src/core/mod.rs:2260:25
+     |
+2260 |         let functions = Functions::build(&db);
+     |                         ^^^^^^^^^ use of undeclared type `Functions`
+     |
+help: a struct with a similar name exists
+     |
+2260 -         let functions = Functions::build(&db);
+2260 +         let functions = FunctionId::build(&db);
+     |
+help: consider importing this struct through its public re-export
+     |
+  62 +     use crate::sdk::prelude::Functions;
+     |
+
+error[E0433]: cannot find type `Imports` in this scope
+    --> crates/polint/src/core/mod.rs:2261:23
+     |
+2261 |         let imports = Imports::build(&db);
+     |                       ^^^^^^^ use of undeclared type `Imports`
+     |
+help: a struct with a similar name exists
+     |
+2261 -         let imports = Imports::build(&db);
+2261 +         let imports = ImportId::build(&db);
+     |
+help: consider importing this struct through its public re-export
+     |
+  62 +     use crate::sdk::prelude::Imports;
+     |
+
+error[E0433]: cannot find type `BranchObligations` in this scope
+    --> crates/polint/src/core/mod.rs:2262:24
+     |
+2262 |         let branches = BranchObligations::build(&db);
+     |                        ^^^^^^^^^^^^^^^^^ use of undeclared type `BranchObligations`
+     |
+help: a struct with a similar name exists
+     |
+2262 -         let branches = BranchObligations::build(&db);
+2262 +         let branches = BranchObligation::build(&db);
+     |
+help: consider importing this struct through its public re-export
+     |
+  62 +     use crate::sdk::prelude::BranchObligations;
+     |
+
+error[E0433]: cannot find type `GoTests` in this scope
+    --> crates/polint/src/core/mod.rs:2263:21
+     |
+2263 |         let tests = GoTests::build(&db);
+     |                     ^^^^^^^ use of undeclared type `GoTests`
+     |
+help: consider importing this struct through its public re-export
+     |
+  62 +     use crate::sdk::prelude::GoTests;
+     |
+
+error[E0433]: cannot find type `TsComponents` in this scope
+    --> crates/polint/src/core/mod.rs:2264:26
+     |
+2264 |         let components = TsComponents::build(&db);
+     |                          ^^^^^^^^^^^^ use of undeclared type `TsComponents`
+     |
+help: a struct with a similar name exists
+     |
+2264 -         let components = TsComponents::build(&db);
+2264 +         let components = TsComponentFact::build(&db);
+     |
+help: consider importing this struct through its public re-export
+     |
+  62 +     use crate::sdk::prelude::TsComponents;
+     |
+
+error[E0433]: cannot find type `TsClasses` in this scope
+    --> crates/polint/src/core/mod.rs:2265:23
+     |
+2265 |         let classes = TsClasses::build(&db);
+     |                       ^^^^^^^^^ use of undeclared type `TsClasses`
+     |
+help: consider importing this struct through its public re-export
+     |
+  62 +     use crate::sdk::prelude::TsClasses;
+     |
+
+error[E0433]: cannot find type `StringLiterals` in this scope
+    --> crates/polint/src/core/mod.rs:2266:24
+     |
+2266 |         let literals = StringLiterals::build(&db);
+     |                        ^^^^^^^^^^^^^^ use of undeclared type `StringLiterals`
+     |
+help: a struct with a similar name exists
+     |
+2266 -         let literals = StringLiterals::build(&db);
+2266 +         let literals = StringLiteralFact::build(&db);
+     |
+help: consider importing this struct through its public re-export
+     |
+  62 +     use crate::sdk::prelude::StringLiterals;
+     |
+
+error[E0433]: cannot find type `JsxAttributes` in this scope
+    --> crates/polint/src/core/mod.rs:2267:19
+     |
+2267 |         let jsx = JsxAttributes::build(&db);
+     |                   ^^^^^^^^^^^^^ use of undeclared type `JsxAttributes`
+     |
+help: a struct with a similar name exists
+     |
+2267 -         let jsx = JsxAttributes::build(&db);
+2267 +         let jsx = JsxAttributeFact::build(&db);
+     |
+help: consider importing this struct through its public re-export
+     |
+  62 +     use crate::sdk::prelude::JsxAttributes;
+     |
+
+error[E0433]: cannot find type `Imports` in this scope
+    --> crates/polint/src/core/mod.rs:2354:23
+     |
+2354 |         let imports = Imports::build(&db);
+     |                       ^^^^^^^ use of undeclared type `Imports`
+     |
+help: a struct with a similar name exists
+     |
+2354 -         let imports = Imports::build(&db);
+2354 +         let imports = ImportId::build(&db);
+     |
+help: consider importing this struct through its public re-export
+     |
+  62 +     use crate::sdk::prelude::Imports;
+     |
+
+error[E0433]: cannot find type `GoTests` in this scope
+    --> crates/polint/src/core/mod.rs:2418:21
+     |
+2418 |         let tests = GoTests::build(&db);
+     |                     ^^^^^^^ use of undeclared type `GoTests`
+     |
+help: consider importing this struct through its public re-export
+     |
+  62 +     use crate::sdk::prelude::GoTests;
+     |
+
+error[E0425]: cannot find type `DiagnosticRange` in this scope
+    --> crates/polint/src/core/mod.rs:2450:10
+     |
+2450 |     ) -> DiagnosticRange {
+     |          ^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this struct through its public re-export
+     |
+  62 +     use crate::sdk::prelude::DiagnosticRange;
+     |
+
+error[E0422]: cannot find struct, variant or union type `DiagnosticRange` in this scope
+    --> crates/polint/src/core/mod.rs:2451:9
+     |
+2451 |         DiagnosticRange {
+     |         ^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this struct through its public re-export
+     |
+  62 +     use crate::sdk::prelude::DiagnosticRange;
+     |
+
+error[E0433]: cannot find type `Severity` in this scope
+    --> crates/polint/src/core/mod.rs:2468:55
+     |
+2468 |             TestRule::report("examples/capabilities", Severity::Warn, "capabilities")
+     |                                                       ^^^^^^^^ use of undeclared type `Severity`
+     |
+help: consider importing this enum
+     |
+  62 +     use crate::diagnostics::Severity;
+     |
+
+error[E0433]: cannot find type `Severity` in this scope
+    --> crates/polint/src/core/mod.rs:2484:50
+     |
+2484 |             TestRule::report("examples/allowed", Severity::Warn, "allowed").into_rule(),
+     |                                                  ^^^^^^^^ use of undeclared type `Severity`
+     |
+help: consider importing this enum
+     |
+  62 +     use crate::diagnostics::Severity;
+     |
+
+error[E0433]: cannot find type `Severity` in this scope
+    --> crates/polint/src/core/mod.rs:2485:48
+     |
+2485 |             TestRule::report("custom/blocked", Severity::Error, "blocked").into_rule(),
+     |                                                ^^^^^^^^ use of undeclared type `Severity`
+     |
+help: consider importing this enum
+     |
+  62 +     use crate::diagnostics::Severity;
+     |
+
+error[E0433]: cannot find type `Severity` in this scope
+    --> crates/polint/src/core/mod.rs:2491:32
+     |
+2491 |                 severity: Some(Severity::Error),
+     |                                ^^^^^^^^ use of undeclared type `Severity`
+     |
+help: consider importing this enum
+     |
+  62 +     use crate::diagnostics::Severity;
+     |
+
+error[E0433]: cannot find type `Severity` in this scope
+    --> crates/polint/src/core/mod.rs:2501:45
+     |
+2501 |         assert_eq!(diagnostics[0].severity, Severity::Error);
+     |                                             ^^^^^^^^ use of undeclared type `Severity`
+     |
+help: consider importing this enum
+     |
+  62 +     use crate::diagnostics::Severity;
+     |
+
+error[E0433]: cannot find type `Severity` in this scope
+    --> crates/polint/src/core/mod.rs:2508:46
+     |
+2508 |             TestRule::report("examples/one", Severity::Warn, "one").into_rule(),
+     |                                              ^^^^^^^^ use of undeclared type `Severity`
+     |
+help: consider importing this enum
+     |
+  62 +     use crate::diagnostics::Severity;
+     |
+
+error[E0433]: cannot find type `Severity` in this scope
+    --> crates/polint/src/core/mod.rs:2509:46
+     |
+2509 |             TestRule::report("examples/two", Severity::Warn, "two").into_rule(),
+     |                                              ^^^^^^^^ use of undeclared type `Severity`
+     |
+help: consider importing this enum
+     |
+  62 +     use crate::diagnostics::Severity;
+     |
+
+error[E0433]: cannot find type `Severity` in this scope
+    --> crates/polint/src/core/mod.rs:2571:52
+     |
+2571 |             TestRule::report("examples/duplicate", Severity::Warn, "duplicate")
+     |                                                    ^^^^^^^^ use of undeclared type `Severity`
+     |
+help: consider importing this enum
+     |
+  62 +     use crate::diagnostics::Severity;
+     |
+
+error[E0433]: cannot find type `Duration` in this scope
+    --> crates/polint/src/core/mod.rs:2573:29
+     |
+2573 |                 .with_delay(Duration::from_millis(50))
+     |                             ^^^^^^^^ use of undeclared type `Duration`
+     |
+     = note: struct `crate::go::semantic::client::tests::Duration` exists but is inaccessible
+help: consider importing this struct
+     |
+  62 +     use std::time::Duration;
+     |
+
+error[E0433]: cannot find type `Severity` in this scope
+    --> crates/polint/src/core/mod.rs:2575:52
+     |
+2575 |             TestRule::report("examples/duplicate", Severity::Error, "duplicate")
+     |                                                    ^^^^^^^^ use of undeclared type `Severity`
+     |
+help: consider importing this enum
+     |
+  62 +     use crate::diagnostics::Severity;
+     |
+
+error[E0433]: cannot find type `Severity` in this scope
+    --> crates/polint/src/core/mod.rs:2590:54
+     |
+2590 |             TestRule::report("examples/duplicate-a", Severity::Warn, "same-fingerprint")
+     |                                                      ^^^^^^^^ use of undeclared type `Severity`
+     |
+help: consider importing this enum
+     |
+  62 +     use crate::diagnostics::Severity;
+     |
+
+error[E0433]: cannot find type `Severity` in this scope
+    --> crates/polint/src/core/mod.rs:2592:54
+     |
+2592 |             TestRule::report("examples/duplicate-b", Severity::Error, "same-fingerprint")
+     |                                                      ^^^^^^^^ use of undeclared type `Severity`
+     |
+help: consider importing this enum
+     |
+  62 +     use crate::diagnostics::Severity;
+     |
+
+error[E0433]: cannot find type `ExtensionFactPrecision` in this scope
+    --> crates/polint/src/core/mod.rs:3373:28
+     |
+3373 |                 precision: ExtensionFactPrecision::Heuristic,
+     |                            ^^^^^^^^^^^^^^^^^^^^^^ use of undeclared type `ExtensionFactPrecision`
+     |
+help: consider importing this enum
+     |
+  62 +     use crate::analysis::extensions::sinks::ExtensionFactPrecision;
+     |
+
+error[E0433]: cannot find type `ExtensionFactConfidence` in this scope
+    --> crates/polint/src/core/mod.rs:3374:29
+     |
+3374 |                 confidence: ExtensionFactConfidence::Medium,
+     |                             ^^^^^^^^^^^^^^^^^^^^^^^ use of undeclared type `ExtensionFactConfidence`
+     |
+help: consider importing this enum
+     |
+  62 +     use crate::analysis::extensions::sinks::ExtensionFactConfidence;
+     |
+
+error[E0433]: cannot find type `EvidenceStatus` in this scope
+    --> crates/polint/src/core/mod.rs:3421:25
+     |
+3421 |                 status: EvidenceStatus::Present,
+     |                         ^^^^^^^^^^^^^^ use of undeclared type `EvidenceStatus`
+     |
+help: a struct with a similar name exists
+     |
+3421 -                 status: EvidenceStatus::Present,
+3421 +                 status: EvidenceStore::Present,
+     |
+help: consider importing this enum
+     |
+  62 +     use crate::analysis::evidence::facts::EvidenceStatus;
+     |
+
+error[E0433]: cannot find type `EvidenceProvenance` in this scope
+    --> crates/polint/src/core/mod.rs:3423:29
+     |
+3423 |                 provenance: EvidenceProvenance::Native,
+     |                             ^^^^^^^^^^^^^^^^^^ use of undeclared type `EvidenceProvenance`
+     |
+help: a struct with a similar name exists
+     |
+3423 -                 provenance: EvidenceProvenance::Native,
+3423 +                 provenance: EvidenceNodeFact::Native,
+     |
+help: consider importing this enum
+     |
+  62 +     use crate::analysis::evidence::facts::EvidenceProvenance;
+     |
+
+error[E0433]: cannot find type `EvidenceValidation` in this scope
+    --> crates/polint/src/core/mod.rs:3424:29
+     |
+3424 |                 validation: EvidenceValidation::Native,
+     |                             ^^^^^^^^^^^^^^^^^^ use of undeclared type `EvidenceValidation`
+     |
+help: consider importing this enum
+     |
+  62 +     use crate::analysis::evidence::facts::EvidenceValidation;
+     |
+
+error[E0433]: cannot find type `EvidenceConfidence` in this scope
+    --> crates/polint/src/core/mod.rs:3425:29
+     |
+3425 |                 confidence: EvidenceConfidence::High,
+     |                             ^^^^^^^^^^^^^^^^^^ use of undeclared type `EvidenceConfidence`
+     |
+help: consider importing this enum
+     |
+  62 +     use crate::analysis::evidence::facts::EvidenceConfidence;
+     |
+
+warning: unused import: `super::labels::*`
+  --> crates/polint/src/core/mod.rs:62:9
+   |
+62 |     use super::labels::*;
+   |         ^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::access_paths::facts::AccessPathFact`
+  --> crates/polint/src/core/mod.rs:66:9
+   |
+66 |     use crate::analysis::access_paths::facts::AccessPathFact;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::access_paths::store::AccessPathStore`
+  --> crates/polint/src/core/mod.rs:67:9
+   |
+67 |     use crate::analysis::access_paths::store::AccessPathStore;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `AcceptedModelFact` and `RejectedModelFact`
+  --> crates/polint/src/core/mod.rs:68:46
+   |
+68 |     use crate::analysis::adaptation::facts::{AcceptedModelFact, RejectedModelFact};
+   |                                              ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::aliases::facts::AliasAnswerFact`
+  --> crates/polint/src/core/mod.rs:69:9
+   |
+69 |     use crate::analysis::aliases::facts::AliasAnswerFact;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::aliases::store::AliasStore`
+  --> crates/polint/src/core/mod.rs:70:9
+   |
+70 |     use crate::analysis::aliases::store::AliasStore;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `CallSiteFact`, `CallTargetFact`, `CallTargetStatus`, `UnresolvedCallFact`, and `UnresolvedCallReason`
+  --> crates/polint/src/core/mod.rs:72:9
+   |
+72 |         CallSiteFact, CallTargetFact, CallTargetStatus, UnresolvedCallFact, UnresolvedCallReason,
+   |         ^^^^^^^^^^^^  ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `CallOutput` and `CallStore`
+  --> crates/polint/src/core/mod.rs:74:41
+   |
+74 |     use crate::analysis::calls::store::{CallOutput, CallStore};
+   |                                         ^^^^^^^^^^  ^^^^^^^^^
+
+warning: unused imports: `BasicBlockFact`, `CfgEdgeFact`, `CfgFunctionFact`, `CfgNodeFact`, `ControlDependenceFact`, `DominatorFact`, `PostDominatorFact`, `ReachabilityFact`, and `UnsupportedControlFlowFact`
+  --> crates/polint/src/core/mod.rs:76:9
+   |
+76 |         BasicBlockFact, CfgEdgeFact, CfgFunctionFact, CfgNodeFact, ControlDependenceFact,
+   |         ^^^^^^^^^^^^^^  ^^^^^^^^^^^  ^^^^^^^^^^^^^^^  ^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^
+77 |         DominatorFact, PostDominatorFact, ReachabilityFact, UnsupportedControlFlowFact,
+   |         ^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::cfg::store::CfgOutput`
+  --> crates/polint/src/core/mod.rs:79:9
+   |
+79 |     use crate::analysis::cfg::store::CfgOutput;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `DataFlowBudgetFact` and `DataFlowEdgeFact`
+  --> crates/polint/src/core/mod.rs:81:9
+   |
+81 |         DataFlowBudgetFact, DataFlowConfidence, DataFlowEdgeFact, DataFlowModelFact,
+   |         ^^^^^^^^^^^^^^^^^^                      ^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::data_flow::provider::DATA_FLOW_PROVIDER_ID`
+  --> crates/polint/src/core/mod.rs:84:9
+   |
+84 |     use crate::analysis::data_flow::provider::DATA_FLOW_PROVIDER_ID;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `DataFlowStore`
+  --> crates/polint/src/core/mod.rs:85:61
+   |
+85 |     use crate::analysis::data_flow::store::{DataFlowOutput, DataFlowStore};
+   |                                                             ^^^^^^^^^^^^^
+
+warning: unused imports: `DomainEventFact` and `DomainObservationFact`
+  --> crates/polint/src/core/mod.rs:86:43
+   |
+86 |     use crate::analysis::domains::facts::{DomainEventFact, DomainObservationFact};
+   |                                           ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `DomainOutput` and `DomainStore`
+  --> crates/polint/src/core/mod.rs:87:43
+   |
+87 |     use crate::analysis::domains::store::{DomainOutput, DomainStore};
+   |                                           ^^^^^^^^^^^^  ^^^^^^^^^^^
+
+warning: unused imports: `EntrypointFact`, `EntrypointStatus`, `FrameworkDispatchEdgeFact`, `TrustBoundaryFact`, and `UnresolvedFrameworkFact`
+  --> crates/polint/src/core/mod.rs:89:9
+   |
+89 |         EntrypointFact, EntrypointStatus, FrameworkDispatchEdgeFact, TrustBoundaryFact,
+   |         ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^
+90 |         UnresolvedFrameworkFact,
+   |         ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `EntrypointOutput` and `EntrypointStore`
+  --> crates/polint/src/core/mod.rs:92:47
+   |
+92 |     use crate::analysis::entrypoints::store::{EntrypointOutput, EntrypointStore};
+   |                                               ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::error::AnalysisError`
+  --> crates/polint/src/core/mod.rs:93:9
+   |
+93 |     use crate::analysis::error::AnalysisError;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `EvidenceBundleFact`, `EvidenceEdgeFact`, `EvidenceOmittedRegionFact`, `EvidencePathFact`, `EvidenceReplayKeyFact`, `EvidenceSliceFact`, and `EvidenceUnknownFact`
+  --> crates/polint/src/core/mod.rs:95:9
+   |
+95 |         EvidenceBundleFact, EvidenceEdgeFact, EvidenceNodeFact, EvidenceOmittedRegionFact,
+   |         ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^                    ^^^^^^^^^^^^^^^^^^^^^^^^^
+96 |         EvidencePathFact, EvidencePrecision, EvidenceReplayKeyFact, EvidenceSliceFact,
+   |         ^^^^^^^^^^^^^^^^                     ^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^
+97 |         EvidenceUnknownFact,
+   |         ^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::evidence::provider::EVIDENCE_PROVIDER_ID`
+  --> crates/polint/src/core/mod.rs:99:9
+   |
+99 |     use crate::analysis::evidence::provider::EVIDENCE_PROVIDER_ID;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `EvidenceOutput` and `EvidenceStore`
+   --> crates/polint/src/core/mod.rs:100:44
+    |
+100 |     use crate::analysis::evidence::store::{EvidenceOutput, EvidenceStore};
+    |                                            ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::identity::facts::IdentityRecord`
+   --> crates/polint/src/core/mod.rs:104:9
+    |
+104 |     use crate::analysis::identity::facts::IdentityRecord;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::identity::provider::valid_call_site_ids`
+   --> crates/polint/src/core/mod.rs:105:9
+    |
+105 |     use crate::analysis::identity::provider::valid_call_site_ids;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `IdentityProviderOutput` and `IdentityStore`
+   --> crates/polint/src/core/mod.rs:106:44
+    |
+106 |     use crate::analysis::identity::store::{IdentityProviderOutput, IdentityStore};
+    |                                            ^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^
+
+warning: unused imports: `PointsToConstraintFact` and `PointsToSetFact`
+   --> crates/polint/src/core/mod.rs:111:45
+    |
+111 |     use crate::analysis::points_to::facts::{PointsToConstraintFact, PointsToSetFact};
+    |                                             ^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::points_to::store::PointsToStore`
+   --> crates/polint/src/core/mod.rs:112:9
+    |
+112 |     use crate::analysis::points_to::store::PointsToStore;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `CallReachabilityFact` and `ReachabilityRootFact`
+   --> crates/polint/src/core/mod.rs:113:48
+    |
+113 |     use crate::analysis::reachability::facts::{CallReachabilityFact, ReachabilityRootFact};
+    |                                                ^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `ReachabilityProviderOutput` and `ReachabilityStore`
+   --> crates/polint/src/core/mod.rs:114:48
+    |
+114 |     use crate::analysis::reachability::store::{ReachabilityProviderOutput, ReachabilityStore};
+    |                                                ^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::refined_calls::facts::RefinedCallEdgeFact`
+   --> crates/polint/src/core/mod.rs:115:9
+    |
+115 |     use crate::analysis::refined_calls::facts::RefinedCallEdgeFact;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::refined_calls::provider::REFINED_CALLS_PROVIDER_ID`
+   --> crates/polint/src/core/mod.rs:116:9
+    |
+116 |     use crate::analysis::refined_calls::provider::REFINED_CALLS_PROVIDER_ID;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `RefinedCallOutput` and `RefinedCallStore`
+   --> crates/polint/src/core/mod.rs:117:49
+    |
+117 |     use crate::analysis::refined_calls::store::{RefinedCallOutput, RefinedCallStore};
+    |                                                 ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::semantic_graph::constraints::ConstraintFact`
+   --> crates/polint/src/core/mod.rs:118:9
+    |
+118 |     use crate::analysis::semantic_graph::constraints::ConstraintFact;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `SemanticEdgeFact` and `SemanticNodeFact`
+   --> crates/polint/src/core/mod.rs:119:50
+    |
+119 |     use crate::analysis::semantic_graph::facts::{SemanticEdgeFact, SemanticNodeFact};
+    |                                                  ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::semantic_graph::store::SemanticGraphOutput`
+   --> crates/polint/src/core/mod.rs:120:9
+    |
+120 |     use crate::analysis::semantic_graph::store::SemanticGraphOutput;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::solver::facts::DerivedEdgeFact`
+   --> crates/polint/src/core/mod.rs:122:9
+    |
+122 |     use crate::analysis::solver::facts::DerivedEdgeFact;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `SolverStore`
+   --> crates/polint/src/core/mod.rs:123:56
+    |
+123 |     use crate::analysis::solver::store::{SolverOutput, SolverStore};
+    |                                                        ^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::store::SemanticStore`
+   --> crates/polint/src/core/mod.rs:124:9
+    |
+124 |     use crate::analysis::store::SemanticStore;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `SummaryOutput` and `SummaryStore`
+   --> crates/polint/src/core/mod.rs:126:45
+    |
+126 |     use crate::analysis::summaries::store::{SummaryOutput, SummaryStore};
+    |                                             ^^^^^^^^^^^^^  ^^^^^^^^^^^^
+
+warning: unused imports: `NarrowedTypeFact` and `TypeFact`
+   --> crates/polint/src/core/mod.rs:127:41
+    |
+127 |     use crate::analysis::types::facts::{NarrowedTypeFact, TypeFact};
+    |                                         ^^^^^^^^^^^^^^^^  ^^^^^^^^
+
+warning: unused import: `crate::analysis::types::provider::TYPE_VALUE_ALIAS_PROVIDER_ID`
+   --> crates/polint/src/core/mod.rs:128:9
+    |
+128 |     use crate::analysis::types::provider::TYPE_VALUE_ALIAS_PROVIDER_ID;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `TypeStore`
+   --> crates/polint/src/core/mod.rs:129:41
+    |
+129 |     use crate::analysis::types::store::{TypeStore, TypeValueAliasOutput};
+    |                                         ^^^^^^^^^
+
+warning: unused import: `AllocationTokenFact`
+   --> crates/polint/src/core/mod.rs:130:42
+    |
+130 |     use crate::analysis::values::facts::{AllocationTokenFact, ValueFact};
+    |                                          ^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::analysis::values::store::ValueStore`
+   --> crates/polint/src/core/mod.rs:131:9
+    |
+131 |     use crate::analysis::values::store::ValueStore;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `FactMetaStore`, `FactMeta`, `resolution_metadata`, `resolution_status_metadata`, `stable_key_from_parts`, and `symbol_metadata`
+   --> crates/polint/src/core/mod.rs:133:37
+    |
+133 |         FactConfidence, FactFamily, FactMeta, FactMetaStore, FactPrecision, FactRef,
+    |                                     ^^^^^^^^  ^^^^^^^^^^^^^
+134 |         MissingFactMeta, ValidationStatus, resolution_metadata, resolution_status_metadata,
+    |                                            ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+135 |         stable_key_from_parts, symbol_metadata,
+    |         ^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::diagnostics::fingerprint`
+   --> crates/polint/src/core/mod.rs:137:9
+    |
+137 |     use crate::diagnostics::fingerprint;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `GoSemanticAddressTakenFact`, `GoSemanticCallsiteFact`, `GoSemanticDynamicDispatchFact`, `GoSemanticFunctionFact`, `GoSemanticInstantiatedTypeFact`, `GoSemanticMethodSetFact`, `GoSemanticPackageErrorFact`, `GoSemanticPackageFact`, and `GoSemanticRtaEdgeFact`
+   --> crates/polint/src/core/mod.rs:139:9
+    |
+139 |         GoSemanticAddressTakenFact, GoSemanticCallsiteFact, GoSemanticDynamicDispatchFact,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+140 |         GoSemanticFunctionFact, GoSemanticInstantiatedTypeFact, GoSemanticMethodSetFact,
+    |         ^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^
+141 |         GoSemanticPackageErrorFact, GoSemanticPackageFact, GoSemanticRtaEdgeFact,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `GoSemanticFactsOutput`, `GoSemanticStoreReport`, and `GoSemanticStore`
+   --> crates/polint/src/core/mod.rs:144:9
+    |
+144 |         GoSemanticFactsOutput, GoSemanticStore, GoSemanticStoreReport,
+    |         ^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `DependencyRequirementFact`, `ImportToPackageFact`, `RepoTopologyOverlayFact`, `ResolvedDependencyEdgeFact`, `SourceSetFact`, `TopologyOutput`, `TopologyPackageFact`, `TopologyPrecision`, and `WorkspaceRootFact`
+   --> crates/polint/src/core/mod.rs:147:9
+    |
+147 |         DependencyRequirementFact, ImportToPackageFact, RepoTopologyOverlayFact,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^
+148 |         ResolvedDependencyEdgeFact, SourceSetFact, TopologyOutput, TopologyPackageFact,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^  ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^
+149 |         TopologyPrecision, WorkspaceRootFact,
+    |         ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `AliasId`, `ExportId`, `GeneratedSymbolId`, `ResolutionId`, `SemanticImportId`, and `StableExportId`
+   --> crates/polint/src/core/mod.rs:152:20
+    |
+152 |         AliasFact, AliasId, ExportFact, ExportId, GeneratedSymbolFact, GeneratedSymbolId,
+    |                    ^^^^^^^              ^^^^^^^^                       ^^^^^^^^^^^^^^^^^
+153 |         ResolutionFact, ResolutionId, ScopeFact, ScopeId, SemanticImportFact, SemanticImportId,
+    |                         ^^^^^^^^^^^^                                          ^^^^^^^^^^^^^^^^
+154 |         SemanticStatus, StableExportId, StableExportIdentity,
+    |                         ^^^^^^^^^^^^^^
+
+warning: unused imports: `TsObjectAllocationFact`, `TsPropertyReadFact`, `TsPropertyWriteFact`, `TsPrototypeLinkFact`, and `TsReceiverBindingFact`
+   --> crates/polint/src/core/mod.rs:157:9
+    |
+157 |         TsObjectAllocationFact, TsPropertyReadFact, TsPropertyWriteFact, TsPrototypeLinkFact,
+    |         ^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^
+158 |         TsReceiverBindingFact,
+    |         ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `TsObjectModelOutput` and `TsObjectModelStore`
+   --> crates/polint/src/core/mod.rs:160:42
+    |
+160 |     use crate::ts::object_model::store::{TsObjectModelOutput, TsObjectModelStore};
+    |                                          ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Deserialize` and `Serialize`
+   --> crates/polint/src/core/mod.rs:161:17
+    |
+161 |     use serde::{Deserialize, Serialize};
+    |                 ^^^^^^^^^^^  ^^^^^^^^^
+
+warning: `polint` (lib) generated 2 warnings (run `cargo fix --lib -p polint` to apply 2 suggestions)
+Some errors have detailed explanations: E0422, E0425, E0433.
+For more information about an error, try `rustc --explain E0422`.
+warning: `polint` (lib test) generated 54 warnings (2 duplicates)
+error: could not compile `polint` (lib test) due to 107 previous errors; 54 warnings emitted

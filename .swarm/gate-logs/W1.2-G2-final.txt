@@ -1,0 +1,17 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Checking polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.2/crates/polint)
+error: method `with_structured_evidence_v1` is never used
+   --> crates/polint/src/diagnostics/mod.rs:942:19
+    |
+853 | impl Diagnostic {
+    | --------------- method in this implementation
+...
+942 |     pub(crate) fn with_structured_evidence_v1(mut self, value: StructuredEvidenceV1) -> Self {
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D dead-code` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: could not compile `polint` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

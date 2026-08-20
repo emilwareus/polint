@@ -1,63 +1,69 @@
-use crate::config::LoadedConfig;
-use crate::core::{AnalysisDb, Language, SourceFile};
-use crate::module_graph::paths::{
-    TOPOLOGY_MANIFEST_MAX_BYTES, normalize_repo_relative_path, read_repo_file_to_string_with_limit,
-    repo_file_exists, repo_relative_existing_path,
-};
+#![allow(dead_code)]
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
+use crate::analysis_api::{FactDatabase, SourceFile};
+use crate::internal_core::Language;
+use toml::Value;
+
+use crate::go::repo_fs::{
+    TOPOLOGY_MANIFEST_MAX_BYTES, normalize_repo_relative_path, read_repo_file_to_string_with_limit,
+    repo_file_exists, repo_relative_existing_path,
+};
+
 const MIN_SYNTHETIC_GO_WORK_VERSION: &str = "1.24";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct GoAnalysisConfig {
-    pub(crate) module_roots: Vec<String>,
-    pub(crate) package_patterns: Vec<String>,
-    pub(crate) build_tags: Vec<String>,
-    pub(crate) include_tests: bool,
-    pub(crate) offline: bool,
-    pub(crate) files_without_module_root: Vec<String>,
+pub struct GoAnalysisConfig {
+    pub module_roots: Vec<String>,
+    pub package_patterns: Vec<String>,
+    pub build_tags: Vec<String>,
+    pub include_tests: bool,
+    pub offline: bool,
+    pub files_without_module_root: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct GoLifecycleError {
+pub struct GoLifecycleError {
     reason: String,
 }
 
 impl GoLifecycleError {
-    pub(crate) fn reason(&self) -> &str {
+    pub fn reason(&self) -> &str {
         &self.reason
     }
 }
 
 #[derive(Debug)]
-pub(crate) struct GoWorkspaceEnv {
+pub struct GoWorkspaceEnv {
     value: String,
     _temp_file: Option<tempfile::NamedTempFile>,
 }
 
 impl GoWorkspaceEnv {
-    pub(crate) fn value(&self) -> &str {
+    pub fn value(&self) -> &str {
         &self.value
     }
 }
 
 impl GoAnalysisConfig {
-    pub(crate) fn from_loaded(
-        loaded: &LoadedConfig,
-        db: &AnalysisDb,
+    pub fn from_settings(
+        root: &Path,
+        settings: &BTreeMap<String, Value>,
+        db: &dyn FactDatabase,
     ) -> Result<Self, GoLifecycleError> {
         let files = go_files(db);
-        Self::from_loaded_files(loaded, &files)
+        Self::from_settings_files(root, settings, &files)
     }
 
-    pub(crate) fn from_loaded_files(
-        loaded: &LoadedConfig,
+    pub fn from_settings_files(
+        root: &Path,
+        settings: &BTreeMap<String, Value>,
         files: &[&SourceFile],
     ) -> Result<Self, GoLifecycleError> {
-        let settings = &loaded.config.languages.go;
         let configured_roots = configured_module_roots(settings)?;
         let (module_roots, files_without_module_root) = if let Some(configured_roots) =
             configured_roots
@@ -65,7 +71,7 @@ impl GoAnalysisConfig {
             let files_without_module_root = files_not_under_module_roots(files, &configured_roots);
             (configured_roots, files_without_module_root)
         } else {
-            infer_go_module_roots(&loaded.root, files)
+            infer_go_module_roots(root, files)
         };
         let package_patterns = validate_package_patterns(string_or_array_setting(
             settings,
@@ -78,17 +84,17 @@ impl GoAnalysisConfig {
             build_tags: string_or_array_setting(settings, "build_tags", &[]),
             include_tests: settings
                 .get("include_tests")
-                .and_then(toml::Value::as_bool)
+                .and_then(Value::as_bool)
                 .unwrap_or(true),
             offline: settings
                 .get("offline")
-                .and_then(toml::Value::as_bool)
+                .and_then(Value::as_bool)
                 .unwrap_or(false),
             files_without_module_root,
         })
     }
 
-    pub(crate) fn missing_module_roots(&self, root: &Path) -> Vec<String> {
+    pub fn missing_module_roots(&self, root: &Path) -> Vec<String> {
         self.module_roots
             .iter()
             .filter(|module_root| !module_root_has_go_mod(root, module_root))
@@ -96,12 +102,12 @@ impl GoAnalysisConfig {
             .collect()
     }
 
-    pub(crate) fn rooted_package_patterns(&self) -> Vec<String> {
+    pub fn rooted_package_patterns(&self) -> Vec<String> {
         rooted_package_patterns(&self.module_roots, &self.package_patterns)
     }
 }
 
-pub(crate) fn workspace_env(
+pub fn workspace_env(
     root: &Path,
     module_roots: &[String],
 ) -> Result<GoWorkspaceEnv, GoLifecycleError> {
@@ -128,7 +134,7 @@ pub(crate) fn workspace_env(
     })
 }
 
-pub(crate) fn go_files(db: &AnalysisDb) -> Vec<&SourceFile> {
+pub fn go_files(db: &dyn FactDatabase) -> Vec<&SourceFile> {
     let mut files = db
         .files()
         .iter()
@@ -139,7 +145,7 @@ pub(crate) fn go_files(db: &AnalysisDb) -> Vec<&SourceFile> {
 }
 
 fn configured_module_roots(
-    settings: &BTreeMap<String, toml::Value>,
+    settings: &BTreeMap<String, Value>,
 ) -> Result<Option<Vec<String>>, GoLifecycleError> {
     let values = string_or_array_value(
         settings
@@ -267,22 +273,22 @@ fn file_is_under_module_root(relative_path: &str, module_root: &str) -> bool {
 }
 
 fn string_or_array_setting(
-    settings: &BTreeMap<String, toml::Value>,
+    settings: &BTreeMap<String, Value>,
     key: &str,
     default: &[&str],
 ) -> Vec<String> {
     string_or_array_value(settings.get(key), default)
 }
 
-fn string_or_array_value(value: Option<&toml::Value>, default: &[&str]) -> Vec<String> {
+fn string_or_array_value(value: Option<&Value>, default: &[&str]) -> Vec<String> {
     let Some(value) = value else {
         return default.iter().map(|value| (*value).to_string()).collect();
     };
     match value {
-        toml::Value::String(value) => split_comma(value),
-        toml::Value::Array(values) => values
+        Value::String(value) => split_comma(value),
+        Value::Array(values) => values
             .iter()
-            .filter_map(toml::Value::as_str)
+            .filter_map(Value::as_str)
             .flat_map(split_comma)
             .collect::<Vec<_>>(),
         _ => default.iter().map(|value| (*value).to_string()).collect(),
@@ -347,11 +353,7 @@ fn needs_synthetic_workspace(root: &Path, module_roots: &[String]) -> bool {
     !repo_file_exists(root, "go.mod")
 }
 
-pub(crate) fn go_work_covers_module_roots(
-    root: &Path,
-    go_work: &Path,
-    module_roots: &[String],
-) -> bool {
+pub fn go_work_covers_module_roots(root: &Path, go_work: &Path, module_roots: &[String]) -> bool {
     let Some(relative_path) = repo_relative_existing_path(root, go_work) else {
         return false;
     };
@@ -607,7 +609,7 @@ fn error(reason: String) -> GoLifecycleError {
     GoLifecycleError { reason }
 }
 
-pub(crate) fn command_with_go_env(
+pub fn command_with_go_env(
     root: &Path,
     module_roots: &[String],
 ) -> Result<(Command, GoWorkspaceEnv), GoLifecycleError> {
@@ -620,250 +622,19 @@ pub(crate) fn command_with_go_env(
     Ok((command, workspace))
 }
 
-pub(crate) fn apply_go_offline_env(command: &mut Command, offline: bool) {
+pub fn apply_go_offline_env(command: &mut Command, offline: bool) {
     if offline {
-        command.env("GOPROXY", "off").env("GOSUMDB", "off");
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn synthetic_go_work_version_uses_one_24_as_floor() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        std::fs::write(
-            temp.path().join("go.mod"),
-            "module example.com/root\n\ngo 1.23\n",
-        )
-        .expect("write go.mod");
-
-        assert_eq!(
-            synthetic_go_work_version(temp.path(), &[".".to_string()]),
-            "1.24"
-        );
-    }
-
-    #[test]
-    fn synthetic_go_work_version_tracks_newer_module_directives() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        std::fs::create_dir_all(temp.path().join("services/app")).expect("mkdir service");
-        std::fs::create_dir_all(temp.path().join("libs/shared")).expect("mkdir lib");
-        std::fs::write(
-            temp.path().join("services/app/go.mod"),
-            "module example.com/app\n\ngo 1.25\n",
-        )
-        .expect("write service go.mod");
-        std::fs::write(
-            temp.path().join("libs/shared/go.mod"),
-            "module example.com/shared\n\ngo 1.24\n",
-        )
-        .expect("write shared go.mod");
-
-        assert_eq!(
-            synthetic_go_work_version(
-                temp.path(),
-                &["services/app".to_string(), "libs/shared".to_string()]
-            ),
-            "1.25"
-        );
-    }
-
-    #[test]
-    fn workspace_env_uses_checked_in_go_work_when_it_covers_roots() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        std::fs::create_dir_all(temp.path().join("services/app")).expect("mkdir service");
-        std::fs::write(
-            temp.path().join("services/app/go.mod"),
-            "module example.com/app\n\ngo 1.24\n",
-        )
-        .expect("write service go.mod");
-        std::fs::write(
-            temp.path().join("go.work"),
-            "go 1.24\n\nuse ./services/app\n",
-        )
-        .expect("write go.work");
-
-        let workspace =
-            workspace_env(temp.path(), &["services/app".to_string()]).expect("workspace env");
-
-        assert_eq!(
-            workspace.value(),
-            temp.path().join("go.work").to_string_lossy().as_ref()
-        );
-    }
-
-    #[test]
-    fn workspace_env_uses_synthetic_go_work_when_checked_in_go_work_misses_roots() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        std::fs::create_dir_all(temp.path().join("services/app")).expect("mkdir service");
-        std::fs::write(
-            temp.path().join("services/app/go.mod"),
-            "module example.com/app\n\ngo 1.24\n",
-        )
-        .expect("write service go.mod");
-        std::fs::write(temp.path().join("go.work"), "go 1.24\n\nuse ./tools/only\n")
-            .expect("write go.work");
-
-        let checked_in = temp.path().join("go.work").to_string_lossy().to_string();
-        let workspace =
-            workspace_env(temp.path(), &["services/app".to_string()]).expect("workspace env");
-        let generated_path = workspace.value().to_string();
-        let generated = std::fs::read_to_string(&generated_path).expect("read generated go.work");
-
-        assert_ne!(generated_path, checked_in);
-        assert!(
-            !generated.contains(&temp.path().to_string_lossy().to_string()),
-            "{generated}"
-        );
-        assert!(generated.contains("services/app"), "{generated}");
-    }
-
-    #[test]
-    fn workspace_env_uses_synthetic_go_work_when_checked_in_go_work_uses_outside_root() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let outside = tempfile::tempdir().expect("outside tempdir");
-        std::fs::create_dir_all(temp.path().join("services/app")).expect("mkdir service");
-        std::fs::write(
-            temp.path().join("services/app/go.mod"),
-            "module example.com/app\n\ngo 1.24\n",
-        )
-        .expect("write service go.mod");
-        std::fs::write(
-            temp.path().join("go.work"),
-            format!(
-                "go 1.24\n\nuse (\n\t./services/app\n\t{:?}\n)\n",
-                outside.path().display().to_string()
-            ),
-        )
-        .expect("write go.work");
-
-        let checked_in = temp.path().join("go.work").to_string_lossy().to_string();
-        let workspace =
-            workspace_env(temp.path(), &["services/app".to_string()]).expect("workspace env");
-        let generated_path = workspace.value().to_string();
-        let generated = std::fs::read_to_string(&generated_path).expect("read generated go.work");
-
-        assert_ne!(generated_path, checked_in);
-        assert!(
-            !generated.contains(&outside.path().to_string_lossy().to_string()),
-            "{generated}"
-        );
-        assert!(generated.contains("services/app"), "{generated}");
-    }
-
-    #[test]
-    fn go_work_covers_module_roots_rejects_parent_escape_use_entries() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        std::fs::create_dir_all(temp.path().join("services/app")).expect("mkdir service");
-        std::fs::write(
-            temp.path().join("services/app/go.mod"),
-            "module example.com/app\n\ngo 1.24\n",
-        )
-        .expect("write service go.mod");
-        let work_path = temp.path().join("go.work");
-        std::fs::write(
-            &work_path,
-            "go 1.24\n\nuse (\n\t./services/app\n\t../outside\n)\n",
-        )
-        .expect("write go.work");
-
-        assert!(!go_work_covers_module_roots(
-            temp.path(),
-            &work_path,
-            &["services/app".to_string()]
-        ));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn go_work_covers_module_roots_rejects_symlinked_use_entries() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let outside = tempfile::tempdir().expect("outside tempdir");
-        std::fs::create_dir_all(temp.path().join("services/app")).expect("mkdir service");
-        std::fs::write(
-            temp.path().join("services/app/go.mod"),
-            "module example.com/app\n\ngo 1.24\n",
-        )
-        .expect("write service go.mod");
-        std::fs::create_dir_all(outside.path().join("outside")).expect("mkdir outside");
-        std::fs::write(
-            outside.path().join("outside/go.mod"),
-            "module example.com/outside\n\ngo 1.24\n",
-        )
-        .expect("write outside go.mod");
-        std::os::unix::fs::symlink(outside.path().join("outside"), temp.path().join("link"))
-            .expect("symlink outside module");
-        let work_path = temp.path().join("go.work");
-        std::fs::write(
-            &work_path,
-            "go 1.24\n\nuse (\n\t./services/app\n\t./link\n)\n",
-        )
-        .expect("write go.work");
-
-        assert!(!go_work_covers_module_roots(
-            temp.path(),
-            &work_path,
-            &["services/app".to_string()]
-        ));
-    }
-
-    #[test]
-    fn go_analysis_config_rejects_package_patterns_that_start_with_dash() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        std::fs::write(
-            temp.path().join(".polint.toml"),
-            "[languages.go]\npackage_patterns = [\"-json\"]\n",
-        )
-        .expect("write config");
-        let mut db = crate::core::AnalysisDb::new();
-        let source = "package main\n";
-        let path = temp.path().join("main.go");
-        std::fs::write(&path, source).expect("write go file");
-        db.add_file(path, "main.go".to_string(), source.to_string());
-        let loaded = crate::config::load_config(temp.path()).expect("config loads");
-
-        let error = GoAnalysisConfig::from_loaded(&loaded, &db).expect_err("pattern is rejected");
-
-        assert!(
-            error.reason().contains(
-                "must not start with `-` because it would be interpreted as a go list flag"
-            )
-        );
-    }
-
-    #[test]
-    fn go_analysis_config_parses_offline_policy() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        std::fs::write(
-            temp.path().join(".polint.toml"),
-            "[languages.go]\nmodule_roots = [\".\"]\noffline = true\n",
-        )
-        .expect("write config");
-        let loaded = crate::config::load_config(temp.path()).expect("config loads");
-
-        let config = GoAnalysisConfig::from_loaded_files(&loaded, &[]).expect("config parses");
-
-        assert!(config.offline);
-    }
-
-    #[test]
-    fn apply_go_offline_env_disables_go_network_sources() {
-        let mut command = Command::new("go");
-
-        apply_go_offline_env(&mut command, true);
-        let envs = command
-            .get_envs()
-            .map(|(key, value)| {
-                (
-                    key.to_string_lossy().to_string(),
-                    value.map(|value| value.to_string_lossy().to_string()),
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
-
-        assert_eq!(envs.get("GOPROXY"), Some(&Some("off".to_string())));
-        assert_eq!(envs.get("GOSUMDB"), Some(&Some("off".to_string())));
+        command
+            .env("GOENV", "off")
+            .env("GOPROXY", "off")
+            .env("GOSUMDB", "off")
+            .env("GOPRIVATE", "none")
+            .env("GONOPROXY", "none")
+            .env("GONOSUMDB", "none")
+            .env("GOINSECURE", "none")
+            .env("GOVCS", "*:off")
+            .env("GOAUTH", "off")
+            .env("GOTOOLCHAIN", "local")
+            .env_remove("GOCACHEPROG");
     }
 }

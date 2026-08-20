@@ -1,0 +1,34 @@
+polint: 6 diagnostics across 3 rules. Full JSON: .polint/output/latest.json
+
+By rule
+  warn local/code-quality-score: 2
+  warn local/large-file: 2
+  warn local/large-function: 2
+
+Examples, max 10
+  warn[local/code-quality-score]: Function `Panel` is both long and branch-heavy.
+    --> Panel.tsx:1:8-12:2
+    evidence lines: 12
+    evidence complexity: 4
+    help: Split the policy decision into smaller named branches.
+    fingerprint: b24655a2bedd2aad
+
+  warn[local/large-file]: File has 12 lines, above the configured maximum of 8.
+    --> Panel.tsx:1:1-1:1
+    evidence lines: 12
+    evidence functions: 1
+    fingerprint: be6de0f85b7d76fa
+
+  warn[local/large-function]: Function `Panel` has 12 lines, above the configured maximum of 6.
+    --> Panel.tsx:1:8-12:2
+    evidence function: Panel
+    evidence lines: 12
+    fingerprint: db330c35487364b2
+
+
+JSON format: versioned object with `summary`, `examples`, and `diagnostics`.
+Do not read the whole file into an AI prompt. Query it with bounded commands:
+  jq '.summary.by_rule' .polint/output/latest.json
+  jq '.summary.rules[] | select(.diagnostics_emitted == 0)' .polint/output/latest.json
+  jq '[.diagnostics[] | select(.rule_id=="local/code-quality-score")][0:20]' .polint/output/latest.json
+  jq '.diagnostics[] | select(.file=="Panel.tsx") | {rule_id, range, message}' .polint/output/latest.json | head -c 12000

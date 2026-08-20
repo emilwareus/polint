@@ -1,13 +1,13 @@
-pub(crate) mod cache_key;
-#[cfg(test)]
-pub(crate) mod debug;
-pub(crate) mod dispatch;
-pub(crate) mod extract;
-pub(crate) mod facts;
-pub(crate) mod provider;
-pub(crate) mod recognizers_go;
-pub(crate) mod recognizers_ts;
-pub(crate) mod store;
-pub(crate) mod trust_boundaries;
-pub(crate) mod unresolved;
-pub(crate) mod validate;
+#![allow(unused_imports)]
+pub(crate) use crate::analysis_neutral::entrypoints::cache_key;
+pub(crate) use crate::analysis_neutral::entrypoints::debug;
+pub(crate) use crate::analysis_neutral::entrypoints::dispatch;
+pub(crate) use crate::analysis_neutral::entrypoints::extract;
+pub(crate) use crate::analysis_neutral::entrypoints::facts;
+pub(crate) use crate::analysis_neutral::entrypoints::provider;
+pub(crate) use crate::analysis_neutral::entrypoints::recognizers_go;
+pub(crate) use crate::analysis_neutral::entrypoints::recognizers_ts;
+pub(crate) use crate::analysis_neutral::entrypoints::store;
+pub(crate) use crate::analysis_neutral::entrypoints::trust_boundaries;
+pub(crate) use crate::analysis_neutral::entrypoints::unresolved;
+pub(crate) use crate::analysis_neutral::entrypoints::validate;

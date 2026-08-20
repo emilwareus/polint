@@ -1,9 +1,9 @@
-pub(crate) mod cache_key;
-#[cfg(test)]
-pub(crate) mod debug;
-pub(crate) mod facts;
-pub(crate) mod go;
-pub(crate) mod provider;
-pub(crate) mod store;
-pub(crate) mod ts_js;
-pub(crate) mod validate;
+#![allow(unused_imports)]
+pub(crate) use crate::analysis_neutral::types::cache_key;
+pub(crate) use crate::analysis_neutral::types::debug;
+pub(crate) use crate::analysis_neutral::types::facts;
+pub(crate) use crate::analysis_neutral::types::go;
+pub(crate) use crate::analysis_neutral::types::provider;
+pub(crate) use crate::analysis_neutral::types::store;
+pub(crate) use crate::analysis_neutral::types::ts_js;
+pub(crate) use crate::analysis_neutral::types::validate;

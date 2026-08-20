@@ -12,10 +12,13 @@ use super::scc::SccSchedule;
 use super::scc::compute_scc_schedule;
 use super::store::SummaryOutput;
 use crate::analysis::ids::MirBodyId;
+use crate::analysis_api::{ProviderExecution, ProviderFailureReason, ProviderFailureStage};
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
-    CacheStats, DemandQueryEngine, DemandQueryTrace, Digest, DigestKind, InputComponent,
-    InputSnapshot,
+    CacheStats, DemandQueryEngine, DemandQueryTrace, Digest, DigestKind, InputSnapshot,
+};
+pub(crate) use crate::analysis_neutral::summaries::provider::{
+    callable_stable_key_map, direct_summaries_output_digest,
 };
 use crate::cache::{Cache, CacheKey};
 use crate::core::AnalysisDb;
@@ -26,6 +29,7 @@ pub(crate) struct DirectSummariesProviderOutput {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) cache_stats: CacheStats,
     pub(crate) output_digest: Option<Digest>,
+    pub(crate) execution: ProviderExecution,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -41,7 +45,9 @@ pub(crate) fn derive_direct_summaries_with_cache_stats(
     module_topology_output_digest: Digest,
     upstream_syntax_output_digests: Vec<Digest>,
 ) -> DirectSummariesProviderOutput {
-    let output = DirectSummaryBuilder::build(db);
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
+    let output = DirectSummaryBuilder::build(interner, db);
     let callable_keys = callable_stable_key_map(db);
     let output_digest = direct_summaries_output_digest(
         manifest,
@@ -53,6 +59,7 @@ pub(crate) fn derive_direct_summaries_with_cache_stats(
         &symbol_graph_output_digest,
         &module_topology_output_digest,
         &upstream_syntax_output_digests,
+        interner,
         &callable_keys,
         &output,
     );
@@ -64,6 +71,7 @@ pub(crate) fn derive_direct_summaries_with_cache_stats(
         diagnostics: Vec::new(),
         cache_stats,
         output_digest: Some(output_digest),
+        execution: Default::default(),
     }
 }
 
@@ -110,6 +118,7 @@ struct SccClosureDigestCacheEntry {
 ///    is future work), and a DemandQueryEngine.
 /// 4. Call close_summaries_by_scc.
 /// 5. Return closure result, demand query trace, and any diagnostics.
+#[cfg(test)]
 pub(crate) fn run_scc_closure(db: &mut AnalysisDb) -> SccClosureProviderOutput {
     run_scc_closure_with_previous_digests(db, BTreeMap::new())
 }
@@ -223,117 +232,11 @@ fn scc_closure_cache_key(config_digest: &str, rule_digest: &str, plan_digest: &s
     )
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn direct_summaries_output_digest(
-    manifest: &ProviderManifest,
-    input_snapshot: &InputSnapshot,
-    semantic_mir_output_digest: &Digest,
-    cfg_output_digest: &Digest,
-    calls_output_digest: &Digest,
-    abstract_domains_output_digest: &Digest,
-    symbol_graph_output_digest: &Digest,
-    module_topology_output_digest: &Digest,
-    upstream_syntax_output_digests: &[Digest],
-    callable_keys: &std::collections::BTreeMap<MirBodyId, String>,
-    output: &SummaryOutput,
-) -> Digest {
-    let mut parts = vec![
-        format!("provider_id={}", manifest.id),
-        format!("provider_version={}", manifest.provider_version()),
-        format!("schema={}", manifest.primary_schema_label()),
-        format!(
-            "parameters={}",
-            direct_summaries_provider_parameter_digest()
-        ),
-        format!("config={}", input_snapshot.config.digest),
-        format!("semantic_mir={semantic_mir_output_digest}"),
-        format!("cfg={cfg_output_digest}"),
-        format!("calls={calls_output_digest}"),
-        format!("abstract_domains={abstract_domains_output_digest}"),
-        format!("symbol_graph={symbol_graph_output_digest}"),
-        format!("module_topology={module_topology_output_digest}"),
-    ];
-    extend_component_parts(
-        &mut parts,
-        "go_lifecycle",
-        &input_snapshot.go_lifecycle.components,
-    );
-    extend_component_parts(
-        &mut parts,
-        "ts_js_lifecycle",
-        &input_snapshot.ts_js_lifecycle.components,
-    );
-    extend_component_parts(&mut parts, "model", &input_snapshot.models);
-    extend_component_parts(&mut parts, "extension", &input_snapshot.extensions);
-    extend_component_parts(&mut parts, "tool", &input_snapshot.tool_invocations);
-    parts.extend(
-        upstream_syntax_output_digests
-            .iter()
-            .map(|digest| format!("upstream_syntax={digest}")),
-    );
-    parts.extend(output.summaries.iter().map(|row| {
-        format!(
-            "summary={} callable={} domain={:?} status={:?} precision={:?} provenance={:?} payload={} tito_flows={:?}",
-            row.stable_key,
-            callable_keys
-                .get(&MirBodyId(row.function.0))
-                .cloned()
-                .unwrap_or_else(|| row.callable_stable_key.clone()),
-            row.domain,
-            row.status,
-            row.precision,
-            row.provenance,
-            row.payload_digest,
-            row.tito_flows,
-        )
-    }));
-    parts.extend(output.events.iter().map(|row| {
-        format!(
-            "event={} callable={} domain={:?} kind={} status={:?} precision={:?} reason={}",
-            row.stable_key,
-            callable_keys
-                .get(&MirBodyId(row.function.0))
-                .cloned()
-                .unwrap_or_else(|| row.callable_stable_key.clone()),
-            row.domain,
-            row.event_kind,
-            row.status,
-            row.precision,
-            row.reason,
-        )
-    }));
-    if output.summaries.is_empty() && output.events.is_empty() {
-        parts.push("summaries_output=empty".to_string());
-    }
-
-    parts.sort();
-    let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
-    Digest::from_parts(DigestKind::ProviderOutput, "direct_summaries_output", &refs)
-}
-
-fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[InputComponent]) {
-    parts.extend(components.iter().map(|component| {
-        format!(
-            "{prefix}:{}:{:?}:{}",
-            component.name, component.status, component.digest
-        )
-    }));
-}
-
-pub(crate) fn callable_stable_key_map(
-    db: &AnalysisDb,
-) -> std::collections::BTreeMap<MirBodyId, String> {
-    db.mir_bodies()
-        .iter()
-        .map(|body| (body.id, body.stable_key.clone()))
-        .collect()
-}
-
 #[cfg(test)]
 mod direct_summaries_provider {
     use super::*;
     use crate::analysis_kernel::AnalysisKernel;
-    use crate::analysis_kernel::incremental::{Digest, DigestKind, InputSnapshot};
+    use crate::analysis_kernel::incremental::{Digest, DigestKind};
     use crate::analysis_plan::AnalysisPlan;
     use crate::config::load_config;
     use crate::core::AnalysisDb;
@@ -346,7 +249,7 @@ mod direct_summaries_provider {
         let temp = tempdir().expect("tempdir");
         fs::write(temp.path().join(".polint.toml"), "").expect("config");
         let loaded = load_config(temp.path()).expect("config loads");
-        let input_snapshot = InputSnapshot::from_run_inputs(
+        let input_snapshot = crate::analysis_kernel::incremental::input_snapshot_from_run_inputs(
             &loaded,
             &db,
             "config",
@@ -442,24 +345,24 @@ mod scc_closure_provider {
     };
     use crate::analysis::summaries::store::SummaryOutput;
     use crate::cache::Cache;
-    use crate::core::{FileId, FunctionId, Language, Span};
+    use crate::core::{FileId, FunctionId, Language, Span, stable_key_for_test};
 
     fn span() -> Span {
-        Span::point(FileId(1), 1, 1)
+        Span::point(FileId::from_raw(1), 1, 1)
     }
 
     fn summary_fact(function_id: u64, callable_key: &str) -> SummaryFact {
         SummaryFact {
             id: SummaryId(0),
-            callable_stable_key: callable_key.to_string(),
-            function: FunctionId(function_id),
+            callable_stable_key: stable_key_for_test(callable_key),
+            function: FunctionId::from_raw(function_id),
             domain: SummaryDomainKind::ControlEffects,
             status: SummaryStatus::Present,
             precision: SummaryPrecision::Local,
             provenance: SummaryProvenance::NativeLocal,
             payload_digest: format!("digest:{callable_key}"),
             tito_flows: Vec::new(),
-            stable_key: format!("summary:control_effects:{callable_key}"),
+            stable_key: stable_key_for_test(&format!("summary:control_effects:{callable_key}")),
         }
     }
 
@@ -468,8 +371,8 @@ mod scc_closure_provider {
             in_throw: false,
             id: CallSiteId(id),
             language: Language::TypeScript,
-            file: FileId(1),
-            caller: FunctionId(caller),
+            file: FileId::from_raw(1),
+            caller: FunctionId::from_raw(caller),
             owner_symbol: None,
             body: MirBodyId(caller),
             operation: MirOpId(id),
@@ -484,7 +387,7 @@ mod scc_closure_provider {
             result: None,
             status: CallTargetStatus::Resolved,
             precision: CallPrecision::Exact,
-            stable_key: format!("site:{id}"),
+            stable_key: crate::core::StableKeyId(id as u32),
         }
     }
 
@@ -492,8 +395,8 @@ mod scc_closure_provider {
         CallTargetFact {
             id: CallTargetId(id),
             site: CallSiteId(site_id),
-            caller: FunctionId(caller),
-            target_function: Some(FunctionId(target_func)),
+            caller: FunctionId::from_raw(caller),
+            target_function: Some(FunctionId::from_raw(target_func)),
             target_symbol: None,
             edge_kind: CallEdgeKind::Direct,
             algorithm: CallAlgorithm::DirectReference,
@@ -501,7 +404,7 @@ mod scc_closure_provider {
             reason: None,
             provenance: CallProvenance::Native,
             precision: CallPrecision::Exact,
-            stable_key: format!("target:{id}"),
+            stable_key: crate::core::StableKeyId(id as u32),
         }
     }
 
