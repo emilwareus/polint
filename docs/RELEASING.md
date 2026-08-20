@@ -7,7 +7,7 @@ polint ships from a single workflow on `main`.
 | Workflow | Trigger | Purpose |
 |---|---|---|
 | `ci.yml` | Push/PR to `main` | `rustfmt`, then `clippy -D warnings` + `cargo test --workspace` on Ubuntu, Windows, and macOS. Includes an ignored `cargo install` smoke test that mirrors the crates.io install path. |
-| `release.yml` | Manual (`workflow_dispatch` on `main`) | Patch-bump via `scripts/bump-workspace-version.py`, push the bump commit to `main`, create the annotated tag `vX.Y.Z`, then optionally publish all crates to crates.io, attach CLI archives to the matching GitHub Release, and move the stable `v1` action tag. |
+| `release.yml` | Manual (`workflow_dispatch` on `main`) | Bump via `scripts/bump-workspace-version.py` at the `bump_level` input (`patch` default, `minor`, `major`), push the bump commit to `main`, create the annotated tag `vX.Y.Z`, then optionally publish all crates to crates.io, attach CLI archives to the matching GitHub Release, and move the stable `v1` action tag. |
 
 ## GitHub Action versioning
 
@@ -64,3 +64,13 @@ Then either run **Release** to take it from there, or push a tag yourself.
 When upgrading the `polint` dependency in `.polint/rules/`, align rule code with the current SDK:
 
 - **`Rule::run` return type:** use `RuleResult` (from `polint::sdk::prelude::*`) instead of `anyhow::Result<()>`. Errors are still created with `anyhow!` / `bail!` and converted with `.into()` where needed. The host maps `RuleError` to internal diagnostics the same way as before.
+
+## Choosing the bump level
+
+`release.yml` takes a `bump_level` input. It defaults to `patch`.
+
+Below `1.0`, a caret requirement on `0.1.x` resolves to `>=0.1.x, <0.2.0`. `polint init` generates
+`polint = "0.1.x"` into every rule pack, so **a patch release reaches every existing consumer on
+their next `cargo update`.** Choose `minor` whenever a release removes or narrows anything on the
+public SDK surface — a removed item, a field made private, or a type gaining `#[non_exhaustive]` —
+so existing pins stay where they are until their owner chooses to move.
