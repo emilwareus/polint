@@ -73,7 +73,11 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml Cargo.lock
+          # The bump rewrites version pins in member manifests as well as the root,
+          # so stage every manifest it may have touched. Listing only the root files
+          # once shipped a tag whose workspace was 0.2.0 while a sibling pin still
+          # read 0.1.7, which does not resolve.
+          git add Cargo.toml Cargo.lock crates/*/Cargo.toml
           if git diff --staged --quiet; then
             echo "::error::No version changes to commit."
             exit 1
