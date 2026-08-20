@@ -6,8 +6,11 @@ public SDK in a way that existing rule packs cannot absorb: pre-1.0, a caret
 requirement like `polint = "0.1.17"` matches every later 0.1.z, so a breaking
 change shipped as a patch reaches existing users on their next `cargo update`.
 
-Updates [workspace.package] version and the `polint = { path = ..., version = ... }`
-entry under [workspace.dependencies]. Prints the new version on stdout.
+Updates [workspace.package] version, then rewrites every internal path dependency
+that carries a version requirement — in the root manifest and in each member
+manifest — to the new version. Those pins must move together: a member published
+at 0.2.0 does not satisfy a sibling's `^0.1.x` requirement, so leaving one behind
+breaks `cargo build` immediately after the bump. Prints the new version on stdout.
 
 Used by `.github/workflows/release.yml`; also safe to run locally, then
 `cargo build --workspace` and commit Cargo.toml + Cargo.lock.
@@ -76,20 +79,38 @@ def main() -> None:
         print("error: failed to replace [workspace.package] block", file=sys.stderr)
         sys.exit(1)
 
-    text, n = re.subn(
-        rf'^(polint = {{ path = "crates/polint", version = "){old_re}("\s*\}})',
-        rf"\g<1>{new_ver}\2",
-        text,
-        flags=re.MULTILINE,
+    cargo_path.write_text(text, encoding="utf-8")
+
+    # Rewrite every internal path dependency that also carries a version requirement.
+    # Matched on the path+version shape rather than on the current version, because a
+    # pin is allowed to lag while it still resolves (`^0.1.7` accepted 0.1.17) and would
+    # otherwise be skipped here and then fail to resolve after a minor bump.
+    internal_dep = re.compile(
+        r'(?m)^(?P<head>[A-Za-z0-9_-]+ = \{[^}\n]*?path = "[^"\n]+"[^}\n]*?version = ")'
+        r'(?P<version>[^"\n]+)'
+        r'(?P<tail>")'
     )
-    if n != 1:
+
+    manifests = [cargo_path] + sorted((root / "crates").glob("*/Cargo.toml"))
+    updated: list[str] = []
+    for manifest in manifests:
+        body = manifest.read_text(encoding="utf-8")
+        new_body, count = internal_dep.subn(
+            lambda m: f"{m.group('head')}{new_ver}{m.group('tail')}", body
+        )
+        if count:
+            manifest.write_text(new_body, encoding="utf-8")
+            updated.append(f"{manifest.relative_to(root)}({count})")
+
+    if not updated:
         print(
-            "error: expected exactly one `polint` workspace dependency version to update",
+            "error: found no internal path+version dependency to update; the release "
+            "would bump the workspace version and leave sibling pins behind",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    cargo_path.write_text(text, encoding="utf-8")
+    print(f"updated internal pins: {', '.join(updated)}", file=sys.stderr)
     print(new_ver, end="")
 
 
