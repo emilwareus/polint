@@ -16,9 +16,17 @@ inputs:
     required: false
     default: check --format github
   cache:
-    description: Restore and save .polint/cache.
+    description: Restore and save the polint caches. Master switch for the analysis cache and the rule-host build cache.
     required: false
     default: "true"
+  cache-rule-builds:
+    description: Restore and save Cargo build intermediates for repo-local rule hosts under a separate build-input key. Ignored when cache is false.
+    required: false
+    default: "true"
+  rule-paths:
+    description: Repo-local rule package directories the build cache covers, newline- or comma-separated. Empty means .polint/rules, and the build cache is skipped when .polint.toml configures a different [rules] paths.
+    required: false
+    default: ""
   cache-key-prefix:
     description: Prefix for GitHub Actions cache keys.
     required: false
@@ -37,8 +45,14 @@ outputs:
     description: Installed polint version.
     value: ${{ steps.install.outputs.version }}
   cache-hit:
-    description: Whether the primary polint cache key was restored.
+    description: Whether the primary polint analysis cache key was restored.
     value: ${{ steps.cache-restore.outputs.cache-hit }}
+  rule-build-cache-hit:
+    description: Whether the exact repo-local rule-host build cache key was restored. Empty when rule-host build caching did not run.
+    value: ${{ steps.rule-build-restore.outputs.cache-hit }}
+  rule-build-cache-skipped:
+    description: Why rule-host build caching did not run, or empty when it ran.
+    value: ${{ steps.cache-inputs.outputs.build-cache-skipped }}
   exit-code:
     description: polint process exit code.
     value: ${{ steps.run-polint.outputs.exit-code }}
@@ -143,21 +157,236 @@ runs:
         echo "${installed}"
         echo "version=${installed#polint }" >> "${GITHUB_OUTPUT}"
 
-    - name: Prepare polint cache directory
+    - name: Resolve polint cache inputs
+      id: cache-inputs
       if: ${{ inputs.cache == 'true' }}
       shell: bash
-      run: mkdir -p "${{ inputs.working-directory }}/.polint/cache"
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        POLINT_ACTION_CACHE_RULE_BUILDS: ${{ inputs.cache-rule-builds }}
+        POLINT_ACTION_RULE_PATHS: ${{ inputs.rule-paths }}
+      run: |
+        set -euo pipefail
 
-    - name: Restore polint cache
+        emit() { printf '%s=%s\n' "$1" "$2" >> "${GITHUB_OUTPUT}"; }
+        emit_lines() {
+          {
+            printf '%s<<POLINT_ACTION_EOF\n' "$1"
+            printf '%s\n' "$2"
+            printf 'POLINT_ACTION_EOF\n'
+          } >> "${GITHUB_OUTPUT}"
+        }
+        skip_build_cache() {
+          emit build-cache false
+          emit build-cache-skipped "$1"
+          echo "polint rule-host build cache: skipped ($1)"
+          exit 0
+        }
+
+        # This action only knows the default cache layout. A moved root is the
+        # caller's to cache.
+        if [[ -n "${POLINT_CACHE_DIR:-}" ]]; then
+          echo "::warning::POLINT_CACHE_DIR is set; this action only caches the default .polint/cache layout, so it is caching nothing this run."
+          emit analysis-cache false
+          skip_build_cache "POLINT_CACHE_DIR moves the cache root"
+        fi
+        emit analysis-cache true
+
+        # Analysis, layer, derived, and semantic-store artifacts stay under the
+        # analysis key. polint validates each artifact against current sources
+        # (path + content + config + rule/options + capability plan + cache
+        # format + polint version), so these are never reused as build output.
+        # The directories only need to exist for the cache steps to resolve them.
+        mkdir -p .polint/cache/analysis .polint/cache/layers \
+          .polint/cache/derived .polint/cache/semantic-store
+
+        if [[ "${POLINT_ACTION_CACHE_RULE_BUILDS}" != "true" ]]; then
+          skip_build_cache "cache-rule-builds is not true"
+        fi
+        if [[ -n "${POLINT_RULES_TARGET_DIR:-}" ]]; then
+          echo "::warning::POLINT_RULES_TARGET_DIR is set; this action only caches .polint/cache/rules-target."
+          skip_build_cache "POLINT_RULES_TARGET_DIR moves the rule-host target directory"
+        fi
+
+        # Rule packages live at [rules].paths in .polint.toml, default
+        # `.polint/rules`. This step cannot parse TOML, so a configured value it
+        # cannot recognize as the default requires an explicit rule-paths input;
+        # without one the key would not cover every rule package, so skip.
+        configured_paths=""
+        if [[ -f .polint.toml ]]; then
+          configured_paths="$(
+            awk '
+              /^[[:space:]]*\[/ { in_rules = ($0 ~ /^[[:space:]]*\[rules\][[:space:]]*$/); next }
+              in_rules && /^[[:space:]]*paths[[:space:]]*=/ {
+                sub(/^[^=]*=[[:space:]]*/, "")
+                sub(/[[:space:]]*#.*$/, "")
+                print
+                exit
+              }
+            ' .polint.toml | tr -d '[:space:]'
+          )"
+        fi
+        rule_paths="$(
+          printf '%s\n' "${POLINT_ACTION_RULE_PATHS}" \
+            | tr ',' '\n' \
+            | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+            | grep -v '^$' || true
+        )"
+        if [[ -z "${rule_paths}" ]]; then
+          case "${configured_paths}" in
+            "" | '[".polint/rules"]' | "['.polint/rules']")
+              rule_paths=".polint/rules"
+              ;;
+            *)
+              echo "::warning::.polint.toml sets [rules].paths to ${configured_paths}; set the rule-paths input to cache rule-host builds for those packages."
+              skip_build_cache "[rules].paths is not the default and rule-paths is unset"
+              ;;
+          esac
+        fi
+
+        found_manifest=""
+        while IFS= read -r rule_path; do
+          [[ -n "${rule_path}" ]] || continue
+          if [[ -f "${rule_path}/Cargo.toml" ]]; then
+            found_manifest="yes"
+          fi
+        done <<< "${rule_paths}"
+        if [[ -z "${found_manifest}" ]]; then
+          skip_build_cache "no repo-local rule package found"
+        fi
+
+        if command -v sha256sum >/dev/null 2>&1; then
+          hash_stdin() { sha256sum | cut -d ' ' -f 1; }
+        elif command -v shasum >/dev/null 2>&1; then
+          hash_stdin() { shasum -a 256 | cut -d ' ' -f 1; }
+        else
+          echo "::warning::neither sha256sum nor shasum is on PATH; skipping the rule-host build cache."
+          skip_build_cache "no sha256 tool on PATH"
+        fi
+        file_digest() {
+          if [[ -f "$1" ]]; then hash_stdin < "$1"; else printf 'absent\n'; fi
+        }
+
+        # `polint check` spawns cargo with the working directory as its cwd, so
+        # rustup and cargo resolve the toolchain and config from here. Reading
+        # the resolved compiler beats hashing rust-toolchain.toml alone: it also
+        # covers a pinned action toolchain and a floating `stable` that moved.
+        cargo_bin="${POLINT_CARGO:-${CARGO:-cargo}}"
+        if [[ -n "${POLINT_RULES_TOOLCHAIN:-}" ]]; then
+          export RUSTUP_TOOLCHAIN="${POLINT_RULES_TOOLCHAIN}"
+        fi
+        rustc_version="$(rustc -vV 2>/dev/null || true)"
+        cargo_version="$("${cargo_bin}" -V 2>/dev/null || true)"
+        if [[ -z "${rustc_version}" || -z "${cargo_version}" ]]; then
+          echo "::warning::no Rust toolchain resolved in $(pwd); skipping the rule-host build cache. polint reports rule-host build failures itself."
+          skip_build_cache "no Rust toolchain resolved"
+        fi
+
+        # Everything that changes what a compiled artifact means. Cargo also
+        # fingerprints profile, features, flags, and dependency hashes per unit,
+        # so this digest partitions entries; it is not the freshness check.
+        env_digest="$(
+          {
+            printf 'polint-rule-build-env-v1\n'
+            printf 'runner-os=%s\n' "${RUNNER_OS}"
+            printf 'runner-arch=%s\n' "${RUNNER_ARCH}"
+            printf 'polint-rules-profile=%s\n' "${POLINT_RULES_PROFILE-<unset>}"
+            printf 'rustflags=%s\n' "${RUSTFLAGS-<unset>}"
+            printf 'cargo-encoded-rustflags=%s\n' "${CARGO_ENCODED_RUSTFLAGS-<unset>}"
+            printf 'cargo-build-rustflags=%s\n' "${CARGO_BUILD_RUSTFLAGS-<unset>}"
+            printf 'cargo-build-target=%s\n' "${CARGO_BUILD_TARGET-<unset>}"
+            printf 'cargo-incremental=%s\n' "${CARGO_INCREMENTAL-<unset>}"
+            printf 'rustc-wrapper=%s\n' "${RUSTC_WRAPPER-<unset>}"
+            printf 'rustc-workspace-wrapper=%s\n' "${RUSTC_WORKSPACE_WRAPPER-<unset>}"
+            printf 'rustup-toolchain=%s\n' "${RUSTUP_TOOLCHAIN-<unset>}"
+            printf 'rustc=%s\n' "${rustc_version}"
+            printf 'cargo=%s\n' "${cargo_version}"
+          } | hash_stdin
+        )"
+
+        # Everything that decides which dependency units Cargo resolves and
+        # builds. Root files are cwd-discovered by cargo and rustup; per-rule
+        # files cover both standalone rule packages and workspace members.
+        deps_digest="$(
+          {
+            printf 'polint-rule-build-deps-v1\n'
+            for candidate in .polint.toml Cargo.toml Cargo.lock rust-toolchain.toml rust-toolchain .cargo/config.toml .cargo/config; do
+              printf '%s=%s\n' "${candidate}" "$(file_digest "${candidate}")"
+            done
+            while IFS= read -r rule_path; do
+              [[ -n "${rule_path}" ]] || continue
+              for candidate in Cargo.toml Cargo.lock; do
+                printf '%s/%s=%s\n' "${rule_path}" "${candidate}" "$(file_digest "${rule_path}/${candidate}")"
+              done
+            done <<< "${rule_paths}"
+          } | hash_stdin
+        )"
+
+        mkdir -p .polint/cache/rules-target
+
+        emit build-cache true
+        emit build-cache-skipped ""
+        emit env-digest "${env_digest}"
+        emit deps-digest "${deps_digest}"
+        emit_lines rule-paths "${rule_paths}"
+
+        {
+          echo "### polint rule-host build cache"
+          echo
+          echo "| input | value |"
+          echo "| --- | --- |"
+          echo "| runner | ${RUNNER_OS}/${RUNNER_ARCH} |"
+          echo "| rule packages | $(printf '%s' "${rule_paths}" | tr '\n' ' ') |"
+          echo "| cargo profile | ${POLINT_RULES_PROFILE:-release} |"
+          echo "| build env digest | \`${env_digest}\` |"
+          echo "| rule deps digest | \`${deps_digest}\` |"
+        } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+
+    - name: Restore polint analysis cache
       id: cache-restore
-      if: ${{ inputs.cache == 'true' }}
+      if: ${{ inputs.cache == 'true' && steps.cache-inputs.outputs.analysis-cache == 'true' }}
       uses: actions/cache/restore@v4
       with:
-        path: ${{ inputs.working-directory }}/.polint/cache
-        key: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-${{ steps.install.outputs.version }}-${{ hashFiles(format('{0}/.polint.toml', inputs.working-directory), format('{0}/Cargo.lock', inputs.working-directory), format('{0}/rust-toolchain.toml', inputs.working-directory), format('{0}/.polint/rules/Cargo.toml', inputs.working-directory), format('{0}/.polint/rules/Cargo.lock', inputs.working-directory), format('{0}/.polint/rules/src/**/*.rs', inputs.working-directory)) }}
+        path: |
+          ${{ inputs.working-directory }}/.polint/cache/analysis
+          ${{ inputs.working-directory }}/.polint/cache/layers
+          ${{ inputs.working-directory }}/.polint/cache/derived
+          ${{ inputs.working-directory }}/.polint/cache/semantic-store
+        key: ${{ inputs.cache-key-prefix }}-analysis-${{ runner.os }}-${{ steps.install.outputs.version }}-${{ hashFiles(format('{0}/.polint.toml', inputs.working-directory), format('{0}/Cargo.lock', inputs.working-directory), format('{0}/rust-toolchain.toml', inputs.working-directory), format('{0}/.polint/rules/Cargo.toml', inputs.working-directory), format('{0}/.polint/rules/Cargo.lock', inputs.working-directory), format('{0}/.polint/rules/src/**/*.rs', inputs.working-directory)) }}
         restore-keys: |
-          ${{ inputs.cache-key-prefix }}-${{ runner.os }}-${{ steps.install.outputs.version }}-
-          ${{ inputs.cache-key-prefix }}-${{ runner.os }}-
+          ${{ inputs.cache-key-prefix }}-analysis-${{ runner.os }}-${{ steps.install.outputs.version }}-
+
+    - name: Restore polint rule-host build cache
+      id: rule-build-restore
+      if: ${{ inputs.cache == 'true' && steps.cache-inputs.outputs.build-cache == 'true' }}
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ inputs.working-directory }}/.polint/cache/rules-target
+        key: ${{ inputs.cache-key-prefix }}-rules-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.install.outputs.version }}-env-${{ steps.cache-inputs.outputs.env-digest }}-deps-${{ steps.cache-inputs.outputs.deps-digest }}
+        restore-keys: |
+          ${{ inputs.cache-key-prefix }}-rules-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.install.outputs.version }}-env-${{ steps.cache-inputs.outputs.env-digest }}-deps-
+
+    - name: Force a rebuild of repo-local rule sources
+      if: ${{ inputs.cache == 'true' && steps.cache-inputs.outputs.build-cache == 'true' }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        POLINT_ACTION_RULE_PATHS: ${{ steps.cache-inputs.outputs.rule-paths }}
+      run: |
+        set -euo pipefail
+
+        # The restored directory holds compiler output for rule packages too,
+        # and no cache key can prove that output matches the rule sources in
+        # this checkout. Cargo decides freshness for path units by comparing
+        # source timestamps against the recorded fingerprint, so make every rule
+        # source newer than anything that was just restored: the rule packages
+        # are then always recompiled from the sources being linted, and only
+        # registry dependency units - which Cargo fingerprints by package,
+        # version, features, flags, and compiler - survive as reuse.
+        printf '%s\n' "${POLINT_ACTION_RULE_PATHS}" | while IFS= read -r rule_path; do
+          [[ -n "${rule_path}" && -d "${rule_path}" ]] || continue
+          find "${rule_path}" -type d -name target -prune -o -type f -exec touch {} +
+        done
 
     - name: Run polint
       id: run-polint
@@ -177,11 +406,22 @@ runs:
         echo "exit-code=${status}" >> "${GITHUB_OUTPUT}"
         exit 0
 
-    - name: Save polint cache
-      if: ${{ always() && inputs.cache == 'true' && steps.cache-restore.outputs.cache-hit != 'true' }}
+    - name: Save polint rule-host build cache
+      if: ${{ always() && inputs.cache == 'true' && steps.cache-inputs.outputs.build-cache == 'true' && steps.rule-build-restore.outputs.cache-hit != 'true' }}
       uses: actions/cache/save@v4
       with:
-        path: ${{ inputs.working-directory }}/.polint/cache
+        path: ${{ inputs.working-directory }}/.polint/cache/rules-target
+        key: ${{ steps.rule-build-restore.outputs.cache-primary-key }}
+
+    - name: Save polint analysis cache
+      if: ${{ always() && inputs.cache == 'true' && steps.cache-inputs.outputs.analysis-cache == 'true' && steps.cache-restore.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          ${{ inputs.working-directory }}/.polint/cache/analysis
+          ${{ inputs.working-directory }}/.polint/cache/layers
+          ${{ inputs.working-directory }}/.polint/cache/derived
+          ${{ inputs.working-directory }}/.polint/cache/semantic-store
         key: ${{ steps.cache-restore.outputs.cache-primary-key }}
 
     - name: Fail on polint findings

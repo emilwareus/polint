@@ -367,6 +367,18 @@ impl CacheLayout {
         self.root.join("analysis")
     }
 
+    /// Cargo target directory for the repo-local rule host.
+    ///
+    /// This is the only cache directory holding compiler output rather than
+    /// source-validated analysis artifacts, and the `rules-target` name is part
+    /// of the published CI contract: `action.yml` restores and saves it under a
+    /// key built from build inputs (polint version, runner OS/arch, resolved
+    /// toolchain, compiler flags, manifests and lockfiles), separate from the
+    /// analysis cache, and recompiles the rule packages afterwards so a cached
+    /// host binary never outlives its sources. `POLINT_RULES_TARGET_DIR` moves
+    /// the directory for callers that manage it themselves, and the action
+    /// skips its build cache when that variable is set. See
+    /// `cache_layout_matches_the_github_action_contract`.
     pub(crate) fn rules_target_dir(&self) -> PathBuf {
         env_path_or_cache_default(
             &self.root,
@@ -1192,6 +1204,43 @@ mod tests {
         assert_eq!(CacheManagedCategory::Layers.name(), "layers");
         assert_eq!(report.removed_files, 1);
         assert!(!layout.layer_cache_dir().exists());
+    }
+
+    /// `action.yml` restores and saves these subdirectories by name: the
+    /// source-validated ones under the analysis key, and `rules-target` - the
+    /// only directory holding compiler output - under a separate build-input
+    /// key. Renaming or adding a directory here without updating the action
+    /// would silently stop caching it, or worse, cache compiler output under a
+    /// key that says nothing about the compiler. Pin the names on both sides;
+    /// `tests/github_action_cache.rs` asserts the action half.
+    #[test]
+    fn cache_layout_matches_the_github_action_contract() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("cache");
+        let layout = CacheLayout::from_root(&root);
+
+        let relative = |path: PathBuf| {
+            path.strip_prefix(&root)
+                .expect("category stays under the cache root")
+                .to_string_lossy()
+                .replace('\\', "/")
+        };
+
+        assert_eq!(relative(layout.analysis_dir()), "analysis");
+        assert_eq!(relative(layout.layer_cache_dir()), "layers");
+        assert_eq!(relative(layout.derived_dir()), "derived");
+        assert_eq!(relative(layout.semantic_store_dir()), "semantic-store");
+        assert_eq!(CacheManagedCategory::RulesTarget.name(), "rules-target");
+
+        match std::env::var_os(POLINT_RULES_TARGET_DIR_ENV).filter(|value| !value.is_empty()) {
+            // The action skips its build cache under this override precisely
+            // because the target directory then leaves the cache root.
+            Some(override_dir) => assert_eq!(
+                layout.rules_target_dir(),
+                absolutize_env_path(&root, PathBuf::from(override_dir))
+            ),
+            None => assert_eq!(relative(layout.rules_target_dir()), "rules-target"),
+        }
     }
 
     proptest! {

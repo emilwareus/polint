@@ -127,8 +127,13 @@ is set:
 | Path | Contents |
 |------|----------|
 | `.polint/cache/analysis` | Compact JSON parser/fact artifacts. |
-| `.polint/cache/rules-target` | Cargo target directory used when `polint check` builds `.polint/rules`. |
+| `.polint/cache/layers` | Persistent per-layer fact manifests and blobs. |
 | `.polint/cache/derived` | Reserved for future project-level derived facts. |
+| `.polint/cache/semantic-store` | Durable semantic store, when enabled. |
+| `.polint/cache/rules-target` | Cargo target directory used when `polint check` builds `.polint/rules`. |
+
+Only `rules-target` holds compiler output. The other directories hold analysis
+data that polint re-validates against current sources on every read.
 
 Analysis cache keys include source path and content, loaded config, rule/options
 digest, requested capability plan, cache format, and polint version. Changing
@@ -164,7 +169,7 @@ because rule execution can dominate large-repo scans. Use
 matters more than scan latency.
 
 In GitHub Actions, prefer the official action, which installs polint and
-restores/saves `.polint/cache` by default:
+restores/saves the cache by default:
 
 ```yaml
 - uses: emilwareus/polint@v1
@@ -173,20 +178,46 @@ restores/saves `.polint/cache` by default:
     args: check --format github
 ```
 
-If you wire the steps manually, cache `.polint/cache` when repo-local rules are
-enabled:
+The action keeps two entries, because the two halves of `.polint/cache` need
+different keys: the source-validated analysis artifacts (`analysis`, `layers`,
+`derived`, `semantic-store`) under a key scoped to the polint version and the
+config/rule inputs, and `rules-target` — Cargo output for repo-local rule hosts
+— under a key built from compiler inputs. See
+[the GitHub Action guide](GITHUB-ACTION.md) for the full key and invalidation
+contract.
+
+If you wire the steps manually, keep those halves apart. Caching `rules-target`
+under an analysis-shaped key (no compiler version, no architecture, no compiler
+flags) can restore compiler output that does not match the toolchain in use:
 
 ```yaml
 - uses: actions/cache@v4
   with:
-    path: .polint/cache
-    key: polint-${{ runner.os }}-${{ hashFiles('.polint.toml', '.polint/rules/Cargo.lock', '.polint/rules/**/*.rs') }}
-    restore-keys: |
-      polint-${{ runner.os }}-
+    path: |
+      .polint/cache/analysis
+      .polint/cache/layers
+      .polint/cache/derived
+      .polint/cache/semantic-store
+    key: polint-analysis-${{ runner.os }}-${{ hashFiles('.polint.toml', '.polint/rules/Cargo.lock', '.polint/rules/**/*.rs') }}
+
+# The compiler that will build the rule host, not just the file that pins it.
+- id: rustc
+  run: echo "id=$(rustc -vV | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+
+- uses: actions/cache@v4
+  with:
+    path: .polint/cache/rules-target
+    key: polint-rules-build-${{ runner.os }}-${{ runner.arch }}-${{ steps.rustc.outputs.id }}-${{ hashFiles('.polint/rules/Cargo.toml', '.polint/rules/Cargo.lock', 'rust-toolchain.toml') }}
+
+# A restored target directory can hold a rule host built from other rule
+# sources. Cargo decides freshness for path units from source timestamps, so
+# make the rule sources newer than everything restored; the rule packages are
+# then recompiled and only dependency units are reused.
+- run: find .polint/rules -type d -name target -prune -o -type f -exec touch {} +
 ```
 
-The first run for a new cache key may still compile `.polint/rules` and
-populate analysis artifacts. The cache primarily improves repeat CI runs.
+The first run for a new cache key still compiles `.polint/rules` and populates
+analysis artifacts. The cache primarily improves repeat CI runs.
 
 ## Rules host failures
 
