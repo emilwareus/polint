@@ -179,16 +179,19 @@ polint keeps local, untracked cache data under `.polint/cache` by default:
 
 ```text
 .polint/cache/
-  analysis/       compact parser/fact JSON artifacts
-  layers/         persistent per-layer fact manifests and blobs
-  derived/        reserved for future project-level derived facts
-  semantic-store/ durable semantic store, when enabled
-  rules-target/   Cargo target dir for repo-local rule hosts
+  analysis/           compact parser/fact JSON artifacts     [source-validated]
+  layers/             per-layer fact manifests and blobs     [source-validated]
+  derived/            reserved for project-level derived facts [source-validated]
+  semantic-store/     durable semantic store, when enabled   [source-validated]
+  rules-target/       Cargo target dir for repo-local rule hosts [compiler-output]
+  extensions-target/  Cargo target dir for repo-local extensions [compiler-output]
+  review/             serialized `polint review` changesets  [scratch]
 ```
 
-Everything except `rules-target` is analysis data polint re-validates against
-current sources; `rules-target` is compiler output. CI should key those two
-halves differently — see the [GitHub Action guide](docs/GITHUB-ACTION.md).
+Source-validated data is re-validated against current sources on every read;
+compiler output is Cargo's to judge; scratch is rebuilt from the current inputs.
+CI has to key those roles differently — see the
+[GitHub Action guide](docs/GITHUB-ACTION.md).
 
 `--no-cache` disables analysis/fact cache reads and writes for that run. It does
 not disable the `rules-target` Cargo cache, because rebuilding the local rule
@@ -456,14 +459,15 @@ facts:
 ```
 
 The action caches `.polint/cache` by default as two separate entries: the
-source-validated analysis artifacts under a key scoped to the polint version and
-config/rule inputs, and the repo-local rule-host Cargo target directory at
-`.polint/cache/rules-target` under a key built from compiler inputs (runner
-OS/architecture, resolved toolchain, compiler flags, manifests, and lockfiles).
-Restoring the build cache never reuses a stale rule host: the action recompiles
-every repo-local rule package from the sources in the checkout, so only
-dependency compilation is reused. A fully cold first run can still pay install,
-build, and analysis costs. See the
+source-validated artifacts under a key scoped to the polint version and the
+resolved config/rule inputs, and the Cargo target directories under a key built
+from compiler inputs (runner OS/architecture, resolved toolchain, compiler
+flags, manifests, and lockfiles). A restored build cache can never reuse a stale
+rule host, because the action removes each rule package's own output from the
+entry before saving it — so Cargo has to rebuild the rule host from the sources
+in the next checkout, and only dependency compilation is reused. Entries are
+saved only after a run that finished. A fully cold first run can still pay
+install, build, and analysis costs. See the
 [GitHub Action guide](docs/GITHUB-ACTION.md) for inputs, cache keys, and
 pinning options.
 

@@ -140,10 +140,13 @@ where
         ];
         args.extend(extension_args);
         let mut env = BTreeMap::new();
+        // Extension builds are compiler output under the cache root, so they
+        // follow the same layout - and the same `POLINT_CACHE_DIR` override -
+        // as every other cache directory.
         env.insert(
             "CARGO_TARGET_DIR".to_string(),
-            self.repo_root
-                .join(".polint/cache/extensions-target")
+            crate::cache::CacheLayout::for_repo(&self.repo_root)
+                .extensions_target_dir()
                 .to_string_lossy()
                 .to_string(),
         );
