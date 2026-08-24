@@ -16,9 +16,21 @@ inputs:
     required: false
     default: check --format github
   cache:
-    description: Restore and save .polint/cache.
+    description: Restore and save the polint caches. Master switch for the analysis cache and the rule-host build cache.
     required: false
     default: "true"
+  cache-rule-builds:
+    description: Restore and save Cargo build intermediates for repo-local rule hosts under a separate build-input key. Ignored when cache is false.
+    required: false
+    default: "true"
+  rule-paths:
+    description: Override the repo-local rule package directories the build cache covers, newline- or comma-separated. Empty reads [rules] paths from .polint.toml.
+    required: false
+    default: ""
+  build-cache-max-size-mb:
+    description: Refuse to save the rule-host build cache when the pruned directories exceed this many MB. Empty means report the size without a ceiling.
+    required: false
+    default: ""
   cache-key-prefix:
     description: Prefix for GitHub Actions cache keys.
     required: false
@@ -37,8 +49,20 @@ outputs:
     description: Installed polint version.
     value: ${{ steps.install.outputs.version }}
   cache-hit:
-    description: Whether the primary polint cache key was restored.
+    description: Whether the primary polint analysis cache key was restored.
     value: ${{ steps.cache-restore.outputs.cache-hit }}
+  rule-build-cache-hit:
+    description: Whether the exact repo-local rule-host build cache key was restored. Empty when rule-host build caching did not run.
+    value: ${{ steps.rule-build-restore.outputs.cache-hit }}
+  rule-build-cache-skipped:
+    description: Why rule-host build caching did not run, or empty when it ran.
+    value: ${{ steps.cache-inputs.outputs.build-cache-skipped }}
+  rule-build-cache-save-skipped:
+    description: Why the rule-host build cache was not saved after this run, or empty when it was saved or never ran.
+    value: ${{ steps.rule-build-save.outputs.save-skipped }}
+  rule-build-cache-size-mb:
+    description: Size in MB of the rule-host build cache directories after pruning, or empty when they were not measured.
+    value: ${{ steps.rule-build-save.outputs.size-mb }}
   exit-code:
     description: polint process exit code.
     value: ${{ steps.run-polint.outputs.exit-code }}
@@ -143,21 +167,57 @@ runs:
         echo "${installed}"
         echo "version=${installed#polint }" >> "${GITHUB_OUTPUT}"
 
-    - name: Prepare polint cache directory
+    - name: Resolve polint cache inputs
+      id: cache-inputs
       if: ${{ inputs.cache == 'true' }}
       shell: bash
-      run: mkdir -p "${{ inputs.working-directory }}/.polint/cache"
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        POLINT_ACTION_CACHE_RULE_BUILDS: ${{ inputs.cache-rule-builds }}
+        POLINT_ACTION_RULE_PATHS: ${{ inputs.rule-paths }}
+        POLINT_ACTION_SCRIPT_DIR: ${{ github.action_path }}/scripts/action
+        POLINT_ACTION_STATE_DIR: ${{ runner.temp }}
+      run: |
+        set -uo pipefail
 
-    - name: Restore polint cache
+        # Cache resolution is an optimization. If it cannot run at all, say so
+        # and continue with no cache rather than failing the job before polint
+        # has had a chance to run.
+        script="${POLINT_ACTION_SCRIPT_DIR}/resolve-cache-inputs.sh"
+        if [[ ! -f "${script}" ]] || ! bash "${script}"; then
+          echo "::warning::polint cache input resolution failed; this run uses no polint cache."
+          {
+            printf 'analysis-cache=false\n'
+            printf 'build-cache=false\n'
+            printf 'build-cache-skipped=%s\n' "cache input resolution failed"
+          } >> "${GITHUB_OUTPUT}"
+        fi
+
+    - name: Restore polint analysis cache
       id: cache-restore
-      if: ${{ inputs.cache == 'true' }}
+      if: ${{ inputs.cache == 'true' && steps.cache-inputs.outputs.analysis-cache == 'true' }}
       uses: actions/cache/restore@v4
       with:
-        path: ${{ inputs.working-directory }}/.polint/cache
-        key: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-${{ steps.install.outputs.version }}-${{ hashFiles(format('{0}/.polint.toml', inputs.working-directory), format('{0}/Cargo.lock', inputs.working-directory), format('{0}/rust-toolchain.toml', inputs.working-directory), format('{0}/.polint/rules/Cargo.toml', inputs.working-directory), format('{0}/.polint/rules/Cargo.lock', inputs.working-directory), format('{0}/.polint/rules/src/**/*.rs', inputs.working-directory)) }}
+        path: |
+          ${{ inputs.working-directory }}/.polint/cache/analysis
+          ${{ inputs.working-directory }}/.polint/cache/layers
+          ${{ inputs.working-directory }}/.polint/cache/derived
+          ${{ inputs.working-directory }}/.polint/cache/semantic-store
+        key: ${{ inputs.cache-key-prefix }}-analysis-${{ runner.os }}-${{ steps.install.outputs.version }}-${{ steps.cache-inputs.outputs.analysis-digest }}
         restore-keys: |
-          ${{ inputs.cache-key-prefix }}-${{ runner.os }}-${{ steps.install.outputs.version }}-
-          ${{ inputs.cache-key-prefix }}-${{ runner.os }}-
+          ${{ inputs.cache-key-prefix }}-analysis-${{ runner.os }}-${{ steps.install.outputs.version }}-
+
+    - name: Restore polint rule-host build cache
+      id: rule-build-restore
+      if: ${{ inputs.cache == 'true' && steps.cache-inputs.outputs.build-cache == 'true' }}
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          ${{ inputs.working-directory }}/.polint/cache/rules-target
+          ${{ inputs.working-directory }}/.polint/cache/extensions-target
+        key: ${{ inputs.cache-key-prefix }}-rules-build-v2-${{ runner.os }}-${{ runner.arch }}-env-${{ steps.cache-inputs.outputs.env-digest }}-deps-${{ steps.cache-inputs.outputs.deps-digest }}
+        restore-keys: |
+          ${{ inputs.cache-key-prefix }}-rules-build-v2-${{ runner.os }}-${{ runner.arch }}-env-${{ steps.cache-inputs.outputs.env-digest }}-deps-
 
     - name: Run polint
       id: run-polint
@@ -177,11 +237,51 @@ runs:
         echo "exit-code=${status}" >> "${GITHUB_OUTPUT}"
         exit 0
 
-    - name: Save polint cache
-      if: ${{ always() && inputs.cache == 'true' && steps.cache-restore.outputs.cache-hit != 'true' }}
+    - name: Prepare the polint rule-host build cache for saving
+      id: rule-build-save
+      if: ${{ always() && inputs.cache == 'true' && steps.cache-inputs.outputs.build-cache == 'true' && steps.rule-build-restore.outputs.cache-hit != 'true' }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        POLINT_ACTION_EXIT_CODE: ${{ steps.run-polint.outputs.exit-code }}
+        POLINT_ACTION_RULE_PACKAGES_FILE: ${{ steps.cache-inputs.outputs.rule-packages-file }}
+        POLINT_ACTION_EXTENSION_PACKAGES_FILE: ${{ steps.cache-inputs.outputs.extension-packages-file }}
+        POLINT_ACTION_RULES_PROFILE: ${{ steps.cache-inputs.outputs.rules-profile }}
+        POLINT_ACTION_MAX_SIZE_MB: ${{ inputs.build-cache-max-size-mb }}
+        POLINT_ACTION_SCRIPT_DIR: ${{ github.action_path }}/scripts/action
+      run: |
+        set -uo pipefail
+
+        # A save this step cannot vouch for is a save that must not happen:
+        # `actions/cache` never overwrites an existing key, so one bad entry is
+        # permanent for that key.
+        script="${POLINT_ACTION_SCRIPT_DIR}/prepare-build-cache-save.sh"
+        if [[ ! -f "${script}" ]] || ! bash "${script}"; then
+          echo "::warning::polint build-cache preparation failed; the rule-host build cache is not saved this run."
+          {
+            printf 'save=false\n'
+            printf 'save-skipped=%s\n' "build cache preparation failed"
+          } >> "${GITHUB_OUTPUT}"
+        fi
+
+    - name: Save polint rule-host build cache
+      if: ${{ always() && inputs.cache == 'true' && steps.cache-inputs.outputs.build-cache == 'true' && steps.rule-build-restore.outputs.cache-hit != 'true' && steps.rule-build-save.outputs.save == 'true' }}
       uses: actions/cache/save@v4
       with:
-        path: ${{ inputs.working-directory }}/.polint/cache
+        path: |
+          ${{ inputs.working-directory }}/.polint/cache/rules-target
+          ${{ inputs.working-directory }}/.polint/cache/extensions-target
+        key: ${{ steps.rule-build-restore.outputs.cache-primary-key }}
+
+    - name: Save polint analysis cache
+      if: ${{ always() && inputs.cache == 'true' && steps.cache-inputs.outputs.analysis-cache == 'true' && steps.cache-restore.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          ${{ inputs.working-directory }}/.polint/cache/analysis
+          ${{ inputs.working-directory }}/.polint/cache/layers
+          ${{ inputs.working-directory }}/.polint/cache/derived
+          ${{ inputs.working-directory }}/.polint/cache/semantic-store
         key: ${{ steps.cache-restore.outputs.cache-primary-key }}
 
     - name: Fail on polint findings

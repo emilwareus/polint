@@ -7,3 +7,9 @@
 *.pdf binary
 .gitattributes text eol=lf
 .github/**/*.yml text eol=lf
+
+# The composite action ships these to Windows runners, where a CRLF checkout
+# would make bash and awk read `\r` as part of every command.
+action.yml text eol=lf
+*.sh text eol=lf
+*.awk text eol=lf

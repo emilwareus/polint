@@ -10823,9 +10823,33 @@ fn cache_status_reports_structured_cache_layout() {
         "unexpected cache root: {json:#?}"
     );
     let categories = json["categories"].as_array().unwrap();
+    // Every directory polint writes under the cache root is reported, with the
+    // role that decides how CI may cache it. A directory missing from this list
+    // is a directory `polint cache clean` cannot reach and `action.yml` cannot
+    // know about.
+    let reported = categories
+        .iter()
+        .map(|category| {
+            (
+                category["name"].as_str().unwrap().to_string(),
+                category["role"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect::<Vec<_>>();
     assert_eq!(
-        categories.len(),
-        4,
+        reported,
+        vec![
+            ("analysis".to_string(), "source-validated".to_string()),
+            ("layers".to_string(), "source-validated".to_string()),
+            ("derived".to_string(), "source-validated".to_string()),
+            ("semantic-store".to_string(), "source-validated".to_string()),
+            ("rules-target".to_string(), "compiler-output".to_string()),
+            (
+                "extensions-target".to_string(),
+                "compiler-output".to_string()
+            ),
+            ("review".to_string(), "scratch".to_string()),
+        ],
         "unexpected cache categories: {json:#?}"
     );
     assert!(categories.iter().any(|category| {

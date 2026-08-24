@@ -367,12 +367,33 @@ impl CacheLayout {
         self.root.join("analysis")
     }
 
+    /// Cargo target directory for the repo-local rule host.
+    ///
+    /// This holds compiler output rather than source-validated analysis
+    /// artifacts, and the `rules-target` name is part of the published CI
+    /// contract: `action.yml` restores and saves it under a key built from
+    /// build inputs (runner OS/arch, resolved toolchain, compiler flags,
+    /// manifests and lockfiles), separate from the analysis cache, and removes
+    /// every rule package's own output from it before saving so a cached host
+    /// binary never outlives its sources. `POLINT_RULES_TARGET_DIR` moves the
+    /// directory for callers that manage it themselves, and the action skips
+    /// its build cache when that variable moves it out of the cache root. See
+    /// `cache_layout_matches_the_github_action_contract`.
     pub(crate) fn rules_target_dir(&self) -> PathBuf {
         env_path_or_cache_default(
             &self.root,
             POLINT_RULES_TARGET_DIR_ENV,
             Path::new("rules-target"),
         )
+    }
+
+    /// Cargo target directory for repo-local extension crates.
+    ///
+    /// Compiler output like [`CacheLayout::rules_target_dir`], built by the
+    /// extension host from `.polint/extensions/*`, and cached under the same
+    /// build-input key with the same prune-before-save rule.
+    pub(crate) fn extensions_target_dir(&self) -> PathBuf {
+        self.root.join("extensions-target")
     }
 
     pub(crate) fn derived_dir(&self) -> PathBuf {
@@ -387,6 +408,16 @@ impl CacheLayout {
         self.root.join("semantic-store")
     }
 
+    /// Serialized `polint review` changesets.
+    ///
+    /// Per-run scratch: each file is named after a hash of the changeset it
+    /// holds and is rewritten from the diff being reviewed, so restoring one
+    /// from CI would save no work and only grow the entry. `action.yml`
+    /// deliberately does not cache it.
+    pub(crate) fn review_dir(&self) -> PathBuf {
+        self.root.join("review")
+    }
+
     #[cfg_attr(
         not(test),
         expect(dead_code, reason = "kept for private internal consumers")
@@ -396,12 +427,16 @@ impl CacheLayout {
     }
 
     pub(crate) fn status(&self) -> Result<CacheStatus> {
-        let categories = vec![
-            self.status_for("analysis", self.analysis_dir())?,
-            self.status_for("rules-target", self.rules_target_dir())?,
-            self.status_for("derived", self.derived_dir())?,
-            self.status_for("layers", self.layer_cache_dir())?,
-        ];
+        let categories = CacheManagedCategory::ALL
+            .iter()
+            .map(|category| {
+                self.status_for(
+                    category.name(),
+                    category.role(),
+                    self.category_path(*category),
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
         let total_bytes = categories.iter().map(|category| category.bytes).sum();
         let total_files = categories.iter().map(|category| category.files).sum();
         Ok(CacheStatus {
@@ -412,10 +447,16 @@ impl CacheLayout {
         })
     }
 
-    fn status_for(&self, name: &'static str, path: PathBuf) -> Result<CacheCategoryStatus> {
+    fn status_for(
+        &self,
+        name: &'static str,
+        role: CacheDirRole,
+        path: PathBuf,
+    ) -> Result<CacheCategoryStatus> {
         let stats = directory_stats(&path)?;
         Ok(CacheCategoryStatus {
             name,
+            role: role.name(),
             path: path.display().to_string(),
             exists: stats.exists,
             bytes: stats.bytes,
@@ -426,12 +467,7 @@ impl CacheLayout {
     pub(crate) fn clean(&self, selection: CacheCleanSelection) -> Result<CacheCleanReport> {
         let mut report = CacheCleanReport::default();
         let categories = match selection {
-            CacheCleanSelection::All => vec![
-                CacheManagedCategory::Analysis,
-                CacheManagedCategory::RulesTarget,
-                CacheManagedCategory::Derived,
-                CacheManagedCategory::Layers,
-            ],
+            CacheCleanSelection::All => CacheManagedCategory::ALL.to_vec(),
             CacheCleanSelection::Category(category) => vec![category],
         };
 
@@ -457,12 +493,7 @@ impl CacheLayout {
 
     pub(crate) fn prune(&self, options: &CachePruneOptions) -> Result<CachePruneReport> {
         let categories = if options.categories.is_empty() {
-            vec![
-                CacheManagedCategory::Analysis,
-                CacheManagedCategory::RulesTarget,
-                CacheManagedCategory::Derived,
-                CacheManagedCategory::Layers,
-            ]
+            CacheManagedCategory::ALL.to_vec()
         } else {
             options.categories.clone()
         };
@@ -550,9 +581,12 @@ impl CacheLayout {
     fn category_path(&self, category: CacheManagedCategory) -> PathBuf {
         match category {
             CacheManagedCategory::Analysis => self.analysis_dir(),
-            CacheManagedCategory::RulesTarget => self.rules_target_dir(),
-            CacheManagedCategory::Derived => self.derived_dir(),
             CacheManagedCategory::Layers => self.layer_cache_dir(),
+            CacheManagedCategory::Derived => self.derived_dir(),
+            CacheManagedCategory::Semantic => self.semantic_store_dir(),
+            CacheManagedCategory::RulesTarget => self.rules_target_dir(),
+            CacheManagedCategory::ExtensionsTarget => self.extensions_target_dir(),
+            CacheManagedCategory::Review => self.review_dir(),
         }
     }
 }
@@ -579,21 +613,84 @@ fn absolutize_env_path(base: &Path, path: PathBuf) -> PathBuf {
     }
 }
 
+/// What a cache directory holds, and therefore how CI has to treat it.
+///
+/// `action.yml` keys the two cached roles differently and caches neither
+/// scratch data nor anything it cannot classify; see
+/// `cache_layout_matches_the_github_action_contract`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CacheDirRole {
+    /// Artifacts polint re-validates against current sources on every read, so
+    /// a restored entry can only save recomputation, never answer for a source
+    /// it does not match.
+    SourceValidated,
+    /// Cargo output. Only the compiler can judge its freshness, so it is keyed
+    /// on build inputs and pruned of repo-local package output before saving.
+    CompilerOutput,
+    /// Per-run scratch, rewritten from the current inputs. Caching it would
+    /// save no work and only grow the entry.
+    Scratch,
+}
+
+impl CacheDirRole {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::SourceValidated => "source-validated",
+            Self::CompilerOutput => "compiler-output",
+            Self::Scratch => "scratch",
+        }
+    }
+}
+
+/// Every directory polint writes under the cache root.
+///
+/// This is the single list `polint cache status`, `polint cache clean`,
+/// `polint cache prune`, and the GitHub Action contract test all read, so a new
+/// cache directory cannot quietly appear in one of them and be missing from the
+/// others.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CacheManagedCategory {
     Analysis,
-    RulesTarget,
-    Derived,
     Layers,
+    Derived,
+    /// The `semantic-store` directory, named for the directory rather than the
+    /// store type that fills it: that type stays private to the kernel.
+    Semantic,
+    RulesTarget,
+    ExtensionsTarget,
+    Review,
 }
 
 impl CacheManagedCategory {
+    pub(crate) const ALL: &'static [Self] = &[
+        Self::Analysis,
+        Self::Layers,
+        Self::Derived,
+        Self::Semantic,
+        Self::RulesTarget,
+        Self::ExtensionsTarget,
+        Self::Review,
+    ];
+
     pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Analysis => "analysis",
-            Self::RulesTarget => "rules-target",
-            Self::Derived => "derived",
             Self::Layers => "layers",
+            Self::Derived => "derived",
+            Self::Semantic => "semantic-store",
+            Self::RulesTarget => "rules-target",
+            Self::ExtensionsTarget => "extensions-target",
+            Self::Review => "review",
+        }
+    }
+
+    pub(crate) fn role(self) -> CacheDirRole {
+        match self {
+            Self::Analysis | Self::Layers | Self::Derived | Self::Semantic => {
+                CacheDirRole::SourceValidated
+            }
+            Self::RulesTarget | Self::ExtensionsTarget => CacheDirRole::CompilerOutput,
+            Self::Review => CacheDirRole::Scratch,
         }
     }
 }
@@ -623,6 +720,7 @@ pub(crate) struct CacheStatus {
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct CacheCategoryStatus {
     pub(crate) name: &'static str,
+    pub(crate) role: &'static str,
     pub(crate) path: String,
     pub(crate) exists: bool,
     pub(crate) bytes: u64,
@@ -1192,6 +1290,180 @@ mod tests {
         assert_eq!(CacheManagedCategory::Layers.name(), "layers");
         assert_eq!(report.removed_files, 1);
         assert!(!layout.layer_cache_dir().exists());
+    }
+
+    /// A cache directory named outside this module is a directory
+    /// `CacheManagedCategory` does not know about, so `polint cache status`
+    /// cannot report it, `polint cache clean` cannot remove it, and the GitHub
+    /// Action cannot decide how to key it - it just quietly accumulates. That is
+    /// how the extension host's target directory went unmanaged, and it also
+    /// meant `POLINT_CACHE_DIR` did not move it.
+    #[test]
+    fn only_this_module_names_a_cache_subdirectory() {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut offenders = Vec::new();
+        let mut pending = vec![src.clone()];
+        while let Some(dir) = pending.pop() {
+            for entry in fs::read_dir(&dir).expect("read source directory") {
+                let path = entry.expect("source entry").path();
+                if path.is_dir() {
+                    pending.push(path);
+                    continue;
+                }
+                if path.extension().and_then(|ext| ext.to_str()) != Some("rs")
+                    || path == src.join("cache/mod.rs")
+                {
+                    continue;
+                }
+                let contents = fs::read_to_string(&path).expect("read source file");
+                // Test modules may spell paths out; production code may not.
+                let production = contents
+                    .split_once("#[cfg(test)]")
+                    .map_or(contents.as_str(), |(before, _)| before);
+                if production.contains("\".polint/cache/") {
+                    offenders.push(path.display().to_string());
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "cache subdirectories belong to CacheLayout, not to their callers: {offenders:?}"
+        );
+    }
+
+    /// Every managed category's directory name, pinned against the cache root.
+    ///
+    /// `action.yml` names these directories literally, so a rename here is a
+    /// silent cache loss there. `cache_layout_matches_the_github_action_contract`
+    /// checks the other half of that contract.
+    #[test]
+    fn cache_layout_directory_names_are_stable() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("cache");
+        let layout = CacheLayout::from_root(&root);
+
+        let relative = |path: PathBuf| {
+            path.strip_prefix(&root)
+                .expect("category stays under the cache root")
+                .to_string_lossy()
+                .replace('\\', "/")
+        };
+
+        assert_eq!(relative(layout.analysis_dir()), "analysis");
+        assert_eq!(relative(layout.layer_cache_dir()), "layers");
+        assert_eq!(relative(layout.derived_dir()), "derived");
+        assert_eq!(relative(layout.semantic_store_dir()), "semantic-store");
+        assert_eq!(
+            relative(layout.extensions_target_dir()),
+            "extensions-target"
+        );
+        assert_eq!(relative(layout.review_dir()), "review");
+        assert_eq!(CacheManagedCategory::RulesTarget.name(), "rules-target");
+
+        match std::env::var_os(POLINT_RULES_TARGET_DIR_ENV).filter(|value| !value.is_empty()) {
+            // The action skips its build cache under this override precisely
+            // because the target directory then leaves the cache root.
+            Some(override_dir) => assert_eq!(
+                layout.rules_target_dir(),
+                absolutize_env_path(&root, PathBuf::from(override_dir))
+            ),
+            None => assert_eq!(relative(layout.rules_target_dir()), "rules-target"),
+        }
+
+        // Every managed category resolves under the cache root, so nothing can
+        // be reported, cleaned, or pruned outside it.
+        for category in CacheManagedCategory::ALL {
+            let path = layout.category_path(*category);
+            if *category == CacheManagedCategory::RulesTarget
+                && std::env::var_os(POLINT_RULES_TARGET_DIR_ENV).is_some()
+            {
+                continue;
+            }
+            assert_eq!(
+                relative(path),
+                category.name(),
+                "{} must live at its own name under the cache root",
+                category.name()
+            );
+        }
+    }
+
+    /// `action.yml` is the published CI contract for this layout: the
+    /// source-validated directories are restored and saved under a key scoped
+    /// to the polint version and config/rule inputs, the compiler-output
+    /// directories under a separate key built from build inputs, and scratch is
+    /// not cached at all.
+    ///
+    /// This test walks the categories rather than a hardcoded list, so adding a
+    /// cache directory fails here until the action says how to treat it.
+    /// Getting it wrong the other way - compiler output under the analysis key -
+    /// would cache a rule-host binary under a key that names no compiler.
+    #[test]
+    fn cache_layout_matches_the_github_action_contract() {
+        let action_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../action.yml");
+        let raw = fs::read_to_string(&action_path).expect("read action.yml");
+        let action: serde_norway::Value =
+            serde_norway::from_str(&raw).expect("action.yml parses as YAML");
+        let steps = action["runs"]["steps"]
+            .as_sequence()
+            .expect("composite action has steps");
+
+        let cached_paths = |step_name: &str| -> Vec<String> {
+            let step = steps
+                .iter()
+                .find(|step| step["name"].as_str() == Some(step_name))
+                .unwrap_or_else(|| panic!("action.yml has no step named {step_name:?}"));
+            step["with"]["path"]
+                .as_str()
+                .unwrap_or_else(|| panic!("step {step_name:?} caches no path"))
+                .lines()
+                .map(|line| line.trim().to_string())
+                .filter(|line| !line.is_empty())
+                .collect()
+        };
+
+        let analysis_paths = cached_paths("Restore polint analysis cache");
+        let build_paths = cached_paths("Restore polint rule-host build cache");
+        assert_eq!(analysis_paths, cached_paths("Save polint analysis cache"));
+        assert_eq!(
+            build_paths,
+            cached_paths("Save polint rule-host build cache")
+        );
+
+        let entry_for =
+            |name: &str| format!("${{{{ inputs.working-directory }}}}/.polint/cache/{name}");
+        for category in CacheManagedCategory::ALL {
+            let entry = entry_for(category.name());
+            let in_analysis = analysis_paths.contains(&entry);
+            let in_build = build_paths.contains(&entry);
+            match category.role() {
+                CacheDirRole::SourceValidated => assert!(
+                    in_analysis && !in_build,
+                    "{} holds source-validated artifacts and belongs only in the analysis entry",
+                    category.name()
+                ),
+                CacheDirRole::CompilerOutput => assert!(
+                    in_build && !in_analysis,
+                    "{} holds compiler output and belongs only in the build entry",
+                    category.name()
+                ),
+                CacheDirRole::Scratch => assert!(
+                    !in_analysis && !in_build,
+                    "{} is per-run scratch and must not be cached",
+                    category.name()
+                ),
+            }
+        }
+
+        // And nothing is cached that no category accounts for.
+        for path in analysis_paths.iter().chain(build_paths.iter()) {
+            assert!(
+                CacheManagedCategory::ALL
+                    .iter()
+                    .any(|category| *path == entry_for(category.name())),
+                "action.yml caches {path}, which is not a managed cache category"
+            );
+        }
     }
 
     proptest! {

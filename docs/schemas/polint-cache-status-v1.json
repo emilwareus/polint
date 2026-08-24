@@ -18,11 +18,23 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["name", "path", "exists", "bytes", "files"],
+        "required": ["name", "role", "path", "exists", "bytes", "files"],
         "properties": {
           "name": {
             "type": "string",
-            "enum": ["analysis", "rules-target", "derived"]
+            "enum": [
+              "analysis",
+              "layers",
+              "derived",
+              "semantic-store",
+              "rules-target",
+              "extensions-target",
+              "review"
+            ]
+          },
+          "role": {
+            "type": "string",
+            "enum": ["source-validated", "compiler-output", "scratch"]
           },
           "path": {
             "type": "string"

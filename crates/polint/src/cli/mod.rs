@@ -608,12 +608,19 @@ enum CacheStatusFormatArg {
     Json,
 }
 
+/// Mirrors `CacheManagedCategory`; `cache_category_arg_covers_every_managed_category`
+/// keeps the two lists, and their user-facing names, in step.
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum CacheCategoryArg {
     All,
     Analysis,
-    RulesTarget,
+    Layers,
     Derived,
+    #[value(name = "semantic-store")]
+    Semantic,
+    RulesTarget,
+    ExtensionsTarget,
+    Review,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -3287,25 +3294,33 @@ fn symbol_precision_label(precision: SymbolPrecision) -> &'static str {
     }
 }
 
+/// The managed category a `--category` value selects, or `None` for `all`.
+fn category_arg_to_managed(category: CacheCategoryArg) -> Option<CacheManagedCategory> {
+    match category {
+        CacheCategoryArg::All => None,
+        CacheCategoryArg::Analysis => Some(CacheManagedCategory::Analysis),
+        CacheCategoryArg::Layers => Some(CacheManagedCategory::Layers),
+        CacheCategoryArg::Derived => Some(CacheManagedCategory::Derived),
+        CacheCategoryArg::Semantic => Some(CacheManagedCategory::Semantic),
+        CacheCategoryArg::RulesTarget => Some(CacheManagedCategory::RulesTarget),
+        CacheCategoryArg::ExtensionsTarget => Some(CacheManagedCategory::ExtensionsTarget),
+        CacheCategoryArg::Review => Some(CacheManagedCategory::Review),
+    }
+}
+
 fn category_arg_to_prune_categories(
     category: Option<CacheCategoryArg>,
 ) -> Vec<CacheManagedCategory> {
-    match category {
-        Some(CacheCategoryArg::All) | None => Vec::new(),
-        Some(CacheCategoryArg::Analysis) => vec![CacheManagedCategory::Analysis],
-        Some(CacheCategoryArg::RulesTarget) => vec![CacheManagedCategory::RulesTarget],
-        Some(CacheCategoryArg::Derived) => vec![CacheManagedCategory::Derived],
+    match category.and_then(category_arg_to_managed) {
+        None => Vec::new(),
+        Some(category) => vec![category],
     }
 }
 
 fn category_arg_to_clean_selection(category: CacheCategoryArg) -> CacheCleanSelection {
-    match category {
-        CacheCategoryArg::All => CacheCleanSelection::All,
-        CacheCategoryArg::Analysis => CacheCleanSelection::Category(CacheManagedCategory::Analysis),
-        CacheCategoryArg::RulesTarget => {
-            CacheCleanSelection::Category(CacheManagedCategory::RulesTarget)
-        }
-        CacheCategoryArg::Derived => CacheCleanSelection::Category(CacheManagedCategory::Derived),
+    match category_arg_to_managed(category) {
+        None => CacheCleanSelection::All,
+        Some(category) => CacheCleanSelection::Category(category),
     }
 }
 
@@ -3323,8 +3338,9 @@ fn render_cache_status_human(status: &CacheStatus) -> String {
     ));
     for category in &status.categories {
         out.push_str(&format!(
-            "- {}: {} files, {} ({})\n  {}\n",
+            "- {} [{}]: {} files, {} ({})\n  {}\n",
             category.name,
+            category.role,
             category.files,
             human_bytes(category.bytes),
             if category.exists {
@@ -4169,7 +4185,7 @@ fn write_review_changeset(
     let json =
         serde_json::to_string(changeset).context("failed to serialize review changeset to JSON")?;
     let cache_layout = CacheLayout::for_repo(root);
-    let review_dir = cache_layout.root().join("review");
+    let review_dir = cache_layout.review_dir();
     std::fs::create_dir_all(&review_dir)
         .with_context(|| format!("failed to create review cache dir {}", review_dir.display()))?;
     let name = format!(
@@ -4473,6 +4489,45 @@ mod tests {
     };
     #[cfg(unix)]
     use super::{ScaffoldWrite, commit_new_rule_scaffold_with};
+
+    /// `--category` is how a user reaches a cache directory, so a directory
+    /// polint manages but the flag cannot name is a directory nobody can clean,
+    /// and a flag value that does not match the directory name is a directory
+    /// nobody can find.
+    #[test]
+    fn cache_category_arg_covers_every_managed_category() {
+        use super::{CacheCategoryArg, CacheManagedCategory, category_arg_to_managed};
+        use clap::ValueEnum;
+
+        let selectable = CacheCategoryArg::value_variants()
+            .iter()
+            .filter_map(|variant| {
+                let category = category_arg_to_managed(*variant)?;
+                let value = variant
+                    .to_possible_value()
+                    .expect("every category is selectable");
+                Some((value.get_name().to_string(), category.name()))
+            })
+            .collect::<Vec<_>>();
+
+        for (value, category) in &selectable {
+            assert_eq!(
+                value, category,
+                "the --category value must be the cache directory's own name"
+            );
+        }
+        assert_eq!(
+            selectable
+                .iter()
+                .map(|(_, category)| *category)
+                .collect::<Vec<_>>(),
+            CacheManagedCategory::ALL
+                .iter()
+                .map(|category| category.name())
+                .collect::<Vec<_>>(),
+            "cache --category must name every managed cache category, in the same order"
+        );
+    }
 
     #[test]
     fn rule_host_dependency_features_match_the_cli_build() {
