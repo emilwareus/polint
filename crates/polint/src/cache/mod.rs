@@ -583,7 +583,7 @@ impl CacheLayout {
             CacheManagedCategory::Analysis => self.analysis_dir(),
             CacheManagedCategory::Layers => self.layer_cache_dir(),
             CacheManagedCategory::Derived => self.derived_dir(),
-            CacheManagedCategory::SemanticStore => self.semantic_store_dir(),
+            CacheManagedCategory::Semantic => self.semantic_store_dir(),
             CacheManagedCategory::RulesTarget => self.rules_target_dir(),
             CacheManagedCategory::ExtensionsTarget => self.extensions_target_dir(),
             CacheManagedCategory::Review => self.review_dir(),
@@ -653,7 +653,9 @@ pub(crate) enum CacheManagedCategory {
     Analysis,
     Layers,
     Derived,
-    SemanticStore,
+    /// The `semantic-store` directory, named for the directory rather than the
+    /// store type that fills it: that type stays private to the kernel.
+    Semantic,
     RulesTarget,
     ExtensionsTarget,
     Review,
@@ -664,7 +666,7 @@ impl CacheManagedCategory {
         Self::Analysis,
         Self::Layers,
         Self::Derived,
-        Self::SemanticStore,
+        Self::Semantic,
         Self::RulesTarget,
         Self::ExtensionsTarget,
         Self::Review,
@@ -675,7 +677,7 @@ impl CacheManagedCategory {
             Self::Analysis => "analysis",
             Self::Layers => "layers",
             Self::Derived => "derived",
-            Self::SemanticStore => "semantic-store",
+            Self::Semantic => "semantic-store",
             Self::RulesTarget => "rules-target",
             Self::ExtensionsTarget => "extensions-target",
             Self::Review => "review",
@@ -684,7 +686,7 @@ impl CacheManagedCategory {
 
     pub(crate) fn role(self) -> CacheDirRole {
         match self {
-            Self::Analysis | Self::Layers | Self::Derived | Self::SemanticStore => {
+            Self::Analysis | Self::Layers | Self::Derived | Self::Semantic => {
                 CacheDirRole::SourceValidated
             }
             Self::RulesTarget | Self::ExtensionsTarget => CacheDirRole::CompilerOutput,

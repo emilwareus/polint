@@ -609,14 +609,15 @@ enum CacheStatusFormatArg {
 }
 
 /// Mirrors `CacheManagedCategory`; `cache_category_arg_covers_every_managed_category`
-/// keeps the two lists in step.
+/// keeps the two lists, and their user-facing names, in step.
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum CacheCategoryArg {
     All,
     Analysis,
     Layers,
     Derived,
-    SemanticStore,
+    #[value(name = "semantic-store")]
+    Semantic,
     RulesTarget,
     ExtensionsTarget,
     Review,
@@ -3300,7 +3301,7 @@ fn category_arg_to_managed(category: CacheCategoryArg) -> Option<CacheManagedCat
         CacheCategoryArg::Analysis => Some(CacheManagedCategory::Analysis),
         CacheCategoryArg::Layers => Some(CacheManagedCategory::Layers),
         CacheCategoryArg::Derived => Some(CacheManagedCategory::Derived),
-        CacheCategoryArg::SemanticStore => Some(CacheManagedCategory::SemanticStore),
+        CacheCategoryArg::Semantic => Some(CacheManagedCategory::Semantic),
         CacheCategoryArg::RulesTarget => Some(CacheManagedCategory::RulesTarget),
         CacheCategoryArg::ExtensionsTarget => Some(CacheManagedCategory::ExtensionsTarget),
         CacheCategoryArg::Review => Some(CacheManagedCategory::Review),
@@ -4490,7 +4491,9 @@ mod tests {
     use super::{ScaffoldWrite, commit_new_rule_scaffold_with};
 
     /// `--category` is how a user reaches a cache directory, so a directory
-    /// polint manages but the flag cannot name is a directory nobody can clean.
+    /// polint manages but the flag cannot name is a directory nobody can clean,
+    /// and a flag value that does not match the directory name is a directory
+    /// nobody can find.
     #[test]
     fn cache_category_arg_covers_every_managed_category() {
         use super::{CacheCategoryArg, CacheManagedCategory, category_arg_to_managed};
@@ -4498,16 +4501,30 @@ mod tests {
 
         let selectable = CacheCategoryArg::value_variants()
             .iter()
-            .filter_map(|variant| category_arg_to_managed(*variant))
-            .map(|category| category.name())
-            .collect::<Vec<_>>();
-        let managed = CacheManagedCategory::ALL
-            .iter()
-            .map(|category| category.name())
+            .filter_map(|variant| {
+                let category = category_arg_to_managed(*variant)?;
+                let value = variant
+                    .to_possible_value()
+                    .expect("every category is selectable");
+                Some((value.get_name().to_string(), category.name()))
+            })
             .collect::<Vec<_>>();
 
+        for (value, category) in &selectable {
+            assert_eq!(
+                value, category,
+                "the --category value must be the cache directory's own name"
+            );
+        }
         assert_eq!(
-            selectable, managed,
+            selectable
+                .iter()
+                .map(|(_, category)| *category)
+                .collect::<Vec<_>>(),
+            CacheManagedCategory::ALL
+                .iter()
+                .map(|category| category.name())
+                .collect::<Vec<_>>(),
             "cache --category must name every managed cache category, in the same order"
         );
     }
