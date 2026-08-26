@@ -33,8 +33,8 @@ Research complete; implementation not started beyond the measurement slice.
 | [`IMPLEMENTATION-PLAN.md`](IMPLEMENTATION-PLAN.md) | Complete. Package graph, boundary design, snapshot format, host/rule protocol, build and artifact lifecycle, threat model, eleven phases with per-task files and acceptance criteria, testing matrix, budgets, migration and release plan, documentation plan, risks, and a requirement→phase traceability table. |
 | [`RESEARCH-BRIEF.md`](RESEARCH-BRIEF.md) | The brief the report answers, kept verbatim so the report's scope is auditable. |
 | [`IMPLEMENTATION-PLAN-BRIEF.md`](IMPLEMENTATION-PLAN-BRIEF.md) | The brief the plan answers, same reason. |
-| Phase A measurement harness | Landed: `polint-bench build-cost`, `make build-cost`, and a measured baseline at [`../evaluation-harness/baselines/build-cost.json`](../evaluation-harness/baselines/build-cost.json). Metric definitions and limits are in [`../evaluation-harness/README.md`](../evaluation-harness/README.md). |
-| Phases B–K | Not started. |
+| Phase A measurement harness | Tasks A1, A3, A4 landed: `polint-bench build-cost`, `make build-cost` / `make build-cost-baseline`, and a measured baseline at [`../evaluation-harness/baselines/build-cost.json`](../evaluation-harness/baselines/build-cost.json). Metric definitions and limits are in [`../evaluation-harness/README.md`](../evaluation-harness/README.md). A2 (more repositories), A5 (extend the per-check cost record), and A6 (a CI job) are outstanding. |
+| Phases B–K | Not started. `IMPLEMENTATION-PLAN.md` §14.1 has the order; B does not depend on A2. |
 
 ## Summary of the conclusion
 
@@ -88,9 +88,10 @@ recorded in `docs/architecture-review/PLAN.md:79` and
 `static-analysis-architecture-review` track, whose first working rule scopes the
 whole set to work landing on that branch
 (`docs/architecture-review/PLAN.md:76-78`); this topic is research plus one
-unpublished measurement crate on a separate branch, targeting `main`.
-It is under the companion ≤ 25-file limit, and the
-Rust it adds is confined to `crates/polint-bench`, changes no product behaviour,
-and is revertible on its own. Splitting the research prose from the harness would
-separate the three unverified figures in `IMPLEMENTATION-PLAN.md` §0 from the
-measurement that replaces them, which is the opposite of the point.
+unpublished measurement crate, on its own branch, targeting `main`. It is under
+the companion ≤ 25-file limit, and the Rust it adds is confined to
+`crates/polint-bench`, changes no product behaviour, and is revertible on its
+own. Splitting the research prose from the harness would
+separate the claims table in `IMPLEMENTATION-PLAN.md` §0 from the measurement
+that turned three of its rows from reported to `[measured]`, which is the
+opposite of the point.

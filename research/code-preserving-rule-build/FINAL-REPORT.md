@@ -241,8 +241,8 @@ What this confirms, and what it corrects:
 - **Confirmed — Cargo runs on every scan.** `warm-noop` and `warm-source-edit`
   compile nothing and still start Cargo once. That is the §4.1 claim, measured.
 - **Confirmed — the counts are deterministic.** Cargo starts, `rustc` starts,
-  compiled units, retained bytes, and retained file counts were byte-identical
-  across all three runs of every cell. Only wall-clock and rule-host RSS moved.
+  compiled units, retained bytes, and retained file counts were identical across
+  all three runs of every cell. Only wall-clock and rule-host RSS moved.
 - **Corrected — the retained figure.** 582.7 MB, not 537 MB. The two are not the
   same quantity: 537 MB is the Action's figure *after* it prunes the rule
   package's own output, and it was taken on different hardware with a different
