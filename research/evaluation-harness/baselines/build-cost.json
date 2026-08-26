@@ -1,0 +1,224 @@
+{
+  "schema_version": "polint-build-cost-1",
+  "command": "make build-cost",
+  "environment": {
+    "label": "linux-container-6cpu",
+    "os": "linux",
+    "arch": "x86_64",
+    "logical_cpus": 6,
+    "cargo_version": "cargo 1.95.0 (f2d3ce0bd 2026-03-21)",
+    "rustc_version": "rustc 1.95.0 (59807616e 2026-04-14)",
+    "polint_version": "polint 0.2.1",
+    "rules_profile": "release",
+    "cargo_offline": false
+  },
+  "limits": [
+    "compiler_peak_rss_bytes is null: peak RSS comes from the rule host's own POLINT_GOLDEN_COST_PATH sidecar and the harness adds no process instrumentation, so cargo and rustc memory is not observed.",
+    "rule_host_* describes the last rule-host process a run started; a run that starts one per fixture case reports only the last.",
+    "Rule packs resolve polint through a path dependency on this checkout, so cargo_registry_* excludes polint itself and a cold cell downloads only the third-party closure.",
+    "RUSTC_WRAPPER is installed to count compiled units and participates in Cargo fingerprints, so every cell primes its own state; numbers are not comparable to runs taken without the harness.",
+    "One run per cell was recorded. Invocation and compiled-unit counts are stable across runs; wall-clock and byte totals move with machine load and free disk. Re-run with --runs N for a median."
+  ],
+  "cells": [
+    {
+      "repo": "examples/basic",
+      "scenario": "cold",
+      "status": "ok",
+      "failure_detail": null,
+      "rule_packs": 1,
+      "test_cases": 0,
+      "test_cases_generated": false,
+      "runs": [
+        {
+          "index": 0,
+          "status": "ok",
+          "failure_detail": null,
+          "metrics": {
+            "cargo_failed_invocations": 0,
+            "cargo_invocations": 1,
+            "cargo_registry_bytes_after": 410109144,
+            "cargo_registry_bytes_before": 410109144,
+            "cargo_wall_clock_ms": 417499,
+            "compiled_units": 225,
+            "compiler_peak_rss_bytes": null,
+            "polint_cache_bytes_after": 3362,
+            "polint_cache_bytes_before": 0,
+            "polint_cache_bytes_written": 3362,
+            "rule_host_peak_rss_bytes": 73949184,
+            "rule_host_peak_rss_delta_bytes": 0,
+            "rule_host_wall_clock_ms": 6,
+            "rule_tests_failed": null,
+            "rule_tests_passed": null,
+            "rule_tests_total": null,
+            "rules_target_bytes_after": 582705785,
+            "rules_target_bytes_before": 0,
+            "rules_target_bytes_written": 582705785,
+            "rules_target_files_after": 1708,
+            "rustc_invocations": 241,
+            "wall_clock_ms": 417563
+          }
+        }
+      ]
+    },
+    {
+      "repo": "examples/basic",
+      "scenario": "warm-noop",
+      "status": "ok",
+      "failure_detail": null,
+      "rule_packs": 1,
+      "test_cases": 0,
+      "test_cases_generated": false,
+      "runs": [
+        {
+          "index": 0,
+          "status": "ok",
+          "failure_detail": null,
+          "metrics": {
+            "cargo_failed_invocations": 0,
+            "cargo_invocations": 1,
+            "cargo_registry_bytes_after": 410109144,
+            "cargo_registry_bytes_before": 410109144,
+            "cargo_wall_clock_ms": 988,
+            "compiled_units": 0,
+            "compiler_peak_rss_bytes": null,
+            "polint_cache_bytes_after": 3362,
+            "polint_cache_bytes_before": 3362,
+            "polint_cache_bytes_written": 0,
+            "rule_host_peak_rss_bytes": 68947968,
+            "rule_host_peak_rss_delta_bytes": 0,
+            "rule_host_wall_clock_ms": 4,
+            "rule_tests_failed": null,
+            "rule_tests_passed": null,
+            "rule_tests_total": null,
+            "rules_target_bytes_after": 582709408,
+            "rules_target_bytes_before": 582709408,
+            "rules_target_bytes_written": 28547,
+            "rules_target_files_after": 1708,
+            "rustc_invocations": 0,
+            "wall_clock_ms": 1017
+          }
+        }
+      ]
+    },
+    {
+      "repo": "examples/basic",
+      "scenario": "warm-rule-edit",
+      "status": "ok",
+      "failure_detail": null,
+      "rule_packs": 1,
+      "test_cases": 0,
+      "test_cases_generated": false,
+      "runs": [
+        {
+          "index": 0,
+          "status": "ok",
+          "failure_detail": null,
+          "metrics": {
+            "cargo_failed_invocations": 0,
+            "cargo_invocations": 1,
+            "cargo_registry_bytes_after": 410109144,
+            "cargo_registry_bytes_before": 410109144,
+            "cargo_wall_clock_ms": 2545,
+            "compiled_units": 1,
+            "compiler_peak_rss_bytes": null,
+            "polint_cache_bytes_after": 3362,
+            "polint_cache_bytes_before": 3362,
+            "polint_cache_bytes_written": 0,
+            "rule_host_peak_rss_bytes": 70053888,
+            "rule_host_peak_rss_delta_bytes": 0,
+            "rule_host_wall_clock_ms": 3,
+            "rule_tests_failed": null,
+            "rule_tests_passed": null,
+            "rule_tests_total": null,
+            "rules_target_bytes_after": 582713037,
+            "rules_target_bytes_before": 582713037,
+            "rules_target_bytes_written": 25940604,
+            "rules_target_files_after": 1708,
+            "rustc_invocations": 1,
+            "wall_clock_ms": 2575
+          }
+        }
+      ]
+    },
+    {
+      "repo": "examples/basic",
+      "scenario": "warm-source-edit",
+      "status": "ok",
+      "failure_detail": null,
+      "rule_packs": 1,
+      "test_cases": 0,
+      "test_cases_generated": false,
+      "runs": [
+        {
+          "index": 0,
+          "status": "ok",
+          "failure_detail": null,
+          "metrics": {
+            "cargo_failed_invocations": 0,
+            "cargo_invocations": 1,
+            "cargo_registry_bytes_after": 410109144,
+            "cargo_registry_bytes_before": 410109144,
+            "cargo_wall_clock_ms": 505,
+            "compiled_units": 0,
+            "compiler_peak_rss_bytes": null,
+            "polint_cache_bytes_after": 5680,
+            "polint_cache_bytes_before": 3362,
+            "polint_cache_bytes_written": 3362,
+            "rule_host_peak_rss_bytes": 69406720,
+            "rule_host_peak_rss_delta_bytes": 0,
+            "rule_host_wall_clock_ms": 3,
+            "rule_tests_failed": null,
+            "rule_tests_passed": null,
+            "rule_tests_total": null,
+            "rules_target_bytes_after": 582714487,
+            "rules_target_bytes_before": 582714487,
+            "rules_target_bytes_written": 28568,
+            "rules_target_files_after": 1708,
+            "rustc_invocations": 0,
+            "wall_clock_ms": 523
+          }
+        }
+      ]
+    },
+    {
+      "repo": "examples/basic",
+      "scenario": "test-suite",
+      "status": "ok",
+      "failure_detail": null,
+      "rule_packs": 1,
+      "test_cases": 2,
+      "test_cases_generated": true,
+      "runs": [
+        {
+          "index": 0,
+          "status": "ok",
+          "failure_detail": null,
+          "metrics": {
+            "cargo_failed_invocations": 0,
+            "cargo_invocations": 2,
+            "cargo_registry_bytes_after": 410109144,
+            "cargo_registry_bytes_before": 410109144,
+            "cargo_wall_clock_ms": 291984,
+            "compiled_units": 225,
+            "compiler_peak_rss_bytes": null,
+            "polint_cache_bytes_after": 3362,
+            "polint_cache_bytes_before": 0,
+            "polint_cache_bytes_written": 3362,
+            "rule_host_peak_rss_bytes": 69636096,
+            "rule_host_peak_rss_delta_bytes": 0,
+            "rule_host_wall_clock_ms": 2,
+            "rule_tests_failed": 2,
+            "rule_tests_passed": 0,
+            "rule_tests_total": 2,
+            "rules_target_bytes_after": 600858908,
+            "rules_target_bytes_before": 0,
+            "rules_target_bytes_written": 600858908,
+            "rules_target_files_after": 1710,
+            "rustc_invocations": 241,
+            "wall_clock_ms": 292019
+          }
+        }
+      ]
+    }
+  ]
+}

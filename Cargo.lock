@@ -1198,6 +1198,10 @@ version = "0.2.1"
 dependencies = [
  "anyhow",
  "polint",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml",
 ]
 
 [[package]]

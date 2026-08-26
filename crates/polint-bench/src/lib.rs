@@ -3,6 +3,8 @@
 //! Used by the `polint-bench` binary and integration tests to see where time
 //! goes: config, disk+`AnalysisDb`, Go parse/facts, TS parse/facts, `run_rules`.
 
+pub mod build_cost;
+
 use anyhow::Result;
 use polint::_bench::cache;
 use polint::_bench::config::load_config;

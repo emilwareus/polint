@@ -59,6 +59,7 @@ Add `public surface leak gate (ubuntu-latest)` AND `public surface leak gate (ma
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260826-bc1 | Build-cost baseline harness for the repo-local rule-host path (`polint-bench build-cost`, `make build-cost`, measured baseline) | 2026-08-26 | working tree | [260826-bc1-build-cost-baseline-harness](./quick/260826-bc1-build-cost-baseline-harness/) |
 | 260811-t-intern-c-factmeta | PRE-SHIP T-INTERN-C: migrate FactMeta/stable_key_owners to StableKeyId | 2026-08-11 | 932cfd0b | [260811-t-intern-c-factmeta](./quick/260811-t-intern-c-factmeta/) |
 | 260810-t-intern-b-solver-summaries-audit-fix | PRE-SHIP T-INTERN-B solver/summaries audit-fix: StableKeyId Ord/serde/normalize findings | 2026-08-10 | 39097eeb | [260810-t-intern-b-solver-summaries-audit-fix](./quick/260810-t-intern-b-solver-summaries-audit-fix/) |
 | 260810-t-intern-b-rest-solver-summaries | PRE-SHIP T-INTERN-B rest-solver-summaries: intern solver/summaries/slicing identities | 2026-08-10 | 1a2d6238 | [260810-t-intern-b-rest-solver-summaries](./quick/260810-t-intern-b-rest-solver-summaries/) |
