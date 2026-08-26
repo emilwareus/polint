@@ -7,14 +7,17 @@
 
 ## 0. Provenance and verification note
 
-A prior research report exists at `/opt/data/research/polint-builds-code-preserving-2026-08-25/report.md`. Its headline figures are carried here as **unverified reported measurements**, explicitly labelled, and Phase A exists to replace them with measured values before any design decision leans on them. Claims verified directly against the repository are marked **[verified]** with the evidence that establishes them.
+A prior research report exists at `/opt/data/research/polint-builds-code-preserving-2026-08-25/report.md`. Its headline figures entered this plan as **unverified reported measurements**, and Phase A existed to replace them with measured values before any design decision leaned on them. **Phase A has now run.** Claims verified directly against the repository are marked **[verified]**; claims replaced by measurement are marked **[measured]** and cite the cell of `research/evaluation-harness/baselines/build-cost.json` that carries them.
+
+The measured cells are `examples/basic` × {`cold`, `warm-noop`, `warm-rule-edit`, `warm-source-edit`, `test-suite`}, release profile, median of three runs on one machine (`environment.label = linux-container-6cpu`, `cargo`/`rustc` 1.95.0). Reproduce with `make build-cost`; rewrite with `make build-cost-baseline BUILD_COST_LABEL=<machine> BUILD_COST_RUNS=<n>`.
 
 | Reported claim | Status | Evidence |
 | --- | --- | --- |
 | "~238k-line polint engine" | **[verified]** | `find crates/polint/src -name '*.rs' \| xargs wc -l` → `238359 total` |
-| "~223 compiled units" for a rule-pack build | plausible, unverified | `Cargo.lock` has 274 `[[package]]` entries workspace-wide; the isolated leak-probe lockfile (`tests/fixtures/public-surface-leak-probe/Cargo.lock`, `polint` with `default-features = false`, no language features) has 129 packages. Adding `lang-go` (`tree-sitter`, `tree-sitter-go`) + `lang-typescript` (18 `oxc*` packages) plus build-script and proc-macro units lands in that range. Re-measure in Phase A with `cargo build --timings`. |
-| "~185.4s cold build" | unverified | Phase A measures it on both reference machines. |
-| "~537MB target retention" | unverified | A matching control surface exists: `action.yml` input `build-cache-max-size-mb` (default `""`, i.e. no ceiling) and the `.polint/cache/rules-target` directory. Phase A measures actual retention. |
+| "~223 compiled units" for a rule-pack build | **[measured]** — it is **225** | `cold` cell: `compiled_units = 225`, `rustc_invocations = 241` (the other 16 are Cargo probes), `cargo_invocations = 1`. Identical across all three runs. The pre-measurement estimate (129 packages in the leak-probe lockfile plus `lang-go`, `lang-typescript`'s 18 `oxc*` packages, build scripts and proc macros) was in range, but the number is now observed rather than inferred |
+| "~185.4s cold build" | **[measured]** — **187.3 s** on the recorded machine, and **not portable** | `cold` cell: `wall_clock_ms = 187303` (runs: 185121, 243199, 187303). The same cell on the same host measured 417.6 s while the host was contended. Treat wall-clock as machine- and load-specific; the counts are not |
+| "~537MB target retention" | **[measured]** — **582.7 MB** across 1,708 files, and it is a different quantity | `cold` cell: `rules_target_bytes_after = 582705787`, `rules_target_files_after = 1708`, identical across all three runs. 537 MB was the GitHub Action's figure *after* it prunes the rule package's own output (`docs/GITHUB-ACTION.md:162-166`); the harness prunes nothing. The control surface still exists: `action.yml` input `build-cache-max-size-mb` (default `""`, i.e. no ceiling) |
+| "Cargo runs on every scan, not only the first" | **[measured]** | `warm-noop` and `warm-source-edit`: `cargo_invocations = 1`, `compiled_units = 0`, `wall_clock_ms` 157 and 163. A rule edit is `cargo_invocations = 1`, `compiled_units = 1`, 735 ms. So §1.1's "zero Cargo invocations when nothing changed" removes a real per-scan cost, not a hypothetical one |
 | "shells out to `cargo run` and recompiles the whole engine" | **[verified]** | `crates/polint/src/cli/mod.rs:4260-4319` (`run_local_rule_host_kind`), `:4350-4407` (`run_local_rule_host_inspect`), `crates/polint/src/rule_test.rs:323-373` (`run_rule_host_check`), `crates/polint/src/analysis/extensions/host.rs:128-162` (extension host) |
 
 ---
@@ -46,7 +49,7 @@ These are **decisions already made**, not open questions.
 | `fn f(ctx: &mut RuleCtx<'_>, imports: Imports<'_>, …) -> RuleResult` | `crates/polint/src/core/rule.rs:155-249`, `crates/polint/src/sdk/facts.rs` |
 | `polint::runner::run_cli(vec![…])` in `.polint/rules/src/main.rs` | `crates/polint/src/runner/mod.rs:144-157` |
 | ordinary Rust helpers, control flow, `?`, `anyhow::bail!` | `crates/polint/src/rule_error.rs:10-20` |
-| the `polint::sdk::prelude` allowlist (74 names) | `crates/polint/tests/public_surface_leak.rs:41+` |
+| the `polint::sdk::prelude` allowlist (116 names) | `crates/polint/tests/public_surface_leak.rs:41+` |
 
 **I3 — Borrowed typed views stay borrowed.** `SourceFiles<'a>`, `Imports<'a>`, `Symbols<'a>` … are `Copy` structs holding `&'a AnalysisDb` and returning `&'a [Fact]` / `impl Iterator<Item = &'a Fact>` (`crates/polint/src/sdk/facts.rs:23-52, 258-291, 495-575`). Signatures and lifetimes are unchanged; only what `AnalysisDb` *is* inside the rule process changes. No view may start returning owned `Vec<Fact>`.
 
@@ -87,7 +90,7 @@ Sizes (`wc -l`, Rust only):
 | `crates/polint/src/analysis_plan.rs` | 1,762 | capability planning |
 | `crates/polint/src/sdk/policy.rs` | 958 | policy query vocabulary |
 | `crates/polint/src/rule_test.rs` | 752 | `polint test` fixture runner |
-| `crates/polint/src/runner/mod.rs` | 525 | `run_cli` (rule-host CLI) |
+| `crates/polint/src/runner/mod.rs` | 524 | `run_cli` (rule-host CLI) |
 | `crates/polint/src/rule_manifest.rs` | 452 | manifest + inspect wire types |
 | `crates/polint/src/core/rule.rs` | 451 | `Rule`, `RuleCtx`, `run_rules` |
 | `crates/polint/src/sdk/scope.rs` | 183 | glob scoping helpers |
@@ -187,7 +190,7 @@ Cargo's `package =` rename makes the extern crate name `polint`, so `use polint:
 | --- | --- | --- |
 | Workspace member packages | 21 (4 + 17 example packs) | 23 |
 | Published to crates.io | 2 (`polint`, `polint-macros`) | **3** (`polint`, `polint-macros`, `polint-sdk`); `polint-engine` is `publish = false` initially, promoted only if Phase J needs it |
-| `polint::sdk::prelude` names | 74 | **74** (frozen; `tests/public_surface_leak.rs` unchanged) |
+| `polint::sdk::prelude` names | 116 | **116** (frozen; `tests/public_surface_leak.rs` unchanged) |
 | New public API | — | `polint_sdk::protocol::*` and `polint_sdk::snapshot::*`, both `#[doc(hidden)]` |
 | Removed public API | — | none |
 | `polint::_bench` (`lib.rs:62-143`) | engine types | re-pointed at `polint_engine::_bench`; `polint-bench` unchanged |
@@ -212,11 +215,25 @@ Cargo's `package =` rename makes the extern crate name `polint`, so `use polint:
 | `rule_error.rs` (20) | `polint_sdk::rule::error` | verbatim |
 | `sdk/{mod,facts,policy,scope}.rs` (3,385) | `polint_sdk::sdk` | views re-pointed at the snapshot db; policy views become RPC (§4.5) |
 | `rule_manifest.rs` (452) | `polint_sdk::manifest` | needed by **both** sides |
-| `runner/mod.rs` (525) | `polint_sdk::runner` | rewritten as a protocol client (§5) |
+| `runner/mod.rs` (524) | `polint_sdk::runner` | rewritten as a protocol client (§5) |
 | `path_context.rs:6-64` (`PathContextIndex`) | `polint_sdk::core::path_context` | drop the `PathContextsConfig`-taking `build` (engine-side); keep `related_paths` plus a `from_pairs` constructor for snapshot rehydration |
 | `cache/mod.rs:872-885` `stable_hash` | `polint_sdk::hash::stable_hash` | **must keep separator byte `0xfe`** (`:881`), not `0xff` — `analysis_neutral/hash.rs:13` uses `0xff` and is a *different* function. `PolicyViolation::stable_key` (`sdk/policy.rs:161-182`) depends on the `0xfe` variant. |
 
 **Total moved: ~7,000 LOC of the 238,359.**
+
+**Why that boundary is the right one, checked rather than assumed.** `sdk/facts.rs`
+— the file every rule actually reads facts through — imports exactly three things
+beyond `crate::core` (`sdk/facts.rs:7-18`):
+
+| Import | Disposition |
+| --- | --- |
+| `crate::sdk::policy::{EventPattern, FlowQuery, GuardQuery, LifecycleQuery, PolicyViolation, ReachQuery}` | moves to the SDK with the rest of `sdk/` |
+| `crate::policy_queries::{matching_events, forbidden_reachable, missing_guards, missing_cleanup, forbidden_flows}` | becomes host RPC (§4.5) — the only five call sites |
+| `crate::symbol_graph::query` | a two-line re-export of `analysis_neutral/symbol_graph/query.rs`, whose 8 public functions take `&dyn FactDatabase` and are reimplemented in the SDK against `&AnalysisDb` (D5) |
+
+Nothing in the typed fact surface reaches `analysis_kernel`, `go`, `ts`,
+`analysis`, `cache`, or `config`. That is what makes the split mechanical rather
+than a redesign.
 
 ### 4.2 What stays in `polint-engine`
 
@@ -543,7 +560,7 @@ pub struct RuleArtifactKeyInputs<'a> {
 }
 ```
 
-`key = cache::stable_hash(&[...])` (`crates/polint/src/cache/mod.rs:874-885`, the `0xfe` variant), rendered as the 16-hex-char string the codebase already uses for cache filenames (`cli/mod.rs:4191-4194`, `:317`).
+`key = cache::stable_hash(&[...])` (`crates/polint/src/cache/mod.rs:874-885`, the `0xfe` variant), rendered as the 16-hex-char string the codebase already uses for cache filenames (`cli/mod.rs:4191-4194`, `:106-107`).
 
 Deliberately **excluded**: `.polint.toml` contents, `--profile`, `--only-rule`, the file set, the changeset. Those change *what the host asks the rule binary to do*, never *what the binary is*; including them would defeat the cache on every scope change.
 
@@ -867,14 +884,23 @@ Throughout Phases C–G a single feature flag governs the new path:
 
 No product behaviour changes. This phase exists so every later claim is checkable, and so the report's unverified numbers (§0) are replaced with measured ones.
 
-| # | Task | Files | Depends | Acceptance |
-| --- | --- | --- | --- | --- |
-| A1 | `polint-bench build-cost` subcommand: runs a scenario, counts Cargo invocations (via a `POLINT_CARGO` shim script that appends to a log), records wall-clock, `cargo build --timings` unit count, `target`/cache bytes+files before/after, and `CARGO_HOME/registry` byte delta | new `crates/polint-bench/src/build_cost.rs`; `crates/polint-bench/src/main.rs` (96), `src/lib.rs` (193) | — | `cargo run -p polint-bench -- build-cost --repo examples/basic --scenario cold` emits JSON with all 8 metrics |
-| A2 | Scenario matrix: `cold`, `warm-noop`, `warm-rule-edit`, `warm-source-edit`, `test-suite` over `examples/basic`, `examples/go-import-boundaries`, and the pinned scale repos | `crates/polint-bench/src/build_cost.rs`; `scripts/fetch-scale-repos.py`; `research/evaluation-harness/suites/*-scale.toml` | A1 | all 15 cells run; missing scale checkouts skip loudly, matching `tests/golden.rs` behaviour for optional targets |
-| A3 | Commit measured baseline | new `research/evaluation-harness/baselines/build-cost.json` (schema `polint-build-cost-1`) | A2 | file exists; every metric non-null on 2 vCPU/4 GB and on a dev machine; §10 tables filled from it |
-| A4 | `make build-cost` | `Makefile` (after `scale-corpus-run`) | A3 | target runs A2 and diffs against A3 |
-| A5 | Extend the per-check cost record with `cargo_invocations: u32`, `rule_build_ms: u64`, `snapshot_bytes: u64`, `snapshot_encode_ms`/`decode_ms: u64`; bump `SCHEMA_VERSION` to `polint-golden-cost-2` | `crates/polint/src/golden_cost.rs:20, 23-46`; `crates/polint/tests/golden.rs:29, 41-49`; all sidecars under `tests/golden/outputs/` | — | `POLINT_UPDATE_GOLDEN_COSTS=1 cargo test -p polint --test golden` regenerates; `cargo test -p polint --test golden` green |
-| A6 | CI job `build-cost` (non-blocking; uploads the JSON artifact) | `.github/workflows/ci.yml`, after `gates` | A4 | job runs on PRs touching `crates/**` |
+**A1, A3, and A4 have landed** (`perf(bench): add the rule-host build-cost baseline harness`). A2, A5, and A6 have not. The table below records what was built, including where it diverged from the original task text, so a later agent does not re-derive a decision that was already made.
+
+| # | Task | Status | Files | Depends | Acceptance |
+| --- | --- | --- | --- | --- | --- |
+| A1 | `polint-bench build-cost` subcommand: runs a scenario, counts Cargo invocations, records wall-clock, compiled units, `target`/cache bytes+files before/after, and the `CARGO_HOME/registry` byte delta | **done** | `crates/polint-bench/src/build_cost/{mod,scratch,shim}.rs`; `crates/polint-bench/src/main.rs`, `src/lib.rs`; `crates/polint-bench/Cargo.toml` | — | `polint-bench build-cost --repo examples/basic --scenario cold` emits a `polint-build-cost-1` report carrying the whole `METRIC_KEYS` set, with any metric it could not observe `null` and named in `limits` |
+| A2 | Widen the matrix: the five scenarios over `examples/go-import-boundaries` and the pinned scale repos, alongside `examples/basic` | **outstanding** | `crates/polint-bench/src/build_cost/scratch.rs`; `scripts/fetch-scale-repos.py`; `research/evaluation-harness/suites/*-scale.toml` | A1 | every requested cell runs; missing scale checkouts skip loudly, matching `tests/golden.rs` behaviour for optional targets. Needs `scanned_sources` to walk subdirectories first — it reads only repository-root files today, so `warm-source-edit` and `test-suite` fail on a repo that nests its sources |
+| A3 | Commit measured baseline | **done for one machine** | `research/evaluation-harness/baselines/build-cost.json` (schema `polint-build-cost-1`); `research/evaluation-harness/README.md` | A1 | the file parses as the schema, carries no machine-local path, and states its own limits (both asserted by `the_committed_baseline_matches_the_schema_and_has_no_machine_paths`). The 2 vCPU / 4 GB rig is **not** recorded; absent machines stay absent rather than estimated |
+| A4 | `make build-cost` / `make build-cost-baseline` | **done** | `Makefile` (after `scale-corpus-run`) | A3 | `make build-cost` re-runs the matrix and prints the measured/baseline ratio per headline metric; `make build-cost-baseline BUILD_COST_LABEL=<machine> BUILD_COST_RUNS=<n>` rewrites the artifact |
+| A5 | Extend the per-check cost record with `cargo_invocations: u32`, `rule_build_ms: u64`, `snapshot_bytes: u64`, `snapshot_encode_ms`/`decode_ms: u64`; bump `SCHEMA_VERSION` to `polint-golden-cost-2` | **outstanding** | `crates/polint/src/golden_cost.rs:20, 23-46`; `crates/polint/tests/golden.rs:29, 41-49`; all sidecars under `tests/golden/outputs/` | — | `POLINT_UPDATE_GOLDEN_COSTS=1 cargo test -p polint --test golden` regenerates; `cargo test -p polint --test golden` green |
+| A6 | CI job `build-cost` (non-blocking; uploads the JSON artifact) | **outstanding** | `.github/workflows/ci.yml`, after `gates` | A4 | job runs on PRs touching `crates/**`. Note the cost: a cold cell is a full rule-host build, so this job is minutes, not seconds |
+
+Decisions A1 made that the original task text did not anticipate:
+
+* **Compiled units are counted, not read from `cargo build --timings`.** The Cargo shim installs itself as `RUSTC_WRAPPER` and counts `rustc` invocations that carry `--crate-name` and no `--print`/`-vV` probe. This observes the number instead of parsing a report, and it is the same mechanism a later "0 Cargo invocations" assertion needs. The cost is that `RUSTC_WRAPPER` participates in Cargo's fingerprint, so every cell primes its own state and numbers are not comparable to a run taken without the harness — recorded in the artifact's `limits`.
+* **The shim is the `polint-bench` binary itself**, selected through `POLINT_CARGO`, not a generated shell script: one binary, no shell-quoting or Windows `.cmd` problem.
+* **`compiler_peak_rss_bytes` is never observed.** Rule-host peak RSS comes from the `POLINT_GOLDEN_COST_PATH` sidecar the engine already writes, and A1 deliberately added no instrumentation to `crates/polint/src`. Cargo and `rustc` memory would need process-level instrumentation the harness does not have, so the metric is `null` in every report. **This is why A3's acceptance is not "every metric non-null."**
+* **Fixture cases for `test-suite` are generated**, because no example repository ships `.polint/tests`. A generated case asserts nothing, so its pass/fail tally carries no signal; the case count and the Cargo invocations it causes do.
 
 **Rollback:** delete the bench subcommand and the CI job. No product code touched except additive `golden_cost.rs` fields.
 
@@ -905,7 +931,7 @@ No behaviour change. At the end of Phase C the product still runs the legacy pat
 | C5 | Move `core/rule.rs:18-249` + `rule_error.rs` → `polint_sdk::rule`; keep `Rule::run(&AnalysisDb, &mut RuleCtx)`; `AnalysisDb` is a **temporary alias** to `polint_engine::core::HostFactDb` behind a `sdk-engine-db` feature so this PR compiles unchanged | `crates/polint/src/core/rule.rs`, `crates/polint/src/core/mod.rs:113-114`, `crates/polint/src/rule_error.rs` | C1–C4 | `cargo test -p polint --lib --all-features` green; `tests/consumer_api_compat.rs` compiles untouched |
 | C6 | Move `core/rule.rs:277-410` executor to `polint_sdk::rule::exec`, replacing `rayon::par_iter` (`:361-368`) with `std::thread::scope` + index-ordered collection | `crates/polint/src/core/rule.rs` | C5 | diagnostics for `examples/*` byte-identical (`cargo test -p polint --test golden`); `rayon` gone from the SDK closure (B2) |
 | C7 | Move `rule_manifest.rs` (452) → `polint_sdk::manifest` | `crates/polint/src/rule_manifest.rs`, `crates/polint/src/runner/mod.rs:11`, `crates/polint/src/cli/mod.rs` | C5 | `inspect_rule_report_sorts_rules_and_uses_stable_top_level_fields` (`rule_manifest.rs:406-451`) passes with the exact expected JSON string |
-| C8 | Move `sdk/{mod,facts,policy,scope}.rs` (3,385) → `polint_sdk::sdk`; add `Serialize`/`Deserialize` to the 14 policy types (`sdk/policy.rs:16-620`); `polint::sdk` becomes `pub use polint_sdk::sdk;` | those four files + `crates/polint/src/lib.rs:10` | C5–C7 | `cargo test -p polint --test public_surface_leak` green with `ALLOWED_PRELUDE` **unchanged** (all 74 names) |
+| C8 | Move `sdk/{mod,facts,policy,scope}.rs` (3,385) → `polint_sdk::sdk`; add `Serialize`/`Deserialize` to the 14 policy types (`sdk/policy.rs:16-620`); `polint::sdk` becomes `pub use polint_sdk::sdk;` | those four files + `crates/polint/src/lib.rs:10` | C5–C7 | `cargo test -p polint --test public_surface_leak` green with `ALLOWED_PRELUDE` **unchanged** (all 116 names) |
 | C9 | Move `diagnostics/mod.rs` types (§4.1 list) to `polint_sdk::diagnostics`; renderers stay | `crates/polint/src/diagnostics/mod.rs` | C2 | `cargo test -p polint --test golden`, `--test cli` green; `docs/schemas/polint-report-v1.json` unchanged |
 | C10 | Split the heavy crate: `crates/polint` keeps `src/main.rs` plus a facade `lib.rs` re-exporting `polint_sdk::{sdk, runner, rule}` and `polint_engine::run_main`; everything else moves to new `crates/polint-engine` | `Cargo.toml`, new `crates/polint-engine/Cargo.toml`, a `git mv` of `crates/polint/src/*` except `main.rs`/`lib.rs`; `crates/polint/tests/*` move to `crates/polint-engine/tests/` **except** `consumer_api_compat.rs`, `public_surface_leak.rs`, `cargo_install_smoke.rs`, which stay with `polint` | C1–C9 | `make check` green; `cargo install --locked --path crates/polint --force` produces a working `polint` (`tests/cargo_install_smoke.rs`) |
 | C11 | Rename `polint_engine::core::AnalysisDb` → `HostFactDb`; drop the C5 alias; `polint::sdk::__private::AnalysisDb` (`sdk/mod.rs:66`) now names an SDK type with the same accessor surface, backed by `FactSnapshot` | `crates/polint-engine/src/core/db.rs:142`, `crates/polint-engine/src/core/mod.rs:106`, `crates/polint-sdk/src/sdk/db.rs` (new) | C10, D1–D4 | `polint-macros` unchanged (verified by `cargo test -p polint-macros`) |
@@ -933,7 +959,7 @@ No behaviour change. At the end of Phase C the product still runs the legacy pat
 | --- | --- | --- | --- | --- |
 | E1 | Protocol types + schema constants (`polint-rule-host-hello-v1`, `-run-v1`, `-policy-v1`), all `#[serde(rename_all="snake_case", deny_unknown_fields)]` | new `crates/polint-sdk/src/protocol/{mod,wire}.rs`, modelled on `crates/polint-engine/src/analysis_neutral/extensions/protocol.rs:1-128` | C-final, D2 | unknown-field rejection tests mirroring `extensions/protocol.rs:134-162` |
 | E2 | Length-prefixed frame codec (`u32` LE + JSON), reader/writer, 64 MiB cap | `crates/polint-sdk/src/protocol/frame.rs` | E1 | unit tests: zero-length, oversized, truncated, split-across-reads |
-| E3 | Rewrite `runner::run_cli` as the protocol client: parse `--polint-rule-protocol <n>`, Hello, loop on RunRequest, execute via `polint_sdk::rule::exec`, respond; **no clap, no tracing-subscriber** | `crates/polint-sdk/src/runner/mod.rs` (from `crates/polint-engine/src/runner/mod.rs`, 525) | E1, E2, D4 | `polint::runner::run_cli(vec![…])` signature unchanged (`ExitCode` return); B2 shows `clap` and `tracing-subscriber` gone |
+| E3 | Rewrite `runner::run_cli` as the protocol client: parse `--polint-rule-protocol <n>`, Hello, loop on RunRequest, execute via `polint_sdk::rule::exec`, respond; **no clap, no tracing-subscriber** | `crates/polint-sdk/src/runner/mod.rs` (from `crates/polint-engine/src/runner/mod.rs`, 524) | E1, E2, D4 | `polint::runner::run_cli(vec![…])` signature unchanged (`ExitCode` return); B2 shows `clap` and `tracing-subscriber` gone |
 | E4 | Engine-side `RuleHost` client: spawn, Hello, plan, snapshot, RunRequest, collect | new `crates/polint-engine/src/rule_host/{mod,client}.rs` | E1–E3, D3 | drives `examples/basic` end-to-end behind `POLINT_RULE_BACKEND=protocol` |
 | E5 | Policy RPC: `PolicyChannel` in the SDK (`Mutex<Framed>`), `PolicyServer` in the engine dispatching to `policy_queries::{matching_events, forbidden_reachable, missing_guards, missing_cleanup, forbidden_flows}` (`policy_queries.rs:23-49`) | `crates/polint-sdk/src/sdk/facts.rs:883-962`, `crates/polint-sdk/src/sdk/policy_channel.rs`, `crates/polint-engine/src/rule_host/policy.rs` | E4, C8 | a rule generated by `polint new-rule --template unsafe-deserialization` produces byte-identical diagnostics under both backends |
 | E6 | Process controls: `env_clear()` + allowlist, empty cwd, deadlines, output caps, process-group/Job-Object kill, stdin-EOF cancellation | `crates/polint-engine/src/rule_host/process.rs`, reusing `crates/polint-engine/src/analysis/extensions/host.rs:332-379` and the Windows Job Object code | E4 | a rule that spawns a child and sleeps is fully reaped on timeout (test mirrors `host.rs:790-830`) |
@@ -989,7 +1015,7 @@ No behaviour change. At the end of Phase C the product still runs the legacy pat
 | I2 | Action: cache `rules-bin`, add a `rules-execution` input, default `artifact-preferred`, report `rules-bin` size | `action.yml:18-63, 210-263`, `scripts/action/resolve-cache-inputs.sh`, `scripts/action/prepare-build-cache-save.sh` | F2, H4 |
 | I3 | Generated skill text | `crates/polint-engine/src/cli/skill.rs:185, 209-246, 287-288, 330-344, 418-433` | I1 |
 | I4 | Publish `polint-sdk` | `scripts/publish-crates.sh:11-15` (`PACKAGES=(polint-macros polint-sdk polint)`), `scripts/bump-workspace-version.py`, `.github/workflows/release.yml`, `release-dry-run.yml` | C10 |
-| I5 | Schema additions: `docs/schemas/polint-cache-status-v1.json` (two enum values); new `docs/schemas/polint-fact-snapshot-v1.json`, `polint-rule-host-protocol-v1.json`, `polint-rule-artifact-v1.json` | F2, D1, E1 |
+| I5 | Schema additions | `docs/schemas/polint-cache-status-v1.json` (two enum values); new `docs/schemas/polint-fact-snapshot-v1.json`, `polint-rule-host-protocol-v1.json`, `polint-rule-artifact-v1.json` | F2, D1, E1 |
 | I6 | Delete the legacy path: `run_local_rule_host_kind`, `run_local_rule_host_inspect`, `write_review_changeset`, `--changed-files`, `CacheManagedCategory::Review` | `crates/polint-engine/src/cli/mod.rs`, `cache/mod.rs` | one minor release after H5 |
 
 ### Phase J — Optional prebuilt artifact path
@@ -1055,7 +1081,7 @@ No entry below asserts that a test currently passes — these are the tests to w
 
 | ID | Command | Assertion |
 | --- | --- | --- |
-| A-1 | `cargo test -p polint --test public_surface_leak` | `ALLOWED_PRELUDE` (74 names, `tests/public_surface_leak.rs:41+`) unchanged; the probe compiles with `#![no_implicit_prelude]` and a single `use ::polint::sdk::prelude::*;` |
+| A-1 | `cargo test -p polint --test public_surface_leak` | `ALLOWED_PRELUDE` (116 names, `tests/public_surface_leak.rs:41+`) unchanged; the probe compiles with `#![no_implicit_prelude]` and a single `use ::polint::sdk::prelude::*;` |
 | A-2 | `cargo test -p polint --test consumer_api_compat` | `Span`/`DiagnosticRange` struct literals, `RuleId(..)`, `Language`/`Severity` comparisons, `Diagnostic::error(..).with_evidence(..)` all still compile |
 | A-3 | `cargo test -p polint-engine --test internal_architecture` | `REMOVED_PACKAGES` still absent; publishable set is exactly `{polint, polint-macros, polint-sdk}` |
 | A-4 | `cargo test -p polint-engine --test module_layering` | `crates/polint-sdk/src/**` free of `polint_engine::`, `crate::analysis`, `crate::cache`, `crate::config` |
@@ -1118,7 +1144,11 @@ No entry below asserts that a test currently passes — these are the tests to w
 
 **Measured today, in-repo:** per-golden-case `wall_clock_ms`, `peak_rss_bytes`, `peak_rss_delta_bytes` (`golden_cost.rs:23-46`, sidecars under `tests/golden/outputs/`), gated at 1.50× (`tests/golden.rs:28-31`); scale-corpus LOC/RSS/wall-clock (`scripts/run-scale-corpus.py` → `research/evaluation-harness/baselines/scale-corpus-run.json`).
 
-**Reported but unverified:** 223 compiled units, 185.4 s cold build, 537 MB retention (§0). **Phase A produces the authoritative numbers; every budget below is expressed as a ratio to the Phase A baseline, not to the reported figures**, so the plan does not inherit an unverified premise.
+**Measured by Phase A:** `research/evaluation-harness/baselines/build-cost.json` — per cell, Cargo starts, `rustc` starts, compiled units, end-to-end and in-Cargo wall-clock, rule-host wall-clock and peak RSS, bytes before/after/written and files retained for the rule-host target directory and the polint cache, and the `CARGO_HOME/registry` delta. §0 lists the headline values. Regenerate with `make build-cost`.
+
+**Superseded:** the reported 223 compiled units, 185.4 s cold build, and 537 MB retention. §0 records what each became and why one of the three is not the same quantity at all.
+
+**Still asserted, not measured:** every budget in §10.4 and every kill criterion in §10.5. Each is a ratio against the Phase A cell for the same repository, scenario, and machine — never against the superseded figures, and never against a cell measured on different hardware. Two inputs the baseline does not yet have: the M-CI rig (§10.2) and any repository other than `examples/basic` (Phase A2).
 
 ### 10.2 Machines and corpora
 
@@ -1143,6 +1173,9 @@ No entry below asserts that a test currently passes — these are the tests to w
 | **warm-source-edit** | one byte changed in a scanned `.go`/`.ts` file |
 | **repeat×10** | ten consecutive `warm-noop` runs |
 | **test-suite** | `polint test` over all fixture cases |
+
+`polint-bench build-cost` implements all of these except **repeat×10**, which is
+`--scenario warm-noop --runs 10` read as a series rather than a median.
 
 ### 10.4 Budgets
 
@@ -1187,7 +1220,7 @@ Any of these, sustained across three runs on both machines, stops the phase and 
 
 ### 10.6 Experiment protocol
 
-Each cell: 1 warm-up (discarded), then 5 runs; report median and p90. Fix `POLINT_RULES_PROFILE` per cell (`release` is the product default, `cli/mod.rs:4429-4439`; `dev` is what `tests/golden.rs:69` uses). Pin the toolchain to `rust-toolchain.toml`. Record `rustc -vV`, `cargo -V`, kernel, filesystem, and whether `sccache` is active (`.cargo/config.toml` makes it opt-in) in every result row. Cold cells run in a fresh container with an empty `CARGO_HOME`.
+Each cell: 5 runs, reported as a median. Warm cells take one unmeasured warm-up first; cold cells must not — a warm-up would destroy the state the cell is defined by, so `build-cost` re-primes them (deletes the cache and the rule-host target directory, re-materializes the repository) before each run instead. `--runs N` selects the run count; the committed baseline states its own in `limits` when it is 1. Fix `POLINT_RULES_PROFILE` per cell (`release` is the product default, `cli/mod.rs:4429-4439`; `dev` is what `tests/golden.rs:69` uses). Pin the toolchain to `rust-toolchain.toml`. Record `rustc -vV`, `cargo -V`, kernel, filesystem, and whether `sccache` is active (`.cargo/config.toml` makes it opt-in) in every result row. Cold cells run in a fresh container with an empty `CARGO_HOME`.
 
 ---
 
@@ -1284,7 +1317,7 @@ Every example pack then migrates with zero per-pack edits, and `scripts/bump-wor
 | `ARCHITECTURE.md` | `:26-91` — replace "The product publishes two Cargo packages" with the three-package graph and a new mermaid diagram; keep the private-module table but scope it to `polint-engine`. Add "Host and rule-process boundary" covering the snapshot, the protocol, and the policy RPC. Update `:112-127` (supported surface) to say the surface now lives in `polint-sdk` and is reached as `polint::sdk` either way. Update `:86-90` to name `sdk_dependency_closure.rs` alongside the existing gates. |
 | `AGENTS.md`, `docs/AGENT-PLAYBOOK.md` | Update every "the rule pack depends on `polint`" statement; add the `package = "polint-sdk"` line; note that editing a rule triggers a thin rebuild and editing sources triggers none. |
 | `docs/RELEASING.md` | Three-crate publish order; the `sdk_abi` bump rule; the vendored-SDK asset regeneration step. |
-| `docs/API-VISIBILITY-PLAN.md` | Record that the 74-name prelude moved crates without changing; add the promotion record for `polint_sdk::{protocol, snapshot}` as `#[doc(hidden)]` non-API. |
+| `docs/API-VISIBILITY-PLAN.md` | Record that the 116-name prelude moved crates without changing; add the promotion record for `polint_sdk::{protocol, snapshot}` as `#[doc(hidden)]` non-API. |
 | `docs/facts/*.md` | Add a "Snapshot section" line to each fact document naming the section that carries it and whether it is capability-gated. |
 | `docs/schemas/` | Update `polint-cache-status-v1.json` (two enum values). Add `polint-fact-snapshot-v1.json`, `polint-rule-host-protocol-v1.json`, `polint-rule-artifact-v1.json`. **Unchanged:** `polint-report-v1.json`, `polint-rule-inspect-v1.json`, `polint-test-report-v1.json`, `polint-ai-friendly-v1.json`, `polint-explain-v1.json`, `polint-facts-v1.json`, `polint-ignores-v1.json`, `polint-unknowns-v1.json`. |
 | `crates/polint-engine/src/cli/skill.rs` | The generated skill is user-facing documentation. Update `:185` (`allowed-tools`; `Bash(cargo:*)` may no longer be needed for warm runs), `:287-288` (pack layout), `:330-344` (registration snippet — unchanged source, but add the manifest note), `:418-433` (review section, `--changed-files` removal). |
@@ -1320,7 +1353,7 @@ Claims that must be **removed or corrected**, not just amended:
 | R-9 | Hard-link fallback to copy inflates `rules-bin` on Windows / cross-device caches | medium | low | LRU ceiling (§6.9); record `binary_len` so status reporting is honest | KC-7 |
 | R-10 | Extension host and rule host diverge into two protocols | medium | medium | Phase G7 makes the extension host reuse `rules_artifact`; a follow-up may unify the protocols, but not in this plan | — |
 | R-11 | Removing the child's `tracing-subscriber` init (`runner/mod.rs:145-149`) breaks someone's `RUST_LOG` workflow | low | low | `POLINT_RULE_LOG` replacement documented; host stderr still surfaces rule output | — |
-| R-12 | `polint test` behaviour changes because one process now serves many fixture repos, leaking state between cases | medium | high | the rule process holds no cross-run state by construction (`AnalysisDb` is per-`RunRequest`); add an explicit test that case N's diagnostics are unaffected by case N-1 | KC-6 |
+| R-12 | `polint test` behaviour changes because one process now serves many fixture repos, leaking state between cases | medium | high | `AnalysisDb` is per-`RunRequest`, so facts, options, and diagnostics cannot cross cases. One piece of process-global state does survive: `sdk/scope.rs`'s `cached_matcher` memo (`OnceLock<RwLock<HashMap<String, Option<GlobMatcher>>>>`, `sdk/scope.rs:51-63`). It is a pure function of the pattern text, so reuse across cases is correct, but any future process-global state must clear the same bar. Add an explicit test that case N's diagnostics are unaffected by case N-1 | KC-6 |
 
 ### 13.2 Decisions already fixed
 
@@ -1424,31 +1457,35 @@ Sequencing rules:
 * **H gates the default flip.** KC-6 (any golden divergence) blocks H5 unconditionally.
 * **I6 (deleting the legacy path) is a separate release**, ≥ 90 days after 0.4.0.
 
-### 14.2 The first implementation PR
+### 14.2 The first implementation PR — landed
 
-**Title:** `perf(build): add the rule-host build-cost baseline harness`
-**Phase:** A (tasks A1–A4). **Product behaviour change: none.**
+**Title:** `perf(bench): add the rule-host build-cost baseline harness`
+**Phase:** A (tasks A1, A3, A4). **Product behaviour change: none; no file under `crates/polint/src` changed.**
 
-**Files:**
+**Files, as landed:**
 
-* new `crates/polint-bench/src/build_cost.rs` — scenario runner
-* `crates/polint-bench/src/main.rs` (96) — add the `build-cost` subcommand
-* `crates/polint-bench/src/lib.rs` (193) — expose the scenario types
-* new `research/evaluation-harness/baselines/build-cost.json` — schema `polint-build-cost-1`, populated on both M-CI and M-DEV
-* `Makefile` — add `build-cost` after `scale-corpus-run`
-* new `crates/polint-engine/tests/build_baseline.rs` — `#[ignore]`d smoke test that the harness runs a single cell
-* `research/evaluation-harness/README.md` — document the metric definitions
+* new `crates/polint-bench/src/build_cost/mod.rs` — scenario matrix, metric set, report schema, baseline diff table
+* new `crates/polint-bench/src/build_cost/scratch.rs` — scratch repository materialization, manifest rewrite, directory accounting, scenario edits
+* new `crates/polint-bench/src/build_cost/shim.rs` — the Cargo and `rustc` shims that count invocations and compiled units
+* `crates/polint-bench/src/main.rs`, `src/lib.rs`, `Cargo.toml` — subcommand dispatch, shim-mode detection before argument parsing, `serde`/`serde_json`/`toml` and a `tempfile` dev-dependency
+* new `research/evaluation-harness/baselines/build-cost.json` — schema `polint-build-cost-1`, one machine
+* `Makefile` — `build-cost` and `build-cost-baseline` after `scale-corpus-run`
+* `research/evaluation-harness/README.md` — metric definitions, scenarios, and limits
 
-**What it measures** (per cell of {small, medium, large} × {cold, warm-noop, warm-rule-edit, warm-source-edit, test-suite}): Cargo invocation count (via a `POLINT_CARGO` shim that appends to a log — the env var already exists at `cli/mod.rs:4260-4262` and `rule_test.rs:330-332`, so no product code is needed), compiled-unit count from `cargo build --timings`, wall-clock, peak RSS (reuse `measure::TimedRun`, `crates/polint/src/measure.rs`), bytes written to `.polint/cache/rules-target`, bytes retained after the run, and the `CARGO_HOME/registry` byte delta.
+Divergences from the pre-implementation sketch, and why: one module became three (the shim has to be reachable before argument parsing, and scratch management is the largest single concern); the smoke test lives in the bench crate's own `#[cfg(test)]` modules rather than in `crates/polint-engine/tests/` — which does not exist until Phase C10, so the original file path was unbuildable at Phase A; and compiled units are counted through `RUSTC_WRAPPER` rather than parsed from `cargo build --timings`.
 
-**Acceptance:**
+**What it measures** (per cell of {repo} × {cold, warm-noop, warm-rule-edit, warm-source-edit, test-suite}): Cargo invocation count and failures, Cargo wall-clock, `rustc` invocations, compiled units, end-to-end wall-clock, rule-host wall-clock and peak RSS, bytes before/after/written and files retained for both the rule-host `CARGO_TARGET_DIR` and the polint cache, the `CARGO_HOME/registry` byte delta, and the `polint test` tally. `POLINT_CARGO` (`cli/mod.rs:4260-4262`, `rule_test.rs:330-332`), `POLINT_RULES_TARGET_DIR`, `POLINT_RULES_PROFILE`, `POLINT_CACHE_DIR`, and `POLINT_GOLDEN_COST_PATH` all already exist, so no product code was needed.
 
-1. `cargo run -p polint-bench -- build-cost --repo examples/basic --scenario cold --json` emits all seven metrics, non-null.
-2. `make build-cost` runs the full matrix and diffs against the committed baseline.
-3. The committed baseline records real numbers for M-CI and M-DEV, replacing the reported-but-unverified 223 units / 185.4 s / 537 MB with measured values, so §10's ratio budgets become concrete absolute targets.
-4. `make check` green; no file under `crates/polint/src` changed.
+**Acceptance, as met:**
+
+1. `polint-bench build-cost --repo examples/basic --scenario cold` emits a `polint-build-cost-1` report carrying every `METRIC_KEYS` entry, with unobservable metrics `null` and named in `limits` — *not* "all metrics non-null", which `compiler_peak_rss_bytes` cannot satisfy without instrumenting the engine.
+2. `make build-cost` runs the matrix and prints the measured/baseline ratio per headline metric. ✔
+3. The committed baseline replaces the reported-but-unverified figures with measured ones **on one machine**. M-CI (2 vCPU / 4 GB) is not recorded and is absent rather than estimated; §10's ratio budgets are therefore concrete only for the recorded machine. ✔ (partial)
+4. `cargo fmt`, `cargo clippy -p polint-bench --all-targets --all-features -- -D warnings`, and `cargo test -p polint-bench` green; no file under `crates/polint/src` changed. ✔
 
 **Why this PR first:** it is the only piece with zero architectural risk; it is independently valuable (a build-cost regression gate the repo does not have today); it turns §0's three unverified claims into measured facts before any of them justifies a design; and it produces the `POLINT_CARGO` shim that every later phase's "0 Cargo invocations" assertion depends on.
+
+**Next PR:** Phase A2 (widen the matrix, which needs `scanned_sources` to recurse) or Phase B1 (the closure guard against the leak probe). B does not depend on A2.
 
 ---
 

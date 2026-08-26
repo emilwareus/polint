@@ -365,11 +365,42 @@ pub fn run(repo_root: &Path, options: Options) -> Result<BuildCostReport> {
     }
     Ok(BuildCostReport {
         schema_version: SCHEMA_VERSION.to_string(),
-        command: "make build-cost".to_string(),
+        command: command_line(&harness.options),
         environment: harness.environment()?,
         limits: harness.limits(),
         cells,
     })
+}
+
+/// The invocation that produced a report, as a reader could retype it.
+///
+/// Options that only say where to read or write - `--out`, `--baseline`,
+/// `--polint-bin`, `--scratch` - are omitted: they carry machine-local paths and
+/// change nothing about what was measured. Everything that does change a
+/// measurement is included.
+fn command_line(options: &Options) -> String {
+    let mut parts = vec![
+        "polint-bench build-cost".to_string(),
+        format!("--label {}", options.label),
+        format!("--runs {}", options.runs),
+        format!("--profile {}", options.rules_profile),
+    ];
+    for repo in &options.repos {
+        parts.push(format!("--repo {repo}"));
+    }
+    for scenario in &options.scenarios {
+        parts.push(format!("--scenario {}", scenario.as_str()));
+    }
+    if options.offline {
+        parts.push("--offline".to_string());
+    }
+    if options.skip_registry {
+        parts.push("--skip-registry".to_string());
+    }
+    if options.keep_scratch {
+        parts.push("--keep-scratch".to_string());
+    }
+    parts.join(" ")
 }
 
 impl Harness {
@@ -447,6 +478,26 @@ impl Harness {
         ];
         if self.registry_dir.is_none() {
             notes.push("cargo_registry_* is null: registry accounting was skipped.".to_string());
+        }
+        if self.scratch_root.starts_with(&self.repo_root) {
+            notes.push(
+                "The scratch tree is inside this checkout, so Cargo discovers this repository's \
+                 .cargo/config.toml when it builds the rule pack: [build] incremental = false, an \
+                 aarch64-unknown-linux-gnu linker, and two SCCACHE_* variables. A consumer's \
+                 repository carries none of them. incremental = false is already the release \
+                 default, so a release cell is unaffected; pass --scratch outside the checkout for \
+                 a build that inherits no Cargo configuration."
+                    .to_string(),
+            );
+        }
+        if !cfg!(unix) {
+            notes.push(
+                "Byte totals count hard-linked content once only where the platform reports \
+                 stable file identity. This report was taken where it does not, so a file Cargo \
+                 linked into more than one directory is counted per link and byte totals read \
+                 high."
+                    .to_string(),
+            );
         }
         if self.options.runs == 1 {
             notes.push(
@@ -853,7 +904,7 @@ mod tests {
     fn report_of(wall: u64) -> BuildCostReport {
         BuildCostReport {
             schema_version: SCHEMA_VERSION.to_string(),
-            command: "make build-cost".to_string(),
+            command: "polint-bench build-cost --label test --runs 1 --profile release".to_string(),
             environment: Environment {
                 label: "test".to_string(),
                 os: "linux".to_string(),
@@ -924,6 +975,48 @@ mod tests {
         assert_eq!(metrics["compiler_peak_rss_bytes"], None);
         assert_eq!(metrics["cargo_registry_bytes_after"], None);
         assert_eq!(metrics["wall_clock_ms"], Some(1));
+    }
+
+    #[test]
+    fn the_report_records_the_invocation_that_produced_it() {
+        // A fixed string would claim `make build-cost` for a baseline actually
+        // taken over three runs of one scenario, which is the kind of label a
+        // reader has no way to check.
+        let args: Vec<String> = [
+            "--label",
+            "rig-a",
+            "--runs",
+            "3",
+            "--repo",
+            "examples/basic",
+            "--scenario",
+            "cold",
+            "--skip-registry",
+        ]
+        .iter()
+        .map(|value| value.to_string())
+        .collect();
+        assert_eq!(
+            command_line(&parse_args(&args).unwrap()),
+            "polint-bench build-cost --label rig-a --runs 3 --profile release \
+             --repo examples/basic --scenario cold --skip-registry"
+        );
+    }
+
+    #[test]
+    fn the_recorded_invocation_omits_machine_local_paths() {
+        let args: Vec<String> = [
+            "--out",
+            "/home/someone/out.json",
+            "--scratch",
+            "/tmp/scratch",
+        ]
+        .iter()
+        .map(|value| value.to_string())
+        .collect();
+        let recorded = command_line(&parse_args(&args).unwrap());
+        assert!(!recorded.contains("/home/someone"), "{recorded}");
+        assert!(!recorded.contains("/tmp/scratch"), "{recorded}");
     }
 
     #[test]

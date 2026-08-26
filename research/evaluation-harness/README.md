@@ -50,6 +50,14 @@ subprocess Cargo builds first, so the cost a user waits for is a compile.
 matrix and prints ratios against
 `baselines/build-cost.json` (`schema_version = polint-build-cost-1`), and
 `make build-cost-baseline BUILD_COST_LABEL=<machine>` rewrites it.
+`BUILD_COST_RUNS=<n>` sets the runs per cell on either target; a cell's recorded
+value is the median of its successful runs, so wall-clock wants more than one and
+the counts do not need it. The report's own `command` field records the
+invocation that produced it.
+
+The committed baseline covers **`examples/basic` only, on one machine**. Other
+repositories and other machines are absent rather than estimated; add them with
+`--repo` and a fresh `--label`.
 
 Each cell copies the repository under test into `target/polint-build-cost/`,
 rewrites the rule pack into the standalone manifest a consumer gets, and points
@@ -91,12 +99,18 @@ the cache and the rule-host target directory before every run.
 | `compiler_peak_rss_bytes` | always `null`; see limits |
 | `rule_tests_passed` / `_failed` / `_total` | `polint test` tally, `test-suite` only |
 
-Byte totals sum regular-file sizes and count hard-linked content once, because
-Cargo links a built binary into both `deps/` and the profile root.
+Byte totals sum regular-file sizes. On platforms that report stable file
+identity — Unix — content reached through more than one directory entry is
+counted once, because Cargo links a built binary into both `deps/` and the
+profile root. Where the platform does not, every link is counted and the totals
+read high; a report taken there says so in its own `limits`.
 
 ### Limits
 
-Every report repeats its own limits in a `limits` array. They are:
+Every report carries its own `limits` array. Four entries are always present,
+three more appear only when they apply (registry accounting skipped, a platform
+without stable file identity, one run per cell), and the rest of this section is
+the standing commentary a reader needs alongside them.
 
 - `compiler_peak_rss_bytes` is never measured. Peak RSS comes from the sidecar
   the rule host already writes, and the harness adds no process instrumentation,
@@ -113,12 +127,22 @@ Every report repeats its own limits in a `limits` array. They are:
   them (`test_cases_generated: true`). A generated case asserts nothing, so its
   pass/fail tally carries no signal; the case count and the Cargo invocations it
   causes do.
-- Wall-clock is the load-sensitive metric. Cargo invocation counts, compiled-unit
-  counts, and byte totals repeat exactly across runs on the same checkout;
-  `wall_clock_ms` and `cargo_wall_clock_ms` move by multiples on a shared or
-  memory-constrained host. Compare timings only against a baseline taken on the
-  same machine under the same conditions, and re-measure locally before drawing
-  a conclusion from a ratio.
+- `warm-source-edit` and `test-suite` pick their analyzed source from the
+  repository root only. A repository under test that nests every source in a
+  subdirectory fails those two cells rather than measuring the wrong thing.
+- The scratch tree lives under `target/`, inside this checkout, so Cargo
+  discovers this repository's `.cargo/config.toml` when it builds the rule pack.
+  Its `[build] incremental = false` is already the `release` default, so a
+  release cell is unaffected, but a cell run under another profile is not a clean
+  consumer's build. Pass `--scratch` a path outside the checkout to remove it.
+- Wall-clock is the load-sensitive metric; the counts are not. In the committed
+  baseline every cell's Cargo starts, `rustc` starts, compiled units, retained
+  bytes, and retained file count are identical across all three runs, while
+  `wall_clock_ms` for the `cold` cell spans 185.1–243.2 s — and the same cell on
+  the same host measured 417.6 s while the host was busy. Take a baseline on an
+  idle machine, raise `BUILD_COST_RUNS` so the recorded value is a median,
+  compare only against a baseline from the same machine, and re-measure locally
+  before drawing a conclusion from a wall-clock ratio.
 - A committed baseline records the one machine it was taken on, named by
   `environment.label`. Machines that were not available are absent rather than
   estimated, and a cell that could not run is `status: "failed"` carrying the

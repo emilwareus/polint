@@ -5,6 +5,14 @@
 **Date:** 2026-08-25
 **Status:** Research only. No repository files were modified; no branches, commits, or PRs were created.
 
+**Reading note.** This report is a dated snapshot: every repository path and line
+range is as of `b272b378`. Where the branch that carries this report has since
+moved a line, the citation is annotated. One substantive figure has been
+superseded — the build cost quoted in §3.3 was a documentation figure, and
+`research/evaluation-harness/baselines/build-cost.json` now carries a first-party
+measurement of the same path. §3.3 records both; §9 states which of its numbers
+are measured and which remain budgets.
+
 ---
 
 ## 1. Executive recommendation
@@ -21,7 +29,7 @@ Concretely, in priority order:
 4. **Vendor the SDK source inside the polint binary** and build the rule pack with `--offline --locked` against a materialized path dependency. This makes first-run offline operation possible and eliminates version skew between the CLI and the library the rule pack links.
 5. **Then, and only then, consider prebuilt SDK rlib artifacts** (keyed on exact `rustc -vV`) as a *fast path with source fallback*, and a **WASM backend** as a *second execution target* for shared rule packs and untrusted repositories.
 
-**Why this and not the alternatives.** Native Rust rule code must be compiled for the target by something, somewhere — that is not negotiable, and any claim of "no compilation at all while rules stay Rust" is either false or a claim that the *author* compiles instead of the customer. So the design question is not "can we remove compilation" but **"what is the smallest thing the customer must compile, and can they compile it offline, fast, on two cores?"** Today the answer is "223 compilation units, 185.4 s, 537 MB retained" (`docs/GITHUB-ACTION.md:162-166`). After this change the answer should be "one crate, against a prebuilt SDK, in seconds" — and with prebuilt SDK artifacts, "one `rustc` invocation."
+**Why this and not the alternatives.** Native Rust rule code must be compiled for the target by something, somewhere — that is not negotiable, and any claim of "no compilation at all while rules stay Rust" is either false or a claim that the *author* compiles instead of the customer. So the design question is not "can we remove compilation" but **"what is the smallest thing the customer must compile, and can they compile it offline, fast, on two cores?"** Today the measured answer on `examples/basic` is "225 compilation units and 187 s the first time, one Cargo start on every scan afterwards whether or not anything changed, 582.7 MB retained" (§3.3.2, `research/evaluation-harness/baselines/build-cost.json`). After this change the answer should be "one crate, against a prebuilt SDK, in seconds" — and with prebuilt SDK artifacts, "one `rustc` invocation."
 
 **Scenario defaults** (detail in §5):
 
@@ -151,9 +159,9 @@ The `polint` library it depends on is one crate of **238,359 lines** of Rust:
 | `ts/**` | 31,045 | Oxc TS/JS frontend, lowering, symbol/module graphs |
 | `go/**` | 20,248 | tree-sitter Go frontend, sidecar lifecycle, lowering |
 | `core/**` | 11,640 | `AnalysisDb`, `Rule`, `RuleCtx`, fact stores, metadata |
-| `cli/**` | 9,481 | the CLI, the scaffolder, the generated skill |
+| `cli/**` | 5,572 | the CLI, the scaffolder, the generated skill |
 | `analysis/**` | 8,420 | facade providers, extensions, unknown taxonomy |
-| `module_graph/`, `symbol_graph/` | 8,403 | facade graph entry points |
+| `module_graph/`, `symbol_graph/` | 8,675 | facade graph entry points |
 | `cache/**`, `config/**` | 2,831 | cache layout, digests, config loading |
 | `diagnostics/mod.rs` | 2,833 | `Diagnostic`, renderers (human/GitHub/JSON/SARIF/ai-friendly) |
 | `policy_queries.rs` | 3,580 | bounded query evaluation behind `Events`/`Calls`/`DataFlow` |
@@ -178,20 +186,79 @@ Two Cargo facts shape what that number means in practice, both verified against 
 - *"Platform-specific dependencies with the `[target]` table are resolved as-if all platforms are enabled. In other words, the resolver ignores the platform or cfg expression."* — [Cargo Book, Dependency Resolution](https://doc.rust-lang.org/cargo/reference/resolver.html). This is why `sqlite-wasm-rs`, the `wit-*`/`wasm-*` family, and the whole `windows-*` family appear in the lock on a Linux machine.
 - *"If `--target` is not specified, then all target dependencies are fetched."* — [`cargo fetch`](https://doc.rust-lang.org/cargo/commands/cargo-fetch.html). Building filters by target; the resolve graph does not.
 
-### 3.3 The measured cost, from the repository itself
+### 3.3 The measured cost
 
-The repository records a real measurement of the rule-host build:
+Two measurements describe the same path. The first is the figure this report was
+written against; the second was taken afterwards, with a harness, and is the one
+later work should quote.
+
+#### 3.3.1 The documentation figure this report was written against
+
+The repository records a measurement of the rule-host build:
 
 > "Measured locally on a rule pack with a path dependency on the `polint` library (x86_64 Linux, release profile, **223 compiled units**): a cold build takes **185.4 s**; after pruning, the rebuild recompiles exactly one unit — the rule package — in **0.7 s**. The target directory is **562 MB** before pruning and **537 MB** after, the difference being the rule package's own output plus incremental state."
 > — `docs/GITHUB-ACTION.md:162-166`
 
-This is the load-bearing number for the whole report, and it decomposes the problem precisely:
+It decomposes the problem precisely:
 
 - **222 of the 223 units are not the customer's rule.** They are polint and its dependencies.
 - **The customer's own rule crate compiles and links in 0.7 s.** Linking a binary against the already-built polint rlib set is *not* the bottleneck.
 - **537 MB must be retained** for that 0.7 s to stay 0.7 s.
 
 So the cost is entirely "compile a static-analysis engine per repository," and the rule itself is already nearly free. That is exactly the shape that a thin-SDK split fixes.
+
+It is, however, a prose figure in a document rather than a reproducible
+measurement, and it was recorded for the GitHub Action's cache design rather than
+for this question. §3.3.2 replaces it.
+
+#### 3.3.2 The first-party measurement
+
+`polint-bench build-cost` drives the real CLI against a scratch copy of a
+repository, counts Cargo starts through the `POLINT_CARGO` indirection, counts
+compiled units through a `RUSTC_WRAPPER` shim, and walks the rule-host target
+directory and the polint cache either side of each run. The committed artifact is
+`research/evaluation-harness/baselines/build-cost.json`
+(`schema_version = polint-build-cost-1`); `research/evaluation-harness/README.md`
+documents each metric and each limit.
+
+Measured on `examples/basic`, release profile, one machine (`environment.label =
+linux-container-6cpu`, `cargo`/`rustc` 1.95.0), median of three runs per cell:
+
+| Scenario | Cargo starts | Compiled units | Wall clock | `rules-target` after |
+|---|---:|---:|---:|---:|
+| `cold` | 1 | **225** | 187.3 s | **582.7 MB** (1,708 files) |
+| `warm-noop` | **1** | 0 | 157 ms | 582.7 MB |
+| `warm-rule-edit` | 1 | **1** | 735 ms | 582.7 MB |
+| `warm-source-edit` | **1** | 0 | 163 ms | 582.7 MB |
+| `test-suite` (2 generated cases) | **2** | 225 | 209.5 s | 582.7 MB |
+
+What this confirms, and what it corrects:
+
+- **Confirmed — the shape.** 224 of the 225 compiled units are polint and its
+  dependencies (241 `rustc` starts, 16 of them Cargo probes); a one-line rule
+  edit recompiles exactly one unit and writes 25.9 MB. The engine, not the rule,
+  is the cost.
+- **Confirmed — Cargo runs on every scan.** `warm-noop` and `warm-source-edit`
+  compile nothing and still start Cargo once. That is the §4.1 claim, measured.
+- **Confirmed — the counts are deterministic.** Cargo starts, `rustc` starts,
+  compiled units, retained bytes, and retained file counts were byte-identical
+  across all three runs of every cell. Only wall-clock and rule-host RSS moved.
+- **Corrected — the retained figure.** 582.7 MB, not 537 MB. The two are not the
+  same quantity: 537 MB is the Action's figure *after* it prunes the rule
+  package's own output, and it was taken on different hardware with a different
+  pack. The harness prunes nothing, so 582.7 MB is closer to what a developer's
+  disk actually holds.
+- **Corrected — warm scans are cheaper than the documentation implies, and still
+  not free.** A no-op re-scan costs 157 ms end to end, essentially all of it a
+  Cargo freshness pass that compiles nothing; a rule edit costs 735 ms. The
+  target for those cells is therefore "zero Cargo starts", not "a faster build".
+- **Not comparable — wall clock across machines.** 187.3 s here against the
+  documentation's 185.4 s is coincidence, not agreement: the same cell on this
+  same host measured 417.6 s while the host was contended. Wall-clock is only
+  meaningful against a baseline from the same machine in the same state.
+- **Not yet measured.** One repository, one machine. Compiler peak RSS is never
+  observed and is recorded as `null`, not estimated. The 2 vCPU / 4 GB acceptance
+  rig (R1, §9.1) has not been run.
 
 ### 3.4 Everything else the cold path requires
 
@@ -338,7 +405,7 @@ Also worth stating: **`cargo` runs on every scan, not only on the first.** `cli/
 | `analysis_neutral/**` | 88,470 | `petgraph`, `rayon`; solvers, IFDS, domains, summaries |
 | `analysis/**`, `module_graph/`, `symbol_graph/`, `frontend/`, `fs/`, `git/` | ~20,000 | `ignore`, process plumbing |
 | `config/`, `cache/`, `baseline.rs`, `ignores.rs` | ~5,000 | `toml`, `serde_norway`, `json-strip-comments` |
-| `cli/**` | 9,481 | `clap` |
+| `cli/**` | 5,572 | `clap` |
 
 **Can be split out (the SDK):**
 
@@ -436,14 +503,14 @@ The honest cost, stated plainly: **one serialize + one deserialize per scan** th
 
 See §7 (architecture) and §8 (phases). Summary of the minimum:
 
-- **+2 publishable packages** (`polint-sdk`, `polint-engine`); `polint` becomes a thin facade with a default `engine` feature. Total publishable: **3**, up from 2.
+- **+2 workspace packages** (`polint-sdk`, `polint-engine`); `polint` becomes a thin facade. Publishable goes from 2 to **3** — `polint-engine` starts `publish = false` and is promoted only if a third party ever needs to build a host (`IMPLEMENTATION-PLAN.md` §3.3, §13.3 D-5).
 - **1 new wire object** (the fact snapshot). The other two wire objects already exist as versioned schemas.
-- **1 manifest line changes** in generated rule packs (`default-features = false`, which the scaffolder already emits for language features — `cli/mod.rs:1137-1144`).
+- **1 manifest line changes** in generated rule packs: the `polint` dependency gains Cargo's `package = "polint-sdk"` rename, keeping the extern crate name `polint` (`IMPLEMENTATION-PLAN.md` §11.4). The scaffolder already emits the rest of that line (`cli/mod.rs:1137-1144`).
 - **0 changes** to rule source files, `.polint.toml`, profiles, baselines, ignores, or report schemas.
 
 ### 4.7 Experiments and budgets
 
-See §9. Every number there is a **budget or a kill criterion**, not a result. The only measured number in this report is the repository's own: 223 units / 185.4 s / 562 MB → 537 MB / 0.7 s rebuild (`docs/GITHUB-ACTION.md:162-166`).
+See §9. Every number there is a **budget or a kill criterion**, not a result. The measured numbers are the two in §3.3: the repository's documentation figure (223 units / 185.4 s / 562 MB → 537 MB / 0.7 s rebuild, `docs/GITHUB-ACTION.md:162-166`) and the committed `build-cost` baseline (225 units, 187.3 s, one Cargo start, 582.7 MB retained on `examples/basic`).
 
 ---
 
@@ -455,7 +522,7 @@ Trust: **implicit**. The rules are in the repo the team owns and reviews; a mali
 
 What matters: **edit-and-run latency**, first-clone latency for a teammate who never edits rules, laptop disk, and CI minutes.
 
-Today: the first clone pays 185.4 s and 537 MB; every scan spawns `cargo`; offline is impossible.
+Today, measured (§3.3.2): the first clone pays 187.3 s and 582.7 MB; every scan spawns `cargo` — 157 ms of freshness checking even when nothing changed; offline is impossible.
 
 **Recommended default: P2** — native rule binary against the thin SDK, snapshot protocol, fingerprint gate so unchanged rules never invoke `cargo`. **Plus**: CI publishes the built rule artifact (§P4) so teammates who never touch rules never compile anything.
 
@@ -484,7 +551,7 @@ This is the same trust posture as `npm install` or `cargo test`, and it is defen
 ### Cross-cutting constraints
 
 - **Low-powered machines are the acceptance environment.** 2 vCPU / 4 GB / cold page cache. A build that takes 185 s on a fast x86_64 workstation is materially worse there — Cargo parallelism is the thing that hides the cost, and it is exactly what a small machine lacks.
-- **Minimal customer disk.** 537 MB per repository is the current retained cost; a developer with five polint-enabled repos pays it five times unless they share a target dir.
+- **Minimal customer disk.** 582.7 MB per repository is the measured retained cost (§3.3.2); a developer with five polint-enabled repos pays it five times unless they share a target dir.
 - **Offline / air-gapped.** Must work. Today it cannot.
 - **Determinism is a product property** (`ARCHITECTURE.md:370-390`) and cannot regress.
 - **Two publishable packages was a deliberate outcome**, guarded by a test (`internal_architecture.rs:14-33`). Any proposal must justify each new package individually.
@@ -499,7 +566,7 @@ Each option below is assessed against: *does rule source change?*, *what does th
 
 Rule source: unchanged. Customer compiles: everything.
 
-Cold: 185.4 s / 223 units / 562 MB. Warm rule edit: 0.7 s. Offline: no. Portability: excellent (source is portable; any `rustc ≥ 1.95` works). Security: RCE-by-checkout.
+Cold: 187.3 s / 225 units / 582.7 MB retained. Warm no-op: 157 ms, one Cargo start, zero units. Warm rule edit: 735 ms, one unit (§3.3.2). Offline: no. Portability: excellent (source is portable; any `rustc ≥ 1.95` works). Security: RCE-by-checkout.
 
 **Rejected as a destination.** It is, however, the correct *fallback mode* to retain behind `POLINT_RULES_MODE=in-process` for the polint repository's own tests and for users who hit a snapshot-protocol limitation.
 
@@ -518,7 +585,7 @@ polint-sdk   ← polint-engine
 
 - Rule pack: `polint = { version = "0.3", default-features = false }` → closure is `polint-sdk` + `polint-macros` only.
 - `cargo install polint` → default features → `polint-engine` → the `polint` binary. Unchanged for users.
-- Feature unification cannot leak the engine into a rule pack, because the scaffolded pack is **its own workspace** (`[workspace]` at `cli/mod.rs:1155`) and *"Features for target-specific dependencies are not enabled if the target is not currently being built"* / resolver v2 semantics apply ([Cargo resolver](https://doc.rust-lang.org/cargo/reference/resolver.html)); the workspace already uses `resolver = "3"` (`Cargo.toml:29`). This must still be **asserted by a test** (§7.4) rather than assumed.
+- Feature unification cannot leak the engine into a rule pack, because the scaffolded pack is **its own workspace** (`[workspace]` at `cli/mod.rs:1156`) and *"Features for target-specific dependencies are not enabled if the target is not currently being built"* / resolver v2 semantics apply ([Cargo resolver](https://doc.rust-lang.org/cargo/reference/resolver.html)); the workspace already uses `resolver = "3"` (`Cargo.toml:29`). It does **not** hold for this repository's own 17 example packs, which are workspace members and would have `engine` unified back on — see the note at the head of §7.1. This must still be **asserted by a test** (§7.4) rather than assumed.
 
 **Alternative single-package shape**, worth recording: keep two packages and `#[cfg(feature = "engine")]` the heavy modules inside `polint`, with every heavy dependency `optional = true`. `crates/polint/src/lib.rs:19-58` already declares every module in one place, so the cfg edit is ~25 lines. This preserves the "two publishable packages" invariant exactly. Costs: a 238 KLOC crate with a combinatorial feature matrix; slower `cargo check --all-features`; and the rule pack still *downloads* the full crate source even though it compiles little of it. **Recommend the three-package split; record this as the fallback if crates.io naming or publishing is a problem.**
 
@@ -536,7 +603,7 @@ Three genuinely different things get conflated under "cache the build." Separati
 *Disk:* it **adds** a second copy — polint's config caps it at 10 GiB.
 **Verdict: complementary, never the answer.**
 
-**C-ii. Final target retention (`.polint/cache/rules-target`, 537 MB).** This is what makes the 0.7 s rebuild possible; it is also the whole disk problem. The GitHub Action already keys it correctly on compiler inputs and prunes the rule package's own output before saving (`docs/GITHUB-ACTION.md:95-171`, commit `3c0f4dfa`). That work is well-designed and should be preserved — but it is *managing* a cost, not removing it. Under Option B most of it becomes unnecessary.
+**C-ii. Final target retention (`.polint/cache/rules-target`, 582.7 MB measured, §3.3.2).** This is what makes the 0.7 s rebuild possible; it is also the whole disk problem. The GitHub Action already keys it correctly on compiler inputs and prunes the rule package's own output before saving (`docs/GITHUB-ACTION.md:95-171`, commit `3c0f4dfa`). That work is well-designed and should be preserved — but it is *managing* a cost, not removing it. Under Option B most of it becomes unnecessary.
 
 **C-iii. Shipping prebuilt engine/SDK artifacts.** Two sub-variants:
 
@@ -664,14 +731,14 @@ Scoring: ● strong · ◐ partial · ○ weak/absent.
 | Sandbox for untrusted rules | ○ | ○ | ○ | ○ | ● | ◐ (needs sandbox too) | ○ | ○ | ○ |
 | Determinism preserved | ● | ● | ● | ◐ | ● | ● | ● | ◐ | ● |
 | Implementation risk | — | ◐ (db split, snapshot volume) | ◐ | ● high | ◐ | ○ low | ○ low | ◐ | ● high |
-| Publishable-package delta | 0 | +2 | +0 (with B) | +1 | +0 (with B) | 0 | 0 | 0 | +2 |
+| Workspace-package delta (published) | 0 | +2 (+1) | +0 (with B) | +1 (+1) | +0 (with B) | 0 | 0 | 0 | +2 (+1) |
 
 **Explicit rejections, one line each:**
 
 - **DSL / declarative-first** — rejected by the product invariant (§2). Optional generator only.
 - **cdylib / native plugin** — no stable Rust ABI, forces `repr(C)` facts, does not remove compilation, worse security, contradicts `ARCHITECTURE.md:499-500` and the `unsafe_code` lint policy.
 - **WASM-first** — does not remove scenario-A compilation, adds a runtime and a target, 32-bit snapshot limit, and needs the same SDK split anyway.
-- **Ship a populated target dir** — Cargo fingerprints + absolute dep-info paths make relocation fragile; 537 MB.
+- **Ship a populated target dir** — Cargo fingerprints + absolute dep-info paths make relocation fragile; 582.7 MB.
 - **`-Z bindeps` / `-Z build-std`** — nightly only ([unstable features](https://doc.rust-lang.org/cargo/reference/unstable.html)).
 - **Cranelift backend** — nightly component.
 - **sccache / incremental / profile tuning alone** — do not change the order of magnitude; incremental worsens disk.
@@ -684,6 +751,20 @@ Scoring: ● strong · ◐ partial · ○ weak/absent.
 ## 7. Recommended target architecture
 
 ### 7.1 Packages
+
+**Superseded in one respect — read `IMPLEMENTATION-PLAN.md` §3.1 for the decided
+graph.** The shape below reaches the thin closure by having rule packs depend on
+the `polint` facade with `default-features = false`, so the engine arrives only
+through an optional dependency behind a default `engine` feature. That works for
+a scaffolded pack, which is its own workspace. It does **not** work for the 17
+example packs in *this* repository, which are workspace members alongside the
+`polint` binary: Cargo unifies features across the workspace members being built,
+so `cargo build --workspace` would re-enable `engine` for every example pack and
+the guard in §7.4 would fail for a reason no rule author could act on. The plan
+therefore has rule packs depend on `polint-sdk` directly, renamed to `polint` with
+Cargo's `package =` key — which is immune to feature unification because it is a
+different package, and still leaves rule `.rs` sources byte-identical. Everything
+else below stands.
 
 ```
 polint-macros   (unchanged)  proc-macro; syn/quote/proc-macro2
@@ -829,18 +910,18 @@ Implement `FactSnapshot`, host-side production, SDK-side consumption. Gate behin
 
 ## 9. Experiment plan, budgets, and kill criteria
 
-**No benchmark results are invented here.** The only measured figure in this report is the repository's own 223 units / 185.4 s / 562 → 537 MB / 0.7 s (`docs/GITHUB-ACTION.md:162-166`). Everything below is a method, a budget, or a kill criterion.
+**No benchmark results are invented here.** The measured figures in this report are the two in §3.3: the repository's own documentation figure, and the first-party `build-cost` baseline. Everything below is a method, a budget, or a kill criterion — and every ratio budget should be taken against the §3.3.2 baseline cell for the same repository, scenario, and machine, never against the §3.3.1 prose figure.
 
 ### 9.1 Standard rigs
 
-- **R1 — low-powered acceptance rig (primary):** 2 vCPU, 4 GB RAM, cold page cache, empty `CARGO_HOME`, HDD-class or throttled I/O. **All acceptance budgets are stated against R1.** The 185.4 s figure is from a workstation; it will be materially worse on R1, and that must be measured rather than extrapolated.
+- **R1 — low-powered acceptance rig (primary):** 2 vCPU, 4 GB RAM, cold page cache, empty `CARGO_HOME`, HDD-class or throttled I/O. **All acceptance budgets are stated against R1.** The §3.3.2 baseline is from a 6-CPU container, not R1; a cold build will be materially worse on two cores, and that must be measured rather than extrapolated.
 - **R2 — developer laptop:** 8–10 cores, 16–32 GB, warm caches.
 - **R3 — CI runner:** GitHub-hosted `ubuntu-latest`, `macos-*`, `windows-*`.
 - **R4 — air-gapped:** network namespace with no egress, empty `CARGO_HOME`.
 
 Corpora: `examples/**` (small), `tests/golden-corpus/inputs.toml`, and the scale corpus via `scripts/fetch-scale-repos.py` / `scripts/run-scale-corpus.py`.
 
-Existing instrumentation to reuse rather than rebuild: `POLINT_GOLDEN_COST_PATH` writes wall-clock ms + peak RSS + RSS delta per check (`crates/polint/src/golden_cost.rs:18-46`), built on `crate::measure::TimedRun` (`getrusage`/`K32GetProcessMemoryInfo`, `crates/polint/Cargo.toml:53-68`).
+Existing instrumentation to reuse rather than rebuild: `POLINT_GOLDEN_COST_PATH` writes wall-clock ms + peak RSS + RSS delta per check (`crates/polint/src/golden_cost.rs:18-46`), built on `crate::measure::TimedRun` (`getrusage`/`K32GetProcessMemoryInfo`, `crates/polint/Cargo.toml:53-68`); and `polint-bench build-cost` (`make build-cost`), which already implements E1's Cargo-invocation, compiled-unit, and bytes-written/retained counting for the scenarios in §3.3.2 and reads that same sidecar for rule-host RSS.
 
 ### 9.2 Experiments
 
@@ -861,11 +942,11 @@ Existing instrumentation to reuse rather than rebuild: `POLINT_GOLDEN_COST_PATH`
 
 | Metric | Today | **Target** | **Kill criterion** |
 |---|---|---|---|
-| Cold `polint check`, 1 rule, small repo, empty caches | 185.4 s build (R2-class) + analysis | **≤ 20 s total**; stretch ≤ 5 s with E5 | > 60 s on R1 → the split did not buy enough; reopen §6 |
+| Cold `polint check`, 1 rule, small repo, empty caches | the §3.3.2 `cold` cell on the same machine (187.3 s on the recorded one) | **≤ 20 s total**; stretch ≤ 5 s with E5 | > 60 s on R1 → the split did not buy enough; reopen §6 |
 | Warm re-scan, no rule edit | 0.7 s rebuild + analysis + cargo spawn | **analysis + ≤ 150 ms**, **zero `cargo` spawns** | > 1 s of non-analysis overhead |
 | Rule edit → re-scan | 0.7 s + analysis | **≤ 3 s** on R1 | > 8 s |
 | Bytes downloaded, first run | polint binary + all crates.io tarballs for 223 units | **polint binary + 0** (vendored SDK) | any network requirement for a pack whose only dep is `polint` |
-| Bytes retained per repo | **537 MB** | **≤ 120 MB**; stretch ≤ 40 MB | > 250 MB |
+| Bytes retained per repo | **582.7 MB** | **≤ 120 MB**; stretch ≤ 40 MB | > 250 MB |
 | Peak RSS, rule process | n/a (engine in-process) | **≤ 1.3 × snapshot bytes + 64 MB** | > 2 × snapshot + 128 MB |
 | Peak RSS, host | current baseline | **≤ 1.15 ×** today | > 1.4 × |
 | Snapshot round-trip | 0 (does not exist) | **≤ 15 % of analysis wall time**, p95 over the corpus | **> 25 % on the largest corpus repo → the snapshot design fails; fall back to `in-process` as default and reopen §6.3-C-iii-b (prebuilt rlibs) as the primary** |
@@ -982,7 +1063,7 @@ This is a small, cheap, static check that removes surfaces 1–3 outright and is
 
 ## 12. Conclusion
 
-polint's build cost is not caused by rules being code. It is caused by **rules linking the engine**. The typed fact API — the thing that makes rules-as-code good — is already a pure read projection over an in-memory database, the fact structs are already plain serializable data, the macro already emits only SDK paths, and the host↔rule wire already exists as two versioned public JSON schemas. The 185.4-second, 537-megabyte cold start is 222 compilation units of parsers, solvers, kernel, and a bundled SQLite that the customer's rule never touches. Its own crate compiles in 0.7 seconds.
+polint's build cost is not caused by rules being code. It is caused by **rules linking the engine**. The typed fact API — the thing that makes rules-as-code good — is already a pure read projection over an in-memory database, the fact structs are already plain serializable data, the macro already emits only SDK paths, and the host↔rule wire already exists as two versioned public JSON schemas. The measured cold start on `examples/basic` is 225 compilation units in 187 seconds — 224 of those units parsers, solvers, kernel, and a bundled SQLite that the customer's rule never touches — and 582.7 MB retained; a one-line rule edit recompiles exactly one unit in under a second (§3.3.2).
 
 So the answer is not a DSL, not a plugin ABI, and not WebAssembly. **The answer is to move the engine to the side of the process boundary that already ships as a prebuilt binary, and let the rule pack compile against a thin SDK.** Rule sources do not change. Typed facts, capability derivation, diagnostics, fixture tests, determinism, and AI-friendly authoring are preserved, and two of them — fixture tests and determinism auditability — get better.
 
@@ -1010,7 +1091,7 @@ The recommended defaults differ by scenario, and should: **a team that owns its 
 - `crates/polint/Cargo.toml:92-94` — `unsafe_code = "deny"` (workspace `forbid` downgraded for one audited FFI)
 - `rust-toolchain.toml:1-3` — `channel = "1.95"`
 - `.cargo/config.toml:1-8` — `incremental = false`; sccache guidance; `SCCACHE_CACHE_SIZE = 10G`
-- `Cargo.lock` — 274 `[[package]]` entries; `:1158-1193` `polint`'s dependency list; `:694-702` `libsqlite3-sys` → `cc`/`pkg-config`/`vcpkg`; `:1566-1578` `rusqlite`; `:981-999` `oxc_resolver` → `simd-json`
+- `Cargo.lock` — 274 `[[package]]` entries; `:1158-1193` `polint`'s dependency list; `:694-702` `libsqlite3-sys` → `cc`/`pkg-config`/`vcpkg`; `:1570-1581` `rusqlite`; `:981-999` `oxc_resolver` → `simd-json`
 - `crates/polint/src/cli/mod.rs:4252-4343` — `run_local_rule_host_kind`: `cargo run --quiet [--release] --manifest-path … -- check --format json …`; `CARGO_TARGET_DIR` = `rules-target`; report parsed from stdout
 - `crates/polint/src/cli/mod.rs:4350-4407` — `run_local_rule_host_inspect`: second `cargo run` for rule manifests
 - `crates/polint/src/cli/mod.rs:4417-4452` — `LocalRuleHostProfile`; **release is the default**
@@ -1056,7 +1137,8 @@ The recommended defaults differ by scenario, and should: **a team that owns its 
 - `.swarm/T-SPLIT-LAND.md:1-27` — correction: the eight-crate split did not land; module layering + `module_layering.rs` did
 - `docs/GITHUB-ACTION.md:60-94` — analysis cache key
 - `docs/GITHUB-ACTION.md:95-144` — build cache key (compiler-scoped); *"Compiling those packages means compiling the `polint` library and its dependencies, which dominates the check phase on a cold runner."*
-- `docs/GITHUB-ACTION.md:145-171` — prune-before-save; **the 223 units / 185.4 s / 562 MB → 537 MB / 0.7 s measurement (`:162-166`)**
+- `docs/GITHUB-ACTION.md:145-171` — prune-before-save; **the 223 units / 185.4 s / 562 MB → 537 MB / 0.7 s documentation figure (`:162-166`)**
+- `research/evaluation-harness/baselines/build-cost.json` — the first-party `build-cost` baseline (§3.3.2); `research/evaluation-harness/README.md` — its metric definitions and limits; `crates/polint-bench/src/build_cost/**` — the harness that produced it
 - `docs/CONSUMER-SETUP.md:1-11` — MSRV requirement for rule packs
 - `docs/CONSUMER-SETUP.md:44-107` — `inspect rule` / `test` / `facts` / `unknowns` / `explain` JSON surfaces
 - `docs/CONSUMER-SETUP.md:109-121` — environment variables (`POLINT_CARGO`, `POLINT_CACHE_DIR`, `POLINT_RULES_PROFILE`, `POLINT_RULES_TARGET_DIR`, `POLINT_RULES_TOOLCHAIN`)

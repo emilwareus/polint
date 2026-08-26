@@ -26,9 +26,10 @@ No product behaviour changed and no file under `crates/polint/src` was touched.
   already writes under `POLINT_GOLDEN_COST_PATH` (`golden_cost.rs` ->
   `measure::TimedRun`). Nothing new was instrumented in the engine.
 - **Bytes** — the rule-host `CARGO_TARGET_DIR`, the polint cache, and
-  `CARGO_HOME/registry` are walked either side of the measured command.
-  Hard-linked content counts once, because Cargo links a built binary into both
-  `deps/` and the profile root.
+  `CARGO_HOME/registry` are walked either side of the measured command. Where the
+  platform reports stable file identity — Unix — hard-linked content counts once,
+  because Cargo links a built binary into both `deps/` and the profile root; where
+  it does not, the report says so in its own `limits`.
 - **Isolation** — each cell copies the repository under test into
   `target/polint-build-cost/`, rewrites the pack manifest into the standalone
   shape a consumer gets, and points the cache and target directories at scratch,
@@ -38,15 +39,23 @@ No product behaviour changed and no file under `crates/polint/src` was touched.
 ## What the baseline replaced
 
 The research report carried three unverified figures. Measured on the recorded
-machine, a cold `examples/basic` scan compiles **225 units** in **one** Cargo
-invocation and retains **582.7 MB** in the rule-host target directory. A
-`warm-noop` re-run still starts Cargo once and compiles nothing; a
-`warm-source-edit` does the same; a one-line rule edit compiles exactly one unit;
-`polint test` starts Cargo once per fixture case.
+machine (median of three runs per cell), a cold `examples/basic` scan compiles
+**225 units** in **one** Cargo invocation, takes **187.3 s**, and retains
+**582.7 MB** across 1,708 files in the rule-host target directory. A `warm-noop`
+re-run still starts Cargo once, compiles nothing, and costs 157 ms; a
+`warm-source-edit` does the same in 163 ms; a one-line rule edit compiles exactly
+one unit in 735 ms; `polint test` starts Cargo once per fixture case.
+
+The 537 MB the report quoted is not the same quantity: it is the GitHub Action's
+figure *after* it prunes the rule package's own output, and the harness prunes
+nothing.
 
 ## Limits recorded, not estimated
 
 `compiler_peak_rss_bytes` is `null` — Cargo and `rustc` memory is not observed.
-Wall-clock was taken on a shared, contended host and moves by multiples with
-load; invocation, unit, and byte counts do not. Every limit is repeated in the
+Only `examples/basic`, and only one machine, is recorded; the 2 vCPU / 4 GB
+acceptance rig is absent rather than estimated. Every count — Cargo starts,
+`rustc` starts, compiled units, retained bytes, retained files — was identical
+across all three runs of every cell; wall-clock was not, and the same `cold` cell
+measured 417.6 s on this host while it was busy. Every limit is repeated in the
 artifact's own `limits` array and in `research/evaluation-harness/README.md`.
