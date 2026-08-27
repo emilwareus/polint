@@ -1,5 +1,11 @@
 Create an extensive, implementation-grade plan for emilwareus/polint's code-preserving build architecture.
 
+**Later product decision (2026-08-27):** supersedes the compatibility parts of
+this brief. The migration ships directly in the proposed 0.3.0 unstable minor:
+no legacy backend, automatic legacy fallback, multi-release compatibility
+window, or deprecation period. Users upgrade polint and migrate the rule-pack
+manifest/build contract; rule `.rs` source and the typed Rust API remain stable.
+
 Repository: /workspace/polint, main/origin/main at b272b378 (v0.2.1), clean working tree. Existing research report: /opt/data/research/polint-builds-code-preserving-2026-08-25/report.md. Read it fully and verify its claims against the repository before planning.
 
 Core product invariant (non-negotiable): polint rules remain real, expressive, typed Rust code. Do NOT make a DSL/declarative policy the primary model. Existing rule source should remain byte-identical if technically possible: #[polint::rule], polint::sdk::prelude::*, typed fact-view parameters, RuleCtx, RuleResult, run_cli registration, normal Rust helpers/control flow. Optional code-generating conveniences are allowed only as secondary features.
@@ -19,7 +25,7 @@ The plan must be detailed enough for approved coding agents to implement without
 5. Rule protocol design: manifest handshake, run request, snapshot transfer, stdout/stderr limits, timeouts, exit/error protocol, version negotiation, determinism, cancellation, one process vs two processes, and compatibility with current report/inspect JSON schemas.
 6. Build and artifact lifecycle: source fingerprint inputs, current-artifact detection, direct binary execution bypassing Cargo, single build for all fixture cases, Cargo flags, offline/locked operation, vendored SDK, target directory location/cleanup, user-level cache, disk ceilings/LRU, prebuilt native artifacts, signing/digests, and explicit native trust mode.
 7. Security threat model and controls: customer-controlled Cargo.toml, build.rs, proc macros, dependencies, rule binary, snapshot files, path traversal, untrusted fresh repos, artifact signatures, sandbox boundaries, and what native mode can/cannot guarantee. Include default behavior for owned repositories, shared artifacts, and arbitrary untrusted repositories.
-8. Detailed phased implementation plan. Use phases and bite-sized tasks with exact files likely to change/create, dependencies, sequencing, prerequisites, rollback/compatibility strategy, and acceptance criteria. Include at minimum:
+8. Detailed phased implementation plan. Use phases and bite-sized tasks with exact files likely to change/create, dependencies, sequencing, prerequisites, development rollback strategy, the direct breaking migration, and acceptance criteria. Include at minimum:
    - measurement/baseline harness;
    - dependency-closure and feature-leak guard;
    - SDK extraction;
@@ -33,7 +39,7 @@ The plan must be detailed enough for approved coding agents to implement without
    - later WASM backend decision gate.
 9. Testing/verification matrix with exact commands and expected assertions. Include unit, integration, golden, public API leak, capability, determinism, corruption/version mismatch, offline/no-Cargo, cross-platform, security/failure, and performance tests. Make no unsupported claims about tests passing.
 10. Performance budgets and experiment design. Separate measured existing data, targets, and kill criteria. Include 2 vCPU/4GB clean machine and normal developer machine; cold/warm; small/medium/large repos; bytes downloaded/written/retained, CPU/RSS, rule compile time, host analysis time, snapshot serialization/deserialization, startup, repeated scans, and number of Cargo invocations.
-11. Migration and release plan preserving existing users: feature flags, versions, generated manifests, existing rule packs, compatibility modes, deprecation timeline, error messages, and how to avoid forcing an all-at-once migration.
+11. Direct migration and release plan: proposed 0.3.0 version, generated and existing manifests, a one-shot rewrite aid, rebuild/test instructions, actionable errors for unmigrated packs, release gates, and proof that no legacy backend or auto-fallback ships. The all-at-once manifest/build migration is intentional; preserve rule `.rs` source/API instead of the 0.2 package/execution contract.
 12. Documentation plan: files and claims to update, including README, consumer setup, architecture, action docs, generated skill, schemas, examples, and troubleshooting.
 13. Risks, unresolved decisions, and an implementation decision log template.
 14. Final recommended order of execution and what the first implementation PR should be.

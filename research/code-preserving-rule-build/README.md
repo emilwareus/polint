@@ -27,12 +27,19 @@ intact.
 
 Research complete; implementation not started beyond the measurement slice.
 
+**Product decision:** the architecture is proposed for a direct, intentionally
+breaking **0.3.0** migration (not yet released). 0.3.0 replaces the 0.2
+rule-pack manifest/build/execution contract with the thin-SDK/protocol path.
+There is no legacy backend, automatic legacy fallback, multi-minor rollout, or
+deprecation window. Users upgrade polint and migrate their pack manifest; rule
+`.rs` source and the typed Rust authoring API remain stable.
+
 | Deliverable | State |
 | --- | --- |
 | [`FINAL-REPORT.md`](FINAL-REPORT.md) | Complete. Current-state evidence, seven code-preserving alternatives with explicit rejection reasons, decision matrix, recommended architecture, security and trust boundaries, experiment plan with budgets and kill criteria. |
-| [`IMPLEMENTATION-PLAN.md`](IMPLEMENTATION-PLAN.md) | Complete. Package graph, boundary design, snapshot format, host/rule protocol, build and artifact lifecycle, threat model, eleven phases with per-task files and acceptance criteria, testing matrix, budgets, migration and release plan, documentation plan, risks, and a requirement→phase traceability table. |
-| [`RESEARCH-BRIEF.md`](RESEARCH-BRIEF.md) | The brief the report answers, kept verbatim so the report's scope is auditable. |
-| [`IMPLEMENTATION-PLAN-BRIEF.md`](IMPLEMENTATION-PLAN-BRIEF.md) | The brief the plan answers, same reason. |
+| [`IMPLEMENTATION-PLAN.md`](IMPLEMENTATION-PLAN.md) | Complete. Package graph, boundary design, snapshot format, host/rule protocol, build and artifact lifecycle, threat model, eleven phases with per-task files and acceptance criteria, testing matrix, budgets, direct breaking 0.3.0 migration and release plan, documentation plan, risks, and a requirement→phase traceability table. |
+| [`RESEARCH-BRIEF.md`](RESEARCH-BRIEF.md) | The original brief the report answers, retained so the report's scope is auditable. |
+| [`IMPLEMENTATION-PLAN-BRIEF.md`](IMPLEMENTATION-PLAN-BRIEF.md) | The original plan brief with its compatibility requirement explicitly superseded by Emil's later breaking-migration decision. |
 | Phase A measurement harness | Tasks A1, A3, A4 landed: `polint-bench build-cost`, `make build-cost` / `make build-cost-baseline`, and a measured baseline at [`../evaluation-harness/baselines/build-cost.json`](../evaluation-harness/baselines/build-cost.json). Metric definitions and limits are in [`../evaluation-harness/README.md`](../evaluation-harness/README.md). A2 (more repositories), A5 (extend the per-check cost record), and A6 (a CI job) are outstanding. |
 | Phases B–K | Not started. `IMPLEMENTATION-PLAN.md` §14.1 has the order; B does not depend on A2. |
 
@@ -48,6 +55,12 @@ kernel. The rule process deserializes the snapshot once and the existing typed
 views borrow from it, so `SourceFiles::all(self) -> &'a [SourceFile]` and every
 other accessor keeps its exact signature and **rule sources do not change by a
 byte**.
+
+The package cutover is nevertheless intentional and breaking: after 0.3.0 is
+released, a 0.2 pack updates its dependency to `polint-sdk` renamed as `polint`,
+rebuilds/regenerates its host artifacts as needed, runs `polint test` and
+`polint check`, and upgrades. A planned `polint rules migrate` command is only a
+one-shot rewrite aid; it is not a compatibility layer.
 
 Rejected, each with its reason recorded: a DSL or declarative policy format
 (violates the product invariant), native `cdylib` plugins (no stable Rust ABI, so

@@ -24,6 +24,21 @@ The measured cells are `examples/basic` × {`cold`, `warm-noop`, `warm-rule-edit
 
 ## 1. Executive goal and invariants
 
+### 1.0 Product migration decision
+
+Emil Wåreus has chosen a direct, intentionally breaking migration for the next
+unstable minor release, proposed as **0.3.0**. polint is currently unstable and
+Emil is its only user, so supporting the 0.2 rule-pack build/execution contract
+in parallel would add cost without serving the product.
+
+0.3.0 therefore has one rule path: rule packs depend on `polint-sdk` (renamed to
+the extern crate `polint`), the prebuilt engine produces a fact snapshot, and
+the thin rule host executes through the protocol. There is no released legacy
+backend, manifest auto-detection, automatic fallback to `cargo run` with the
+heavy crate, or deprecation window. Users upgrade polint and migrate their pack
+manifest. Rule `.rs` source and the typed Rust API remain stable; the intentional
+break is the package/build/execution contract.
+
 ### 1.1 Goal
 
 Make a customer scan with repo-local rules stop paying for a full compile of the polint engine and its dependency closure, **without changing what a polint rule is**. A rule stays real, typed, expressive Rust. The engine becomes a prebuilt host that produces facts; the repo-local rule binary links only a thin SDK, deserializes one fact snapshot, and runs the author's Rust over borrowed typed views.
@@ -53,7 +68,7 @@ These are **decisions already made**, not open questions.
 
 **I3 — Borrowed typed views stay borrowed.** `SourceFiles<'a>`, `Imports<'a>`, `Symbols<'a>` … are `Copy` structs holding `&'a AnalysisDb` and returning `&'a [Fact]` / `impl Iterator<Item = &'a Fact>` (`crates/polint/src/sdk/facts.rs:23-52, 258-291, 495-575`). Signatures and lifetimes are unchanged; only what `AnalysisDb` *is* inside the rule process changes. No view may start returning owned `Vec<Fact>`.
 
-**I4 — Output compatibility.** `PolintReport` (`crates/polint/src/diagnostics/mod.rs:117-124`, schema `docs/schemas/polint-report-v1.json`), `InspectRuleReport` (`crates/polint/src/rule_manifest.rs:162-168`, schema `docs/schemas/polint-rule-inspect-v1.json`), the AI-friendly report (`docs/schemas/polint-ai-friendly-v1.json`), SARIF, and the rule-test report (`docs/schemas/polint-test-report-v1.json`) keep byte-identical shapes for identical inputs.
+**I4 — Output stability.** `PolintReport` (`crates/polint/src/diagnostics/mod.rs:117-124`, schema `docs/schemas/polint-report-v1.json`), `InspectRuleReport` (`crates/polint/src/rule_manifest.rs:162-168`, schema `docs/schemas/polint-rule-inspect-v1.json`), the AI-friendly report (`docs/schemas/polint-ai-friendly-v1.json`), SARIF, and the rule-test report (`docs/schemas/polint-test-report-v1.json`) keep byte-identical shapes for identical inputs. This preserves report consumers; it does not preserve the 0.2 rule-host backend.
 
 **I5 — Determinism.** Diagnostic ordering, dedup, stable fingerprints, and cache digests must be unchanged. The snapshot round-trip must be order-preserving for every fact family, because view methods document "deterministic database order".
 
@@ -164,7 +179,7 @@ polint          (facade + `polint` binary; keeps the crates.io name and `cargo i
 
 * `polint-sdk` depends on `polint-macros`, `serde`, `serde_json`, `thiserror`, `anyhow`, `globset`, `toml`. Nothing else.
 * `polint-engine` depends on `polint-sdk` (snapshot/protocol/diagnostic types) plus everything heavy.
-* `polint` depends on `polint-engine` and `polint-sdk`, owns `src/main.rs`, and re-exports `pub use polint_sdk::{sdk, runner, rule};` for backward compatibility.
+* `polint` depends on `polint-engine` and `polint-sdk`, owns `src/main.rs`, and re-exports `pub use polint_sdk::{sdk, runner, rule};` to keep the Rust rule source/API stable.
 * `polint-macros` gains **no** dependency on either — it emits `::polint::…` paths textually.
 
 **The byte-identical trick.** Generated pack manifests change *one line*:
@@ -173,7 +188,7 @@ polint          (facade + `polint` binary; keeps the crates.io name and `cargo i
 polint = { package = "polint-sdk", version = "0.3", default-features = false, features = ["lang-go", "lang-typescript"] }
 ```
 
-Cargo's `package =` rename makes the extern crate name `polint`, so `use polint::sdk::prelude::*;`, `#[polint::rule]` (which expands to `::polint::sdk::__private::…`, `polint-macros/src/lib.rs:69, 82, 99-119`), and `polint::runner::run_cli` all stay byte-identical. **Rule `.rs` files do not change at all.** `polint-sdk` keeps `lang-go`/`lang-typescript` as accepted no-op features precisely so existing manifests keep resolving.
+Cargo's `package =` rename makes the extern crate name `polint`, so `use polint::sdk::prelude::*;`, `#[polint::rule]` (which expands to `::polint::sdk::__private::…`, `polint-macros/src/lib.rs:69, 82, 99-119`), and `polint::runner::run_cli` all stay byte-identical. **Rule `.rs` files do not change at all.** `polint-sdk` keeps `lang-go`/`lang-typescript` as accepted no-op features so migrated and newly generated manifests can preserve their language feature lists.
 
 ### 3.2 Alternatives considered and rejected
 
@@ -525,7 +540,7 @@ The host answers on the main thread between `RunRequest` and `RunResponse`; `Hos
 
 **Determinism.** The rule process must produce identical `RunResponse.diagnostics` for identical `(snapshot bytes, RunRequest)`. Enforced by: `dedupe_diagnostics` + `sort_diagnostics` before responding (`diagnostics/mod.rs:647, 678`), no wall-clock or RNG in the SDK, `BTreeMap`/`BTreeSet` everywhere, and the thread-scope executor collecting per-rule outputs into an index-ordered `Vec` before flattening (mirroring `core/rule.rs:361-368`).
 
-### 5.8 Compatibility with current JSON schemas
+### 5.8 Stability of current JSON schemas
 
 * `polint check --format json` — the **host** renders `PolintReport` exactly as today (`diagnostics/mod.rs:199-218`), now from the run response instead of parsing the child's stdout. `docs/schemas/polint-report-v1.json` unchanged.
 * `polint inspect rule --format json` — host-rendered from `HelloResponse` (§5.2). `docs/schemas/polint-rule-inspect-v1.json` unchanged.
@@ -800,7 +815,7 @@ Before any build, `validate_rule_manifest(<pack>/Cargo.toml)` rejects:
 | `[workspace]` inheriting from outside the repo | pulls in an unseen manifest |
 | non-`bin` target kinds, `proc-macro = true`, `crate-type = ["cdylib"]` in the pack itself | the pack is a rule host, nothing else |
 
-Violations produce a `polint/rules-manifest` **error** diagnostic naming the offending key and line, and the pack is skipped — the scan continues with the other packs, mirroring the transactional-refusal style already used by the scaffolder (`cli/mod.rs:871-895`). The generated manifest (`pack_cargo_toml`, `cli/mod.rs:1130-1158`) and all 17 example packs pass unchanged.
+Violations produce a `polint/rules-manifest` **error** diagnostic naming the offending key and line, and the pack is skipped — the scan continues with the other packs, mirroring the transactional-refusal style already used by the scaffolder (`cli/mod.rs:871-895`). The migrated generated-manifest output (`pack_cargo_toml`, `cli/mod.rs:1130-1158`) and all 17 migrated example packs pass validation.
 
 ### 7.4 `build.rs`, proc macros, and dependencies
 
@@ -866,7 +881,7 @@ Same treatment for `artifact_sources` local-file entries and for the `<pack>` di
 | A shared rule pack from another team | `artifact-only` | no | yes | digest pinned in `.polint/rules-artifacts.lock` |
 | An arbitrary untrusted repository | `none` when `--untrusted`/`POLINT_UNTRUSTED=1`; otherwise `native` with a one-time stderr notice naming the packs about to be compiled | no | no | — |
 
-The one-time notice is deliberate: silently compiling a stranger's code is the status quo, and the notice is the cheapest honest fix short of flipping the default, which would break every existing user.
+The one-time notice is deliberate: silently compiling a stranger's code is the status quo. Whether untrusted repositories should default to `none` is a separate security-product decision (D-8), not a reason to retain the 0.2 package/build path.
 
 ---
 
@@ -874,11 +889,12 @@ The one-time notice is deliberate: silently compiling a stranger's code is the s
 
 Each task lists **files**, **depends on**, and **acceptance**. Tasks are sized to be one reviewable PR or smaller.
 
-Throughout Phases C–G a single feature flag governs the new path:
-
-* Cargo feature `rule-protocol` on `polint-engine` (default **off** until Phase H closes).
-* Runtime override `POLINT_RULE_BACKEND=legacy|protocol` for A/B in CI and for user escape after release.
-* Legacy path = today's `run_local_rule_host_kind` (`cli/mod.rs:4252-4343`), kept intact and compiled in until Phase I.
+Phases C–H are an unreleased migration train, not a compatibility rollout.
+Intermediate commits may temporarily leave the current call path present so the
+workspace compiles while code moves, but they do not add a user-selectable
+backend or ship as a release. Each integration task removes the 0.2 call site it
+replaces, and the 0.3.0 release gate requires repository search and tests to
+prove the old path is gone.
 
 ### Phase A — Measurement and baseline harness
 
@@ -912,15 +928,18 @@ Built *before* the SDK exists, against a probe, so the guard fails loudly the mo
 | --- | --- | --- | --- | --- |
 | B1 | `SDK_ALLOWED_CLOSURE` allowlist + closure test: shells `cargo tree -p polint-sdk --edges normal --prefix none --locked --no-dedupe`, parses names, asserts `set ⊆ allowlist` and `count ≤ 35` | new `crates/polint/tests/sdk_dependency_closure.rs` | C1 for a real target; runs against `tests/fixtures/public-surface-leak-probe` until then | test compiles, `#[ignore]`d until C1, then un-ignored |
 | B2 | Forbidden-crate assertion in CI, mirroring the existing parser-isolation check | `.github/workflows/ci.yml:100-118` (`language-features` job) — add an `sdk closure` matrix entry running `cargo tree -p polint-sdk` and `! grep -Eq '(^\| )(oxc_\|tree-sitter\|rusqlite\|rayon\|petgraph\|ignore\|clap\|clap_builder\|tracing-subscriber\|serde_norway\|json-strip-comments)'` | B1 | job fails if any forbidden crate appears |
-| B3 | Feature-leak guard: assert `polint-sdk`'s `lang-go`/`lang-typescript` features enable **zero** optional dependencies (they exist only for manifest compatibility, §3.1) | `crates/polint/tests/sdk_dependency_closure.rs` | C1 | `cargo tree -p polint-sdk --features lang-go,lang-typescript` closure equals the default closure exactly |
+| B3 | Feature-leak guard: assert `polint-sdk`'s `lang-go`/`lang-typescript` features enable **zero** optional dependencies (they preserve the migrated/generated feature list, §3.1) | `crates/polint/tests/sdk_dependency_closure.rs` | C1 | `cargo tree -p polint-sdk --features lang-go,lang-typescript` closure equals the default closure exactly |
 | B4 | Layering guard for the new crates | `crates/polint/tests/module_layering.rs` (216); `crates/polint/tests/internal_architecture.rs:4-33` | C1 | `crates/polint-sdk/src/**` contains no `polint_engine::`, `crate::analysis`, `crate::cache`, `crate::config`; `REMOVED_PACKAGES` still absent; new positive assertion that the publishable set is exactly `{polint, polint-macros, polint-sdk}` |
 | B5 | Compile-time size budget: assert `polint-sdk`'s own `src` LOC ≤ 8,000 | `crates/polint/tests/sdk_dependency_closure.rs` | C-final | fails if engine code drifts back into the SDK |
 
 **Rollback:** the guards are tests; disabling one is a one-line `#[ignore]`.
 
-### Phase C — SDK extraction (mechanical, behaviour-preserving)
+### Phase C — SDK extraction (mechanical, unreleased)
 
-No behaviour change. At the end of Phase C the product still runs the legacy path; the only difference is that `polint::sdk` and `polint::runner` are re-exports from a new thin crate. Extraction follows the layering diagram (`ARCHITECTURE.md:56-84`) bottom-up, so each PR compiles.
+At the end of Phase C, the package boundary is compiled and the supported Rust
+rule API is unchanged. This intermediate state is not published. Extraction
+follows the layering diagram (`ARCHITECTURE.md:56-84`) bottom-up so each PR
+compiles, but 0.3.0 waits for the protocol cutover and manifest migration.
 
 | # | Task | Files | Depends | Acceptance |
 | --- | --- | --- | --- | --- |
@@ -960,13 +979,14 @@ No behaviour change. At the end of Phase C the product still runs the legacy pat
 | E1 | Protocol types + schema constants (`polint-rule-host-hello-v1`, `-run-v1`, `-policy-v1`), all `#[serde(rename_all="snake_case", deny_unknown_fields)]` | new `crates/polint-sdk/src/protocol/{mod,wire}.rs`, modelled on `crates/polint-engine/src/analysis_neutral/extensions/protocol.rs:1-128` | C-final, D2 | unknown-field rejection tests mirroring `extensions/protocol.rs:134-162` |
 | E2 | Length-prefixed frame codec (`u32` LE + JSON), reader/writer, 64 MiB cap | `crates/polint-sdk/src/protocol/frame.rs` | E1 | unit tests: zero-length, oversized, truncated, split-across-reads |
 | E3 | Rewrite `runner::run_cli` as the protocol client: parse `--polint-rule-protocol <n>`, Hello, loop on RunRequest, execute via `polint_sdk::rule::exec`, respond; **no clap, no tracing-subscriber** | `crates/polint-sdk/src/runner/mod.rs` (from `crates/polint-engine/src/runner/mod.rs`, 524) | E1, E2, D4 | `polint::runner::run_cli(vec![…])` signature unchanged (`ExitCode` return); B2 shows `clap` and `tracing-subscriber` gone |
-| E4 | Engine-side `RuleHost` client: spawn, Hello, plan, snapshot, RunRequest, collect | new `crates/polint-engine/src/rule_host/{mod,client}.rs` | E1–E3, D3 | drives `examples/basic` end-to-end behind `POLINT_RULE_BACKEND=protocol` |
-| E5 | Policy RPC: `PolicyChannel` in the SDK (`Mutex<Framed>`), `PolicyServer` in the engine dispatching to `policy_queries::{matching_events, forbidden_reachable, missing_guards, missing_cleanup, forbidden_flows}` (`policy_queries.rs:23-49`) | `crates/polint-sdk/src/sdk/facts.rs:883-962`, `crates/polint-sdk/src/sdk/policy_channel.rs`, `crates/polint-engine/src/rule_host/policy.rs` | E4, C8 | a rule generated by `polint new-rule --template unsafe-deserialization` produces byte-identical diagnostics under both backends |
+| E4 | Engine-side `RuleHost` client: spawn, Hello, plan, snapshot, RunRequest, collect | new `crates/polint-engine/src/rule_host/{mod,client}.rs` | E1–E3, D3 | drives the migrated `examples/basic` end to end through the protocol |
+| E5 | Policy RPC: `PolicyChannel` in the SDK (`Mutex<Framed>`), `PolicyServer` in the engine dispatching to `policy_queries::{matching_events, forbidden_reachable, missing_guards, missing_cleanup, forbidden_flows}` (`policy_queries.rs:23-49`) | `crates/polint-sdk/src/sdk/facts.rs:883-962`, `crates/polint-sdk/src/sdk/policy_channel.rs`, `crates/polint-engine/src/rule_host/policy.rs` | E4, C8 | a rule generated by `polint new-rule --template unsafe-deserialization` produces the frozen 0.2.1 diagnostic output through the protocol |
 | E6 | Process controls: `env_clear()` + allowlist, empty cwd, deadlines, output caps, process-group/Job-Object kill, stdin-EOF cancellation | `crates/polint-engine/src/rule_host/process.rs`, reusing `crates/polint-engine/src/analysis/extensions/host.rs:332-379` and the Windows Job Object code | E4 | a rule that spawns a child and sleeps is fully reaped on timeout (test mirrors `host.rs:790-830`) |
 | E7 | Error taxonomy: reuse `rules_host_error_message` (`cli/rules_host_error.rs:8-37`) for spawn/build failures; add protocol codes 3/4/5 | `crates/polint-engine/src/cli/rules_host_error.rs`, `crates/polint-engine/src/rule_host/error.rs` | E4 | MSRV/network/manifest/rustc hint tests (`rules_host_error.rs:101-112`) still pass |
 | E8 | `sdk_abi` constant + negotiation | `crates/polint-sdk/src/lib.rs`, `crates/polint-engine/src/rule_host/client.rs` | E1 | a binary built against `sdk_abi = N-1` is rejected with exit 3 and a message naming both numbers |
 
-**Rollback:** feature `rule-protocol` off, or `POLINT_RULE_BACKEND=legacy`.
+**Rollback:** revert the unreleased Phase E commits. A protocol failure blocks
+the 0.3.0 release; it does not route users through a second backend.
 
 ### Phase F — Fingerprint, artifact cache, direct execution
 
@@ -981,31 +1001,33 @@ No behaviour change. At the end of Phase C the product still runs the legacy pat
 | F7 | Manifest validation (§7.3) | `crates/polint-engine/src/rules_artifact/manifest_check.rs` | F1 | all 17 `examples/*/.polint/rules/Cargo.toml` and the `pack_cargo_toml` output pass; each forbidden construct has a negative test |
 | F8 | `polint rules build [--emit-artifact DIR]` subcommand | `crates/polint-engine/src/cli/mod.rs` (new `Command::Rules`) | F3 | produces `<key>.polintrule`; `--help` documented |
 
-**Rollback:** `POLINT_RULE_BACKEND=legacy` bypasses F entirely; the caches are additive directories that `polint cache clean` removes.
+**Rollback:** revert the unreleased Phase F commits; the additive cache
+directories remain removable through `polint cache clean`.
 
 ### Phase G — Runner and CLI integration
 
 | # | Task | Files | Depends | Acceptance |
 | --- | --- | --- | --- | --- |
-| G1 | Rewrite `check_local_rule_hosts` (`cli/mod.rs:3949-4046`): validate packs → resolve binaries → build **one** plan from all packs' handshakes → build **one** snapshot → drive each pack → assemble | `crates/polint-engine/src/cli/mod.rs:3949-4046, 4236-4343` | E4, F4 | `polint check` on all 17 examples produces byte-identical `--format json` under both backends |
+| G1 | Replace `check_local_rule_hosts` (`cli/mod.rs:3949-4046`) with: validate migrated packs → resolve binaries → build **one** plan from all packs' handshakes → build **one** snapshot → drive each pack → assemble; delete `run_local_rule_host_kind` in the same task | `crates/polint-engine/src/cli/mod.rs:3949-4046, 4236-4343` | E4, F4 | `polint check` on all 17 migrated examples produces the frozen 0.2.1 `--format json`; repository search finds no old check runner |
 | G2 | Drop the duplicate source load for ignores/`--stat` (`cli/mod.rs:3973-3985`) — the host already has `HostFactDb` | `crates/polint-engine/src/cli/mod.rs:3949-3985`; `backfill_diagnostic_files` (`:3926-3947`) retained for out-of-scope diagnostics | G1 | `--stat`/`--shortstat` output unchanged; measured file reads halve on `examples/go-import-boundaries` |
 | G3 | `inspect rule` from the handshake (or from `RuleArtifactRecord.rule_ids` with no spawn); delete `run_local_rule_host_inspect` (`cli/mod.rs:4350-4407`) | `crates/polint-engine/src/cli/mod.rs` | E4 | `polint inspect rule --format json` byte-identical; **0** Cargo invocations when the artifact is current |
-| G4 | `review` (`cli/mod.rs:4054+`): changeset travels in `RunRequest.changeset`; retire `--changed-files` and `write_review_changeset` (`:4181-4199`) | `crates/polint-engine/src/cli/mod.rs`, `crates/polint-sdk/src/runner/mod.rs` | E4 | `examples/review-rules` and `examples/gorm-review-indexes` produce identical output; the `review/` cache dir keeps working for the legacy backend until Phase I |
+| G4 | `review` (`cli/mod.rs:4054+`): changeset travels in `RunRequest.changeset`; delete `--changed-files`, `write_review_changeset` (`:4181-4199`), and the obsolete `review/` handoff cache | `crates/polint-engine/src/cli/mod.rs`, `crates/polint-sdk/src/runner/mod.rs`, `crates/polint-engine/src/cache/mod.rs` | E4 | migrated `examples/review-rules` and `examples/gorm-review-indexes` produce the frozen 0.2.1 output; no old handoff path remains |
 | G5 | `polint test`: one binary resolve and one process per pack for the whole suite (§6.4) | `crates/polint-engine/src/rule_test.rs:184-195, 244-303, 323-373` | E4, F4 | Cargo invocations for `polint test` on `examples/multiple-rules` drop from N to ≤ 1; report byte-identical |
 | G6 | Baseline path (`collect_diagnostics_for_baseline`, `cli/mod.rs:3751-3792`) uses the same resolve+drive helper | `crates/polint-engine/src/cli/mod.rs:3751-3792` | G1 | `--baseline`/`--new-only` behaviour unchanged |
 | G7 | Extension host reuses `rules_artifact` for build+cache (its `command_spec`, `analysis/extensions/host.rs:128-162`, is a `cargo run` with the same problem) | `crates/polint-engine/src/analysis/extensions/host.rs` | F4 | extension handshake works with 0 Cargo invocations when unchanged; `extensions-target` pruned like `rules-target` |
 
-**Rollback:** every G task keeps the legacy function until Phase I; a revert restores the old call site.
+**Rollback:** revert the unreleased integration task. Once a G task lands, its
+0.2 call site is deleted; no released runtime switch restores it.
 
 ### Phase H — Test harness and golden equivalence
 
 | # | Task | Files | Depends | Acceptance |
 | --- | --- | --- | --- | --- |
-| H1 | Dual-backend golden runner: every case in `tests/golden-corpus/inputs.toml` runs under both backends and the outputs must be **identical** | `crates/polint-engine/tests/golden.rs:60-70` (`polint_cmd` gains a backend param) | G1 | `cargo test -p polint-engine --test golden` green for both |
-| H2 | Capability-matrix dual run | `crates/polint-engine/tests/capability_matrix.rs` (913), `tests/capability-matrix/matrix.toml` | G1 | all matrix cells identical across backends |
+| H1 | Migration golden runner: freeze the 0.2.1 outputs, then run every case in `tests/golden-corpus/inputs.toml` through the protocol path | `crates/polint-engine/tests/golden.rs:60-70`, existing golden outputs | G1 | `cargo test -p polint-engine --test golden` matches the frozen outputs; no old backend is compiled into the test binary |
+| H2 | Capability-matrix migration run | `crates/polint-engine/tests/capability_matrix.rs` (913), `tests/capability-matrix/matrix.toml` | G1 | every protocol-path cell matches the frozen 0.2.1 expected result |
 | H3 | `cli.rs` integration updates: new assertions for 0-Cargo warm runs, `--rules-execution`, artifact corruption, `sdk_abi` mismatch | `crates/polint-engine/tests/cli.rs` (12,464) | F4, E8 | new tests green; no existing test deleted, only re-pointed |
 | H4 | Action-contract test covers `rules-bin` + `snapshots` | `crates/polint-engine/tests/github_action_cache.rs` (1,119) | F2, I2 | `cache_layout_matches_the_github_action_contract` green |
-| H5 | Flip the default: `rule-protocol` on by default; `POLINT_RULE_BACKEND=legacy` still available | `crates/polint-engine/Cargo.toml`, `crates/polint/Cargo.toml` | H1–H4 | full `make check` green |
+| H5 | Enforce the single-path release candidate: no backend selector, no heavy-crate pack execution, and no auto-detection of 0.2 manifests | `crates/polint-engine/Cargo.toml`, `crates/polint/Cargo.toml`, `crates/polint-engine/src/cli/mod.rs` | H1–H4 | full `make check` green; migration-negative temp repo fails with the §11.6 actionable error; `rg` finds no released legacy selector |
 
 ### Phase I — Docs, action, release
 
@@ -1016,7 +1038,7 @@ No behaviour change. At the end of Phase C the product still runs the legacy pat
 | I3 | Generated skill text | `crates/polint-engine/src/cli/skill.rs:185, 209-246, 287-288, 330-344, 418-433` | I1 |
 | I4 | Publish `polint-sdk` | `scripts/publish-crates.sh:11-15` (`PACKAGES=(polint-macros polint-sdk polint)`), `scripts/bump-workspace-version.py`, `.github/workflows/release.yml`, `release-dry-run.yml` | C10 |
 | I5 | Schema additions | `docs/schemas/polint-cache-status-v1.json` (two enum values); new `docs/schemas/polint-fact-snapshot-v1.json`, `polint-rule-host-protocol-v1.json`, `polint-rule-artifact-v1.json` | F2, D1, E1 |
-| I6 | Delete the legacy path: `run_local_rule_host_kind`, `run_local_rule_host_inspect`, `write_review_changeset`, `--changed-files`, `CacheManagedCategory::Review` | `crates/polint-engine/src/cli/mod.rs`, `cache/mod.rs` | one minor release after H5 |
+| I6 | 0.3.0 migration gate: verify every example/temp-repo pack uses the renamed `polint-sdk` dependency, old runner symbols are absent, migration docs are complete, and the negative old-manifest test is actionable | workspace manifests, examples, `crates/polint-engine/tests/cli.rs`, release checklist | H5, I1–I5 |
 
 ### Phase J — Optional prebuilt artifact path
 
@@ -1065,15 +1087,15 @@ No entry below asserts that a test currently passes — these are the tests to w
 | I-5 | `cargo test -p polint-engine --test cli inspect_rule_uses_artifact_record` | `polint inspect rule --format json` → 0 Cargo invocations, 0 rule-process spawns |
 | I-6 | `cargo run -p polint -- test` in `examples/multiple-rules` | Cargo invocations ≤ 1; rule-process spawns ≤ 1 |
 | I-7 | `cargo test -p polint-engine --test cli extension_host_uses_artifact_cache` | extension handshake with 0 Cargo invocations when unchanged |
+| I-8 | `cargo test -p polint-engine --test cli rule_pack_breaking_migration` | a temp repo using only public SDK imports and real facts succeeds after the renamed `polint-sdk` manifest migration and emits the asserted diagnostic; the same repo with the 0.2 heavy-crate dependency fails before Cargo/rule execution with the §11.6 message |
 
 ### 9.3 Golden equivalence
 
 | ID | Command | Assertion |
 | --- | --- | --- |
 | G-1 | `cargo test -p polint-engine --test golden` | every case in `tests/golden-corpus/inputs.toml` matches `tests/golden/outputs/**` |
-| G-2 | `POLINT_RULE_BACKEND=legacy cargo test -p polint-engine --test golden` | same goldens |
 | G-3 | `cargo test -p polint-engine --test golden_corpus` | corpus-level invariants hold |
-| G-4 | `cargo test -p polint-engine --test capability_matrix` under both backends | identical cells |
+| G-4 | `cargo test -p polint-engine --test capability_matrix` | protocol-path cells match the frozen 0.2.1 expectations |
 | T-EQ-3 | `cargo test -p polint-engine --test symbol_query_equivalence` | for 200 generated fact sets, `polint_engine::analysis_neutral::symbol_graph::query::*` and `polint_sdk::sdk::symbol_query::*` return identical sequences, **including** the `reference_order` stable-key tiebreak (`query.rs:77-97`) |
 | T-EQ-5 | `cargo test -p polint-engine --test policy_violation_roundtrip` | proptest: `PolicyViolation` → JSON → `PolicyViolation` preserves `stable_key()` and `diagnostic(id, msg)` byte-for-byte |
 
@@ -1212,10 +1234,10 @@ Any of these, sustained across three runs on both machines, stops the phase and 
 
 * **KC-1** — warm-noop Cargo invocations > 0 after Phase F. The entire premise fails; investigate before proceeding to G.
 * **KC-2** — SDK closure > 45 units. The thin SDK is not thin; re-examine `toml`/`globset`/`anyhow` in the public contract.
-* **KC-3** — end-to-end warm-noop on M-CI worse than 0.60 × baseline. The process boundary plus snapshot cost more than the compile saved; consider an in-host fast path for packs whose rules request only `syntax`-family views.
+* **KC-3** — end-to-end warm-noop on M-CI worse than 0.60 × baseline. The process boundary plus snapshot cost more than the compile saved; block 0.3.0 and revisit the single-path boundary before proceeding.
 * **KC-4** — snapshot encode+decode > 15% of warm end-to-end. Opens the binary-codec gate (adopt `postcard` behind `SectionCodec`, §4.4).
 * **KC-5** — host peak RSS > 1.30 × baseline. The projection is copying where it should be moving; make `HostFactDb::snapshot` consume `self` on the final call.
-* **KC-6** — any golden output differs between backends. Blocks H5 unconditionally.
+* **KC-6** — any new-path golden output differs from the frozen 0.2.1 oracle. Blocks H5 unconditionally.
 * **KC-7** — retention reduction < 2×. The `rules-target` prune (§6.7) is not working; verify `cargo clean -p <pkgid>` equivalence.
 
 ### 10.6 Experiment protocol
@@ -1228,30 +1250,37 @@ Each cell: 5 runs, reported as a median. Warm cells take one unmeasured warm-up 
 
 ### 11.1 Principle
 
-No user is required to migrate on any release. A rule pack pinned to `polint = "0.2"` keeps working unchanged; it simply keeps paying the old build cost. Migration is opt-in, one pack at a time, and reversible.
+0.3.0 is intentionally breaking for rule-pack manifests and build/execution.
+Users upgrade polint and migrate their rule pack in the same change. The 0.2
+heavy-crate manifest does not run under 0.3.0, and the CLI does not auto-detect
+or route it to the old `cargo run` path. Rule source remains ordinary typed Rust
+and should stay byte-identical.
+
+The migration is direct but guarded: every shipped example and an outside-user
+temp repository must migrate and pass before release, while an unmigrated 0.2
+manifest must fail before build or execution with one actionable message.
 
 ### 11.2 Version map
 
 | Release | Ships | User-visible |
 | --- | --- | --- |
-| **0.3.0** | `polint-sdk` published; `polint` re-exports it; `polint-engine` internal; protocol behind `POLINT_RULE_BACKEND=protocol` (default `legacy`) | none by default. `polint rules migrate` available. |
-| **0.4.0** | protocol default **on**; artifact cache on; `polint check --rules-execution`; action defaults to `artifact-preferred` | new packs generated with `package = "polint-sdk"`. Legacy packs auto-detected and run on the legacy path with a one-time info diagnostic. |
-| **0.5.0** | legacy path removed (Phase I6); `--changed-files`, `run_local_rule_host_inspect`, `CacheManagedCategory::Review` deleted | packs still on `polint = "0.2"`/`"0.3"` fail with an actionable error naming `polint rules migrate` |
+| **0.3.0 (proposed; not released)** | `polint-sdk` published; `polint` remains the installed CLI/facade; `polint-engine` internal; snapshot protocol and artifact cache are the only rule build/execution path | intentionally breaking manifest migration; generated packs use `package = "polint-sdk"`; existing packs must run the one-shot manifest migration or make the same one-line edit manually; rule `.rs` source/API stays stable |
 
-Minimum deprecation window: **0.4.0 → 0.5.0 ≥ 90 days**, and 0.5.0 must not ship until evidence (issue tracker plus the examples corpus) shows migration is mechanical.
+There is no staged 0.3/0.4/0.5 compatibility timeline and no deprecation
+window. If migration tests, performance gates, or protocol correctness are not
+ready, 0.3.0 is delayed rather than shipping two backends.
 
-### 11.3 Compatibility modes
+### 11.3 One package/build contract
 
-Detection is on the pack manifest, not on a flag:
+| Pack `[dependencies]` | 0.3.0 behaviour |
+| --- | --- |
+| `polint = { package = "polint-sdk", version = "0.3", … }` | accepted; build/cache/execute through the protocol path |
+| workspace dependency renamed to `polint-sdk` (this repository's examples) | accepted; same path |
+| `polint = { version = "0.2", … }` or a path to the heavy `crates/polint` package | rejected before Cargo or rule execution with the §11.6 migration message |
 
-| Pack `[dependencies]` | Mode | Behaviour |
-| --- | --- | --- |
-| `polint = { package = "polint-sdk", … }` | **protocol** | new path |
-| `polint = { version = "0.4", … }` (facade) | **protocol-via-facade** | works, but the pack compiles the engine too — correct output, no speedup; one-time `polint/rules-migrate` info diagnostic |
-| `polint = { version = "0.2"/"0.3", … }` | **legacy** | old `cargo run` path (0.3/0.4 only) |
-| `polint = { path = "…/crates/polint" }` (this repo's own examples) | resolved by path | `polint_deps_path_prefix` (`cli/mod.rs:1105-1117`) is extended to prefer `crates/polint-sdk` when present |
-
-Mode is reported in `polint inspect rule --format json` as a new optional `execution_mode` field on `RuleManifestWire` (`rule_manifest.rs:170-182`), `#[serde(skip_serializing_if = "Option::is_none")]`, so `docs/schemas/polint-rule-inspect-v1.json` stays backward-compatible.
+This is validation, not backend detection: there is only one accepted contract
+and one execution path. `polint inspect rule --format json` does not gain a
+legacy/protocol execution-mode field merely to describe a removed backend.
 
 ### 11.4 Generated manifests
 
@@ -1266,9 +1295,13 @@ format!(r#"polint = {{ package = "polint-sdk", version = "{version}", default-fe
 
 `enabled_language_features()` (`:1119-1128`) is unchanged, and `polint-sdk` accepts `lang-go`/`lang-typescript` as no-op features (§3.1) so the generated line keeps resolving. `polint_deps_path_prefix` (`:1105-1117`) gains a `crates/polint-sdk` probe. **`initial_pack_main` (`:1160-1173`) and `register_rule_in_pack_main` (`:1175+`) are untouched** — `polint::runner::run_cli(vec![…])` is still the generated `main`.
 
-### 11.5 `polint rules migrate`
+### 11.5 `polint rules migrate` as a one-shot aid
 
-New subcommand. Transactional, using the existing `ScaffoldWrite`/`commit_new_rule_scaffold_with`/`rollback_new_rule_scaffold` machinery (`cli/mod.rs:752-779, 918-1033`) so a partial failure restores every file byte-for-byte.
+New subcommand. It is a one-shot manifest rewrite aid, not a compatibility
+mechanism. It is transactional, using the existing
+`ScaffoldWrite`/`commit_new_rule_scaffold_with`/`rollback_new_rule_scaffold`
+machinery (`cli/mod.rs:752-779, 918-1033`) so a partial failure restores every
+file byte-for-byte.
 
 It edits **only** `<pack>/Cargo.toml`:
 
@@ -1279,12 +1312,26 @@ It edits **only** `<pack>/Cargo.toml`:
 
 It never touches `src/**`. Migration for the 17 in-repo example packs is a single mechanical PR.
 
+The documented user procedure is direct:
+
+1. upgrade the installed CLI to 0.3.0 once it is released;
+2. run `polint rules migrate <pack> --yes`, or make the equivalent one-line
+   dependency change to `package = "polint-sdk"`;
+3. remove/regenerate any checked-in rule-host lock or generated build metadata
+   the new package contract invalidates, then run `polint rules build` (or let
+   the first `polint test` build the thin host);
+4. run `polint test --format json` and `polint check --format json --fail-on none`;
+5. commit the manifest/lockfile migration with the repository's rules.
+
+There is no instruction to enable a compatibility flag or retain the 0.2
+dependency after validation.
+
 ### 11.6 Error messages
 
 | Situation | Message |
 | --- | --- |
-| pack on `polint = "0.2"` under 0.5.0 | `polint: rules host: <pack>/Cargo.toml depends on polint 0.2, which predates the rule protocol. Run \`polint rules migrate <pack>\` (rewrites one dependency line; your rule sources are unchanged). See docs/CONSUMER-SETUP.md#migrating-rule-packs` |
-| protocol-via-facade | `polint: <pack> depends on the polint facade rather than polint-sdk, so it recompiles the analysis engine on every rule change. Run \`polint rules migrate <pack>\` to cut build time. This is informational; the scan is correct.` |
+| pack on `polint = "0.2"` under 0.3.0 | `polint: rules host: <pack>/Cargo.toml uses the pre-0.3 rule package/build contract. Run \`polint rules migrate <pack>\` (rewrites one dependency line; your rule sources are unchanged), then rebuild and test the pack. See docs/CONSUMER-SETUP.md#migrating-rule-packs` |
+| pack points at the heavy `polint` facade instead of `polint-sdk` | same hard migration error; the CLI does not compile or execute it |
 | `sdk_abi` mismatch | `polint: rules host: <pack> was built against polint-sdk ABI <n>; this polint accepts <min>..=<max>. Run \`cargo update -p polint-sdk --manifest-path <pack>/Cargo.toml\`, or \`polint cache clean --category rules-bin\` to force a rebuild.` |
 | `artifact-only` miss | `polint: no rule artifact for key <key> (<pack>). Ask the pack owner to run \`polint rules build --emit-artifact <dir>\` on a matching toolchain (<rustc version>, <triple>), or set \`execution = "native"\`.` |
 | unpinned artifact | `polint: refusing artifact <url> — sha256 <digest> is not in .polint/rules-artifacts.lock. Add it with \`polint rules lock\`, or pass --trust-artifacts for this run.` |
@@ -1305,6 +1352,12 @@ Every example pack then migrates with zero per-pack edits, and `scripts/bump-wor
 
 `scripts/publish-crates.sh:11-15` → `PACKAGES=(polint-macros polint-sdk polint)`, in that order, reusing the existing `crate_version_exists`/`wait_for_crate_version` gating. `polint-engine` starts `publish = false`; if Phase J needs it published (so third parties can build a host), it is inserted between `polint-sdk` and `polint`. `.github/workflows/release.yml` and `release-dry-run.yml` gain the extra dry-run step. `docs/RELEASING.md` documents the three-crate order and the `sdk_abi` bump rule: **any change to a fact-row field, a snapshot section, or a protocol frame bumps `sdk_abi`, and `sdk_abi` never decreases.**
 
+The 0.3.0 release checklist additionally requires: every workspace example and
+outside-user temp repo migrated; migration-negative fixtures produce the exact
+actionable error; the old runner symbols and backend selectors are absent; and
+all §9/§10 release gates pass. 0.3.0 is a proposal until those gates pass and a
+release is actually published.
+
 ---
 
 ## 12. Documentation plan
@@ -1312,7 +1365,7 @@ Every example pack then migrates with zero per-pack edits, and `scripts/bump-wor
 | File | Change |
 | --- | --- |
 | `README.md` | Rework the install/first-run narrative: `cargo install polint --locked` still installs the CLI (`:54`); a first scan compiles a *thin* rule pack, not the engine; warm scans run no Cargo at all. Update the cache-layout block (`:186-192`) with `rules-bin` and `snapshots` and their roles. Replace the "fully cold first run can still pay…" paragraph (`:464-469`) with measured Phase A/§10 numbers. Add a short trust-model paragraph pointing at `--untrusted`. |
-| `docs/CONSUMER-SETUP.md` | Rewrite the Rust-toolchain section (`:3-10`): the toolchain is needed only to *build* rule packs, and not at all in `artifact-only` mode. Update the env table (`:113-119`) with `POLINT_RULE_BACKEND`, `POLINT_RULES_OFFLINE`, `POLINT_RULES_BIN_MAX_MB`, `POLINT_SNAPSHOT_MAX_MB`, `POLINT_USER_CACHE_DIR`, `POLINT_RULE_TIMEOUT_SECS`, `POLINT_RULE_LOG`, `POLINT_KEEP_SNAPSHOT`, `POLINT_RULE_SANDBOX`. Update the cache-dir table (`:133-138`). **Delete the hand-rolled CI cache recipe (`:199-243`)** — it hand-runs `cargo clean --release -p <pkgid>`, which the artifact cache makes obsolete and actively wrong. Add "Migrating rule packs" (§11.5) and "Running polint on a repository you do not trust" (§7). Extend the rules-host troubleshooting list (`:251-261`) with the protocol failure kinds. |
+| `docs/CONSUMER-SETUP.md` | Rewrite the Rust-toolchain section (`:3-10`): the toolchain is needed only to *build* rule packs, and not at all in `artifact-only` mode. Update the env table (`:113-119`) with `POLINT_RULES_OFFLINE`, `POLINT_RULES_BIN_MAX_MB`, `POLINT_SNAPSHOT_MAX_MB`, `POLINT_USER_CACHE_DIR`, `POLINT_RULE_TIMEOUT_SECS`, `POLINT_RULE_LOG`, `POLINT_KEEP_SNAPSHOT`, `POLINT_RULE_SANDBOX`; do **not** add a legacy/protocol backend selector. Update the cache-dir table (`:133-138`). **Delete the hand-rolled CI cache recipe (`:199-243`)** — it hand-runs `cargo clean --release -p <pkgid>`, which the artifact cache makes obsolete and actively wrong. Add the intentionally breaking 0.3.0 "Migrating rule packs" instructions (§11.5) and "Running polint on a repository you do not trust" (§7). Extend the rules-host troubleshooting list (`:251-261`) with the protocol failure kinds. |
 | `docs/GITHUB-ACTION.md` | Document the new `rules-execution` and `rules-artifact-sources` inputs, the extended `rule-build-cache-*` outputs, and that `rules-bin` is cached alongside `rules-target`. State that a runner with no Rust toolchain works in `artifact-only`. |
 | `ARCHITECTURE.md` | `:26-91` — replace "The product publishes two Cargo packages" with the three-package graph and a new mermaid diagram; keep the private-module table but scope it to `polint-engine`. Add "Host and rule-process boundary" covering the snapshot, the protocol, and the policy RPC. Update `:112-127` (supported surface) to say the surface now lives in `polint-sdk` and is reached as `polint::sdk` either way. Update `:86-90` to name `sdk_dependency_closure.rs` alongside the existing gates. |
 | `AGENTS.md`, `docs/AGENT-PLAYBOOK.md` | Update every "the rule pack depends on `polint`" statement; add the `package = "polint-sdk"` line; note that editing a rule triggers a thin rebuild and editing sources triggers none. |
@@ -1354,6 +1407,7 @@ Claims that must be **removed or corrected**, not just amended:
 | R-10 | Extension host and rule host diverge into two protocols | medium | medium | Phase G7 makes the extension host reuse `rules_artifact`; a follow-up may unify the protocols, but not in this plan | — |
 | R-11 | Removing the child's `tracing-subscriber` init (`runner/mod.rs:145-149`) breaks someone's `RUST_LOG` workflow | low | low | `POLINT_RULE_LOG` replacement documented; host stderr still surfaces rule output | — |
 | R-12 | `polint test` behaviour changes because one process now serves many fixture repos, leaking state between cases | medium | high | `AnalysisDb` is per-`RunRequest`, so facts, options, and diagnostics cannot cross cases. One piece of process-global state does survive: `sdk/scope.rs`'s `cached_matcher` memo (`OnceLock<RwLock<HashMap<String, Option<GlobMatcher>>>>`, `sdk/scope.rs:51-63`). It is a pure function of the pattern text, so reuse across cases is correct, but any future process-global state must clear the same bar. Add an explicit test that case N's diagnostics are unaffected by case N-1 | KC-6 |
+| R-13 | The intentional 0.3.0 manifest/build break leaves an example, generated pack, or outside-user workflow unmigrated | medium | high | migrate every checked-in pack; add temp-repo tests using only public SDK imports and real facts; add a negative 0.2-manifest fixture; block release on the §11.8 checklist | I6 / X-4 / migration temp-repo tests |
 
 ### 13.2 Decisions already fixed
 
@@ -1369,6 +1423,7 @@ Claims that must be **removed or corrected**, not just amended:
 | DF-8 | `cargo build` + artifact capture replaces `cargo run` |
 | DF-9 | No native `cdylib` ABI; no remote execution; WASM only as a later distribution backend |
 | DF-10 | Native mode cannot confine build scripts or proc macros; `--untrusted` is the honest control |
+| DF-11 | 0.3.0 is intentionally breaking for the rule-pack package/build/execution contract; there is no released legacy backend, auto-fallback, or deprecation window |
 
 ### 13.3 Unresolved — require benchmark or verification evidence
 
@@ -1381,9 +1436,9 @@ Claims that must be **removed or corrected**, not just amended:
 | D-5 | Should `polint-engine` be published? | whether third parties need to build hosts (Phase J) | Phase J scoping |
 | D-6 | Is `parallel` rule execution in the rule process worth keeping without `rayon`? | C6 measurement vs. serial | if `std::thread::scope` is within 5% of serial on all examples, consider dropping the flag |
 | D-7 | Does `[patch]` work in `cargo --config <file>` on MSRV 1.95? | direct experiment | R-4 fallback |
-| D-8 | Should the default for an unknown repo flip from `native` to `none`? | user/issue evidence after 0.4.0 | a major release only |
+| D-8 | Should the default for an unknown repo flip from `native` to `none`? | user/issue evidence after 0.3.0 | a later explicit security decision |
 | D-9 | Should ed25519 signing replace digest pinning? | key-distribution design | deferred past Phase J |
-| D-10 | Can the extension protocol and the rule protocol be unified? | after both ship | post-0.5.0 |
+| D-10 | Can the extension protocol and the rule protocol be unified? | after both ship | post-0.3.0 follow-up |
 | D-11 | Detached artifact signatures | see D-9 | deferred |
 
 ### 13.4 Decision log template
@@ -1441,8 +1496,8 @@ A (measure)                     ─ 1 week, no product change
              └─ E (protocol)    ─ 2 weeks     ┘ only D2's wire types
                   └─ F (artifacts) ─ 1.5 weeks
                        └─ G (CLI integration) ─ 1.5 weeks
-                            └─ H (equivalence, flip default) ─ 1 week
-                                 └─ I (docs, action, release 0.4.0)
+                            └─ H (oracle equivalence, single-path gate) ─ 1 week
+                                 └─ I (docs, action, breaking 0.3.0 release gate)
                                       └─ J (prebuilt artifacts, optional)
                                            └─ K (WASM gate — evaluate, do not build)
 ```
@@ -1454,8 +1509,10 @@ Sequencing rules:
 * **C is a freeze window.** Eleven `git mv`-shaped PRs against `crates/polint/src` will conflict with anything else touching those trees. Land them fast and serially.
 * **D and E overlap deliberately**, joined at D2.
 * **F before G.** The CLI rewrite should target the artifact resolver, not `cargo run`, so G is written once.
-* **H gates the default flip.** KC-6 (any golden divergence) blocks H5 unconditionally.
-* **I6 (deleting the legacy path) is a separate release**, ≥ 90 days after 0.4.0.
+* **H gates the single-path release candidate.** KC-6 (any golden divergence from the frozen 0.2.1 oracle) blocks H5 unconditionally.
+* **G/I complete the cutover before release.** The old runner is deleted and
+  every manifest is migrated before 0.3.0; there is no later cleanup release or
+  compatibility window.
 
 ### 14.2 The first implementation PR — landed
 
@@ -1511,7 +1568,7 @@ Divergences from the pre-implementation sketch, and why: one module became three
 | 5d | Exit/error protocol; version negotiation | §5.7 | E7, E8 | F-1, F-2, F-8, E7 acceptance |
 | 5e | Determinism, cancellation | §5.6, §5.7 | E3, E6 | C-3, C-4, C-5, F-6 |
 | 5f | One process vs two | §5.1 | E4 | I-5, I-6 |
-| 5g | Compatibility with report/inspect JSON schemas | §5.8 | E4, G1, G3 | G-1, G-2, C7 acceptance |
+| 5g | Stability of report/inspect JSON schemas | §5.8 | E4, G1, G3 | G-1, G-3, C7 acceptance |
 | 6a | Source fingerprint inputs | §6.1, §6.2 | F1 | U-5, U-6 |
 | 6b | Current-artifact detection | §6.3 | F4 | I-2, F-3, F-4, F-5 |
 | 6c | Direct binary execution bypassing Cargo | §6.3 | F4 | I-2, I-4, O-1 |
@@ -1547,7 +1604,7 @@ Divergences from the pre-implementation sketch, and why: one module became three
 | 8k | Later WASM backend decision gate | §8 Phase K | gate only | gate criteria 1–4 |
 | 9 | Testing/verification matrix | §9.1–9.8 | all | the matrix itself |
 | 10 | Performance budgets and experiment design | §10.1–10.6 | A, plus gates in D/F/H | P-1, P-2, P-3, KC-1..KC-7 |
-| 11 | Migration and release preserving existing users | §11.1–11.8 | I4, plus `polint rules migrate` in the F/G window | X-4, I-1, compatibility-mode tests in H3 |
+| 11 | Direct breaking migration and release plan | §11.1–11.8 | I4, I6, plus the one-shot `polint rules migrate` aid | X-4, I-1, migrated outside-user temp repo, negative 0.2-manifest test |
 | 12 | Documentation plan | §12 | I1, I3 | doc-claim review in I1; `cargo doc` job (`ci.yml:33`) |
 | 13 | Risks, unresolved decisions, decision log template | §13.1–13.4 | continuous | DL files under `docs/decisions/` |
 | 14 | Final order of execution and first PR | §14.1–14.2 | — | first-PR acceptance 1–4 |

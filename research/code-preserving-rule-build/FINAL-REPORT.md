@@ -3,7 +3,8 @@
 **Repository:** `emilwareus/polint` at `/workspace/polint`
 **Commit:** `b272b378` (`main` = `origin/main`), workspace version `0.2.1`
 **Date:** 2026-08-25
-**Status:** Research only. No repository files were modified; no branches, commits, or PRs were created.
+**Status:** Research recommendation plus the Phase A measurement harness. The
+future SDK/engine split is not implemented in this topic.
 
 **Reading note.** This report is a dated snapshot: every repository path and line
 range is as of `b272b378`. Where the branch that carries this report has since
@@ -19,15 +20,28 @@ are measured and which remain budgets.
 
 **Adopt "prebuilt engine host + thin-SDK rule binary over a fact-snapshot protocol." Do not adopt a DSL, do not adopt native plugins, and do not make WASM the primary answer.**
 
+**Product decision (Emil Wåreus, 2026-08-27): ship this as an intentional
+breaking migration in the next unstable minor, proposed as 0.3.0.** polint is
+currently unstable and has one user, so the implementation must not carry the
+0.2 rule-host backend, auto-detect old packs, or promise a deprecation window.
+Users upgrade polint and migrate each rule pack to the thin-SDK package and
+protocol contract. The break is in the manifest/build/execution contract; rule
+`.rs` source and the typed Rust authoring API remain unchanged.
+
 The single change that matters is an **inversion**: today the customer compiles the entire polint engine into a repo-local binary and that binary does the analysis; the prebuilt `polint` CLI is only an orchestrator. Invert it. Let the **prebuilt, downloaded `polint` binary do the analysis** (it already owns the cache, the config, and the capability planner), and let the repo-local rule pack compile against a **thin SDK crate that contains no parsers, no solvers, no SQLite, and no kernel** — just fact types, fact views, diagnostics, `RuleCtx`, and the runner protocol client.
 
 Concretely, in priority order:
 
-1. **Split the crate along a boundary that already exists in the source.** Create `polint-sdk` (thin) and `polint-engine` (the current 238,359-line engine), and keep **`polint` as a thin facade crate** so that *rule source files do not change by a single byte* and `cargo install polint` still works. Rule packs depend on `polint` with `default-features = false`.
+1. **Split the crate along a boundary that already exists in the source.** Create `polint-sdk` (thin) and `polint-engine` (the current 238,359-line engine), and keep **`polint` as the CLI/facade package** so that *rule source files do not change by a single byte* and `cargo install polint` still works. Rule-pack manifests depend directly on `polint-sdk`, renamed to the extern crate `polint` with Cargo's `package =` key.
 2. **Move fact production out of the rule host.** The prebuilt host computes facts and writes a **fact snapshot**; the rule binary deserializes it once into an owned `FactSnapshot` and the existing views borrow from it, so `SourceFiles::all(self) -> &'a [SourceFile]` and every other typed accessor keeps its exact signature.
 3. **Stop spawning `cargo` when nothing changed.** Fingerprint the rule sources + manifest + SDK version + `rustc -vV`; if the cached rule binary matches, run it directly. Today `polint check` spawns `cargo run` unconditionally.
 4. **Vendor the SDK source inside the polint binary** and build the rule pack with `--offline --locked` against a materialized path dependency. This makes first-run offline operation possible and eliminates version skew between the CLI and the library the rule pack links.
-5. **Then, and only then, consider prebuilt SDK rlib artifacts** (keyed on exact `rustc -vV`) as a *fast path with source fallback*, and a **WASM backend** as a *second execution target* for shared rule packs and untrusted repositories.
+5. **Then, and only then, consider prebuilt SDK rlib artifacts** (keyed on exact `rustc -vV`) as a *fast path with thin-SDK source compilation on a cache miss*, and a **WASM backend** as a *second execution target* for shared rule packs and untrusted repositories.
+
+The implementation work may use short-lived branch-local scaffolding while the
+boundary is being assembled, but no release carries two user-selectable rule
+backends. The 0.3.0 release gate is the complete package split, protocol path,
+manifest migration, and removal of the 0.2 build/execution path.
 
 **Why this and not the alternatives.** Native Rust rule code must be compiled for the target by something, somewhere — that is not negotiable, and any claim of "no compilation at all while rules stay Rust" is either false or a claim that the *author* compiles instead of the customer. So the design question is not "can we remove compilation" but **"what is the smallest thing the customer must compile, and can they compile it offline, fast, on two cores?"** Today the measured answer on `examples/basic` is "225 compilation units and 187 s the first time, one Cargo start on every scan afterwards whether or not anything changed, 582.7 MB retained" (§3.3.2, `research/evaluation-harness/baselines/build-cost.json`). After this change the answer should be "one crate, against a prebuilt SDK, in seconds" — and with prebuilt SDK artifacts, "one `rustc` invocation."
 
@@ -464,7 +478,7 @@ Two things follow, and they should be stated to users in exactly these words:
 
 **Portability costs, concretely:**
 
-- **P3** binds polint to an exact `rustc` build. The Rust reference is unambiguous that there is nothing to rely on here: *"Type layout can be changed with each compilation. Instead of trying to document exactly what is done, we only document what is guaranteed today."* — [Type layout](https://doc.rust-lang.org/reference/type-layout.html). `rustc_metadata` carries a `METADATA_HEADER` including a `METADATA_VERSION` ([rustc_metadata](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_metadata/index.html)); that page makes **no** stability claim, which is itself the point. `-C metadata` exists precisely "to differentiate symbols between two different versions of the same crate being linked" ([codegen options](https://doc.rust-lang.org/rustc/codegen-options/index.html)). Practical consequence: prebuilt rlibs must be keyed on `rustc -vV` verbatim and must have a source-compile fallback.
+- **P3** binds polint to an exact `rustc` build. The Rust reference is unambiguous that there is nothing to rely on here: *"Type layout can be changed with each compilation. Instead of trying to document exactly what is done, we only document what is guaranteed today."* — [Type layout](https://doc.rust-lang.org/reference/type-layout.html). `rustc_metadata` carries a `METADATA_HEADER` including a `METADATA_VERSION` ([rustc_metadata](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_metadata/index.html)); that page makes **no** stability claim, which is itself the point. `-C metadata` exists precisely "to differentiate symbols between two different versions of the same crate being linked" ([codegen options](https://doc.rust-lang.org/rustc/codegen-options/index.html)). Practical consequence: prebuilt rlibs must be keyed on `rustc -vV` verbatim and use thin-SDK source compilation when the artifact does not match.
 - **P4 native** requires cross-building 5 targets (the release matrix at `.github/workflows/release.yml:129-155`: `x86_64`/`aarch64-unknown-linux-gnu`, `x86_64`/`aarch64-apple-darwin`, `x86_64-pc-windows-msvc`). Cross-compiling macOS from Linux is the awkward one; polint solves it today by using macOS runners.
 - **P4 WASM** collapses that to one artifact. `wasm32-wasip2` is **Tier 2** with `std`, emits components, needs a component-model runtime (Wasmtime 17+), defaults to `-Cpanic=abort`, and is *"not tested in CI at this time"* per [platform support](https://doc.rust-lang.org/rustc/platform-support/wasm32-wasip2.html). `wasm32-wasip1` is the more conservative choice today. WASM is 32-bit: a fact snapshot must fit in a 4 GiB linear memory, and a copy into guest memory is required.
 
@@ -568,26 +582,32 @@ Rule source: unchanged. Customer compiles: everything.
 
 Cold: 187.3 s / 225 units / 582.7 MB retained. Warm no-op: 157 ms, one Cargo start, zero units. Warm rule edit: 735 ms, one unit (§3.3.2). Offline: no. Portability: excellent (source is portable; any `rustc ≥ 1.95` works). Security: RCE-by-checkout.
 
-**Rejected as a destination.** It is, however, the correct *fallback mode* to retain behind `POLINT_RULES_MODE=in-process` for the polint repository's own tests and for users who hit a snapshot-protocol limitation.
+**Rejected as both a destination and a compatibility backend.** The existing
+path remains useful only as historical evidence and as a pre-migration oracle
+while developing 0.3.0. It is deleted before release; protocol limitations
+block the migration release instead of silently routing users back through the
+engine-compiling rule host.
 
 ### 6.2 Option B — Thin SDK + prebuilt engine host + fact-snapshot protocol ★ recommended
 
 **Rule source: byte-identical.** Customer compiles: one crate + ~25–35 SDK units.
 
-The package shape (§7.1) matters and has one non-obvious constraint: **Cargo forbids cyclic package dependencies**, so `polint` cannot both be the thin SDK *and* optionally depend on an engine that depends back on `polint`. The resolution is a three-package graph with no cycle:
+The package shape (§7.1) matters and has one non-obvious constraint: **Cargo forbids cyclic package dependencies**, so `polint` cannot both be the thin SDK *and* optionally depend on an engine that depends back on `polint`. The resolution is a three-package product graph with no cycle:
 
 ```
-polint-sdk   ← polint-engine
-     ↑              ↑
-     └──── polint ──┘   (polint: pub use polint_sdk as sdk; optional dep on polint-engine
-                          behind default feature "engine", which also enables [[bin]] polint)
+polint-sdk ← polint-engine ← polint (CLI/facade)
+     ↑                         │
+     └──── migrated rule packs ┘
 ```
 
-- Rule pack: `polint = { version = "0.3", default-features = false }` → closure is `polint-sdk` + `polint-macros` only.
-- `cargo install polint` → default features → `polint-engine` → the `polint` binary. Unchanged for users.
-- Feature unification cannot leak the engine into a rule pack, because the scaffolded pack is **its own workspace** (`[workspace]` at `cli/mod.rs:1156`) and *"Features for target-specific dependencies are not enabled if the target is not currently being built"* / resolver v2 semantics apply ([Cargo resolver](https://doc.rust-lang.org/cargo/reference/resolver.html)); the workspace already uses `resolver = "3"` (`Cargo.toml:29`). It does **not** hold for this repository's own 17 example packs, which are workspace members and would have `engine` unified back on — see the note at the head of §7.1. This must still be **asserted by a test** (§7.4) rather than assumed.
+- Rule pack: `polint = { package = "polint-sdk", version = "0.3" }` → closure is `polint-sdk` + `polint-macros` only.
+- `cargo install polint` still installs the CLI/facade backed by `polint-engine`.
+- Feature unification cannot leak the engine into a migrated rule pack because
+  `polint-sdk` is a different package. The closure and feature-leak tests in
+  §7.4 assert that property for both temp-repo packs and the 17 workspace
+  examples.
 
-**Alternative single-package shape**, worth recording: keep two packages and `#[cfg(feature = "engine")]` the heavy modules inside `polint`, with every heavy dependency `optional = true`. `crates/polint/src/lib.rs:19-58` already declares every module in one place, so the cfg edit is ~25 lines. This preserves the "two publishable packages" invariant exactly. Costs: a 238 KLOC crate with a combinatorial feature matrix; slower `cargo check --all-features`; and the rule pack still *downloads* the full crate source even though it compiles little of it. **Recommend the three-package split; record this as the fallback if crates.io naming or publishing is a problem.**
+**Alternative single-package shape**, worth recording: keep two packages and `#[cfg(feature = "engine")]` the heavy modules inside `polint`, with every heavy dependency `optional = true`. `crates/polint/src/lib.rs:19-58` already declares every module in one place, so the cfg edit is ~25 lines. This preserves the "two publishable packages" invariant exactly. Costs: a 238 KLOC crate with a combinatorial feature matrix; slower `cargo check --all-features`; and the rule pack still *downloads* the full crate source even though it compiles little of it. **Recommend the three-package split; record this only as a pre-release design contingency if crates.io naming or publishing is a problem.**
 
 Cold: target ≤ 20 s on 2 cores (E1/E7). Retained: target ≤ 120 MB. Offline: **yes**, with the vendored-SDK step. Portability: unchanged from today (source-portable, any `rustc ≥ MSRV`). Security: same class as today, but the manifest is now small enough to lock down meaningfully (§10).
 
@@ -619,7 +639,7 @@ Three genuinely different things get conflated under "cache the build." Separati
   *Blocker:* rlib/rmeta compatibility is tied to the exact compiler. Primary evidence: *"Type layout can be changed with each compilation"* ([type layout](https://doc.rust-lang.org/reference/type-layout.html)); `-C metadata` exists to disambiguate symbols between crate versions ([codegen options](https://doc.rust-lang.org/rustc/codegen-options/index.html)); `rustc_metadata` carries a `METADATA_VERSION` and documents no stability ([rustc_metadata](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_metadata/index.html)). Proc-macro `.so`s are host shared objects loaded by `rustc` — same constraint.
   *Combinatorics:* 5 targets × N `rustc` versions. `polint init` already pins `rust-toolchain.toml` (`cli/mod.rs:723-742`), which helps — but it pins `channel = "1.95"`, and rustup resolves that to the newest 1.95.x, so artifact reuse would additionally require pinning `1.95.0` exactly.
   *A linker (`cc`/MSVC) is still required.*
-  **Verdict: Phase-3 fast path with mandatory source fallback. Not a foundation.** Kill criterion in §9.
+  **Verdict: Phase-3 fast path with mandatory thin-SDK source compilation on a mismatch. Not a foundation.** Kill criterion in §9.
 
 **A cheap, high-value cousin worth doing regardless: vendor the SDK source into the polint binary.** Materialize it to `.polint/cache/sdk/<version>/`, point the rule pack at it via a path dependency or `[patch]`, and build `--offline --locked`. This does not reduce compile time at all, but it (a) makes first-run offline operation possible, (b) guarantees the SDK version matches the CLI exactly, and (c) removes the registry as a supply-chain surface for the rule build. It is Phase 2 and it is small.
 
@@ -752,19 +772,11 @@ Scoring: ● strong · ◐ partial · ○ weak/absent.
 
 ### 7.1 Packages
 
-**Superseded in one respect — read `IMPLEMENTATION-PLAN.md` §3.1 for the decided
-graph.** The shape below reaches the thin closure by having rule packs depend on
-the `polint` facade with `default-features = false`, so the engine arrives only
-through an optional dependency behind a default `engine` feature. That works for
-a scaffolded pack, which is its own workspace. It does **not** work for the 17
-example packs in *this* repository, which are workspace members alongside the
-`polint` binary: Cargo unifies features across the workspace members being built,
-so `cargo build --workspace` would re-enable `engine` for every example pack and
-the guard in §7.4 would fail for a reason no rule author could act on. The plan
-therefore has rule packs depend on `polint-sdk` directly, renamed to `polint` with
-Cargo's `package =` key — which is immune to feature unification because it is a
-different package, and still leaves rule `.rs` sources byte-identical. Everything
-else below stands.
+The decided graph is the one detailed in `IMPLEMENTATION-PLAN.md` §3.1. Rule
+packs depend on `polint-sdk` directly, renamed to `polint` with Cargo's
+`package =` key. Because it is a different package, workspace feature
+unification cannot pull the engine into a rule pack, and rule `.rs` sources stay
+byte-identical.
 
 ```
 polint-macros   (unchanged)  proc-macro; syn/quote/proc-macro2
@@ -776,14 +788,12 @@ polint-engine   (NEW = today's crate, renamed)
                              frontends · kernel · providers · cache · config · CLI · renderers
                              deps: oxc*, tree-sitter*, rusqlite, rayon, petgraph, clap, ignore, …
                              depends on: polint-sdk                       ~220 KLOC
-polint          (facade)     pub use polint_sdk as sdk;
-                             pub use polint_sdk::runner;
-                             pub use polint_macros::rule;
-                             [features] default = ["engine"]; engine = ["dep:polint-engine"]
-                             [[bin]] name = "polint", required-features = ["engine"]
+polint          (CLI/facade) owns the installed `polint` binary; depends on
+                             polint-engine and polint-sdk and re-exports the
+                             supported rule-author names for source stability
 ```
 
-- Rule packs: `polint = { version = "0.3", default-features = false }`.
+- Rule packs: `polint = { package = "polint-sdk", version = "0.3" }`.
 - `cargo install polint` unchanged.
 - `use polint::sdk::prelude::*;` and `polint::runner::run_cli(vec![...])` unchanged.
 - Macro output unchanged (it emits `::polint::sdk::*` only).
@@ -828,14 +838,18 @@ Format: v0 JSON (correctness and debuggability), v1 a compact length-prefixed bi
 
 **Why the borrowed-slice API survives:** the rule process deserializes once into an owned `FactSnapshot` that lives for the whole run; `FactView::build(&snapshot)` yields views that borrow *it*. `SourceFiles::all(self) -> &'a [SourceFile]` is unchanged.
 
-### 7.3 Execution modes
+### 7.3 Execution and distribution after migration
 
-| Mode | Selection | Used by |
+| Path | Selection | Used by |
 |---|---|---|
-| `snapshot` (default after Phase 3) | default | A, and B/C via artifacts |
-| `in-process` | `POLINT_RULES_MODE=in-process`, rule pack with `features = ["engine"]` | polint's own tests; escape hatch if E3 fails on a specific repo |
-| `artifact` | `[rules] artifact = { … }` | B; A's non-authors and CI |
-| `wasm` (Phase 4) | `[rules] target = "wasm"` | B default artifact; C sandbox |
+| Native thin-SDK binary over the snapshot protocol | the sole default rule path in 0.3.0 | A |
+| Prebuilt native artifact over the same protocol | `[rules] artifact = { … }` when the later artifact phase ships | B; A's non-authors and CI |
+| WASM artifact over the same fact boundary | later decision gate only | B distribution; C sandbox |
+
+There is no released `legacy`/`in-process` mode and no automatic fallback to
+the 0.2 rule host. A missing or corrupt cached binary may of course be rebuilt
+from the migrated thin-SDK pack; that is cache recovery within the new path,
+not compatibility with the old package contract.
 
 ### 7.4 New invariants to encode as tests
 
@@ -843,7 +857,10 @@ The repository's strength is that architecture claims are gated by tests. Add th
 
 1. **Closure gate.** Assert that the dependency closure of `polint --no-default-features` for each released target stays at or under a fixed package count and contains **none** of: `oxc_*`, `tree-sitter*`, `rusqlite`, `libsqlite3-sys`, `clap`, `tracing-subscriber`, `rayon`, `petgraph`, `ignore`, `toml`, `serde_norway`. This is the single most valuable regression gate in the whole plan — it prevents the split from silently eroding.
 2. **Feature-leak gate.** Build a temp-repo rule pack outside the workspace and assert its lockfile does not contain the engine.
-3. **Mode-equivalence gate.** Extend the existing golden and determinism suites (`cargo test -p polint --test golden`, `--lib eval::determinism_gate`) to run every case in both `in-process` and `snapshot` mode and assert byte-identical diagnostics.
+3. **Migration-equivalence gate.** Capture the 0.2.1 golden/report outputs as
+the pre-migration oracle, then run every case through the snapshot path and
+assert byte-identical diagnostics and public JSON. Do not keep the old backend
+in the released binary merely to run this comparison.
 
 Update `crates/polint/tests/internal_architecture.rs:14-33` from "exactly two publishable product packages" to three, keeping `REMOVED_PACKAGES` intact so the old split cannot creep back.
 
@@ -890,21 +907,48 @@ Update `crates/polint/tests/internal_architecture.rs:14-33` from "exactly two pu
 Baseline every metric in §9 on the golden corpus and on a 2 vCPU / 4 GB container. Add `polint check --rules-build-report <path>` emitting units, wall time, target bytes, downloaded bytes. Run E1.
 *Exit:* a committed baseline table. *Risk:* none.
 
-**Phase 1 — Extract `polint-sdk`; rule host still links the engine.**
-Mechanical move. `polint` becomes a facade with `default = ["engine"]`. Rule packs get `default-features = false`. **Behaviour identical** — the rule host still enables `engine` internally, so `run_cli` still runs the kernel in-process. Ship it.
-*Exit:* closure gate + feature-leak gate green; all golden/determinism/public-surface-leak tests unchanged. *Risk:* medium (E2). *Rollback:* revert the crate move; no wire format exists yet.
+**Phase 1 — Extract `polint-sdk` on an unreleased integration branch.**
+Mechanical move. Keep every rule `.rs` source compiling through the renamed
+`polint-sdk` dependency, but do not publish a partial compatibility release.
+*Exit:* closure gate + feature-leak gate green; all golden/determinism/public-surface-leak tests unchanged. *Risk:* medium (E2). *Rollback:* revert the development commits; no user-facing mode exists.
 
-**Phase 2 �� Snapshot protocol, opt-in.**
-Implement `FactSnapshot`, host-side production, SDK-side consumption. Gate behind `POLINT_RULES_MODE=snapshot`. Add the mode-equivalence gate. Add the vendored SDK (`.polint/cache/sdk/<version>` + `--offline --locked`). Add the fingerprint gate so `cargo` is not spawned when the rule binary is current.
-*Exit:* E3 within budget; E4 byte-identical across modes; E8 offline passes. *Risk:* high (snapshot volume). *Rollback:* the flag defaults off.
+**Phase 2 — Build the snapshot protocol as the only release candidate path.**
+Implement `FactSnapshot`, host-side production, SDK-side consumption, the
+migration-equivalence gate, the vendored SDK (`.polint/cache/sdk/<version>` +
+`--offline --locked`), and the fingerprint gate so `cargo` is not spawned when
+the rule binary is current. Any temporary development wiring is private and is
+removed before the release branch is cut.
+*Exit:* E3 within budget; E4 byte-identical to the 0.2.1 oracle; E8 offline passes. *Risk:* high (snapshot volume). *Rollback:* revert the unreleased implementation.
 
-**Phase 3 — Flip the default; trim.**
-`snapshot` becomes default; `in-process` stays as an escape hatch. Rule packs no longer enable `engine`. Retire the Action's rule-build cache entry (or shrink it drastically). Stop writing a repo-root `rust-toolchain.toml`. Optional: prebuilt SDK rlib artifacts with source fallback (E5).
-*Exit:* cold/disk/offline budgets met on the low-powered rig (E7). *Risk:* medium. *Rollback:* flip the default back.
+**Phase 3 — Complete the breaking 0.3.0 cutover.**
+Make the snapshot protocol the sole rule path, delete the 0.2 rule-host
+functions and flags, migrate every example/temp-repo fixture manifest, retire
+the Action's old rule-build cache entry (or shrink it to new-path artifacts),
+and stop writing a repo-root `rust-toolchain.toml`. Optional: prebuilt SDK rlib
+artifacts with thin-SDK source compilation on a cache miss (E5).
+*Exit:* cold/disk/offline budgets met on the low-powered rig (E7), migration tests catch every unmigrated manifest, and repository search finds no released legacy selector or auto-fallback. *Risk:* medium. *Rollback:* delay 0.3.0 and revert the release candidate.
 
 **Phase 4 — Portable artifacts and sandboxing.**
 `polint rules build --out`; `[rules] artifact = { url|path, sha256, sdk_abi }`; signature verification. Trust gate + manifest lockdown default-on for repos with no recorded trust. WASM backend behind `[rules] target = "wasm"` (E6).
 *Exit:* scenario B works with zero customer compilation; scenario C default-denies. *Risk:* medium. *Rollback:* artifacts and wasm are additive.
+
+### 8.4 Direct 0.3.0 user migration
+
+0.3.0 is proposed, not released. Once released, the documented migration is:
+
+1. upgrade the `polint` CLI to 0.3.0;
+2. change the rule-pack dependency to `polint = { package = "polint-sdk",
+   version = "0.3", … }`, manually or with the one-shot planned `polint rules
+   migrate` command;
+3. regenerate/remove stale rule-host lock or build metadata as required and
+   rebuild the thin host;
+4. run `polint test --format json` and `polint check --format json --fail-on
+   none` before committing the migration.
+
+The migration tool edits the manifest; it does not keep the old package or
+execution path alive. An unmigrated 0.2 pack is a release-tested actionable
+error, and migration breakage in examples or outside-user temp repos blocks the
+0.3.0 release.
 
 ---
 
@@ -930,8 +974,8 @@ Existing instrumentation to reuse rather than rebuild: `POLINT_GOLDEN_COST_PATH`
 | **E1** | How big is the closure, before and after? | `cargo tree -e normal --target <triple>` and `cargo build --timings` for (a) today's pack, (b) the proposed SDK closure prototype, on all 5 released targets | unit count, wall time, target bytes, `CARGO_HOME` delta bytes, per-unit slowest 20 |
 | **E2** | Can `core/db.rs` be split cleanly? | Spike branch: extract the read model; compile every `examples/**` rule pack against SDK-only | lines moved to SDK, lines of engine code that had to follow, public-API deltas |
 | **E3** | What does the snapshot cost? | For each corpus repo × each example rule's planned closure: serialize, measure bytes and ms, deserialize, measure ms and peak RSS | snapshot bytes, ser ms, deser ms, RSS delta, ratio to total analysis time |
-| **E4** | Is determinism preserved? | Run golden + `eval::determinism_gate` in both modes, 20× each, reversed file order | byte-equality of diagnostics; snapshot digest stability |
-| **E5** | Do prebuilt SDK rlibs pay off? | Build the bundle for pinned `rustc`; drive `rustc` directly; also measure the mismatch-fallback path | build ms, bundle bytes, projected hit rate from `rustc -vV` distribution |
+| **E4** | Is determinism and source-level behaviour preserved? | Record the 0.2.1 oracle, then run golden + `eval::determinism_gate` through the new path 20× with reversed file order | byte-equality to the oracle; snapshot digest stability |
+| **E5** | Do prebuilt SDK rlibs pay off? | Build the bundle for pinned `rustc`; drive `rustc` directly; also measure thin-SDK source compilation when the artifact does not match | build ms, bundle bytes, projected hit rate from `rustc -vV` distribution |
 | **E6** | Is WASM viable as a second backend? | Build an example pack for `wasm32-wasip1`; instantiate AOT-cached; run | module bytes, AOT bytes, instantiate ms, run ms vs native, guest memory peak, polint binary size delta |
 | **E7** | Does it hold on a small machine? | Repeat E1 + E3 + full cold scan on **R1** | all of the above; this is the acceptance run |
 | **E8** | Does offline work? | **R4**: `polint init` → `polint new-rule` → `polint check`, no network, empty `CARGO_HOME` | pass/fail; every network attempt logged |
@@ -949,19 +993,20 @@ Existing instrumentation to reuse rather than rebuild: `POLINT_GOLDEN_COST_PATH`
 | Bytes retained per repo | **582.7 MB** | **≤ 120 MB**; stretch ≤ 40 MB | > 250 MB |
 | Peak RSS, rule process | n/a (engine in-process) | **≤ 1.3 × snapshot bytes + 64 MB** | > 2 × snapshot + 128 MB |
 | Peak RSS, host | current baseline | **≤ 1.15 ×** today | > 1.4 × |
-| Snapshot round-trip | 0 (does not exist) | **≤ 15 % of analysis wall time**, p95 over the corpus | **> 25 % on the largest corpus repo → the snapshot design fails; fall back to `in-process` as default and reopen §6.3-C-iii-b (prebuilt rlibs) as the primary** |
+| Snapshot round-trip | 0 (does not exist) | **≤ 15 % of analysis wall time**, p95 over the corpus | **> 25 % on the largest corpus repo → block 0.3.0 and reopen §6.3-C-iii-b (prebuilt rlibs) or another single-path design** |
 | Rule startup (spawn → first fact read) | n/a | **≤ 100 ms + snapshot load**; load ≤ 200 ms per 100 MB | > 500 ms fixed overhead |
 | Offline first run | fails | **passes** | fails → Phase 2 does not ship |
 | Cross-platform | 5 targets | all 5, and **no C toolchain needed for the rule build** | any target requires a C compiler for the pack |
 | Compile frequency | every scan | **only on rule/SDK/toolchain change** | any unconditional `cargo` spawn remains |
-| Determinism | byte-identical goldens | **byte-identical across both modes** | any divergence → blocks Phase 3 |
+| Determinism | byte-identical 0.2.1 goldens | **byte-identical on the new path** | any divergence → blocks 0.3.0 |
 | Trust gate | none | untrusted repo: **no `build.rs` execution, no rule binary execution** | sentinel file created in E9 |
 | Prebuilt-rlib fast path (E5) | n/a | ≥ 70 % projected hit rate | < 70 %, or > 2 support incidents per release → drop E5 permanently |
 | WASM backend (E6) | n/a | ≤ 2 × native run time; ≤ 25 MB binary growth | > 3 × native, or no scenario-B demand → defer indefinitely |
 
 ### 9.4 Global kill criteria for the whole direction
 
-Abandon Option B and fall back to Option A + C-iii-b if **any** of these hold after Phase 2:
+Stop the 0.3.0 release and revisit the single-path architecture if **any** of
+these hold after Phase 2. Do not ship Option A as a compatibility backend:
 
 1. E3 exceeds 25 % of analysis time on the largest corpus repo and no format change (binary, columnar, mmap, interned strings) brings it under.
 2. E2 shows the `core/db.rs` read/write split requires moving more than 20 % of `analysis_kernel` into the SDK — meaning the boundary is not where it looks.
@@ -1047,12 +1092,12 @@ This is a small, cheap, static check that removes surfaces 1–3 outright and is
 4. **crates.io naming and publishing.** `polint-sdk` and `polint-engine` must be claimable. Three publishable packages is more release surface (`scripts/publish-crates.sh`, `scripts/bump-workspace-version.py`, `docs/RELEASING.md` all need updating). If this is unacceptable, use the single-package feature-gated variant (§6.2).
 5. **Two-package invariant.** `internal_architecture.rs:14-33` encodes it. Changing it is a deliberate architectural decision, not a test edit — it should be recorded as such.
 6. **Windows.** `libsqlite3-sys` bundled and `tree-sitter` need a C toolchain today. Removing them from the rule-pack closure is a real Windows win, but the SDK must be verified to need no C at all.
-7. **Determinism across modes.** Two execution paths means two chances to diverge. Gated by E4 and by keeping `in-process` mode permanently in CI.
+7. **Migration determinism.** The new execution boundary can diverge from 0.2.1 semantics. Gate it with E4 and frozen pre-migration fixtures; do not retain the old backend in CI or the product after the cutover.
 
 **Unresolved decisions — these need a product call, not more research**
 
 1. **Is a no-Rust-toolchain consumer path required for scenario A?** If yes, Phase 4 artifacts become mandatory rather than optional, and the CI-publishes-artifact workflow becomes the documented default. If no, Phase 2/3 suffice. *This is the single decision that most changes the plan.*
-2. **Does `polint init` keep writing a repo-root `rust-toolchain.toml`?** (`cli/mod.rs:723-742`) It is intrusive — it pins the *whole repository's* toolchain for polint's benefit — and once the SDK is vendored and the fast path is `rustc`-driven, it is arguably unnecessary. Moving it under `.polint/` is a compatibility change for existing users.
+2. **Does `polint init` keep writing a repo-root `rust-toolchain.toml`?** (`cli/mod.rs:723-742`) It is intrusive — it pins the *whole repository's* toolchain for polint's benefit — and once the SDK is vendored and the fast path is `rustc`-driven, it is arguably unnecessary. Moving it under `.polint/` is an additional 0.3.0 toolchain-behaviour decision and must be tested and documented explicitly.
 3. **Should `rusqlite`/the semantic store be feature-gated in the engine?** Independent of this plan, it is the largest native build cost in the tree and a Windows/musl liability.
 4. **String representation in facts.** `String` (portable, simple, copies) vs. `Arc<str>` interned (cheaper snapshot, small API change) vs. archived `&str` (zero-copy mmap, larger API change). Defer until E3 says which is needed.
 5. **Snapshot schema stability.** Is it a public contract (third parties may produce or consume it) or polint-internal (host and SDK are always released together)? **Recommendation: internal, with `sdk_abi_version` checked at handshake and a clear mismatch error.** Making it public multiplies the compatibility burden for no demonstrated user need.
@@ -1196,6 +1241,8 @@ Every claim below is flagged in the text where it appears and is **from model kn
 
 ---
 
-*Research and report only. `/workspace/polint` was not modified; no implementation code was written.*
+*The architecture remains a proposal. This topic also contains the Phase A
+measurement harness; it does not implement the SDK/engine split or production
+rule protocol.*
 
 ---
