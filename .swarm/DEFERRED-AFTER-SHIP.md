@@ -87,7 +87,8 @@ is now compact and correct, so the store will have something worth persisting.
 
 ## 5. Test-count delta · **verified benign, recorded for completeness**
 
-553 `#[test]` attributes removed versus `main`; suite now 2,193 and fully green.
+553 `#[test]` attributes removed versus the pre-migration `main`; the suite was 2,193 and fully
+green at that point (1,870 in `crates/polint/src` as of 0.3.0).
 
 This tracks the deliberate deletions: `ts_value_flows.rs` (11,898 LOC), the parallel
 `calls/js_points_to` Oxc pipeline, recognizer banks, unmatched-BFS paths, and scoring filters —
@@ -103,19 +104,23 @@ inside an ordinary `#[test]`. That is a wall-clock budget check running on share
 `windows-latest — lib tests` job on PR #97 — a PR whose entire diff is 31 lines of Python that
 cannot touch Rust — and passed on rerun.
 
-**Evidence it is chronic, not a one-off:** this branch's CI history is 5 failures across ~14
-completed runs, and three separate commits already went into this area — `fix: stabilize Windows
-runtime gates`, `fix: resume contained Windows subprocesses`, `fix: handle Windows cache
-contention`. The class keeps coming back because the assertion is timing-based on a machine whose
-speed is not controlled.
+**Evidence it is chronic, not a one-off:** it recurred on `main` itself in run `32347880742`
+(`windows-latest — lib tests`, panic at `fixtures.rs:1956`), and three separate commits have
+already gone into this area — `fix: stabilize Windows runtime gates`, `fix: resume contained
+Windows subprocesses`, `fix: handle Windows cache contention`. The class keeps coming back because
+the assertion is timing-based on a machine whose speed is not controlled.
 
 **Why it matters more than a normal flake:** every gate in `ORCHESTRATION.md` assumes a red build
 means something is wrong. A gate that fails for reasons unrelated to the change trains both humans
 and agents to retry rather than investigate, which is precisely how a real regression gets waved
 through. A flaky gate is worse than no gate, because it carries authority it has not earned.
 
-**Fix direction:** a runtime budget belongs in the cost record (W0.A4), where a regression is
-reported against a recorded baseline and reviewed, not in a pass/fail unit test. Either move the
-budget check out of `cargo test` into the benchmark path, or make it advisory there — record and
-warn, never fail. Keep the correctness assertions next to it (`false_negatives`, `forbidden_hits`)
-exactly as they are; those are the ones that should stay hard.
+**Scope:** larger than one site. `runtime_budget_failed` is asserted **20 times** in
+`fixtures.rs` and appears **25 times** across `crates/polint-eval/src/harness/`.
+
+**Fix direction:** a runtime budget belongs alongside the recorded cost baselines
+(`crates/polint/src/golden_cost.rs`, `research/evaluation-harness/baselines/build-cost.json`),
+where a regression is compared against a baseline and reviewed — not in a pass/fail unit test.
+Either move the budget check out of `cargo test` into the benchmark path, or make it advisory
+there: record and warn, never fail. Keep the correctness assertions next to it
+(`false_negatives`, `forbidden_hits`) exactly as they are; those are the ones that should stay hard.
