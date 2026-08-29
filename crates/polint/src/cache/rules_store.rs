@@ -1206,9 +1206,11 @@ mod tests {
 
     #[test]
     fn an_absolute_override_names_the_store_and_off_turns_sharing_off() {
+        let absolute_override = std::env::temp_dir().join("polint-store-shared");
+        let override_value = absolute_override.to_string_lossy();
         assert_eq!(
-            resolve_root(Some("/tmp/shared"), None, None, Some("/home/u")),
-            Some(PathBuf::from("/tmp/shared"))
+            resolve_root(Some(override_value.as_ref()), None, None, Some("/home/u")),
+            Some(absolute_override)
         );
         for off in ["off", "OFF", "  Disabled ", "none", "None"] {
             assert_eq!(
