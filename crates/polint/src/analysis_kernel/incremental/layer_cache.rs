@@ -250,17 +250,23 @@ impl LayerCacheStore {
         T: for<'de> Deserialize<'de>,
         F: FnOnce(&T, &LayerCacheManifest) -> bool,
     {
+        // Validating requires deserializing the payload; keep that value so a hit
+        // does not deserialize the same bytes a second time.
+        let mut validated = None;
         let read = self.read_payload_bytes_validated(key, |payload_bytes, manifest| {
             let Ok(value) = serde_json::from_slice::<T>(payload_bytes) else {
                 return false;
             };
-            validator(&value, manifest)
+            if !validator(&value, manifest) {
+                return false;
+            }
+            validated = Some(value);
+            true
         });
         match read.status {
             LayerCacheReadStatus::Hit => {
-                let payload_bytes = read.value.expect("layer cache hit includes payload bytes");
-                let value = serde_json::from_slice::<T>(&payload_bytes)
-                    .expect("layer cache hit payload was validated as T");
+                let value = validated
+                    .expect("layer cache hit ran the validator, which keeps the parsed payload");
                 LayerCacheReadOutcome {
                     status: LayerCacheReadStatus::Hit,
                     output_digest: read.output_digest,

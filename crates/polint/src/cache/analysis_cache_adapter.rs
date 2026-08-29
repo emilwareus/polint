@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use crate::analysis_api::{
     AnalysisCache, Digest, FileCacheKeyParts, FileCacheReadOutcome, FileCacheReadStatus,
-    LayerCacheKeyParts, LayerCacheKind, LayerCachePrecision, LayerCacheReadOutcome,
-    LayerCacheReadStatus, LayerCacheWriteStatus,
+    LayerCacheEntryDigests, LayerCacheKeyParts, LayerCacheKind, LayerCachePrecision,
+    LayerCacheReadOutcome, LayerCacheReadStatus, LayerCacheWriteStatus,
 };
 
 use crate::analysis_kernel::incremental::{
@@ -73,12 +73,18 @@ impl AnalysisCache for CacheAnalysisCache {
     fn read_layer_json(
         &self,
         key: &LayerCacheKeyParts,
-        validate: &mut dyn FnMut(&[u8], Option<&Digest>) -> bool,
+        validate: &mut dyn FnMut(&[u8], LayerCacheEntryDigests<'_>) -> bool,
     ) -> LayerCacheReadOutcome {
         let layer_key = to_layer_key(key);
         let store = self.cache.layer_cache_store();
         let read = store.read_json_bytes_validated(&layer_key, |bytes, manifest| {
-            validate(bytes, Some(&manifest.output_digest))
+            validate(
+                bytes,
+                LayerCacheEntryDigests {
+                    output: Some(&manifest.output_digest),
+                    payload: Some(&manifest.payload_digest),
+                },
+            )
         });
         let status = match read.status {
             FacadeLayerReadStatus::Hit => LayerCacheReadStatus::Hit,

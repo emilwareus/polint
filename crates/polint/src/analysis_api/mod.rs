@@ -16,8 +16,8 @@ mod syntax_facts;
 
 pub use cache_api::{
     AnalysisCache, DisabledAnalysisCache, FileCacheKeyParts, FileCacheReadOutcome,
-    FileCacheReadStatus, LayerCacheKeyParts, LayerCacheKind, LayerCachePrecision,
-    LayerCacheReadOutcome, LayerCacheReadStatus, LayerCacheWriteStatus,
+    FileCacheReadStatus, LayerCacheEntryDigests, LayerCacheKeyParts, LayerCacheKind,
+    LayerCachePrecision, LayerCacheReadOutcome, LayerCacheReadStatus, LayerCacheWriteStatus,
 };
 pub use callable_names::{
     ANONYMOUS_CALLABLE_PREFIX, anonymous_callable_name, is_anonymous_callable_name,
