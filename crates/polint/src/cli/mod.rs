@@ -4,6 +4,7 @@ use crate::baseline::{
     BaselineConfig, BaselineSummary, DEFAULT_BASELINE_PATH, classify_diagnostics, load_baseline,
     render_baseline_summary, write_baseline,
 };
+use crate::cache::rules_store;
 use crate::cache::{
     CacheCleanReport, CacheCleanSelection, CacheLayout, CacheManagedCategory, CachePruneOptions,
     CachePruneReport, CacheStatus, POLINT_CACHE_DIR_ENV,
@@ -27,6 +28,7 @@ use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -4249,6 +4251,12 @@ fn run_local_rule_host(
 /// `check` calls this with `kind = "check"` and `changed_files = None`;
 /// `polint review` calls it with `kind = "review"` and the serialized changeset
 /// path. The host runs the same inner `check` subcommand either way.
+///
+/// The host binary is obtained in whichever of three ways is cheapest and can be
+/// proven correct: the one this checkout already compiled, the one this machine
+/// compiled in another checkout, or a fresh compile. Which one answered changes
+/// nothing about what the host reports — the fingerprint names the build's whole
+/// input surface, and the bytes are verified against it before anything runs.
 fn run_local_rule_host_kind(
     root: &Path,
     manifest: &Path,
@@ -4257,19 +4265,188 @@ fn run_local_rule_host_kind(
     kind: &str,
     changed_files: Option<&Path>,
 ) -> Result<(Vec<Diagnostic>, Vec<crate::diagnostics::RuleExecutionRow>)> {
-    let cargo = std::env::var("POLINT_CARGO")
-        .or_else(|_| std::env::var("CARGO"))
-        .unwrap_or_else(|_| "cargo".to_string());
+    let cargo = local_rule_host_cargo();
     let cache_layout = CacheLayout::for_repo(root);
-    let mut command = ProcessCommand::new(&cargo);
-    command.current_dir(root).args(["run", "--quiet"]);
-    apply_local_rule_host_profile(&mut command);
-    command.args([
-        "--manifest-path",
-        manifest
-            .to_str()
-            .ok_or_else(|| anyhow::anyhow!("non-UTF-8 manifest path: {}", manifest.display()))?,
-        "--",
+    let rules_target_dir = cache_layout.rules_target_dir();
+    let host_args = local_rule_host_arguments(args, apply_ignore_comments, kind, changed_files)?;
+
+    if let Some(plan) = local_rule_host_plan(root, manifest, &cargo, &rules_target_dir) {
+        // The host this checkout compiled last, when it is still the host these
+        // inputs name. Nothing else has to run, cargo included.
+        if let Some(binary) =
+            rules_store::binary_recorded_by_stamp(&rules_target_dir, &plan.fingerprint.complete)
+        {
+            return run_local_rule_host_binary(root, manifest, &binary, &cache_layout, &host_args);
+        }
+        // The store answers a question asked from another checkout, so it may
+        // only be reached when this fingerprint names the same bytes there.
+        // Decided once, past the stamp a warm run returns on, and used by both
+        // the restore below and the publish after the build, which therefore
+        // cannot disagree about it.
+        let store = plan.store.as_ref().filter(|_| {
+            rules_store::inputs_are_the_same_from_every_checkout(&plan.rule_package_dir, root)
+        });
+        if let Some(store) = store {
+            if let Some(binary) =
+                rules_store::restore(store, &rules_target_dir, &plan.fingerprint.complete)
+            {
+                tracing::info!(target: "polint::rules", "rule host restored from store");
+                return run_local_rule_host_binary(
+                    root,
+                    manifest,
+                    &binary,
+                    &cache_layout,
+                    &host_args,
+                );
+            }
+            // Compiling and running are separated here so the binary can be
+            // named, recorded, and shared. A build that cannot be attributed to
+            // one binary falls through to the combined `cargo run` below, which
+            // needs no such answer.
+            if let Some(binary) =
+                build_local_rule_host_binary(root, manifest, &cargo, &cache_layout)?
+            {
+                record_built_rule_host(root, &plan, store, &rules_target_dir, &binary);
+                return run_local_rule_host_binary(
+                    root,
+                    manifest,
+                    &binary,
+                    &cache_layout,
+                    &host_args,
+                );
+            }
+        }
+    }
+
+    run_local_rule_host_through_cargo(root, manifest, &cargo, &cache_layout, &host_args)
+}
+
+/// The cargo binary polint builds repo-local Rust with.
+fn local_rule_host_cargo() -> String {
+    std::env::var("POLINT_CARGO")
+        .or_else(|_| std::env::var("CARGO"))
+        .unwrap_or_else(|_| "cargo".to_string())
+}
+
+/// How a rule host's build inputs are named, and where a build already done may
+/// be found.
+struct LocalRuleHostPlan {
+    /// The digests over every input the build reads, taken before it runs.
+    fingerprint: rules_store::BuildFingerprint,
+    /// The directory holding the rule package, whose sources the fingerprint
+    /// covers and whose manifests decide whether it may be shared.
+    rule_package_dir: PathBuf,
+    /// What the fingerprint was taken against, so it can be taken again once the
+    /// build has finished.
+    environment: rules_store::BuildEnvironment,
+    /// The machine-global store, when sharing is on for this run.
+    store: Option<rules_store::RuleHostStore>,
+}
+
+/// Name this rule host's build inputs, or `None` when they cannot be named.
+///
+/// `None` is not a failure: it means this run compiles and runs the host the one
+/// way it always could. Resolving the compiler costs two process starts, so it
+/// is not paid at all when there is neither a stamp to check nor a store to
+/// look in.
+fn local_rule_host_plan(
+    root: &Path,
+    manifest: &Path,
+    cargo: &str,
+    rules_target_dir: &Path,
+) -> Option<LocalRuleHostPlan> {
+    let store = rules_store::RuleHostStore::from_env();
+    if store.is_none() && !rules_store::is_stamped(rules_target_dir) {
+        return None;
+    }
+    let rule_package_dir = manifest.parent()?.to_path_buf();
+    let environment = rules_store::BuildEnvironment::new(
+        LocalRuleHostProfile::from_env().name(),
+        local_rule_host_toolchain(root, cargo)?,
+    );
+    Some(LocalRuleHostPlan {
+        fingerprint: rules_store::build_fingerprint(root, &rule_package_dir, &environment)?,
+        rule_package_dir,
+        environment,
+        store,
+    })
+}
+
+/// Record a freshly built rule host, under the identity it has now that cargo
+/// has finished.
+///
+/// The key is taken again because the build writes one of its own inputs: cargo
+/// creates or updates the rule package's lockfile, and the key every later run
+/// computes is the one that includes it. Nothing is recorded when the sources
+/// changed while cargo was reading them — that binary is still correct to run,
+/// but it is not the answer to the question the new sources ask.
+fn record_built_rule_host(
+    root: &Path,
+    plan: &LocalRuleHostPlan,
+    store: &rules_store::RuleHostStore,
+    rules_target_dir: &Path,
+    binary: &Path,
+) {
+    if let Some(after) =
+        rules_store::build_fingerprint(root, &plan.rule_package_dir, &plan.environment)
+        && after.authored == plan.fingerprint.authored
+    {
+        rules_store::record(Some(store), rules_target_dir, &after.complete, binary);
+    }
+}
+
+/// The compiler and cargo a rule-host build in `root` would use.
+///
+/// Both are read in `root` with the same toolchain override the build gets, so
+/// they report what would actually compile the host: a `rust-toolchain.toml`
+/// there, a pinned `POLINT_RULES_TOOLCHAIN`, or a floating `stable` that moved.
+/// They are started together because each is a rustup shim away and a warm run
+/// waits for both before it can decide anything.
+fn local_rule_host_toolchain(root: &Path, cargo: &str) -> Option<rules_store::ToolchainIdentity> {
+    let toolchain = std::env::var(rules_host_error::POLINT_RULES_TOOLCHAIN)
+        .ok()
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            std::env::var("RUSTUP_TOOLCHAIN")
+                .ok()
+                .filter(|value| !value.is_empty())
+        });
+    let start = |program: &str, argument: &str| {
+        let mut command = ProcessCommand::new(program);
+        command
+            .current_dir(root)
+            .arg(argument)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null());
+        if let Some(toolchain) = &toolchain {
+            command.env("RUSTUP_TOOLCHAIN", toolchain);
+        }
+        command.spawn().ok()
+    };
+    let rustc = start("rustc", "-vV")?;
+    let cargo = start(cargo, "-V")?;
+    let rustc = rustc.wait_with_output().ok()?;
+    let cargo = cargo.wait_with_output().ok()?;
+    if !rustc.status.success() || !cargo.status.success() {
+        return None;
+    }
+    Some(rules_store::ToolchainIdentity {
+        rustc: String::from_utf8(rustc.stdout).ok()?,
+        cargo: String::from_utf8(cargo.stdout).ok()?,
+        rustup_toolchain: toolchain,
+    })
+}
+
+/// The arguments the rule host itself is invoked with — everything cargo would
+/// pass after `--`.
+fn local_rule_host_arguments(
+    args: &CheckArgs,
+    apply_ignore_comments: bool,
+    kind: &str,
+    changed_files: Option<&Path>,
+) -> Result<Vec<OsString>> {
+    let mut out: Vec<OsString> = [
         "check",
         "--format",
         "json",
@@ -4283,33 +4460,187 @@ fn run_local_rule_host_kind(
         },
         "--kind",
         kind,
-    ]);
+    ]
+    .iter()
+    .map(OsString::from)
+    .collect();
     if let Some(changed_files) = changed_files {
-        command.args([
-            "--changed-files",
-            changed_files.to_str().ok_or_else(|| {
-                anyhow::anyhow!("non-UTF-8 changeset path: {}", changed_files.display())
-            })?,
-        ]);
+        out.push(OsString::from("--changed-files"));
+        out.push(OsString::from(changed_files.to_str().ok_or_else(|| {
+            anyhow::anyhow!("non-UTF-8 changeset path: {}", changed_files.display())
+        })?));
     }
+    if let Some(profile) = &args.profile {
+        out.push(OsString::from("--profile"));
+        out.push(OsString::from(profile));
+    }
+    if args.no_cache {
+        out.push(OsString::from("--no-cache"));
+    }
+    if let Some(pattern) = &args.only_rule {
+        out.push(OsString::from("--only-rule"));
+        out.push(OsString::from(pattern));
+    }
+    out.extend(args.paths.iter().map(|path| path.as_os_str().to_owned()));
+    Ok(out)
+}
+
+/// The environment every repo-local rule host process runs with, however it was
+/// obtained: polint's cache root, the cargo target directory polint pins for
+/// repo-local Rust, and the toolchain override when one is set.
+fn apply_local_rule_host_env(command: &mut ProcessCommand, cache_layout: &CacheLayout) {
     command
         .env(POLINT_CACHE_DIR_ENV, cache_layout.root())
         .env("CARGO_TARGET_DIR", cache_layout.rules_target_dir());
-    if let Some(profile) = &args.profile {
-        command.args(["--profile", profile]);
-    }
-    if args.no_cache {
-        command.arg("--no-cache");
-    }
-    if let Some(pattern) = &args.only_rule {
-        command.args(["--only-rule", pattern]);
-    }
     if let Ok(toolchain) = std::env::var(rules_host_error::POLINT_RULES_TOOLCHAIN)
         && !toolchain.is_empty()
     {
         command.env("RUSTUP_TOOLCHAIN", toolchain);
     }
-    command.args(args.paths.iter().map(|path| path.as_os_str()));
+}
+
+/// Compile the rule host and answer where its binary is, or `None` when the
+/// build produced no binary this can attribute to it.
+///
+/// The machine-readable stream is what names the binary; it is cargo's own
+/// answer rather than a path this reconstructs, so a target directory laid out
+/// for a cross-compilation target or a named profile needs no special case.
+/// Diagnostics stay rendered on stderr, so a build that fails reports exactly
+/// what it always reported.
+///
+/// # Errors
+///
+/// Returns the same rule-host build error `cargo run` produces when the build
+/// fails.
+fn build_local_rule_host_binary(
+    root: &Path,
+    manifest: &Path,
+    cargo: &str,
+    cache_layout: &CacheLayout,
+) -> Result<Option<PathBuf>> {
+    let mut command = ProcessCommand::new(cargo);
+    command.current_dir(root).args([
+        "build",
+        "--quiet",
+        "--message-format=json-render-diagnostics",
+    ]);
+    apply_local_rule_host_profile(&mut command);
+    command.args(["--manifest-path", manifest_path_argument(manifest)?]);
+    apply_local_rule_host_env(&mut command, cache_layout);
+
+    let output = command.output().with_context(|| {
+        format!(
+            "failed to build local rule host {} with `{cargo}`",
+            manifest.display()
+        )
+    })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // Only what cargo wrote outside the machine-readable stream is output a
+        // user was meant to read.
+        let stdout = unstructured_cargo_stdout(&output.stdout);
+        anyhow::bail!(rules_host_error::rules_host_error_message(
+            &manifest.display().to_string(),
+            output.status,
+            &stdout,
+            stderr.as_ref(),
+        ));
+    }
+    Ok(built_rule_host_binary(
+        &output.stdout,
+        &cache_layout.rules_target_dir(),
+        &LocalRuleHostProfile::from_env().target_subdirectory(),
+    ))
+}
+
+/// The lines cargo wrote to stdout that are not machine-readable messages.
+fn unstructured_cargo_stdout(stdout: &[u8]) -> String {
+    String::from_utf8_lossy(stdout)
+        .lines()
+        .filter(|line| serde_json::from_str::<serde_json::Value>(line).is_err())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The one executable a rule-host build produced, or `None` when the build
+/// cannot be attributed to exactly one.
+///
+/// A build script is an executable cargo builds and never the host, so only
+/// binary targets are considered, and only those under the profile directory of
+/// the target directory polint pinned. A package declaring several binaries is
+/// one `cargo run` could not have resolved either, so it is refused rather than
+/// guessed at.
+fn built_rule_host_binary(
+    stdout: &[u8],
+    rules_target_dir: &Path,
+    profile_directory: &str,
+) -> Option<PathBuf> {
+    let mut executables = std::str::from_utf8(stdout)
+        .ok()?
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|message| message["reason"] == "compiler-artifact")
+        .filter(|message| {
+            message["target"]["kind"]
+                .as_array()
+                .is_some_and(|kinds| kinds.iter().any(|kind| kind == "bin"))
+        })
+        .filter_map(|message| Some(PathBuf::from(message["executable"].as_str()?)))
+        .filter(|executable| {
+            executable.starts_with(rules_target_dir)
+                && executable
+                    .parent()
+                    .and_then(Path::file_name)
+                    .is_some_and(|directory| directory == profile_directory)
+        })
+        .collect::<Vec<_>>();
+    executables.sort();
+    executables.dedup();
+    match executables.as_slice() {
+        [only] => Some(only.clone()),
+        _ => None,
+    }
+}
+
+/// Run an already-compiled rule host.
+fn run_local_rule_host_binary(
+    root: &Path,
+    manifest: &Path,
+    binary: &Path,
+    cache_layout: &CacheLayout,
+    host_args: &[OsString],
+) -> Result<(Vec<Diagnostic>, Vec<crate::diagnostics::RuleExecutionRow>)> {
+    let mut command = ProcessCommand::new(binary);
+    command.current_dir(root).args(host_args);
+    apply_local_rule_host_env(&mut command, cache_layout);
+    let output = command.output().with_context(|| {
+        format!(
+            "failed to run local rule host {} from {}",
+            manifest.display(),
+            binary.display()
+        )
+    })?;
+    local_rule_host_report(manifest, &output)
+}
+
+/// Compile and run the rule host in one cargo invocation.
+///
+/// This is what runs when the build's inputs cannot be named — an unresolvable
+/// toolchain, a rule package this cannot read, a cargo config that redirects the
+/// build — and it is the behavior polint has always had.
+fn run_local_rule_host_through_cargo(
+    root: &Path,
+    manifest: &Path,
+    cargo: &str,
+    cache_layout: &CacheLayout,
+    host_args: &[OsString],
+) -> Result<(Vec<Diagnostic>, Vec<crate::diagnostics::RuleExecutionRow>)> {
+    let mut command = ProcessCommand::new(cargo);
+    command.current_dir(root).args(["run", "--quiet"]);
+    apply_local_rule_host_profile(&mut command);
+    command.args(["--manifest-path", manifest_path_argument(manifest)?, "--"]);
+    command.args(host_args);
+    apply_local_rule_host_env(&mut command, cache_layout);
 
     let output = command.output().with_context(|| {
         format!(
@@ -4317,6 +4648,21 @@ fn run_local_rule_host_kind(
             manifest.display()
         )
     })?;
+    local_rule_host_report(manifest, &output)
+}
+
+/// A rule host's manifest as a `--manifest-path` argument.
+fn manifest_path_argument(manifest: &Path) -> Result<&str> {
+    manifest
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-UTF-8 manifest path: {}", manifest.display()))
+}
+
+/// The diagnostics and rule rows a finished rule host reported.
+fn local_rule_host_report(
+    manifest: &Path,
+    output: &std::process::Output,
+) -> Result<(Vec<Diagnostic>, Vec<crate::diagnostics::RuleExecutionRow>)> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -4328,13 +4674,13 @@ fn run_local_rule_host_kind(
         ));
     }
 
-    let stdout = String::from_utf8(output.stdout).with_context(|| {
+    let stdout = std::str::from_utf8(&output.stdout).with_context(|| {
         format!(
             "local rule host emitted non-UTF-8 output: {}",
             manifest.display()
         )
     })?;
-    diagnostics_and_rule_execution_from_public_json_report(&stdout).with_context(|| {
+    diagnostics_and_rule_execution_from_public_json_report(stdout).with_context(|| {
         format!(
             "local rule host did not emit polint JSON report: {}",
             manifest.display()
@@ -4424,6 +4770,25 @@ enum LocalRuleHostProfile {
 impl LocalRuleHostProfile {
     fn from_env() -> Self {
         Self::from_env_value(std::env::var(POLINT_RULES_PROFILE_ENV).ok())
+    }
+
+    /// The profile's cargo name, as it appears in a build fingerprint.
+    fn name(&self) -> String {
+        match self {
+            Self::Dev => "dev".to_string(),
+            Self::Release => "release".to_string(),
+            Self::Custom(profile) => profile.clone(),
+        }
+    }
+
+    /// The directory cargo puts this profile's output in, under the target
+    /// directory. Every profile uses its own name except `dev`, whose output
+    /// cargo has always written to `debug`.
+    fn target_subdirectory(&self) -> String {
+        match self {
+            Self::Dev => "debug".to_string(),
+            other => other.name(),
+        }
     }
 
     fn from_env_value(value: Option<String>) -> Self {
