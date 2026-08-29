@@ -5,24 +5,28 @@ Branch: `feat/machine-global-rule-host-store`
 Reviewed base: `origin/main` at `9af105f9` (the local `main` ref was stale)  
 Reviewed feature commits: `4031a0b7`, `78986ce9`, `8d3fbc1e`, `a962036c`  
 Review-fix commit: `c56d69de`
+Blocker-fix commit: `fix(cache): refuse to share rule hosts that embed checkout paths`
+
+Line references in the earlier fixed findings describe the reviewed `c56d69de`
+snapshot; the C1 follow-up is described by symbol and behavior below.
 
 ## Decision
 
-**Do not merge or release this as v0.3.2 yet.** The implementation is much safer
-after `c56d69de`, and every requested gate passes, but the content key still does
-not name checkout-specific compile-time path inputs that Cargo makes available to
-Rust code and build scripts. Two byte-identical checkouts can therefore compute
-the same key while compiling behaviorally different hosts. That contradicts the
-store's core correctness claim, not merely a performance or documentation claim.
+**The machine-global rule-host store is ready to merge for v0.3.2.** The final
+blocker is closed by conservatively opting any package whose Rust sources may
+embed Cargo-provided checkout paths out of restore and publication. The gate
+preserves the store's rule that a surface which cannot be proven is never
+shared, and the complete requested gate suite passes.
 
 ## Findings by severity
 
-### CRITICAL — open release blocker
+### CRITICAL — fixed release blocker
 
-#### C1. Checkout-specific Cargo compile-time paths are absent from the key
+#### C1. Checkout-specific Cargo compile-time paths could escape the key
 
-Status: **WONTFIX in this review; blocks release.** A safe fix requires an
-architectural decision, not a source-text heuristic.
+Status: **FIXED.** A conservative byte-token gate now makes affected packages
+local-only in both directions. False positives are intentional: they cost a
+local build but cannot wrong-share a host.
 
 Evidence:
 
@@ -34,42 +38,28 @@ Evidence:
   names (`crates/polint/src/cache/rules_store.rs:839-853` and
   `crates/polint/src/cache/rules_store.rs:859-896`), so two checkouts with the
   same bytes intentionally receive the same key.
-- Cargo exposes checkout-specific absolute values such as
-  `CARGO_MANIFEST_DIR` and `OUT_DIR` during compilation. Rule code can compile
-  `env!("CARGO_MANIFEST_DIR")` into the host, and a build script can emit or
-  embed `OUT_DIR` or other absolute paths. Hashing the source and `build.rs`
-  bytes does not hash the values those inputs observe.
-- The store explicitly permits different binary bytes for one fingerprint and
-  lets concurrent publishers race on the entry
-  (`crates/polint/src/cache/rules_store.rs:409-417`). That is safe only if all
-  possible outputs are behaviorally interchangeable; a compiled manifest or
-  output-directory path disproves that premise.
-- The public documentation currently calls the enumerated inputs the
-  “complete input surface” (`README.md:240-250`), so this is also a truthfulness
-  defect in the shipped contract.
+- Cargo exposes checkout-specific values such as `CARGO_MANIFEST_DIR`,
+  `OUT_DIR`, `CARGO`, and `RUSTC` during compilation. The shareability decision
+  now scans every `*.rs` under `src`, `benches`, `examples`, and `tests`, plus a
+  root `build.rs`, for the minimal byte-token family that can name those values.
+- The scan is intentionally lexical rather than a claim of Rust semantic
+  coverage. A match in a comment or inert string disables sharing; this follows
+  the store's fail-closed rule. `CARGO_PKG_*` is deliberately excluded because
+  Cargo derives those values from checkout-independent package metadata.
+- The gate is evaluated once before consulting the store and the same result
+  controls publication after a build. A matched package therefore neither
+  restores another checkout's host nor publishes its own.
+- The fingerprint records `embeds_checkout_paths=true|false`, so changing the
+  gate state is also an explicit component of build identity.
+- Unit coverage includes `env!("CARGO_MANIFEST_DIR")`, an `OUT_DIR` token in a
+  doc comment, a token-free package, and a root `build.rs` that expands
+  `include!(concat!(env!("OUT_DIR"), ...))`. Additional coverage pins the
+  `CARGO`/`RUSTC` executable names and the `CARGO_PKG_*` exclusion.
 
-Impact: a host restored in checkout B can contain checkout A's manifest/target
-path and behave differently from the host `cargo run` would compile in B. The
-binary passes the stored SHA-256 check because it is exactly the binary the store
-published; byte verification cannot detect that the key was incomplete.
-
-Why it was not patched here: including these paths (even only as digests) makes
-the key checkout-specific and eliminates the feature's cross-checkout reuse.
-Scanning source text for `env!` is unsound because macros, proc macros, and build
-scripts can construct the same behavior indirectly. A release-quality fix must
-choose and enforce one of these designs:
-
-1. compile in a deterministic, machine-global build root and normalize or forbid
-   path-observing compile-time inputs;
-2. include the actual checkout/build paths in the key and accept that these
-   packages are local-only; or
-3. define and enforce a narrower, mechanically provable class of shareable rule
-   packages.
-
-Before release, add an end-to-end regression with two byte-identical checkouts
-whose host reports `env!("CARGO_MANIFEST_DIR")`, plus a build-script/`OUT_DIR`
-case. Both must either produce distinct keys or be rejected by the shareability
-gate.
+Impact after the fix: packages that might compile a checkout path run through
+the original local Cargo path. Packages without those tokens retain
+cross-checkout reuse, with the existing fingerprint, restore-integrity, and
+same-user trust guarantees.
 
 ### HIGH — fixed in `c56d69de`
 
@@ -198,7 +188,7 @@ merge first and invoke that workflow with `patch` to produce 0.3.2.
 - **Target directory:** the ambient value is correctly ignored because polint
   overwrites it on both paths, but the overwritten value itself is
   checkout-specific and can enter the binary through Cargo compile-time values.
-  This is blocker C1.
+  The C1 token gate now makes packages that name those values local-only.
 - **RUSTC/toolchains/flags:** fixed and covered as described in H1.
 - **Cargo home/config resolution:** location and applicable config contents are
   hashed; unsafe configs fail the gate.
@@ -213,8 +203,8 @@ merge first and invoke that workflow with `patch` to produce 0.3.2.
   store rather than colliding (`crates/polint/src/cache/rules_store.rs:649-677`
   and `crates/polint/src/cache/rules_store.rs:880-896`).
 
-Answer: **NO**, because C1 remains even though the enumerated static inputs are
-now covered.
+Answer: **YES.** The enumerated static inputs are covered, and packages that
+name checkout-specific Cargo values are refused cross-checkout sharing.
 
 ### B. Gate soundness
 
@@ -225,8 +215,8 @@ Cargo home; the rule package config is additionally checked conservatively. An
 intermediate `.polint/.cargo` directory is not a Cargo config ancestor of that
 cwd and cannot affect this invocation. Includes are rejected rather than chased.
 
-Answer: **YES for declared dependency/config redirects after `c56d69de`; NO for
-the broader shareability proof because C1 is outside this gate.**
+Answer: **YES.** Declared dependency/config redirects and checkout-path source
+tokens all fail closed before restore or publication.
 
 ### C. Restore safety
 
@@ -259,9 +249,8 @@ and other environment variables are inherited by both. Cargo-config `[env]` and
 runner cases are now gated out. Nonzero and spawn/build failure byte identity is
 tested.
 
-Answer: **YES for process invocation and failure rendering after `c56d69de`, but
-overall NO until C1 guarantees the restored program is the program this checkout
-would compile.**
+Answer: **YES.** Process invocation and failure rendering are identical, and C1
+packages now stay on the local Cargo path.
 
 ### F. Stamp correctness
 
@@ -272,8 +261,8 @@ switches miss. Stamp writes atomically replace old stamps. The target lock
 serializes writers. A SHA-256 collision remains a standard cryptographic
 assumption, not a realistic stale-stamp scenario.
 
-Answer: **YES, subject to fingerprint completeness; C1 can make a perfectly
-valid stamp identify the wrong checkout semantics.**
+Answer: **YES.** The fingerprint records the checkout-path gate state, and a C1
+package never consults or publishes to the machine-global store.
 
 ### G. Windows
 
@@ -291,12 +280,11 @@ Windows CI.**
 Strong coverage now pins key-field changes, raw bytes, all package inputs,
 ancestor/Cargo-home config, path/workspace/symlink gates, corrupt restore,
 atomic replacement, stamp tampering, cross-checkout publish/restore, warm stamp,
-and byte-identical fallback behavior. The exact focused suite runs 28 tests.
+and byte-identical fallback behavior. The focused suite also covers the C1 token
+gate in normal sources, comments, build scripts, and its minimal variable set.
 
 Test-thin claims:
 
-- no regression for checkout-specific compile-time values (`CARGO_MANIFEST_DIR`
-  / `OUT_DIR`) — this is the release blocker;
 - no true multiprocess target/store contention test;
 - no Windows execution in this environment;
 - the warm test proves no Cargo build/run, while deliberately allowing
@@ -304,16 +292,16 @@ Test-thin claims:
 
 ## Gate results
 
-All commands ran on `c56d69de`; none was pushed.
+All commands ran after the C1 blocker fix; none was pushed.
 
 | Gate | Result |
 |---|---|
 | `cargo fmt --all -- --check` | PASS |
 | `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` | PASS |
-| `cargo test -p polint --lib cache::rules_store` | PASS — 28 passed, 0 failed |
+| `cargo test -p polint --lib cache::rules_store` | PASS — 32 passed, 0 failed |
 | Extra: `cargo test -p polint --test rule_host_store` | PASS — 1 passed, 0 failed |
 
-The branch is five commits ahead of `origin/main` after the review fix. No push
-was performed.
+The branch contains the review hardening and the C1 blocker fix. No push was
+performed.
 
-RELEASE-READY: NO — checkout-specific Cargo compile-time paths are not represented in the supposedly complete cross-checkout key
+RELEASE-READY: YES — checkout-path-embedding rule hosts are local-only, and shareable hosts retain a complete cross-checkout key

@@ -237,28 +237,35 @@ Windows. `off`, `disabled`, or `none` turns sharing off; so does any value that
 is not an absolute path, because a relative one would name a different store
 from every directory.
 
-Each entry is keyed by the build's **complete input surface**: the resolved
-`rustc` and `cargo`, the toolchain override, the compiler-flag environment
-variables, the cargo profile, the OS and architecture, the repository's
+For packages eligible for sharing, each entry is keyed by the build's
+**complete input surface**: the resolved `rustc` and `cargo`, the toolchain
+override, the compiler-flag environment variables, the cargo profile, the OS
+and architecture, the repository's
 `Cargo.toml`/`Cargo.lock`/`rust-toolchain*`, every applicable ancestor and Cargo
 home `.cargo/config*`, the rule package's manifests and lockfile, and the content
 of every file in the package — Rust sources, `build.rs`, and data consumed by
-`include_bytes!` or a build script. Everything is
-hashed from bytes, never modification times. A restored binary is re-hashed
-against the length and digest the entry recorded before it is moved into place
-and run, and any failure — a missing entry, an unreadable one, a corrupt blob —
-is a miss that compiles locally instead. Committing the rule package's
-`Cargo.lock` is what lets a fresh checkout compute the same key the build in
-another one published under.
+`include_bytes!` or a build script. The fingerprint also records whether the
+package tripped the checkout-path gate described below. Everything is hashed
+from bytes, never modification times. A restored binary is re-hashed against
+the length and digest the entry recorded before it is moved into place and run,
+and any failure — a missing entry, an unreadable one, a corrupt blob — is a miss
+that compiles locally instead. Committing the rule package's `Cargo.lock` is
+what lets a fresh checkout compute the same key the build in another one
+published under.
 
-Two constructs mean a rule package's key cannot stand for what its build
-compiles, and both make polint build locally and publish nothing: any `path`
-dependency that leaves the rule package (including an absolute path, whose
-contents have no lockfile checksum), and a cargo config with `patch`, `replace`,
-`paths`, source replacement, `include`, `[env]`, or a target runner. The source
-settings can send the build to bytes no manifest or lockfile records; environment
-and runner settings cannot be reproduced by direct execution. A config polint
-cannot read or parse is local-only too.
+Three constructs make polint build locally without restoring or publishing a
+machine-global host: any `path` dependency that leaves the rule package
+(including an absolute path, whose contents have no lockfile checksum); a cargo
+config with `patch`, `replace`, `paths`, source replacement, `include`, `[env]`,
+or a target runner; and Rust source that can embed checkout-specific values
+Cargo injects. The last check scans `*.rs` under `src`, `benches`, `examples`,
+and `tests`, plus a root `build.rs`, for the byte tokens
+`CARGO_MANIFEST_DIR`, `OUT_DIR`, and the executable environment names `CARGO`
+and `RUSTC`. It is intentionally broad: even a token in a comment opts that
+package out, because a false positive costs one local build while a false
+negative could restore a host compiled for another checkout. `CARGO_PKG_*`
+values are not gated because they come from checkout-independent package
+metadata. A config or source tree polint cannot read or prove is local-only too.
 
 The store is one user's state on one machine, at the trust level of
 `~/.cargo/registry`: polint creates it `0700` on Unix and never shares it between

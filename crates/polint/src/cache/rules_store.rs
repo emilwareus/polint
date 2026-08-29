@@ -115,6 +115,22 @@ const CARGO_FLAG_VARIABLES: [(&str, &str); 9] = [
 /// and the extensionless one it kept honoring for projects written before 1.39.
 const CARGO_CONFIG_NAMES: [&str; 2] = ["config.toml", "config"];
 
+/// Cargo-provided environment names whose values can identify a checkout.
+///
+/// `CARGO_MANIFEST_DIR` and `OUT_DIR` are absolute paths supplied to compiled
+/// code. `CARGO` and `RUSTC` name the tool executables and can likewise carry
+/// paths; their short names include a trailing quote or colon to avoid matching
+/// ordinary prose. `CARGO_PKG_*` values are deliberately absent because Cargo
+/// derives them from checkout-independent package metadata.
+const CHECKOUT_PATH_TOKENS: [&[u8]; 6] = [
+    b"CARGO_MANIFEST_DIR",
+    b"OUT_DIR",
+    b"CARGO\"",
+    b"CARGO:",
+    b"RUSTC\"",
+    b"RUSTC:",
+];
+
 /// The top-level cargo config keys that make direct, cross-checkout reuse unsafe.
 ///
 /// `patch`, `replace`, `paths`, and `source` can send a package to bytes no
@@ -845,6 +861,14 @@ pub(crate) fn build_fingerprint(
         "package_cargo_lock",
         &optional_file_digest(&rule_pkg_dir.join("Cargo.lock"))?,
     );
+    digest.line(
+        "embeds_checkout_paths",
+        if sources_embed_checkout_paths(rule_pkg_dir) {
+            "true"
+        } else {
+            "false"
+        },
+    );
     for (relative, source) in rule_inputs(rule_pkg_dir)? {
         digest.line(&relative, &source);
     }
@@ -894,6 +918,72 @@ fn rule_inputs(rule_pkg_dir: &Path) -> Option<Vec<(String, String)>> {
     // action's `LC_ALL=C sort` produces for the same set.
     out.sort();
     Some(out)
+}
+
+/// Whether Rust compiled for the rule package may read checkout-specific Cargo
+/// environment values.
+///
+/// This is intentionally a broad byte-token gate rather than a Rust parser. A
+/// token in a comment or inert string opts one package out of machine-global
+/// sharing, which costs a local build but can never restore the wrong host. The
+/// scan covers Cargo's conventional Rust target trees and a root `build.rs`.
+/// An unreadable or structurally surprising source tree also fails closed.
+fn sources_embed_checkout_paths(rule_pkg_dir: &Path) -> bool {
+    let build_script = rule_pkg_dir.join("build.rs");
+    match std::fs::symlink_metadata(&build_script) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return true,
+        Ok(metadata) if !metadata.is_file() || metadata.file_type().is_symlink() => return true,
+        Ok(_) => {
+            if source_file_embeds_checkout_paths(&build_script).unwrap_or(true) {
+                return true;
+            }
+        }
+    }
+
+    ["src", "benches", "examples", "tests"]
+        .iter()
+        .map(|directory| rule_pkg_dir.join(directory))
+        .any(|directory| match std::fs::symlink_metadata(&directory) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(_) => true,
+            Ok(metadata) if !metadata.is_dir() || metadata.file_type().is_symlink() => true,
+            Ok(_) => rust_tree_embeds_checkout_paths(&directory).unwrap_or(true),
+        })
+}
+
+/// Scan every regular `*.rs` file below one Cargo source directory.
+fn rust_tree_embeds_checkout_paths(root: &Path) -> Option<bool> {
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(directory).ok()? {
+            let entry = entry.ok()?;
+            let kind = entry.file_type().ok()?;
+            if kind.is_symlink() {
+                return None;
+            }
+            let path = entry.path();
+            if kind.is_dir() {
+                pending.push(path);
+            } else if kind.is_file()
+                && path.extension().is_some_and(|extension| extension == "rs")
+                && source_file_embeds_checkout_paths(&path)?
+            {
+                return Some(true);
+            }
+        }
+    }
+    Some(false)
+}
+
+/// Read one Rust source as bytes and look for the conservative token family.
+fn source_file_embeds_checkout_paths(path: &Path) -> Option<bool> {
+    let bytes = std::fs::read(path).ok()?;
+    Some(CHECKOUT_PATH_TOKENS.iter().any(|token| {
+        bytes
+            .windows(token.len())
+            .any(|candidate| candidate == *token)
+    }))
 }
 
 /// Every file under the rule package that `keep` accepts.
@@ -1069,7 +1159,7 @@ fn hex(bytes: &[u8]) -> String {
 /// The fingerprint hashes the package's manifests, lockfiles, and sources, which
 /// is the whole of what the build compiles as long as every dependency comes
 /// from a registry or a git revision: the lockfile pins those and cargo verifies
-/// them by checksum. Two constructs break that.
+/// them by checksum. Three constructs break that.
 ///
 /// A path dependency does it from inside a manifest: an absolute path names
 /// sources outside the fingerprint, while a relative `../helpers` names a
@@ -1080,6 +1170,10 @@ fn hex(bytes: &[u8]) -> String {
 /// redirects send a build to bytes no manifest and no lockfile records. Config
 /// `[env]` and target runners also change how Cargo executes the built host, so a
 /// direct restored-host execution cannot reproduce their behavior.
+///
+/// Rust sources and build scripts can also embed the checkout-specific paths
+/// Cargo exposes as compile-time environment values. A conservative byte-token
+/// scan makes any package that mentions those values local-only.
 ///
 /// Anything unreadable or unparseable answers `false`: a surface that cannot be
 /// proven is never shared. A false yes costs a local build; a false no shares the
@@ -1100,6 +1194,7 @@ fn shareable_with_cargo_home(
 ) -> bool {
     every_manifest_path_stays_put(rule_pkg_dir)
         && !a_cargo_config_prevents_direct_reuse(rule_pkg_dir, repo_root, cargo_home)
+        && !sources_embed_checkout_paths(rule_pkg_dir)
 }
 
 /// Whether every `path` declared by every manifest under the rule package names
@@ -1685,11 +1780,82 @@ mod tests {
     }
 
     #[test]
-    fn a_registry_only_rule_package_is_the_same_from_every_checkout() {
+    fn a_rule_package_without_checkout_path_tokens_is_shareable() {
         let temp = temp_dir("shareable");
         let root = temp.path();
         let package = rule_package(root);
         assert!(shareable(&package, root));
+    }
+
+    #[test]
+    fn a_rule_source_that_embeds_cargo_manifest_dir_is_not_shareable() {
+        let temp = temp_dir("manifest-dir-token");
+        let root = temp.path();
+        let package = rule_package(root);
+        write(
+            &package.join("src/main.rs"),
+            "fn main() { println!(\"{}\", env!(\"CARGO_MANIFEST_DIR\")); }\n",
+        );
+        assert!(!shareable(&package, root));
+    }
+
+    #[test]
+    fn an_out_dir_token_in_a_doc_comment_is_conservatively_not_shareable() {
+        let temp = temp_dir("doc-comment-token");
+        let root = temp.path();
+        let package = rule_package(root);
+        write(
+            &package.join("src/main.rs"),
+            "/// This inert documentation mentions OUT_DIR.\nfn main() {}\n",
+        );
+        assert!(
+            !shareable(&package, root),
+            "byte-token matching accepts false positives so it never wrong-shares"
+        );
+    }
+
+    #[test]
+    fn a_build_script_that_embeds_out_dir_is_not_shareable() {
+        let temp = temp_dir("build-script-token");
+        let root = temp.path();
+        let package = rule_package(root);
+        write(
+            &package.join("build.rs"),
+            "include!(concat!(env!(\"OUT_DIR\"), \"/generated.rs\"));\nfn main() {}\n",
+        );
+        assert!(!shareable(&package, root));
+    }
+
+    #[test]
+    fn cargo_and_rustc_environment_names_are_not_shareable_but_cargo_pkg_is() {
+        for (variable, expression) in [
+            ("CARGO", "env!(\"CARGO\")"),
+            ("RUSTC", "std::env::var(\"RUSTC\")"),
+        ] {
+            let temp = temp_dir("tool-path-token");
+            let root = temp.path();
+            let package = rule_package(root);
+            write(
+                &package.join("src/main.rs"),
+                &format!("fn main() {{ let _ = {expression}; }}\n"),
+            );
+            assert!(
+                !shareable(&package, root),
+                "the {variable} executable path must stay checkout-local"
+            );
+        }
+
+        let temp = temp_dir("cargo-pkg-token");
+        let root = temp.path();
+        let package = rule_package(root);
+        write(
+            &package.join("src/main.rs"),
+            "fn main() { let _ = env!(\"CARGO_PKG_VERSION\"); }\n",
+        );
+        assert!(
+            shareable(&package, root),
+            "Cargo package metadata is checkout-independent"
+        );
     }
 
     #[test]
