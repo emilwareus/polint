@@ -8,6 +8,7 @@ mod digest;
 mod fact_store;
 mod metadata;
 mod module_facts;
+mod parser_identity;
 mod provider;
 mod source_file;
 mod symbol_facts;
@@ -35,6 +36,9 @@ pub use metadata::{
 pub use module_facts::{
     ModuleEdge, ModuleEdgeKind, ModuleNode, ModuleNodeKind, ResolutionPrecision, ResolutionStatus,
     ResolvedImportFact, UnresolvedReason,
+};
+pub use parser_identity::{
+    GO_PARSER_BACKEND, GO_PARSER_GRAMMAR, TS_PARSER_BACKEND, engine_parser_identity,
 };
 pub use provider::{
     CachePolicy, CaptureEnrichment, FactDatabase, HostAttachment, NullCaptureEnrichment,

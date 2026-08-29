@@ -229,6 +229,7 @@ fn scc_closure_cache_key(config_digest: &str, rule_digest: &str, plan_digest: &s
         rule_digest,
         plan_digest,
         "summary-scc-closure-digests-v1",
+        &crate::analysis_api::engine_parser_identity(),
     )
 }
 

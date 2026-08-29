@@ -245,6 +245,7 @@ fn file_stable_id(key: &FileCacheKeyParts) -> String {
         key.plan_hash.as_str(),
         FILE_CACHE_VERSION,
         key.schema.as_str(),
+        key.parser_identity.as_str(),
     ])
 }
 

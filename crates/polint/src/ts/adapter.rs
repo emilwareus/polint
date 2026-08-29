@@ -3,7 +3,7 @@ use crate::analysis_api::{
     FactDatabase, FileCacheKeyParts, FileCacheReadStatus, FunctionFact, ImportFact,
     JsxAttributeFact, LayerCacheKeyParts, LayerCacheKind, LayerCachePrecision,
     LayerCacheReadStatus, LayerCacheWriteStatus, ProviderRunResult, SourceFile, StringLiteralFact,
-    TS_JS_MODULE_FUNCTION_NAME, TsClassFact, TsComponentFact,
+    TS_JS_MODULE_FUNCTION_NAME, TS_PARSER_BACKEND, TsClassFact, TsComponentFact,
 };
 use crate::internal_core::{
     Diagnostic, DiagnosticRange as TextRange, FileId, FunctionId, Language, Span,
@@ -253,13 +253,20 @@ fn ts_syntax_layer_key(files: &[&SourceFile], config_hash: &str) -> LayerCacheKe
         parameter_digest: parser_parameter_digest(files),
         lifecycle_digest: Digest::absent(DigestKind::TsJsLifecycle, "ts_syntax_lifecycle_absent"),
         config_digest: Digest::from_parts(DigestKind::Config, "config_hash", &[config_hash]),
-        toolchain_digest: Digest::from_parts(
-            DigestKind::ToolInvocation,
-            "ts_syntax_parser_toolchain",
-            &[env!("CARGO_PKG_VERSION")],
-        ),
+        toolchain_digest: ts_parser_toolchain_digest(TS_PARSER_BACKEND),
         input_digests: files.iter().map(|file| source_text_digest(file)).collect(),
     }
+}
+
+/// Identity of the toolchain that produced a TypeScript syntax layer: this engine
+/// plus the parser it links. Facts are only reusable when both still match, so
+/// both belong in the key rather than the engine version alone.
+fn ts_parser_toolchain_digest(backend: &str) -> Digest {
+    Digest::from_parts(
+        DigestKind::ToolInvocation,
+        "ts_syntax_parser_toolchain",
+        &[env!("CARGO_PKG_VERSION"), backend],
+    )
 }
 
 fn source_text_digest(file: &SourceFile) -> Digest {
@@ -441,6 +448,23 @@ fn ts_syntax_output_digest(payload_digest: &Digest) -> Digest {
     )
 }
 
+fn ts_file_cache_key(
+    file: &SourceFile,
+    config_hash: &str,
+    rule_hash: &str,
+    plan_hash: &str,
+) -> FileCacheKeyParts {
+    FileCacheKeyParts {
+        relative_path: file.relative_path.clone(),
+        content_hash: file.content_hash.clone(),
+        config_hash: config_hash.to_string(),
+        rule_hash: rule_hash.to_string(),
+        plan_hash: plan_hash.to_string(),
+        schema: TS_CACHE_SCHEMA.to_string(),
+        parser_identity: TS_PARSER_BACKEND.to_string(),
+    }
+}
+
 fn analyze_ts_source_file(
     file: &SourceFile,
     cache: &dyn AnalysisCache,
@@ -448,14 +472,7 @@ fn analyze_ts_source_file(
     rule_hash: &str,
     plan_hash: &str,
 ) -> TsFileAnalysis {
-    let key = FileCacheKeyParts {
-        relative_path: file.relative_path.clone(),
-        content_hash: file.content_hash.clone(),
-        config_hash: config_hash.to_string(),
-        rule_hash: rule_hash.to_string(),
-        plan_hash: plan_hash.to_string(),
-        schema: TS_CACHE_SCHEMA.to_string(),
-    };
+    let key = ts_file_cache_key(file, config_hash, rule_hash, plan_hash);
     let read = cache.read_file_json(&key);
     if read.status == FileCacheReadStatus::Hit
         && let Some(bytes) = read.value
@@ -4406,5 +4423,46 @@ fn expression_static_value(expression: &Expression<'_>) -> Option<String> {
         }
         Expression::TSTypeAssertion(expression) => expression_static_value(&expression.expression),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod parser_identity_tests {
+    use super::*;
+
+    fn source() -> SourceFile {
+        SourceFile::new(
+            FileId::from_raw(0),
+            std::path::PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            Language::TypeScript,
+            "export {};\n".into(),
+            "0123456789abcdef".to_string(),
+        )
+    }
+
+    /// The parser label is a compile-time constant, so the guard is on the
+    /// derivation: the layer key's toolchain component must be exactly the one
+    /// built from the live label, and must move when the label moves.
+    #[test]
+    fn a_changed_parser_label_changes_the_ts_syntax_layer_key() {
+        let file = source();
+        let key = ts_syntax_layer_key(&[&file], "config");
+
+        assert_eq!(
+            key.toolchain_digest,
+            ts_parser_toolchain_digest(TS_PARSER_BACKEND)
+        );
+        let moved = LayerCacheKeyParts {
+            toolchain_digest: ts_parser_toolchain_digest("oxc-0.0.0"),
+            ..key.clone()
+        };
+        assert_ne!(moved, key);
+    }
+
+    #[test]
+    fn the_per_file_cache_key_carries_the_parser_identity() {
+        let key = ts_file_cache_key(&source(), "config", "rule", "plan");
+        assert_eq!(key.parser_identity, TS_PARSER_BACKEND);
     }
 }

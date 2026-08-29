@@ -38,6 +38,7 @@ impl AnalysisCache for CacheAnalysisCache {
             &key.rule_hash,
             &key.plan_hash,
             &key.schema,
+            &key.parser_identity,
         );
         let read = self
             .cache
@@ -60,6 +61,7 @@ impl AnalysisCache for CacheAnalysisCache {
             &key.rule_hash,
             &key.plan_hash,
             &key.schema,
+            &key.parser_identity,
         );
         let value: serde_json::Value =
             serde_json::from_slice(bytes).map_err(|error| error.to_string())?;

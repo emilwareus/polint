@@ -14,6 +14,10 @@ pub struct FileCacheKeyParts {
     pub rule_hash: String,
     pub plan_hash: String,
     pub schema: String,
+    /// Parser that produced the cached facts (see [`crate::analysis_api::GO_PARSER_BACKEND`]).
+    /// Cached facts are only interchangeable with freshly parsed ones when the
+    /// parser matches, so it is part of the identity of the entry.
+    pub parser_identity: String,
 }
 
 /// Layer-cache identity parts used by syntax frontends.

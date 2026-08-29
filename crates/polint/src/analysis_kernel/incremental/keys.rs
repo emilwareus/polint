@@ -131,6 +131,11 @@ impl LayerKey {
                 &[&key.plan_hash],
             ),
             Digest::from_parts(DigestKind::ToolInvocation, "version", &[version]),
+            Digest::from_parts(
+                DigestKind::ToolInvocation,
+                "parser_identity",
+                &[&key.parser_identity],
+            ),
             Digest::from_parts(DigestKind::ProviderOutput, "schema", &[&key.schema]),
         ];
 
@@ -146,7 +151,11 @@ impl LayerKey {
             ),
             Digest::absent(DigestKind::DependencyLayer, "existing_file_cache_lifecycle"),
             Digest::from_parts(DigestKind::Config, "config_hash", &[&key.config_hash]),
-            Digest::from_parts(DigestKind::ToolInvocation, "version", &[version]),
+            Digest::from_parts(
+                DigestKind::ToolInvocation,
+                "version",
+                &[version, &key.parser_identity],
+            ),
             compatibility_input_digests,
             Vec::new(),
             Vec::new(),
@@ -2488,6 +2497,7 @@ mod tests {
             plan_hash: "plan-hash".to_string(),
             version: CACHE_VERSION.to_string(),
             schema: "ts-facts-v1".to_string(),
+            parser_identity: "oxc-0.0.0".to_string(),
         };
         let key = LayerKey::from_existing_file_cache(
             LayerKind::TsSyntax,
@@ -2519,6 +2529,11 @@ mod tests {
             DigestKind::ToolInvocation,
             "version",
             &[CACHE_VERSION]
+        )));
+        assert!(key.input_digests.contains(&Digest::from_parts(
+            DigestKind::ToolInvocation,
+            "parser_identity",
+            &["oxc-0.0.0"]
         )));
         assert!(key.input_digests.contains(&Digest::from_parts(
             DigestKind::ProviderOutput,

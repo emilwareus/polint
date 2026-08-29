@@ -3,6 +3,7 @@ use super::outcome::ProviderOutcomeError;
 use super::{
     ProviderManifest, ProviderOutcome, ProviderOutcomeStatus, ProviderOutputIdentity, provider,
 };
+use crate::analysis_api::{GO_PARSER_BACKEND, GO_PARSER_GRAMMAR};
 use crate::core::{AnalysisDb, FileId, FunctionId, Language, SourceFile, Span};
 use crate::diagnostics::{Diagnostic, TextRange};
 use std::collections::{BTreeMap, BTreeSet};
@@ -11,15 +12,6 @@ use std::path::Path;
 const MAX_GO_ROWS: usize = 1_000_000;
 pub(crate) const GO_FACT_SCHEMA: &str = "go-facts-v2";
 pub(crate) const GO_PAYLOAD_SCHEMA: &str = "go-syntax-layer-v1";
-// These label the parser that produced a cached/persisted Go syntax layer, so
-// they must track the resolved dependency versions exactly: a stale label lets
-// a grammar change reuse facts parsed by the previous grammar. They are also
-// pinned by `CHECK` constraints in the semantic-store schema, so bumping either
-// dependency needs this constant *and* a new store migration.
-// `go_parser_identity_tracks_the_resolved_dependency_versions` enforces the
-// first half against `Cargo.lock`.
-pub(crate) const GO_PARSER_BACKEND: &str = "tree-sitter-0.26.8";
-pub(crate) const GO_PARSER_GRAMMAR: &str = "tree-sitter-go-0.25.0";
 
 fn ensure_capacity(
     count: usize,
@@ -770,53 +762,6 @@ mod tests {
         let mut beyond = db.clone();
         beyond.push_function(function_fact(short, "C".into(), Span::point(short, 3, 1)));
         assert!(CanonicalGoSyntaxOutput::from_db(&beyond, &[]).is_err());
-    }
-
-    /// The backend/grammar labels are hand-written strings. If they drift from
-    /// the resolved dependency versions, a grammar bump silently keeps the same
-    /// provider identity and layer-cache key, so facts parsed by the previous
-    /// grammar are reused as if current.
-    #[test]
-    fn go_parser_identity_tracks_the_resolved_dependency_versions() {
-        let lock = std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .and_then(Path::parent)
-                .expect("workspace root")
-                .join("Cargo.lock"),
-        )
-        .expect("Cargo.lock is readable");
-        let resolved = |crate_name: &str| {
-            lock.split("[[package]]")
-                .find_map(|block| {
-                    let mut lines = block.lines().filter_map(|line| line.split_once(" = "));
-                    let name = lines
-                        .clone()
-                        .find(|(key, _)| *key == "name")?
-                        .1
-                        .trim_matches('"');
-                    (name == crate_name).then(|| {
-                        lines
-                            .find(|(key, _)| *key == "version")
-                            .expect("locked package has a version")
-                            .1
-                            .trim_matches('"')
-                            .to_string()
-                    })
-                })
-                .unwrap_or_else(|| panic!("{crate_name} is not in Cargo.lock"))
-        };
-        for (label, crate_name, constant) in [
-            ("backend", "tree-sitter", GO_PARSER_BACKEND),
-            ("grammar", "tree-sitter-go", GO_PARSER_GRAMMAR),
-        ] {
-            assert_eq!(
-                constant,
-                format!("{crate_name}-{}", resolved(crate_name)),
-                "the Go parser {label} label drifted from the locked {crate_name} version; \
-                 update the constant and add a semantic-store migration for the new CHECK value"
-            );
-        }
     }
 
     #[test]

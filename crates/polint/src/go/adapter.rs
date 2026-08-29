@@ -1,8 +1,9 @@
 use crate::analysis_api::{
     AnalysisCache, BranchObligation, CacheStats, CachedFileAnalysis, Digest, DigestKind,
     DisabledAnalysisCache, FactDatabase, FileCacheKeyParts, FileCacheReadStatus, FunctionFact,
-    ImportFact, LayerCacheKeyParts, LayerCacheKind, LayerCachePrecision, LayerCacheReadStatus,
-    LayerCacheWriteStatus, PackageFact, ProviderRunResult, SourceFile, StringLiteralFact, TestFact,
+    GO_PARSER_BACKEND, GO_PARSER_GRAMMAR, ImportFact, LayerCacheKeyParts, LayerCacheKind,
+    LayerCachePrecision, LayerCacheReadStatus, LayerCacheWriteStatus, PackageFact,
+    ProviderRunResult, SourceFile, StringLiteralFact, TestFact,
 };
 use crate::internal_core::{
     BranchId, Diagnostic, DiagnosticRange as TextRange, FileId, FunctionId, Language, Span,
@@ -229,12 +230,42 @@ fn go_syntax_layer_key(files: &[&SourceFile], config_hash: &str) -> LayerCacheKe
         parameter_digest: parser_parameter_digest(files),
         lifecycle_digest: Digest::absent(DigestKind::GoLifecycle, "go_syntax_lifecycle_absent"),
         config_digest: Digest::from_parts(DigestKind::Config, "config_hash", &[config_hash]),
-        toolchain_digest: Digest::from_parts(
-            DigestKind::ToolInvocation,
-            "go_syntax_parser_toolchain",
-            &[env!("CARGO_PKG_VERSION")],
-        ),
+        toolchain_digest: go_parser_toolchain_digest(GO_PARSER_BACKEND, GO_PARSER_GRAMMAR),
         input_digests: files.iter().map(|file| source_text_digest(file)).collect(),
+    }
+}
+
+/// Identity of the toolchain that produced a Go syntax layer: this engine plus
+/// the parser it links. Facts are only reusable when both still match, so both
+/// belong in the key rather than the engine version alone.
+fn go_parser_toolchain_digest(backend: &str, grammar: &str) -> Digest {
+    Digest::from_parts(
+        DigestKind::ToolInvocation,
+        "go_syntax_parser_toolchain",
+        &[env!("CARGO_PKG_VERSION"), backend, grammar],
+    )
+}
+
+/// Parser identity carried by every per-file Go cache entry, for the same reason
+/// the layer key carries it.
+fn go_parser_identity() -> String {
+    format!("{GO_PARSER_BACKEND}+{GO_PARSER_GRAMMAR}")
+}
+
+fn go_file_cache_key(
+    file: &SourceFile,
+    config_hash: &str,
+    rule_hash: &str,
+    plan_hash: &str,
+) -> FileCacheKeyParts {
+    FileCacheKeyParts {
+        relative_path: file.relative_path.clone(),
+        content_hash: file.content_hash.clone(),
+        config_hash: config_hash.to_string(),
+        rule_hash: rule_hash.to_string(),
+        plan_hash: plan_hash.to_string(),
+        schema: GO_CACHE_SCHEMA.to_string(),
+        parser_identity: go_parser_identity(),
     }
 }
 
@@ -418,14 +449,7 @@ fn analyze_go_source_file(
     rule_hash: &str,
     plan_hash: &str,
 ) -> GoFileAnalysis {
-    let key = FileCacheKeyParts {
-        relative_path: file.relative_path.clone(),
-        content_hash: file.content_hash.clone(),
-        config_hash: config_hash.to_string(),
-        rule_hash: rule_hash.to_string(),
-        plan_hash: plan_hash.to_string(),
-        schema: GO_CACHE_SCHEMA.to_string(),
-    };
+    let key = go_file_cache_key(file, config_hash, rule_hash, plan_hash);
     let read = cache.read_file_json(&key);
     if read.status == FileCacheReadStatus::Hit
         && let Some(bytes) = read.value
@@ -1728,5 +1752,54 @@ func TestFoo(t *testing.T) {
         let names: Vec<_> = db.tests()[0].subtest_names.clone();
         assert_eq!(names, vec!["case_a".to_string(), "case_b".to_string()]);
         assert_eq!(db.tests()[0].subtest_count, 2);
+    }
+}
+
+#[cfg(test)]
+mod parser_identity_tests {
+    use super::*;
+
+    fn source() -> SourceFile {
+        SourceFile::new(
+            FileId::from_raw(0),
+            std::path::PathBuf::from("payment.go"),
+            "payment.go".to_string(),
+            Language::Go,
+            "package payment\n".into(),
+            "0123456789abcdef".to_string(),
+        )
+    }
+
+    /// The parser labels are compile-time constants, so the guard is on the
+    /// derivation: the layer key's toolchain component must be exactly the one
+    /// built from the live labels, and must move when either label moves.
+    #[test]
+    fn a_changed_parser_label_changes_the_go_syntax_layer_key() {
+        let file = source();
+        let key = go_syntax_layer_key(&[&file], "config");
+
+        assert_eq!(
+            key.toolchain_digest,
+            go_parser_toolchain_digest(GO_PARSER_BACKEND, GO_PARSER_GRAMMAR)
+        );
+        for (backend, grammar) in [
+            ("tree-sitter-0.0.0", GO_PARSER_GRAMMAR),
+            (GO_PARSER_BACKEND, "tree-sitter-go-0.0.0"),
+        ] {
+            let moved = LayerCacheKeyParts {
+                toolchain_digest: go_parser_toolchain_digest(backend, grammar),
+                ..key.clone()
+            };
+            assert_ne!(moved, key);
+        }
+    }
+
+    #[test]
+    fn the_per_file_cache_key_carries_the_parser_identity() {
+        let key = go_file_cache_key(&source(), "config", "rule", "plan");
+        assert_eq!(
+            key.parser_identity,
+            format!("{GO_PARSER_BACKEND}+{GO_PARSER_GRAMMAR}")
+        );
     }
 }
