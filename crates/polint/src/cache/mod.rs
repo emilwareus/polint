@@ -94,6 +94,12 @@ pub(crate) struct CacheReadOutcome<T> {
     pub(crate) status: CacheReadStatus,
 }
 
+/// Outcome of reading an entry off disk, before it is interpreted as JSON.
+enum CacheEntryRead {
+    Found { raw: String, path: PathBuf },
+    Absent(CacheReadStatus),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CacheWriteStatus {
     Disabled,
@@ -215,32 +221,12 @@ impl Cache {
     where
         T: for<'de> Deserialize<'de>,
     {
-        if !self.enabled {
-            return CacheReadOutcome {
-                value: None,
-                status: CacheReadStatus::Disabled,
-            };
-        }
-        let path = self.path_for(key);
-        let raw = match self.read_cache_file_to_string(&path) {
-            Ok(Some(raw)) => raw,
-            Ok(None) => {
+        let (raw, path) = match self.read_entry(key) {
+            CacheEntryRead::Found { raw, path } => (raw, path),
+            CacheEntryRead::Absent(status) => {
                 return CacheReadOutcome {
                     value: None,
-                    status: CacheReadStatus::Miss,
-                };
-            }
-            Err(CacheFileAccess::Unsafe) => {
-                return CacheReadOutcome {
-                    value: None,
-                    status: CacheReadStatus::InvalidEvicted,
-                };
-            }
-            Err(CacheFileAccess::ReadFailed(managed_path)) => {
-                evict_file(&managed_path);
-                return CacheReadOutcome {
-                    value: None,
-                    status: CacheReadStatus::InvalidEvicted,
+                    status,
                 };
             }
         };
@@ -255,6 +241,52 @@ impl Cache {
                     value: None,
                     status: CacheReadStatus::InvalidEvicted,
                 }
+            }
+        }
+    }
+
+    /// Hands the stored entry back as raw JSON bytes, so a caller that knows the
+    /// concrete type parses it exactly once instead of going through an
+    /// intermediate [`serde_json::Value`]. The entry is still checked for
+    /// well-formed JSON, and an unparsable one is evicted, so the hit, miss and
+    /// eviction outcomes match [`Cache::read_json_with_status`].
+    pub(crate) fn read_json_bytes_with_status(&self, key: &CacheKey) -> CacheReadOutcome<Vec<u8>> {
+        let (raw, path) = match self.read_entry(key) {
+            CacheEntryRead::Found { raw, path } => (raw, path),
+            CacheEntryRead::Absent(status) => {
+                return CacheReadOutcome {
+                    value: None,
+                    status,
+                };
+            }
+        };
+        match serde_json::from_str::<serde::de::IgnoredAny>(&raw) {
+            Ok(_) => CacheReadOutcome {
+                value: Some(raw.into_bytes()),
+                status: CacheReadStatus::Hit,
+            },
+            Err(_) => {
+                let _ = fs::remove_file(path);
+                CacheReadOutcome {
+                    value: None,
+                    status: CacheReadStatus::InvalidEvicted,
+                }
+            }
+        }
+    }
+
+    fn read_entry(&self, key: &CacheKey) -> CacheEntryRead {
+        if !self.enabled {
+            return CacheEntryRead::Absent(CacheReadStatus::Disabled);
+        }
+        let path = self.path_for(key);
+        match self.read_cache_file_to_string(&path) {
+            Ok(Some(raw)) => CacheEntryRead::Found { raw, path },
+            Ok(None) => CacheEntryRead::Absent(CacheReadStatus::Miss),
+            Err(CacheFileAccess::Unsafe) => CacheEntryRead::Absent(CacheReadStatus::InvalidEvicted),
+            Err(CacheFileAccess::ReadFailed(managed_path)) => {
+                evict_file(&managed_path);
+                CacheEntryRead::Absent(CacheReadStatus::InvalidEvicted)
             }
         }
     }
@@ -1223,6 +1255,50 @@ mod tests {
             fs::write(cache.path_for(&key), "{not-json").unwrap();
 
             let outcome: CacheReadOutcome<serde_json::Value> = cache.read_json_with_status(&key);
+
+            assert_eq!(outcome.status, CacheReadStatus::InvalidEvicted);
+            assert!(outcome.value.is_none());
+            assert!(!cache.path_for(&key).exists());
+        }
+
+        #[test]
+        fn read_json_bytes_with_status_returns_the_stored_bytes_verbatim() {
+            let temp = tempfile::tempdir().unwrap();
+            let cache = Cache::default_for_repo(temp.path(), true);
+            let key = key();
+            let value = json!({ "schema": "go-facts-v1", "items": [1, 2] });
+
+            cache.write_json(&key, &value).unwrap();
+            let outcome = cache.read_json_bytes_with_status(&key);
+
+            assert_eq!(outcome.status, CacheReadStatus::Hit);
+            assert_eq!(outcome.value, Some(fs::read(cache.path_for(&key)).unwrap()));
+        }
+
+        #[test]
+        fn read_json_bytes_with_status_reports_disabled_and_miss_like_the_typed_read() {
+            let temp = tempfile::tempdir().unwrap();
+            let key = key();
+
+            let disabled =
+                Cache::default_for_repo(temp.path(), false).read_json_bytes_with_status(&key);
+            let miss = Cache::default_for_repo(temp.path(), true).read_json_bytes_with_status(&key);
+
+            assert_eq!(disabled.status, CacheReadStatus::Disabled);
+            assert!(disabled.value.is_none());
+            assert_eq!(miss.status, CacheReadStatus::Miss);
+            assert!(miss.value.is_none());
+        }
+
+        #[test]
+        fn read_json_bytes_with_status_evicts_invalid_json() {
+            let temp = tempfile::tempdir().unwrap();
+            let cache = Cache::default_for_repo(temp.path(), true);
+            let key = key();
+            fs::create_dir_all(cache.root()).unwrap();
+            fs::write(cache.path_for(&key), "{not-json").unwrap();
+
+            let outcome = cache.read_json_bytes_with_status(&key);
 
             assert_eq!(outcome.status, CacheReadStatus::InvalidEvicted);
             assert!(outcome.value.is_none());

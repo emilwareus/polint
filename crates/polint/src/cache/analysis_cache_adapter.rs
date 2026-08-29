@@ -40,17 +40,17 @@ impl AnalysisCache for CacheAnalysisCache {
             &key.schema,
             &key.parser_identity,
         );
-        let read = self
-            .cache
-            .read_json_with_status::<serde_json::Value>(&facade_key);
+        let read = self.cache.read_json_bytes_with_status(&facade_key);
         let status = match read.status {
             CacheReadStatus::Disabled => FileCacheReadStatus::Disabled,
             CacheReadStatus::Miss => FileCacheReadStatus::Miss,
             CacheReadStatus::Hit => FileCacheReadStatus::Hit,
             CacheReadStatus::InvalidEvicted => FileCacheReadStatus::InvalidEvicted,
         };
-        let value = read.value.and_then(|value| serde_json::to_vec(&value).ok());
-        FileCacheReadOutcome { status, value }
+        FileCacheReadOutcome {
+            status,
+            value: read.value,
+        }
     }
 
     fn write_file_json(&self, key: &FileCacheKeyParts, bytes: &[u8]) -> Result<(), String> {
