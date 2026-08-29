@@ -348,17 +348,31 @@ fn parse_ts_syntax_layer_payload(
     plan_digest: &str,
     parallel: bool,
 ) -> SyntaxLayerPayload {
-    let mut results = if parallel {
-        files
-            .par_iter()
-            .map(|file| analyze_ts_source_file(file, cache, config_hash, rule_hash, plan_digest))
-            .collect::<Vec<_>>()
-    } else {
-        files
-            .iter()
-            .map(|file| analyze_ts_source_file(file, cache, config_hash, rule_hash, plan_digest))
-            .collect::<Vec<_>>()
+    // One task per file, so the wall clock is bounded by whichever file starts
+    // last and runs longest. Sizes are heavily skewed — a single generated file
+    // can dwarf the rest — so start the biggest first and let the small ones
+    // fill in behind it.
+    let mut schedule = (0..files.len()).collect::<Vec<_>>();
+    schedule.sort_by_key(|&index| std::cmp::Reverse(files[index].source.len()));
+
+    let analyze = |&index: &usize| {
+        (
+            index,
+            analyze_ts_source_file(files[index], cache, config_hash, rule_hash, plan_digest),
+        )
     };
+    let mut scheduled = if parallel {
+        schedule.par_iter().map(analyze).collect::<Vec<_>>()
+    } else {
+        schedule.iter().map(analyze).collect::<Vec<_>>()
+    };
+    // Undo the scheduling order before the payload's own ordering is applied, so
+    // the stored bytes stay a function of the file set alone.
+    scheduled.sort_by_key(|(index, _)| *index);
+    let mut results = scheduled
+        .into_iter()
+        .map(|(_, result)| result)
+        .collect::<Vec<_>>();
     results.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
 
     SyntaxLayerPayload {
@@ -4576,6 +4590,71 @@ mod layer_digest_tests {
         assert_eq!(read.output_digest, Some(from_payload_digest));
 
         std::fs::remove_dir_all(&cache_root).ok();
+    }
+
+    /// Parse scheduling is a wall-clock concern only: the payload must describe
+    /// the same files in the same order whatever order they were parsed in, and
+    /// every entry must still carry its own file's content hash.
+    #[test]
+    fn the_payload_order_does_not_follow_the_parse_schedule() {
+        let mut db = LocalFactDb::new();
+        // Path order is the reverse of size order, so a payload built in
+        // scheduling order would come out backwards.
+        for (path, body) in [
+            ("a.ts", "export function a() {}\n".repeat(8)),
+            ("b.ts", "export function b() {}\n".repeat(4)),
+            ("c.ts", "export function c() {}\n".to_string()),
+        ] {
+            FactDatabase::add_file(
+                &mut db,
+                std::path::PathBuf::from(path),
+                path.to_string(),
+                body,
+            );
+        }
+        let owned = db.files().to_vec();
+        let files = owned.iter().collect::<Vec<_>>();
+
+        let payload = parse_ts_syntax_layer_payload(
+            &files,
+            &DisabledAnalysisCache,
+            "config",
+            "rule",
+            "",
+            true,
+        );
+
+        assert_eq!(
+            payload
+                .files
+                .iter()
+                .map(|file| file.relative_path.as_str())
+                .collect::<Vec<_>>(),
+            ["a.ts", "b.ts", "c.ts"]
+        );
+
+        // The stored blob is the serialized payload, so identical file sets must
+        // serialize identically however the caller ordered them.
+        let reversed = files.iter().rev().copied().collect::<Vec<_>>();
+        let from_reversed = parse_ts_syntax_layer_payload(
+            &reversed,
+            &DisabledAnalysisCache,
+            "config",
+            "rule",
+            "",
+            true,
+        );
+        assert_eq!(
+            serde_json::to_vec(&payload).expect("payload serializes"),
+            serde_json::to_vec(&from_reversed).expect("payload serializes")
+        );
+        for file in &payload.files {
+            let source = owned
+                .iter()
+                .find(|source| source.relative_path == file.relative_path)
+                .expect("payload describes a parsed file");
+            assert_eq!(file.content_hash, source.content_hash);
+        }
     }
 
     /// A blob swapped for a different but well-formed payload must not be
