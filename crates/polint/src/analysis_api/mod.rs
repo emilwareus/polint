@@ -31,7 +31,7 @@ pub use fact_store::{FactStore, FactStoreEntry};
 pub use metadata::{
     FactConfidence, FactFamily, FactMeta, FactMetaInsert, FactMetaStore, FactPrecision, FactRef,
     MissingFactMeta, StableKeyConflict, StableKeyOwner, ValidationStatus, stable_key_from_parts,
-    stable_key_text_from_parts,
+    stable_key_text_from_parts, write_stable_key_text,
 };
 pub use module_facts::{
     ModuleEdge, ModuleEdgeKind, ModuleNode, ModuleNodeKind, ResolutionPrecision, ResolutionStatus,

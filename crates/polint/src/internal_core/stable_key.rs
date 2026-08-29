@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[derive(
     Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, serde::Serialize, serde::Deserialize,
@@ -22,37 +22,73 @@ impl StableKeyId {
     }
 }
 
+/// Interned key texts and their ids.
+///
+/// A [`StableKeyId`] is the index of its text in `keys`, so ids must be handed
+/// out in insertion order and `keys` must stay densely packed: that invariant is
+/// what makes `resolve` a vector index instead of a map lookup. Splitting this
+/// state across shards would break it, because each shard would number its own
+/// keys from zero.
 #[derive(Debug, Default)]
 struct StableKeyInternerState {
     keys: Vec<Arc<str>>,
     ids: HashMap<Arc<str>, StableKeyId>,
 }
 
+impl StableKeyInternerState {
+    /// Appends `key`, returning the id that now indexes it.
+    fn push(&mut self, key: Arc<str>) -> StableKeyId {
+        let id = StableKeyId(
+            u32::try_from(self.keys.len())
+                .unwrap_or_else(|_| panic!("stable-key interner exhausted u32 ids")),
+        );
+        self.keys.push(Arc::clone(&key));
+        self.ids.insert(key, id);
+        id
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct StableKeyInterner {
-    state: Arc<Mutex<StableKeyInternerState>>,
+    state: Arc<RwLock<StableKeyInternerState>>,
 }
 
 impl StableKeyInterner {
-    pub fn intern(&self, key: impl Into<String>) -> StableKeyId {
-        let key = key.into();
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        if let Some(id) = state.ids.get(key.as_str()) {
+    /// Returns the id for `key`, assigning a new one the first time it is seen.
+    ///
+    /// Text already interned is answered under a read lock and without
+    /// allocating, so callers holding a `&str` pay nothing extra on the common
+    /// path; the owned form is only materialized when the key is new.
+    pub fn intern(&self, key: impl AsRef<str> + Into<String>) -> StableKeyId {
+        if let Some(id) = self.read().ids.get(key.as_ref()) {
             return *id;
         }
 
-        let id = StableKeyId(
-            u32::try_from(state.keys.len())
-                .unwrap_or_else(|_| panic!("stable-key interner exhausted u32 ids")),
-        );
-        let key: Arc<str> = key.into();
-        state.keys.push(Arc::clone(&key));
-        state.ids.insert(key, id);
-        id
+        let key = key.into();
+        let mut state = self.write();
+        if let Some(id) = state.ids.get(key.as_str()) {
+            return *id;
+        }
+        state.push(key.into())
+    }
+
+    /// Interns `key` and returns its text in the same lock acquisition.
+    ///
+    /// Callers that need both — every fact-metadata construction does, because
+    /// the stable-key text is hashed into the payload digest — would otherwise
+    /// take the lock twice for one key.
+    pub(crate) fn intern_and_resolve(&self, key: &str) -> (StableKeyId, Arc<str>) {
+        let mut state = self.write();
+        if let Some((text, id)) = state.ids.get_key_value(key) {
+            return (*id, Arc::clone(text));
+        }
+        let text: Arc<str> = Arc::from(key);
+        let id = state.push(Arc::clone(&text));
+        (id, text)
     }
 
     pub fn resolve(&self, id: StableKeyId) -> Arc<str> {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.read();
         Arc::clone(
             state
                 .keys
@@ -61,8 +97,18 @@ impl StableKeyInterner {
         )
     }
 
+    fn read(&self) -> RwLockReadGuard<'_, StableKeyInternerState> {
+        self.state.read().unwrap_or_else(|error| error.into_inner())
+    }
+
+    fn write(&self) -> RwLockWriteGuard<'_, StableKeyInternerState> {
+        self.state
+            .write()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+
     pub fn detached_clone(&self) -> Self {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.read();
         let keys = state.keys.clone();
         let ids = keys
             .iter()
@@ -78,7 +124,7 @@ impl StableKeyInterner {
             })
             .collect();
         Self {
-            state: Arc::new(Mutex::new(StableKeyInternerState { keys, ids })),
+            state: Arc::new(RwLock::new(StableKeyInternerState { keys, ids })),
         }
     }
 }
@@ -111,6 +157,45 @@ mod tests {
 
         assert_eq!(first, second);
         assert_eq!(interner.resolve(first).as_ref(), "stable-key");
+    }
+
+    #[test]
+    fn ids_are_assigned_in_insertion_order_and_index_their_text() {
+        let interner = StableKeyInterner::default();
+
+        let ids = ["first", "second", "third", "second", "first"]
+            .map(|key| interner.intern(key))
+            .to_vec();
+
+        assert_eq!(
+            ids,
+            [
+                StableKeyId(0),
+                StableKeyId(1),
+                StableKeyId(2),
+                StableKeyId(1),
+                StableKeyId(0)
+            ]
+        );
+        for (index, key) in ["first", "second", "third"].iter().enumerate() {
+            let id = StableKeyId(u32::try_from(index).expect("small index"));
+            assert_eq!(interner.resolve(id).as_ref(), *key);
+        }
+    }
+
+    #[test]
+    fn interning_with_the_text_agrees_with_interning_alone() {
+        let interner = StableKeyInterner::default();
+        let existing = interner.intern("existing");
+
+        let (reused, reused_text) = interner.intern_and_resolve("existing");
+        let (fresh, fresh_text) = interner.intern_and_resolve("fresh");
+
+        assert_eq!(reused, existing);
+        assert_eq!(reused_text.as_ref(), "existing");
+        assert_eq!(fresh, StableKeyId(1));
+        assert_eq!(fresh_text.as_ref(), "fresh");
+        assert_eq!(interner.intern("fresh"), fresh);
     }
 
     #[test]
