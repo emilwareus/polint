@@ -23,7 +23,12 @@ use super::keys::{LayerKey, LayerKind, PrecisionTier};
 use crate::cache::stable_hash;
 
 pub(crate) const LAYER_CACHE_MANIFEST_SCHEMA: &str = "polint-layer-cache-manifest-2";
-const LAYER_CACHE_MANIFEST_MAX_BYTES: u64 = 4 * 1_048_576;
+// A manifest lists one dependency edge per tracked input, so on a large repo it
+// is naturally large. The ceiling only bounds how much is read from disk; a
+// manifest above it is treated as unreadable and evicted, which silently makes
+// its layer miss on every subsequent run. It therefore tracks the payload
+// ceiling rather than sitting below it.
+const LAYER_CACHE_MANIFEST_MAX_BYTES: u64 = 64 * 1_048_576;
 const LAYER_CACHE_PAYLOAD_MAX_BYTES: u64 = 64 * 1_048_576;
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 const MANIFEST_LAYER_DEPENDENCY_SOURCE: &str = "__manifest_layer__";
@@ -245,17 +250,23 @@ impl LayerCacheStore {
         T: for<'de> Deserialize<'de>,
         F: FnOnce(&T, &LayerCacheManifest) -> bool,
     {
+        // Validating requires deserializing the payload; keep that value so a hit
+        // does not deserialize the same bytes a second time.
+        let mut validated = None;
         let read = self.read_payload_bytes_validated(key, |payload_bytes, manifest| {
             let Ok(value) = serde_json::from_slice::<T>(payload_bytes) else {
                 return false;
             };
-            validator(&value, manifest)
+            if !validator(&value, manifest) {
+                return false;
+            }
+            validated = Some(value);
+            true
         });
         match read.status {
             LayerCacheReadStatus::Hit => {
-                let payload_bytes = read.value.expect("layer cache hit includes payload bytes");
-                let value = serde_json::from_slice::<T>(&payload_bytes)
-                    .expect("layer cache hit payload was validated as T");
+                let value = validated
+                    .expect("layer cache hit ran the validator, which keeps the parsed payload");
                 LayerCacheReadOutcome {
                     status: LayerCacheReadStatus::Hit,
                     output_digest: read.output_digest,
@@ -1093,6 +1104,49 @@ mod tests {
                 .exists()
         );
         assert!(store.manifest_path_for_test(&layer_key).exists());
+    }
+
+    /// A manifest lists one edge per tracked input, so on a large repo it grows
+    /// past a few megabytes. If the read ceiling rejects it, the manifest is
+    /// evicted and its layer misses on every run from then on, forever.
+    #[test]
+    fn a_manifest_larger_than_four_mebibytes_still_round_trips_to_a_hit() {
+        let scratch = scratch_dir();
+        let store = LayerCacheStore::new(scratch.path().join("layers"), true);
+        let payload = Payload {
+            items: vec!["a".to_string()],
+        };
+        let layer_key = key();
+        let dependencies = (0..8_192)
+            .map(|ordinal| DependencyEdge {
+                from: CacheNode::Layer(layer_key.clone()),
+                to: CacheNode::Input(format!("src/{ordinal:0>1024}.ts")),
+                kind: DependencyKind::Input,
+                required_shape: ShapeKind::Content,
+            })
+            .collect::<Vec<_>>();
+        let manifest = LayerCacheManifest::new(
+            layer_key.clone(),
+            digest(DigestKind::ProviderOutput, "output"),
+            LayerCacheStore::payload_digest_for_json(&payload).expect("payload digest"),
+            dependencies,
+            PrecisionTier::Syntax,
+            "native_trusted",
+            Vec::new(),
+        );
+
+        store.write_json(&manifest, &payload).unwrap();
+        let manifest_bytes = std::fs::metadata(store.manifest_path_for_test(&layer_key))
+            .expect("manifest metadata")
+            .len();
+        let outcome: LayerCacheReadOutcome<Payload> = store.read_json(&layer_key);
+
+        assert!(
+            manifest_bytes > 4 * 1_048_576,
+            "fixture manifest is {manifest_bytes} bytes, too small to exercise the ceiling"
+        );
+        assert_eq!(outcome.status, LayerCacheReadStatus::Hit);
+        assert_eq!(outcome.value, Some(payload));
     }
 
     #[test]

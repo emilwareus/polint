@@ -8,6 +8,7 @@ mod digest;
 mod fact_store;
 mod metadata;
 mod module_facts;
+mod parser_identity;
 mod provider;
 mod source_file;
 mod symbol_facts;
@@ -15,8 +16,8 @@ mod syntax_facts;
 
 pub use cache_api::{
     AnalysisCache, DisabledAnalysisCache, FileCacheKeyParts, FileCacheReadOutcome,
-    FileCacheReadStatus, LayerCacheKeyParts, LayerCacheKind, LayerCachePrecision,
-    LayerCacheReadOutcome, LayerCacheReadStatus, LayerCacheWriteStatus,
+    FileCacheReadStatus, LayerCacheEntryDigests, LayerCacheKeyParts, LayerCacheKind,
+    LayerCachePrecision, LayerCacheReadOutcome, LayerCacheReadStatus, LayerCacheWriteStatus,
 };
 pub use callable_names::{
     ANONYMOUS_CALLABLE_PREFIX, anonymous_callable_name, is_anonymous_callable_name,
@@ -30,11 +31,15 @@ pub use fact_store::{FactStore, FactStoreEntry};
 pub use metadata::{
     FactConfidence, FactFamily, FactMeta, FactMetaInsert, FactMetaStore, FactPrecision, FactRef,
     MissingFactMeta, StableKeyConflict, StableKeyOwner, ValidationStatus, stable_key_from_parts,
-    stable_key_text_from_parts,
+    stable_key_text_from_parts, write_stable_key_text,
 };
 pub use module_facts::{
     ModuleEdge, ModuleEdgeKind, ModuleNode, ModuleNodeKind, ResolutionPrecision, ResolutionStatus,
     ResolvedImportFact, UnresolvedReason,
+};
+pub use parser_identity::{
+    GO_PARSER_BACKEND, GO_PARSER_GRAMMAR, TS_MODULE_RESOLVER, TS_PARSER_BACKEND,
+    engine_parser_identity,
 };
 pub use provider::{
     CachePolicy, CaptureEnrichment, FactDatabase, HostAttachment, NullCaptureEnrichment,

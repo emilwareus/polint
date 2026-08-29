@@ -1,9 +1,10 @@
 use crate::analysis_api::{
     AnalysisCache, CacheStats, CachedFileAnalysis, Digest, DigestKind, DisabledAnalysisCache,
     FactDatabase, FileCacheKeyParts, FileCacheReadStatus, FunctionFact, ImportFact,
-    JsxAttributeFact, LayerCacheKeyParts, LayerCacheKind, LayerCachePrecision,
-    LayerCacheReadStatus, LayerCacheWriteStatus, ProviderRunResult, SourceFile, StringLiteralFact,
-    TS_JS_MODULE_FUNCTION_NAME, TsClassFact, TsComponentFact,
+    JsxAttributeFact, LayerCacheEntryDigests, LayerCacheKeyParts, LayerCacheKind,
+    LayerCachePrecision, LayerCacheReadStatus, LayerCacheWriteStatus, ProviderRunResult,
+    SourceFile, StringLiteralFact, TS_JS_MODULE_FUNCTION_NAME, TS_PARSER_BACKEND, TsClassFact,
+    TsComponentFact,
 };
 use crate::internal_core::{
     Diagnostic, DiagnosticRange as TextRange, FileId, FunctionId, Language, Span,
@@ -145,24 +146,30 @@ pub fn analyze_files_with_plan_options_and_cache_stats(
     }
 
     let layer_key = ts_syntax_layer_key(files, config_hash);
-    let mut validate = |bytes: &[u8], output_digest: Option<&Digest>| -> bool {
-        let Ok(payload) = serde_json::from_slice::<SyntaxLayerPayload>(bytes) else {
-            return false;
+    // The validator parses the blob to check it; keep that payload so a hit does
+    // not deserialize the same bytes a second time.
+    let mut validated_payload: Option<SyntaxLayerPayload> = None;
+    let read = {
+        let mut validate = |bytes: &[u8], digests: LayerCacheEntryDigests<'_>| -> bool {
+            let Ok(payload) = serde_json::from_slice::<SyntaxLayerPayload>(bytes) else {
+                return false;
+            };
+            if !validate_syntax_layer_payload(&payload, digests, TS_SYNTAX_LAYER_SCHEMA, files) {
+                return false;
+            }
+            validated_payload = Some(payload);
+            true
         };
-        validate_syntax_layer_payload(&payload, output_digest, TS_SYNTAX_LAYER_SCHEMA, files)
+        cache.read_layer_json(&layer_key, &mut validate)
     };
-    let read = cache.read_layer_json(&layer_key, &mut validate);
 
     match read.status {
         LayerCacheReadStatus::Hit => {
             cache_stats.record_hit();
             cache_stats.record_verified_reuse();
-            let payload = serde_json::from_slice::<SyntaxLayerPayload>(
-                &read
-                    .value
-                    .expect("layer cache hit should include syntax payload"),
-            )
-            .expect("layer cache hit payload validated");
+            let payload = validated_payload
+                .take()
+                .expect("layer cache hit ran the validator, which keeps the parsed payload");
             ProviderRunResult {
                 diagnostics: restore_syntax_layer_payload(db, payload),
                 cache_stats,
@@ -253,13 +260,20 @@ fn ts_syntax_layer_key(files: &[&SourceFile], config_hash: &str) -> LayerCacheKe
         parameter_digest: parser_parameter_digest(files),
         lifecycle_digest: Digest::absent(DigestKind::TsJsLifecycle, "ts_syntax_lifecycle_absent"),
         config_digest: Digest::from_parts(DigestKind::Config, "config_hash", &[config_hash]),
-        toolchain_digest: Digest::from_parts(
-            DigestKind::ToolInvocation,
-            "ts_syntax_parser_toolchain",
-            &[env!("CARGO_PKG_VERSION")],
-        ),
+        toolchain_digest: ts_parser_toolchain_digest(TS_PARSER_BACKEND),
         input_digests: files.iter().map(|file| source_text_digest(file)).collect(),
     }
+}
+
+/// Identity of the toolchain that produced a TypeScript syntax layer: this engine
+/// plus the parser it links. Facts are only reusable when both still match, so
+/// both belong in the key rather than the engine version alone.
+fn ts_parser_toolchain_digest(backend: &str) -> Digest {
+    Digest::from_parts(
+        DigestKind::ToolInvocation,
+        "ts_syntax_parser_toolchain",
+        &[env!("CARGO_PKG_VERSION"), backend],
+    )
 }
 
 fn source_text_digest(file: &SourceFile) -> Digest {
@@ -291,9 +305,16 @@ fn parser_parameter_digest(files: &[&SourceFile]) -> Digest {
     )
 }
 
+/// Accepts a cached payload when it describes exactly `files` and its recorded
+/// output digest matches the one the write path would have produced.
+///
+/// The write path derives the output digest from the payload digest, and a cache
+/// verifies the payload digest against the stored blob before calling this, so
+/// deriving it again here is exact — no re-serialization, and no assumption that
+/// re-encoding the parsed payload reproduces the original bytes.
 fn validate_syntax_layer_payload(
     payload: &SyntaxLayerPayload,
-    output_digest: Option<&Digest>,
+    digests: LayerCacheEntryDigests<'_>,
     schema: &str,
     files: &[&SourceFile],
 ) -> bool {
@@ -311,8 +332,12 @@ fn validate_syntax_layer_payload(
         .map(|file| (file.relative_path.as_str(), file.content_hash.as_str()))
         .collect::<Vec<_>>();
     actual == expected
-        && output_digest
-            .is_some_and(|digest| digest == &ts_syntax_output_digest_for_payload(payload))
+        && match (digests.output, digests.payload) {
+            (Some(output_digest), Some(payload_digest)) => {
+                output_digest == &ts_syntax_output_digest(payload_digest)
+            }
+            _ => false,
+        }
 }
 
 fn parse_ts_syntax_layer_payload(
@@ -425,6 +450,11 @@ fn write_syntax_layer_payload(
     Some(output_digest)
 }
 
+/// Recomputes the output digest the long way, by re-serializing the payload.
+///
+/// Only used to prove that the derivation in [`validate_syntax_layer_payload`]
+/// agrees with what the write path recorded.
+#[cfg(test)]
 fn ts_syntax_output_digest_for_payload(payload: &SyntaxLayerPayload) -> Digest {
     let payload_bytes = serde_json::to_vec(payload).unwrap_or_default();
     let payload_digest = DisabledAnalysisCache
@@ -441,6 +471,23 @@ fn ts_syntax_output_digest(payload_digest: &Digest) -> Digest {
     )
 }
 
+fn ts_file_cache_key(
+    file: &SourceFile,
+    config_hash: &str,
+    rule_hash: &str,
+    plan_hash: &str,
+) -> FileCacheKeyParts {
+    FileCacheKeyParts {
+        relative_path: file.relative_path.clone(),
+        content_hash: file.content_hash.clone(),
+        config_hash: config_hash.to_string(),
+        rule_hash: rule_hash.to_string(),
+        plan_hash: plan_hash.to_string(),
+        schema: TS_CACHE_SCHEMA.to_string(),
+        parser_identity: TS_PARSER_BACKEND.to_string(),
+    }
+}
+
 fn analyze_ts_source_file(
     file: &SourceFile,
     cache: &dyn AnalysisCache,
@@ -448,14 +495,7 @@ fn analyze_ts_source_file(
     rule_hash: &str,
     plan_hash: &str,
 ) -> TsFileAnalysis {
-    let key = FileCacheKeyParts {
-        relative_path: file.relative_path.clone(),
-        content_hash: file.content_hash.clone(),
-        config_hash: config_hash.to_string(),
-        rule_hash: rule_hash.to_string(),
-        plan_hash: plan_hash.to_string(),
-        schema: TS_CACHE_SCHEMA.to_string(),
-    };
+    let key = ts_file_cache_key(file, config_hash, rule_hash, plan_hash);
     let read = cache.read_file_json(&key);
     if read.status == FileCacheReadStatus::Hit
         && let Some(bytes) = read.value
@@ -4406,5 +4446,188 @@ fn expression_static_value(expression: &Expression<'_>) -> Option<String> {
         }
         Expression::TSTypeAssertion(expression) => expression_static_value(&expression.expression),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod parser_identity_tests {
+    use super::*;
+
+    fn source() -> SourceFile {
+        SourceFile::new(
+            FileId::from_raw(0),
+            std::path::PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            Language::TypeScript,
+            "export {};\n".into(),
+            "0123456789abcdef".to_string(),
+        )
+    }
+
+    /// The parser label is a compile-time constant, so the guard is on the
+    /// derivation: the layer key's toolchain component must be exactly the one
+    /// built from the live label, and must move when the label moves.
+    #[test]
+    fn a_changed_parser_label_changes_the_ts_syntax_layer_key() {
+        let file = source();
+        let key = ts_syntax_layer_key(&[&file], "config");
+
+        assert_eq!(
+            key.toolchain_digest,
+            ts_parser_toolchain_digest(TS_PARSER_BACKEND)
+        );
+        let moved = LayerCacheKeyParts {
+            toolchain_digest: ts_parser_toolchain_digest("oxc-0.0.0"),
+            ..key.clone()
+        };
+        assert_ne!(moved, key);
+    }
+
+    #[test]
+    fn the_per_file_cache_key_carries_the_parser_identity() {
+        let key = ts_file_cache_key(&source(), "config", "rule", "plan");
+        assert_eq!(key.parser_identity, TS_PARSER_BACKEND);
+    }
+}
+
+#[cfg(test)]
+mod layer_digest_tests {
+    use super::*;
+    use crate::ts::local_db::LocalFactDb;
+    use crate::ts::test_cache::FsAnalysisCache;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static CACHE_ROOT_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn unique_cache_root() -> std::path::PathBuf {
+        let sequence = CACHE_ROOT_COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "polint-ts-layer-digest-{}-{sequence}",
+            std::process::id()
+        ))
+    }
+
+    fn payload_for(source: &str) -> (LocalFactDb, SyntaxLayerPayload) {
+        let mut db = LocalFactDb::new();
+        FactDatabase::add_file(
+            &mut db,
+            std::path::PathBuf::from("main.ts"),
+            "main.ts".to_string(),
+            source.to_string(),
+        );
+        let owned = db.files().to_vec();
+        let files = owned.iter().collect::<Vec<_>>();
+        let payload = parse_ts_syntax_layer_payload(
+            &files,
+            &DisabledAnalysisCache,
+            "config",
+            "rule",
+            "",
+            false,
+        );
+        (db, payload)
+    }
+
+    /// The read path derives the output digest from the payload digest the cache
+    /// already verified against the blob. Prove that derivation agrees with the
+    /// re-serializing one across a real write-then-read round trip.
+    #[test]
+    fn the_output_digest_derived_from_the_payload_digest_matches_reserialization() {
+        let cache_root = unique_cache_root();
+        let cache = FsAnalysisCache::new(cache_root.join("analysis"), true);
+        let (db, payload) = payload_for("package main\nfunc main() {}\n");
+        let owned = db.files().to_vec();
+        let files = owned.iter().collect::<Vec<_>>();
+        let layer_key = ts_syntax_layer_key(&files, "config");
+
+        let mut stats = CacheStats::default();
+        let mut write_diagnostics = Vec::new();
+        let written = write_syntax_layer_payload(
+            &cache,
+            &layer_key,
+            &payload,
+            &mut stats,
+            &mut write_diagnostics,
+        )
+        .expect("layer cache write records an output digest");
+        assert!(write_diagnostics.is_empty());
+
+        let mut derivations = None;
+        let read = {
+            let mut validate = |bytes: &[u8], digests: LayerCacheEntryDigests<'_>| -> bool {
+                let payload = serde_json::from_slice::<SyntaxLayerPayload>(bytes)
+                    .expect("written payload parses");
+                derivations = Some((
+                    ts_syntax_output_digest(
+                        digests.payload.expect("the cache records a payload digest"),
+                    ),
+                    ts_syntax_output_digest_for_payload(&payload),
+                ));
+                validate_syntax_layer_payload(&payload, digests, TS_SYNTAX_LAYER_SCHEMA, &files)
+            };
+            cache.read_layer_json(&layer_key, &mut validate)
+        };
+
+        assert_eq!(read.status, LayerCacheReadStatus::Hit);
+        let (from_payload_digest, from_reserialization) =
+            derivations.expect("a hit runs the validator");
+        assert_eq!(from_payload_digest, from_reserialization);
+        assert_eq!(read.output_digest, Some(written));
+        assert_eq!(read.output_digest, Some(from_payload_digest));
+
+        std::fs::remove_dir_all(&cache_root).ok();
+    }
+
+    /// A blob swapped for a different but well-formed payload must not be
+    /// accepted: the payload-digest gate has to fire before the validator sees
+    /// bytes the manifest does not describe.
+    #[test]
+    fn a_substituted_payload_is_evicted_rather_than_reused() {
+        let cache_root = unique_cache_root();
+        let cache = FsAnalysisCache::new(cache_root.join("analysis"), true);
+        let (db, payload) = payload_for("package main\nfunc main() {}\n");
+        let owned = db.files().to_vec();
+        let files = owned.iter().collect::<Vec<_>>();
+        let layer_key = ts_syntax_layer_key(&files, "config");
+
+        let mut stats = CacheStats::default();
+        let mut write_diagnostics = Vec::new();
+        write_syntax_layer_payload(
+            &cache,
+            &layer_key,
+            &payload,
+            &mut stats,
+            &mut write_diagnostics,
+        )
+        .expect("layer cache write records an output digest");
+
+        let (_, other) = payload_for("package main\nfunc other() {}\n");
+        let payload_bytes = serde_json::to_vec(&payload).expect("payload serializes");
+        let payload_digest = DisabledAnalysisCache
+            .payload_digest_for_json_bytes(&payload_bytes)
+            .expect("payload digest");
+        let blob = cache_root
+            .join("layers")
+            .join("blobs")
+            .join(format!("{}.json", payload_digest.value));
+        std::fs::write(
+            &blob,
+            serde_json::to_vec(&other).expect("substitute payload serializes"),
+        )
+        .expect("write substituted blob");
+
+        let read = {
+            let mut validate = |bytes: &[u8], digests: LayerCacheEntryDigests<'_>| -> bool {
+                let Ok(payload) = serde_json::from_slice::<SyntaxLayerPayload>(bytes) else {
+                    return false;
+                };
+                validate_syntax_layer_payload(&payload, digests, TS_SYNTAX_LAYER_SCHEMA, &files)
+            };
+            cache.read_layer_json(&layer_key, &mut validate)
+        };
+
+        assert_eq!(read.status, LayerCacheReadStatus::InvalidEvicted);
+
+        std::fs::remove_dir_all(&cache_root).ok();
     }
 }

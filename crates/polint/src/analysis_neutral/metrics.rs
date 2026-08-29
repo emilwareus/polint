@@ -147,6 +147,11 @@ pub fn sorted_functions(db: &(impl AnalysisHost + ?Sized)) -> Vec<&FunctionFact>
 }
 
 /// Return a cache-stable digest for the metric projection parameters.
+///
+/// The `dependency-edges` component names the shape of the dependency edges the
+/// metrics layer writes into its manifest. Bumping it retires manifests written
+/// under the previous shape in one deterministic regeneration instead of leaving
+/// them to linger until something else invalidates the layer.
 pub fn metrics_parameter_digest() -> crate::analysis_api::Digest {
     crate::analysis_api::Digest::from_parts(
         crate::analysis_api::DigestKind::ProviderParameters,
@@ -155,6 +160,7 @@ pub fn metrics_parameter_digest() -> crate::analysis_api::Digest {
             "output=file_metrics",
             "output=function_metrics",
             "output=complexity_metrics",
+            "dependency-edges=v2",
         ],
     )
 }

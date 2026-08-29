@@ -454,39 +454,86 @@ impl FactMetaStore {
     }
 }
 
-pub fn stable_key_from_parts(
+pub fn stable_key_from_parts<V: AsRef<str>>(
     interner: &StableKeyInterner,
     family: FactFamily,
-    parts: &[(&str, String)],
+    parts: &[(&str, V)],
 ) -> StableKeyId {
-    let mut normalized = parts
+    let mut borrowed = parts
         .iter()
-        .map(|(label, value)| (*label, value.replace('\\', "/")))
+        .map(|(label, value)| (*label, value.as_ref()))
         .collect::<Vec<_>>();
-    normalized.sort_by(|left, right| left.0.cmp(right.0));
-
-    let mut key = length_prefixed(family.label());
-    for (label, value) in normalized {
-        key.push('|');
-        key.push_str(&length_prefixed(label));
-        key.push('=');
-        key.push_str(&length_prefixed(&value));
-    }
-    interner.intern(key)
+    let mut text = String::new();
+    write_stable_key_text(&mut text, family, &mut borrowed);
+    interner.intern(text)
 }
 
-pub fn stable_key_text_from_parts(
+pub fn stable_key_text_from_parts<V: AsRef<str>>(
     interner: &StableKeyInterner,
     family: FactFamily,
-    parts: &[(&str, String)],
+    parts: &[(&str, V)],
 ) -> String {
     interner
         .resolve(stable_key_from_parts(interner, family, parts))
         .to_string()
 }
 
-fn length_prefixed(value: &str) -> String {
-    format!("{}:{value}", value.len())
+/// Writes the canonical stable-key text for `family` and `parts` into `buffer`,
+/// replacing whatever it held.
+///
+/// `parts` is sorted in place because the key must not depend on the order a
+/// caller listed its parts in. Every label and value is length-prefixed so no
+/// value can forge a delimiter, and `\` is folded to `/` in values so a key does
+/// not depend on the host's path separator.
+///
+/// Callers reuse one buffer across many facts; the text is only copied when a
+/// key turns out to be new.
+pub fn write_stable_key_text(buffer: &mut String, family: FactFamily, parts: &mut [(&str, &str)]) {
+    parts.sort_by(|left, right| left.0.cmp(right.0));
+
+    buffer.clear();
+    push_length_prefixed(buffer, family.label());
+    for (label, value) in parts.iter() {
+        buffer.push('|');
+        push_length_prefixed(buffer, label);
+        buffer.push('=');
+        push_length_prefixed_path(buffer, value);
+    }
+}
+
+fn push_length_prefixed(buffer: &mut String, value: &str) {
+    push_decimal(buffer, value.len());
+    buffer.push(':');
+    buffer.push_str(value);
+}
+
+/// Like [`push_length_prefixed`], folding `\` to `/`. The fold is byte-for-byte,
+/// so the length prefix is the same either way.
+fn push_length_prefixed_path(buffer: &mut String, value: &str) {
+    push_decimal(buffer, value.len());
+    buffer.push(':');
+    let mut rest = value;
+    while let Some(index) = rest.find('\\') {
+        buffer.push_str(&rest[..index]);
+        buffer.push('/');
+        rest = &rest[index + 1..];
+    }
+    buffer.push_str(rest);
+}
+
+fn push_decimal(buffer: &mut String, value: usize) {
+    let mut digits = [0_u8; 20];
+    let mut index = digits.len();
+    let mut value = value;
+    loop {
+        index -= 1;
+        digits[index] = b'0' + u8::try_from(value % 10).expect("a decimal digit fits in a byte");
+        value /= 10;
+        if value == 0 {
+            break;
+        }
+    }
+    buffer.push_str(std::str::from_utf8(&digits[index..]).expect("decimal digits are ASCII"));
 }
 
 #[cfg(test)]
@@ -509,6 +556,28 @@ mod tests {
 
         assert_eq!(reference.run_id, 7);
         assert_eq!(metadata.stable_key, stable_key_for_test("import:stable"));
+    }
+
+    /// The exact bytes matter: this text is interned as a fact's stable key and
+    /// hashed into its payload digest, both of which reach reports.
+    #[test]
+    fn stable_key_text_is_length_prefixed_sorted_and_path_normalized() {
+        let mut text = String::from("left over from an earlier fact");
+
+        write_stable_key_text(
+            &mut text,
+            FactFamily::Import,
+            &mut [
+                ("path", "src\\main.go"),
+                ("import_path", "fmt"),
+                ("path", "b"),
+            ],
+        );
+
+        assert_eq!(
+            text,
+            "6:Import|11:import_path=3:fmt|4:path=11:src/main.go|4:path=1:b"
+        );
     }
 
     #[test]

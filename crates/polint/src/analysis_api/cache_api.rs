@@ -14,6 +14,10 @@ pub struct FileCacheKeyParts {
     pub rule_hash: String,
     pub plan_hash: String,
     pub schema: String,
+    /// Parser that produced the cached facts (see [`crate::analysis_api::GO_PARSER_BACKEND`]).
+    /// Cached facts are only interchangeable with freshly parsed ones when the
+    /// parser matches, so it is part of the identity of the entry.
+    pub parser_identity: String,
 }
 
 /// Layer-cache identity parts used by syntax frontends.
@@ -66,6 +70,18 @@ pub struct LayerCacheReadOutcome {
     pub value: Option<Vec<u8>>,
 }
 
+/// Digests a cache recorded for the entry a read validator is inspecting.
+///
+/// `payload` is the digest of the very bytes handed to the validator: a cache
+/// verifies it against the stored blob before running the validator, so a
+/// validator can derive the expected output digest from it instead of
+/// re-serializing the payload it just parsed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LayerCacheEntryDigests<'a> {
+    pub output: Option<&'a Digest>,
+    pub payload: Option<&'a Digest>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LayerCacheWriteStatus {
     Written,
@@ -87,7 +103,7 @@ pub trait AnalysisCache: Send + Sync {
     fn read_layer_json(
         &self,
         key: &LayerCacheKeyParts,
-        validate: &mut dyn FnMut(&[u8], Option<&Digest>) -> bool,
+        validate: &mut dyn FnMut(&[u8], LayerCacheEntryDigests<'_>) -> bool,
     ) -> LayerCacheReadOutcome;
 
     fn write_layer_json(
@@ -122,7 +138,7 @@ impl AnalysisCache for DisabledAnalysisCache {
     fn read_layer_json(
         &self,
         _key: &LayerCacheKeyParts,
-        _validate: &mut dyn FnMut(&[u8], Option<&Digest>) -> bool,
+        _validate: &mut dyn FnMut(&[u8], LayerCacheEntryDigests<'_>) -> bool,
     ) -> LayerCacheReadOutcome {
         LayerCacheReadOutcome {
             status: LayerCacheReadStatus::BypassedDisabled,

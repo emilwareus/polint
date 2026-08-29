@@ -3,6 +3,7 @@ use super::outcome::ProviderOutcomeError;
 use super::{
     ProviderManifest, ProviderOutcome, ProviderOutcomeStatus, ProviderOutputIdentity, provider,
 };
+use crate::analysis_api::{GO_PARSER_BACKEND, GO_PARSER_GRAMMAR};
 use crate::core::{AnalysisDb, FileId, FunctionId, Language, SourceFile, Span};
 use crate::diagnostics::{Diagnostic, TextRange};
 use std::collections::{BTreeMap, BTreeSet};
@@ -11,15 +12,6 @@ use std::path::Path;
 const MAX_GO_ROWS: usize = 1_000_000;
 pub(crate) const GO_FACT_SCHEMA: &str = "go-facts-v2";
 pub(crate) const GO_PAYLOAD_SCHEMA: &str = "go-syntax-layer-v1";
-// These label the parser that produced a cached/persisted Go syntax layer, so
-// they must track the resolved dependency versions exactly: a stale label lets
-// a grammar change reuse facts parsed by the previous grammar. They are also
-// pinned by `CHECK` constraints in the semantic-store schema, so bumping either
-// dependency needs this constant *and* a new store migration.
-// `go_parser_identity_tracks_the_resolved_dependency_versions` enforces the
-// first half against `Cargo.lock`.
-pub(crate) const GO_PARSER_BACKEND: &str = "tree-sitter-0.26.8";
-pub(crate) const GO_PARSER_GRAMMAR: &str = "tree-sitter-go-0.25.0";
 
 fn ensure_capacity(
     count: usize,
@@ -146,7 +138,7 @@ impl CanonicalGoSyntaxOutput {
             if fact.language != Language::Go || !fact.calls.is_sorted() {
                 return Err(GoSyntaxProjectionError::Output);
             }
-            let span = canonical_span(&fact.span, source)?;
+            let span = canonical_span(&fact.span, source, context.line_count(fact.file)?)?;
             let row = row_digest("function", |row| {
                 append_path_span(row, &source.relative_path, span);
                 row.field("name", &fact.name);
@@ -174,7 +166,7 @@ impl CanonicalGoSyntaxOutput {
             if fact.language != Language::Go {
                 return Err(GoSyntaxProjectionError::Output);
             }
-            let span = canonical_span(&fact.span, source)?;
+            let span = canonical_span(&fact.span, source, context.line_count(fact.file)?)?;
             packages.push(row_digest("package", |row| {
                 append_path_span(row, &source.relative_path, span);
                 row.field("name", &fact.name);
@@ -188,7 +180,7 @@ impl CanonicalGoSyntaxOutput {
             if fact.language != Language::Go {
                 return Err(GoSyntaxProjectionError::Output);
             }
-            let span = canonical_span(&fact.span, source)?;
+            let span = canonical_span(&fact.span, source, context.line_count(fact.file)?)?;
             imports.push(row_digest("import", |row| {
                 append_path_span(row, &source.relative_path, span);
                 row.field("package", fact.package.as_deref().unwrap_or(""));
@@ -200,7 +192,7 @@ impl CanonicalGoSyntaxOutput {
         for fact in db.tests().iter().filter(|fact| context.owns(fact.file)) {
             ensure_capacity(tests.len(), GoSyntaxProjectionError::Output)?;
             let source = context.source(fact.file)?;
-            let span = canonical_span(&fact.span, source)?;
+            let span = canonical_span(&fact.span, source, context.line_count(fact.file)?)?;
             let function = function_ref(fact.function, fact.file, span, true, &functions)?;
             tests.push(row_digest("test", |row| {
                 append_path_span(row, &source.relative_path, span);
@@ -221,7 +213,7 @@ impl CanonicalGoSyntaxOutput {
         for fact in db.branches().iter().filter(|fact| context.owns(fact.file)) {
             ensure_capacity(branches.len(), GoSyntaxProjectionError::Output)?;
             let source = context.source(fact.file)?;
-            let span = canonical_span(&fact.decision_span, source)?;
+            let span = canonical_span(&fact.decision_span, source, context.line_count(fact.file)?)?;
             let function = function_ref(fact.function, fact.file, span, false, &functions)?;
             branches.push(row_digest("branch", |row| {
                 append_path_span(row, &source.relative_path, span);
@@ -243,7 +235,7 @@ impl CanonicalGoSyntaxOutput {
             if fact.language != Language::Go {
                 return Err(GoSyntaxProjectionError::Output);
             }
-            let span = canonical_span(&fact.span, source)?;
+            let span = canonical_span(&fact.span, source, context.line_count(fact.file)?)?;
             literals.push(row_digest("string-literal", |row| {
                 append_path_span(row, &source.relative_path, span);
                 row.field("value", &fact.value);
@@ -399,6 +391,13 @@ pub(crate) enum GoSyntaxProjectionError {
 struct GoContext<'a> {
     files: BTreeMap<FileId, &'a SourceFile>,
     paths: BTreeMap<&'a str, &'a SourceFile>,
+    /// Line count per owned file, counted once here rather than per fact.
+    ///
+    /// Span validation needs the count for every fact, and every fact belongs to
+    /// a file this context already owns, so the whole set is derived up front.
+    /// The count is a pure function of the immutable source text, which makes the
+    /// memo indistinguishable from recounting at each use.
+    line_counts: BTreeMap<FileId, u32>,
 }
 
 impl<'a> GoContext<'a> {
@@ -411,6 +410,7 @@ impl<'a> GoContext<'a> {
             .collect::<BTreeSet<_>>();
         let mut files = BTreeMap::new();
         let mut paths = BTreeMap::new();
+        let mut line_counts = BTreeMap::new();
         for file in db
             .files()
             .iter()
@@ -422,14 +422,27 @@ impl<'a> GoContext<'a> {
             {
                 return Err(GoSyntaxProjectionError::Source);
             }
+            let lines = u32::try_from(file.source.lines().count())
+                .map_err(|_| GoSyntaxProjectionError::Output)?;
+            line_counts.insert(file.id, lines);
         }
-        Ok(Self { files, paths })
+        Ok(Self {
+            files,
+            paths,
+            line_counts,
+        })
     }
     fn owns(&self, file: FileId) -> bool {
         self.files.contains_key(&file)
     }
     fn source(&self, file: FileId) -> Result<&'a SourceFile, GoSyntaxProjectionError> {
         self.files
+            .get(&file)
+            .copied()
+            .ok_or(GoSyntaxProjectionError::Output)
+    }
+    fn line_count(&self, file: FileId) -> Result<u32, GoSyntaxProjectionError> {
+        self.line_counts
             .get(&file)
             .copied()
             .ok_or(GoSyntaxProjectionError::Output)
@@ -450,12 +463,15 @@ struct FunctionOccurrence {
     span: CanonicalSpan,
 }
 
+/// Validate `span` against `source` and reduce it to its canonical tuple.
+///
+/// `line_count` must be the line count of `source`; it is passed in because the
+/// caller holds it for every owned file already.
 fn canonical_span(
     span: &Span,
     source: &SourceFile,
+    line_count: u32,
 ) -> Result<CanonicalSpan, GoSyntaxProjectionError> {
-    let line_count = u32::try_from(source.source.lines().count())
-        .map_err(|_| GoSyntaxProjectionError::Output)?;
     if span.file != source.id
         || span.start_byte > span.end_byte
         || usize::try_from(span.end_byte).map_or(true, |end| end > source.source.len())
@@ -709,51 +725,43 @@ mod tests {
         db.push_function(function_fact(file, "f0".into(), span));
         assert_eq!((unique, CanonicalGoSyntaxOutput::from_db(&db, &[]).is_err()), (true, true));
     }
-    /// The backend/grammar labels are hand-written strings. If they drift from
-    /// the resolved dependency versions, a grammar bump silently keeps the same
-    /// provider identity and layer-cache key, so facts parsed by the previous
-    /// grammar are reused as if current.
+    /// The memoized line count must agree with counting the source at each use,
+    /// and each fact must be validated against *its own* file, not whichever file
+    /// happens to be longest in the projection.
     #[test]
-    fn go_parser_identity_tracks_the_resolved_dependency_versions() {
-        let lock = std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .and_then(Path::parent)
-                .expect("workspace root")
-                .join("Cargo.lock"),
-        )
-        .expect("Cargo.lock is readable");
-        let resolved = |crate_name: &str| {
-            lock.split("[[package]]")
-                .find_map(|block| {
-                    let mut lines = block.lines().filter_map(|line| line.split_once(" = "));
-                    let name = lines
-                        .clone()
-                        .find(|(key, _)| *key == "name")?
-                        .1
-                        .trim_matches('"');
-                    (name == crate_name).then(|| {
-                        lines
-                            .find(|(key, _)| *key == "version")
-                            .expect("locked package has a version")
-                            .1
-                            .trim_matches('"')
-                            .to_string()
-                    })
-                })
-                .unwrap_or_else(|| panic!("{crate_name} is not in Cargo.lock"))
-        };
-        for (label, crate_name, constant) in [
-            ("backend", "tree-sitter", GO_PARSER_BACKEND),
-            ("grammar", "tree-sitter-go", GO_PARSER_GRAMMAR),
-        ] {
+    fn line_counts_are_memoized_per_file_and_match_a_per_fact_recount() {
+        let mut db = AnalysisDb::new();
+        let short = db.add_file("short.go".into(), "short.go".into(), "package a\n".into());
+        let long = db.add_file(
+            "long.go".into(),
+            "long.go".into(),
+            "package b\nconst x = 1\nconst y = 2\n".into(),
+        );
+        db.push_function(function_fact(short, "A".into(), Span::point(short, 1, 1)));
+        db.push_function(function_fact(long, "B".into(), Span::point(long, 3, 1)));
+        let context = GoContext::new(&db).expect("context");
+        for fact in db.functions() {
+            let source = context.source(fact.file).expect("owned source");
+            let recounted =
+                u32::try_from(source.source.lines().count()).expect("line count fits in u32");
+            assert_eq!(context.line_count(fact.file).expect("memo"), recounted);
             assert_eq!(
-                constant,
-                format!("{crate_name}-{}", resolved(crate_name)),
-                "the Go parser {label} label drifted from the locked {crate_name} version; \
-                 update the constant and add a semantic-store migration for the new CHECK value"
+                canonical_span(
+                    &fact.span,
+                    source,
+                    context.line_count(fact.file).expect("memo")
+                )
+                .expect("memoized span"),
+                canonical_span(&fact.span, source, recounted).expect("recounted span"),
             );
         }
+        assert!(CanonicalGoSyntaxOutput::from_db(&db, &[]).is_ok());
+
+        // A span past the short file's last line stays invalid even though the
+        // longer file in the same projection would admit it.
+        let mut beyond = db.clone();
+        beyond.push_function(function_fact(short, "C".into(), Span::point(short, 3, 1)));
+        assert!(CanonicalGoSyntaxOutput::from_db(&beyond, &[]).is_err());
     }
 
     #[test]

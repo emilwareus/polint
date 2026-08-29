@@ -57,7 +57,9 @@ pub(crate) fn with_module_graph_stable_keys<T>(
     })
 }
 
-pub(crate) fn intern_module_graph_stable_key(key: impl Into<String>) -> crate::core::StableKeyId {
+pub(crate) fn intern_module_graph_stable_key(
+    key: impl AsRef<str> + Into<String>,
+) -> crate::core::StableKeyId {
     MODULE_GRAPH_STABLE_KEYS.with(|slot| {
         slot.borrow()
             .as_ref()

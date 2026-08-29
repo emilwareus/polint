@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use crate::analysis_api::{
     AnalysisCache, Digest, FileCacheKeyParts, FileCacheReadOutcome, FileCacheReadStatus,
-    LayerCacheKeyParts, LayerCacheKind, LayerCachePrecision, LayerCacheReadOutcome,
-    LayerCacheReadStatus, LayerCacheWriteStatus,
+    LayerCacheEntryDigests, LayerCacheKeyParts, LayerCacheKind, LayerCachePrecision,
+    LayerCacheReadOutcome, LayerCacheReadStatus, LayerCacheWriteStatus,
 };
 
 use crate::analysis_kernel::incremental::{
@@ -38,18 +38,19 @@ impl AnalysisCache for CacheAnalysisCache {
             &key.rule_hash,
             &key.plan_hash,
             &key.schema,
+            &key.parser_identity,
         );
-        let read = self
-            .cache
-            .read_json_with_status::<serde_json::Value>(&facade_key);
+        let read = self.cache.read_json_bytes_with_status(&facade_key);
         let status = match read.status {
             CacheReadStatus::Disabled => FileCacheReadStatus::Disabled,
             CacheReadStatus::Miss => FileCacheReadStatus::Miss,
             CacheReadStatus::Hit => FileCacheReadStatus::Hit,
             CacheReadStatus::InvalidEvicted => FileCacheReadStatus::InvalidEvicted,
         };
-        let value = read.value.and_then(|value| serde_json::to_vec(&value).ok());
-        FileCacheReadOutcome { status, value }
+        FileCacheReadOutcome {
+            status,
+            value: read.value,
+        }
     }
 
     fn write_file_json(&self, key: &FileCacheKeyParts, bytes: &[u8]) -> Result<(), String> {
@@ -60,6 +61,7 @@ impl AnalysisCache for CacheAnalysisCache {
             &key.rule_hash,
             &key.plan_hash,
             &key.schema,
+            &key.parser_identity,
         );
         let value: serde_json::Value =
             serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
@@ -71,12 +73,18 @@ impl AnalysisCache for CacheAnalysisCache {
     fn read_layer_json(
         &self,
         key: &LayerCacheKeyParts,
-        validate: &mut dyn FnMut(&[u8], Option<&Digest>) -> bool,
+        validate: &mut dyn FnMut(&[u8], LayerCacheEntryDigests<'_>) -> bool,
     ) -> LayerCacheReadOutcome {
         let layer_key = to_layer_key(key);
         let store = self.cache.layer_cache_store();
         let read = store.read_json_bytes_validated(&layer_key, |bytes, manifest| {
-            validate(bytes, Some(&manifest.output_digest))
+            validate(
+                bytes,
+                LayerCacheEntryDigests {
+                    output: Some(&manifest.output_digest),
+                    payload: Some(&manifest.payload_digest),
+                },
+            )
         });
         let status = match read.status {
             FacadeLayerReadStatus::Hit => LayerCacheReadStatus::Hit,

@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::digest::{Digest, DigestKind};
+use crate::analysis_api::TS_MODULE_RESOLVER;
 use crate::analysis_kernel::ProviderManifest;
 use crate::cache::{CACHE_VERSION, CacheKey};
 use crate::core::AnalysisDb;
@@ -34,6 +35,14 @@ pub(crate) const MODULE_GRAPH_TOPOLOGY_INPUT_FILE_NAMES: &[&str] = &[
     "bun.lock",
     "tsconfig.json",
 ];
+
+fn module_graph_toolchain_digest(resolver: &str) -> Digest {
+    Digest::from_parts(
+        DigestKind::ToolInvocation,
+        "module_graph_toolchain",
+        &[resolver],
+    )
+}
 
 pub(crate) use crate::analysis_api::LayerKind;
 
@@ -131,6 +140,11 @@ impl LayerKey {
                 &[&key.plan_hash],
             ),
             Digest::from_parts(DigestKind::ToolInvocation, "version", &[version]),
+            Digest::from_parts(
+                DigestKind::ToolInvocation,
+                "parser_identity",
+                &[&key.parser_identity],
+            ),
             Digest::from_parts(DigestKind::ProviderOutput, "schema", &[&key.schema]),
         ];
 
@@ -146,7 +160,11 @@ impl LayerKey {
             ),
             Digest::absent(DigestKind::DependencyLayer, "existing_file_cache_lifecycle"),
             Digest::from_parts(DigestKind::Config, "config_hash", &[&key.config_hash]),
-            Digest::from_parts(DigestKind::ToolInvocation, "version", &[version]),
+            Digest::from_parts(
+                DigestKind::ToolInvocation,
+                "version",
+                &[version, &key.parser_identity],
+            ),
             compatibility_input_digests,
             Vec::new(),
             Vec::new(),
@@ -235,7 +253,7 @@ impl LayerKey {
             module_graph_parameter_digest,
             lifecycle_digest,
             config_digest,
-            Digest::absent(DigestKind::ToolInvocation, "module_graph_toolchain"),
+            module_graph_toolchain_digest(TS_MODULE_RESOLVER),
             input_digests,
             upstream_syntax_output_digests
                 .into_iter()
@@ -1634,6 +1652,26 @@ mod tests {
     }
 
     #[test]
+    fn module_graph_layer_key_tracks_the_resolver_toolchain() {
+        let key = module_graph_key(
+            digest("import_shape", "base"),
+            digest("go_lifecycle", "base"),
+            digest("ts_js_lifecycle", "base"),
+            digest("config", "base"),
+            digest("syntax", "base"),
+        );
+
+        assert_eq!(
+            key.toolchain_digest,
+            module_graph_toolchain_digest(TS_MODULE_RESOLVER)
+        );
+        assert_ne!(
+            key.toolchain_digest,
+            module_graph_toolchain_digest("oxc-resolver-0.0.0")
+        );
+    }
+
+    #[test]
     fn module_topology_layer_key_changes_on_import_topology_module_symbol_and_semantic_inputs() {
         let base = module_topology_key(
             Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["react"]),
@@ -2488,6 +2526,7 @@ mod tests {
             plan_hash: "plan-hash".to_string(),
             version: CACHE_VERSION.to_string(),
             schema: "ts-facts-v1".to_string(),
+            parser_identity: "oxc-0.0.0".to_string(),
         };
         let key = LayerKey::from_existing_file_cache(
             LayerKind::TsSyntax,
@@ -2519,6 +2558,11 @@ mod tests {
             DigestKind::ToolInvocation,
             "version",
             &[CACHE_VERSION]
+        )));
+        assert!(key.input_digests.contains(&Digest::from_parts(
+            DigestKind::ToolInvocation,
+            "parser_identity",
+            &["oxc-0.0.0"]
         )));
         assert!(key.input_digests.contains(&Digest::from_parts(
             DigestKind::ProviderOutput,

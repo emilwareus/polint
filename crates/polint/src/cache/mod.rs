@@ -22,6 +22,10 @@ pub(crate) struct CacheKey {
     pub(crate) plan_hash: String,
     pub(crate) version: String,
     pub(crate) schema: String,
+    /// Identity of the parser whose facts this entry holds. Without it the entry
+    /// is keyed only by engine version, so a parser or grammar bump reuses facts
+    /// produced by the previous parser.
+    pub(crate) parser_identity: String,
 }
 
 impl CacheKey {
@@ -39,6 +43,7 @@ impl CacheKey {
             plan_hash: String::new(),
             version: CACHE_VERSION.to_string(),
             schema: "analysis-facts-v1".to_string(),
+            parser_identity: "test-parser".to_string(),
         }
     }
 
@@ -49,6 +54,7 @@ impl CacheKey {
         rule_hash: &str,
         plan_hash: &str,
         schema: &str,
+        parser_identity: &str,
     ) -> Self {
         Self {
             file_hash: stable_hash(&[relative_path, content_hash]),
@@ -57,6 +63,7 @@ impl CacheKey {
             plan_hash: plan_hash.to_string(),
             version: CACHE_VERSION.to_string(),
             schema: schema.to_string(),
+            parser_identity: parser_identity.to_string(),
         }
     }
 
@@ -68,6 +75,7 @@ impl CacheKey {
             &self.plan_hash,
             &self.version,
             &self.schema,
+            &self.parser_identity,
         ])
     }
 }
@@ -84,6 +92,12 @@ pub(crate) enum CacheReadStatus {
 pub(crate) struct CacheReadOutcome<T> {
     pub(crate) value: Option<T>,
     pub(crate) status: CacheReadStatus,
+}
+
+/// Outcome of reading an entry off disk, before it is interpreted as JSON.
+enum CacheEntryRead {
+    Found { raw: String, path: PathBuf },
+    Absent(CacheReadStatus),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -207,32 +221,12 @@ impl Cache {
     where
         T: for<'de> Deserialize<'de>,
     {
-        if !self.enabled {
-            return CacheReadOutcome {
-                value: None,
-                status: CacheReadStatus::Disabled,
-            };
-        }
-        let path = self.path_for(key);
-        let raw = match self.read_cache_file_to_string(&path) {
-            Ok(Some(raw)) => raw,
-            Ok(None) => {
+        let (raw, path) = match self.read_entry(key) {
+            CacheEntryRead::Found { raw, path } => (raw, path),
+            CacheEntryRead::Absent(status) => {
                 return CacheReadOutcome {
                     value: None,
-                    status: CacheReadStatus::Miss,
-                };
-            }
-            Err(CacheFileAccess::Unsafe) => {
-                return CacheReadOutcome {
-                    value: None,
-                    status: CacheReadStatus::InvalidEvicted,
-                };
-            }
-            Err(CacheFileAccess::ReadFailed(managed_path)) => {
-                evict_file(&managed_path);
-                return CacheReadOutcome {
-                    value: None,
-                    status: CacheReadStatus::InvalidEvicted,
+                    status,
                 };
             }
         };
@@ -247,6 +241,52 @@ impl Cache {
                     value: None,
                     status: CacheReadStatus::InvalidEvicted,
                 }
+            }
+        }
+    }
+
+    /// Hands the stored entry back as raw JSON bytes, so a caller that knows the
+    /// concrete type parses it exactly once instead of going through an
+    /// intermediate [`serde_json::Value`]. The entry is still checked for
+    /// well-formed JSON, and an unparsable one is evicted, so the hit, miss and
+    /// eviction outcomes match [`Cache::read_json_with_status`].
+    pub(crate) fn read_json_bytes_with_status(&self, key: &CacheKey) -> CacheReadOutcome<Vec<u8>> {
+        let (raw, path) = match self.read_entry(key) {
+            CacheEntryRead::Found { raw, path } => (raw, path),
+            CacheEntryRead::Absent(status) => {
+                return CacheReadOutcome {
+                    value: None,
+                    status,
+                };
+            }
+        };
+        match serde_json::from_str::<serde::de::IgnoredAny>(&raw) {
+            Ok(_) => CacheReadOutcome {
+                value: Some(raw.into_bytes()),
+                status: CacheReadStatus::Hit,
+            },
+            Err(_) => {
+                let _ = fs::remove_file(path);
+                CacheReadOutcome {
+                    value: None,
+                    status: CacheReadStatus::InvalidEvicted,
+                }
+            }
+        }
+    }
+
+    fn read_entry(&self, key: &CacheKey) -> CacheEntryRead {
+        if !self.enabled {
+            return CacheEntryRead::Absent(CacheReadStatus::Disabled);
+        }
+        let path = self.path_for(key);
+        match self.read_cache_file_to_string(&path) {
+            Ok(Some(raw)) => CacheEntryRead::Found { raw, path },
+            Ok(None) => CacheEntryRead::Absent(CacheReadStatus::Miss),
+            Err(CacheFileAccess::Unsafe) => CacheEntryRead::Absent(CacheReadStatus::InvalidEvicted),
+            Err(CacheFileAccess::ReadFailed(managed_path)) => {
+                evict_file(&managed_path);
+                CacheEntryRead::Absent(CacheReadStatus::InvalidEvicted)
             }
         }
     }
@@ -907,6 +947,7 @@ mod tests {
             "rule-a",
             "plan",
             "go-facts-v1",
+            "tree-sitter-0.26.8+tree-sitter-go-0.25.0",
         );
         let b = CacheKey::for_file(
             "src/main.go",
@@ -915,6 +956,7 @@ mod tests {
             "rule-b",
             "plan",
             "go-facts-v1",
+            "tree-sitter-0.26.8+tree-sitter-go-0.25.0",
         );
 
         assert_ne!(a.stable_id(), b.stable_id());
@@ -929,6 +971,7 @@ mod tests {
             "rule",
             "plan-a",
             "go-facts-v1",
+            "tree-sitter-0.26.8+tree-sitter-go-0.25.0",
         );
         let b = CacheKey::for_file(
             "src/main.go",
@@ -937,6 +980,7 @@ mod tests {
             "rule",
             "plan-b",
             "go-facts-v1",
+            "tree-sitter-0.26.8+tree-sitter-go-0.25.0",
         );
 
         assert_ne!(a.stable_id(), b.stable_id());
@@ -951,6 +995,7 @@ mod tests {
             "rule",
             "plan",
             "go-facts-v1",
+            "tree-sitter-0.26.8+tree-sitter-go-0.25.0",
         );
         let b = CacheKey::for_file(
             "src/main.go",
@@ -959,6 +1004,34 @@ mod tests {
             "rule",
             "plan",
             "ts-facts-v1",
+            "tree-sitter-0.26.8+tree-sitter-go-0.25.0",
+        );
+
+        assert_ne!(a.stable_id(), b.stable_id());
+    }
+
+    /// Cached facts are only interchangeable with freshly parsed ones when the
+    /// parser matches. Without this component a parser or grammar bump reuses
+    /// facts produced by the previous parser at a key that claims they are current.
+    #[test]
+    fn cache_key_changes_with_parser_identity() {
+        let a = CacheKey::for_file(
+            "src/main.go",
+            "content",
+            "config",
+            "rule",
+            "plan",
+            "go-facts-v1",
+            "tree-sitter-0.26.8+tree-sitter-go-0.25.0",
+        );
+        let b = CacheKey::for_file(
+            "src/main.go",
+            "content",
+            "config",
+            "rule",
+            "plan",
+            "go-facts-v1",
+            "tree-sitter-0.26.9+tree-sitter-go-0.25.0",
         );
 
         assert_ne!(a.stable_id(), b.stable_id());
@@ -973,6 +1046,7 @@ mod tests {
             "rule",
             "plan",
             "go-facts-v1",
+            "tree-sitter-0.26.8+tree-sitter-go-0.25.0",
         );
         let b = CacheKey::for_file(
             "src/other.go",
@@ -981,6 +1055,7 @@ mod tests {
             "rule",
             "plan",
             "go-facts-v1",
+            "tree-sitter-0.26.8+tree-sitter-go-0.25.0",
         );
 
         assert_ne!(a.stable_id(), b.stable_id());
@@ -997,6 +1072,7 @@ mod tests {
             "rule",
             "plan",
             "go-facts-v1",
+            "tree-sitter-0.26.8+tree-sitter-go-0.25.0",
         );
 
         cache.write_json(&key, &json!({ "ok": true })).unwrap();
@@ -1059,6 +1135,7 @@ mod tests {
             "rule",
             "plan",
             "go-facts-v1",
+            "tree-sitter-0.26.8+tree-sitter-go-0.25.0",
         );
         let value = json!({ "diagnostics": [], "schema": "go-facts-v2" });
 
@@ -1082,6 +1159,7 @@ mod tests {
             "rule",
             "plan",
             "go-facts-v1",
+            "tree-sitter-0.26.8+tree-sitter-go-0.25.0",
         );
 
         cache
@@ -1103,6 +1181,7 @@ mod tests {
             "rule",
             "plan",
             "go-facts-v1",
+            "tree-sitter-0.26.8+tree-sitter-go-0.25.0",
         );
         fs::create_dir_all(cache.root()).unwrap();
         fs::write(cache.path_for(&key), "{not-json").unwrap();
@@ -1124,6 +1203,7 @@ mod tests {
                 "rule",
                 "plan",
                 "go-facts-v1",
+                "tree-sitter-0.26.8+tree-sitter-go-0.25.0",
             )
         }
 
@@ -1175,6 +1255,50 @@ mod tests {
             fs::write(cache.path_for(&key), "{not-json").unwrap();
 
             let outcome: CacheReadOutcome<serde_json::Value> = cache.read_json_with_status(&key);
+
+            assert_eq!(outcome.status, CacheReadStatus::InvalidEvicted);
+            assert!(outcome.value.is_none());
+            assert!(!cache.path_for(&key).exists());
+        }
+
+        #[test]
+        fn read_json_bytes_with_status_returns_the_stored_bytes_verbatim() {
+            let temp = tempfile::tempdir().unwrap();
+            let cache = Cache::default_for_repo(temp.path(), true);
+            let key = key();
+            let value = json!({ "schema": "go-facts-v1", "items": [1, 2] });
+
+            cache.write_json(&key, &value).unwrap();
+            let outcome = cache.read_json_bytes_with_status(&key);
+
+            assert_eq!(outcome.status, CacheReadStatus::Hit);
+            assert_eq!(outcome.value, Some(fs::read(cache.path_for(&key)).unwrap()));
+        }
+
+        #[test]
+        fn read_json_bytes_with_status_reports_disabled_and_miss_like_the_typed_read() {
+            let temp = tempfile::tempdir().unwrap();
+            let key = key();
+
+            let disabled =
+                Cache::default_for_repo(temp.path(), false).read_json_bytes_with_status(&key);
+            let miss = Cache::default_for_repo(temp.path(), true).read_json_bytes_with_status(&key);
+
+            assert_eq!(disabled.status, CacheReadStatus::Disabled);
+            assert!(disabled.value.is_none());
+            assert_eq!(miss.status, CacheReadStatus::Miss);
+            assert!(miss.value.is_none());
+        }
+
+        #[test]
+        fn read_json_bytes_with_status_evicts_invalid_json() {
+            let temp = tempfile::tempdir().unwrap();
+            let cache = Cache::default_for_repo(temp.path(), true);
+            let key = key();
+            fs::create_dir_all(cache.root()).unwrap();
+            fs::write(cache.path_for(&key), "{not-json").unwrap();
+
+            let outcome = cache.read_json_bytes_with_status(&key);
 
             assert_eq!(outcome.status, CacheReadStatus::InvalidEvicted);
             assert!(outcome.value.is_none());
@@ -1473,8 +1597,8 @@ mod tests {
             right in "[a-z]{1,8}/[a-z]{1,8}\\.go",
         ) {
             prop_assume!(left != right);
-            let left_key = CacheKey::for_file(&left, "same-content", "config", "rule", "plan", "go-facts-v1");
-            let right_key = CacheKey::for_file(&right, "same-content", "config", "rule", "plan", "go-facts-v1");
+            let left_key = CacheKey::for_file(&left, "same-content", "config", "rule", "plan", "go-facts-v1", "tree-sitter-0.26.8+tree-sitter-go-0.25.0");
+            let right_key = CacheKey::for_file(&right, "same-content", "config", "rule", "plan", "go-facts-v1", "tree-sitter-0.26.8+tree-sitter-go-0.25.0");
 
             prop_assert_ne!(left_key.stable_id(), right_key.stable_id());
         }

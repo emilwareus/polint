@@ -285,6 +285,17 @@ fn check(root: PathBuf, args: &CheckArgs, rules: &[Rule]) -> Result<u8> {
         );
     }
 
+    // The fact database is by far the largest structure in the process, and the
+    // report it fed has already been written. Walking millions of facts to free
+    // them one at a time is pure latency ahead of an exit that reclaims the whole
+    // address space anyway, so hand it to the operating system.
+    //
+    // This is sound only here, at the end of the command: nothing reads the
+    // database afterwards, and everything with a side effect on drop — the cache
+    // handles and report writers — is owned elsewhere and still drops normally.
+    // A library helper, which the rule host also links, must keep freeing.
+    std::mem::forget(db);
+
     Ok(exit_code_for(&diagnostics, args.fail_on))
 }
 

@@ -484,3 +484,45 @@
         assert_eq!(classes.all()[0].span, db.ts_classes()[0].span);
     }
 
+
+    /// Metadata built from borrowed parts must be indistinguishable from the
+    /// same parts owned: both the interned stable key and the payload digest
+    /// reach reports, so neither may shift with the construction style.
+    #[test]
+    fn borrowed_and_owned_metadata_parts_agree() {
+        use crate::core::metadata::{fact_meta_from_borrowed_parts, fact_meta_from_parts};
+
+        let interner = StableKeyInterner::default();
+        let stable = [
+            ("path", "src\\payment.go"),
+            ("language", "go"),
+            ("name", "Authorize"),
+        ];
+        let extra = [("is_test", "false"), ("calls", "fmt.Errorf")];
+
+        let borrowed = fact_meta_from_borrowed_parts(
+            &interner,
+            FactFamily::Function,
+            "polint.go.syntax",
+            FactPrecision::Syntax,
+            FactConfidence::High,
+            stable,
+            extra,
+        );
+        let owned = fact_meta_from_parts(
+            &interner,
+            FactFamily::Function,
+            "polint.go.syntax",
+            FactPrecision::Syntax,
+            FactConfidence::High,
+            stable.map(|(label, value)| (label, value.to_string())),
+            extra.map(|(label, value)| (label, value.to_string())),
+        );
+
+        assert_eq!(borrowed.stable_key, owned.stable_key);
+        assert_eq!(borrowed.payload_digest, owned.payload_digest);
+        assert_eq!(
+            interner.resolve(borrowed.stable_key).as_ref(),
+            "8:Function|8:language=2:go|4:name=9:Authorize|4:path=14:src/payment.go"
+        );
+    }

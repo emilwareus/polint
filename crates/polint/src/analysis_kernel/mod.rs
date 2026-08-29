@@ -21,8 +21,8 @@ pub(crate) mod validation;
 
 pub(crate) use metadata::{
     FactConfidence, FactFamily, FactMeta, FactMetaStore, FactPrecision, FactRef, MissingFactMeta,
-    ValidationStatus, resolution_metadata, resolution_status_metadata, stable_key_from_parts,
-    stable_key_text_from_parts, symbol_metadata,
+    ValidationStatus, resolution_metadata, resolution_status_metadata, stable_key_text_from_parts,
+    symbol_metadata, write_stable_key_text,
 };
 #[cfg(all(test, feature = "lang-go", feature = "lang-typescript"))]
 pub(crate) use outcome::hard_dependencies;

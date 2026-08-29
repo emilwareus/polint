@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 
 use crate::analysis_api::{
     AnalysisCache, Digest, DigestKind, FileCacheKeyParts, FileCacheReadOutcome,
-    FileCacheReadStatus, LayerCacheKeyParts, LayerCacheKind, LayerCachePrecision,
-    LayerCacheReadOutcome, LayerCacheReadStatus, LayerCacheWriteStatus,
+    FileCacheReadStatus, LayerCacheEntryDigests, LayerCacheKeyParts, LayerCacheKind,
+    LayerCachePrecision, LayerCacheReadOutcome, LayerCacheReadStatus, LayerCacheWriteStatus,
 };
 use serde::{Deserialize, Serialize};
 
@@ -102,7 +102,7 @@ impl AnalysisCache for FsAnalysisCache {
     fn read_layer_json(
         &self,
         key: &LayerCacheKeyParts,
-        validate: &mut dyn FnMut(&[u8], Option<&Digest>) -> bool,
+        validate: &mut dyn FnMut(&[u8], LayerCacheEntryDigests<'_>) -> bool,
     ) -> LayerCacheReadOutcome {
         if !self.enabled {
             return LayerCacheReadOutcome {
@@ -159,7 +159,30 @@ impl AnalysisCache for FsAnalysisCache {
             }
         };
 
-        if !validate(&payload_bytes, Some(&manifest.output_digest)) {
+        // The payload digest is only meaningful to a validator once it has been
+        // checked against the blob, which is the contract the real layer cache
+        // upholds before validating.
+        let payload_digest_matches = self
+            .payload_digest_for_json_bytes(&payload_bytes)
+            .is_ok_and(|digest| digest == manifest.payload_digest);
+        if !payload_digest_matches {
+            let _ = fs::remove_file(&manifest_path);
+            let _ = fs::remove_file(&blob_path);
+            return LayerCacheReadOutcome {
+                status: LayerCacheReadStatus::InvalidEvicted,
+                output_digest: None,
+                payload_digest: None,
+                value: None,
+            };
+        }
+
+        if !validate(
+            &payload_bytes,
+            LayerCacheEntryDigests {
+                output: Some(&manifest.output_digest),
+                payload: Some(&manifest.payload_digest),
+            },
+        ) {
             let _ = fs::remove_file(&manifest_path);
             return LayerCacheReadOutcome {
                 status: LayerCacheReadStatus::InvalidEvicted,
@@ -245,6 +268,7 @@ fn file_stable_id(key: &FileCacheKeyParts) -> String {
         key.plan_hash.as_str(),
         FILE_CACHE_VERSION,
         key.schema.as_str(),
+        key.parser_identity.as_str(),
     ])
 }
 

@@ -21,7 +21,7 @@ use crate::analysis::mir::body::MirStatus;
 use crate::analysis::places::PlaceStatus;
 use crate::analysis::summaries::facts::{SummaryEventFact, SummaryFact};
 use crate::analysis_kernel::{
-    FactConfidence, FactFamily, FactMeta, FactPrecision, ValidationStatus, stable_key_from_parts,
+    FactConfidence, FactFamily, FactMeta, FactPrecision, ValidationStatus, write_stable_key_text,
 };
 use crate::analysis_neutral::domains::facts::{DomainPrecision, DomainStatus};
 use crate::core::StableKeyId;
@@ -31,6 +31,7 @@ use crate::symbol_graph::semantic::{
     SemanticStatus, StableExportIdentity,
 };
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::cmp::Ordering;
 
 pub(super) fn normalize_scope_facts(
@@ -240,11 +241,51 @@ pub(super) fn fact_meta_from_parts<const STABLE: usize, const EXTRA: usize>(
     stable_parts: [(&'static str, String); STABLE],
     payload_extra_parts: [(&'static str, String); EXTRA],
 ) -> FactMeta {
-    let stable_key = stable_key_from_parts(interner, family, &stable_parts);
+    fact_meta_from_borrowed_parts(
+        interner,
+        family,
+        producer_id,
+        precision,
+        confidence,
+        stable_parts
+            .each_ref()
+            .map(|(label, value)| (*label, value.as_str())),
+        payload_extra_parts
+            .each_ref()
+            .map(|(label, value)| (*label, value.as_str())),
+    )
+}
+
+thread_local! {
+    /// Reused across fact-metadata construction: the stable-key text is built
+    /// once per fact and thrown away as soon as it has been interned, so it does
+    /// not deserve a fresh allocation each time.
+    static STABLE_KEY_TEXT: RefCell<String> = const { RefCell::new(String::new()) };
+}
+
+/// Builds fact metadata from parts the caller already owns.
+///
+/// Preferred over [`fact_meta_from_parts`] on paths that restore many facts:
+/// values such as a file path, a language label, or a string literal's text are
+/// borrowed straight from the fact rather than cloned into the parts array.
+pub(super) fn fact_meta_from_borrowed_parts<const STABLE: usize, const EXTRA: usize>(
+    interner: &crate::core::StableKeyInterner,
+    family: FactFamily,
+    producer_id: &'static str,
+    precision: FactPrecision,
+    confidence: FactConfidence,
+    stable_parts: [(&'static str, &str); STABLE],
+    payload_extra_parts: [(&'static str, &str); EXTRA],
+) -> FactMeta {
+    let (stable_key, stable_key_text) = STABLE_KEY_TEXT.with(|buffer| {
+        let mut buffer = buffer.borrow_mut();
+        let mut sorted = stable_parts;
+        write_stable_key_text(&mut buffer, family, &mut sorted);
+        interner.intern_and_resolve(&buffer)
+    });
     let mut payload_parts = stable_parts.to_vec();
     payload_parts.extend(payload_extra_parts);
-    let payload_digest =
-        metadata_payload_digest(interner.resolve(stable_key).as_ref(), &payload_parts);
+    let payload_digest = metadata_payload_digest(&stable_key_text, &payload_parts);
 
     FactMeta {
         stable_key,
@@ -319,19 +360,24 @@ pub(super) fn topology_fact_metadata(
     )
 }
 
-pub(super) fn stable_parts<const N: usize>(
-    parts: [(&'static str, String); N],
-) -> [(&'static str, String); N] {
+pub(super) fn stable_parts<T, const N: usize>(
+    parts: [(&'static str, T); N],
+) -> [(&'static str, T); N] {
     parts
 }
 
-pub(super) fn metadata_payload_digest(
+/// `true` / `false` without the allocation `bool::to_string` would make.
+pub(super) fn bool_label(value: bool) -> &'static str {
+    if value { "true" } else { "false" }
+}
+
+pub(super) fn metadata_payload_digest<V: AsRef<str>>(
     stable_key: &str,
-    parts: &[(&'static str, String)],
+    parts: &[(&'static str, V)],
 ) -> String {
     let mut normalized = parts
         .iter()
-        .map(|(label, value)| (*label, metadata_value(value)))
+        .map(|(label, value)| (*label, metadata_value(value.as_ref())))
         .collect::<Vec<_>>();
     normalized.sort_by(compare_metadata_parts);
 

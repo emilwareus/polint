@@ -1,7 +1,7 @@
 use crate::analysis_api::ProviderExecution;
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
-    CacheNode, CacheStats, DependencyEdge, DependencyKind, Digest, LayerCacheManifest,
+    CacheNode, CacheStats, DependencyEdge, DependencyKind, Digest, DigestKind, LayerCacheManifest,
     LayerCacheReadStatus, LayerCacheStore, LayerCacheWriteStatus, LayerKey, PrecisionTier,
     ShapeKind,
 };
@@ -151,17 +151,40 @@ fn metrics_layer_dependency_edges(
         ));
     }
 
-    for (ordinal, digest) in inputs.function_digests().into_iter().enumerate() {
-        edges.push(dependency_edge(
-            &from,
-            CacheNode::Input(format!("metrics-function:{ordinal}:{digest}")),
-            DependencyKind::Input,
-            ShapeKind::Syntax,
-        ));
-    }
+    // One edge for the whole function set, not one per function. Metrics are
+    // recomputed wholesale whenever any function changes, so a per-function edge
+    // carries no invalidation signal the folded digest does not, while making the
+    // manifest O(functions) — large enough on a real repo to blow past the
+    // manifest read ceiling and make the layer miss forever.
+    edges.push(dependency_edge(
+        &from,
+        CacheNode::Input(format!(
+            "metrics-functions:{}",
+            combined_function_digest(inputs)
+        )),
+        DependencyKind::Input,
+        ShapeKind::Syntax,
+    ));
 
     edges.sort();
     edges
+}
+
+/// Fold every function digest into one. Values are sorted so the fold depends on
+/// the set of functions and not on the order the projection happened to list them.
+fn combined_function_digest(inputs: &CanonicalMetricsInputs) -> Digest {
+    let mut values = inputs
+        .function_digests()
+        .iter()
+        .map(|digest| digest.value.clone())
+        .collect::<Vec<_>>();
+    values.sort();
+    let parts = values.iter().map(String::as_str).collect::<Vec<_>>();
+    Digest::from_parts(
+        DigestKind::ProviderParameters,
+        "metrics_function_facts_combined",
+        &parts,
+    )
 }
 
 fn metrics_parameter_digest() -> Digest {
@@ -359,6 +382,66 @@ mod tests {
             2,
             Vec::new(),
         ))
+    }
+
+    fn metrics_inputs_for(sources: usize, functions_per_source: usize) -> CanonicalMetricsInputs {
+        let mut db = AnalysisDb::new();
+        for source_index in 0..sources {
+            let mut text = String::new();
+            for function_index in 0..functions_per_source {
+                text.push_str(&format!("export function f{function_index}() {{}}\n"));
+            }
+            let relative_path = format!("src/module{source_index}.ts");
+            let file = db.add_file(
+                PathBuf::from(&relative_path),
+                relative_path.clone(),
+                text.clone(),
+            );
+            for function_index in 0..functions_per_source {
+                let line = u32::try_from(function_index + 1).expect("line fits in u32");
+                db.push_function(FunctionFact::new(
+                    FunctionId::from_raw(0),
+                    file,
+                    format!("f{function_index}"),
+                    Span::new(file, 0, 0, line, 1, line, 2),
+                    Language::TypeScript,
+                    false,
+                    true,
+                    1,
+                    Vec::new(),
+                ));
+            }
+        }
+        CanonicalMetricsInputs::from_db(&db).expect("canonical metrics inputs")
+    }
+
+    /// The manifest carries one edge per source plus one for the whole function
+    /// set. Fanning out per function made it grow past the read ceiling on real
+    /// repos, which turned every subsequent read into a miss.
+    #[test]
+    fn metrics_dependency_edges_are_counted_by_source_not_by_function() {
+        let few = metrics_inputs_for(3, 1);
+        let many = metrics_inputs_for(3, 400);
+
+        for (inputs, label) in [(&few, "few"), (&many, "many")] {
+            let edges = metrics_layer_dependency_edges(
+                inputs,
+                &metrics_layer_key(inputs, metrics_manifest()),
+            );
+            assert_eq!(
+                edges.len(),
+                inputs.source_digests().len() + 1,
+                "{label} functions produced {} edges for {} sources",
+                edges.len(),
+                inputs.source_digests().len()
+            );
+        }
+
+        // Collapsing the fan-out must not collapse the invalidation signal.
+        assert_ne!(
+            combined_function_digest(&few),
+            combined_function_digest(&many)
+        );
     }
 
     #[test]

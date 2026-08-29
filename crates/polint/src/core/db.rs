@@ -3601,9 +3601,15 @@ impl AnalysisDb {
     }
 
     pub fn path_for(&self, file: FileId) -> String {
+        self.path_str_for(file).to_string()
+    }
+
+    /// [`AnalysisDb::path_for`] without the copy, for callers that only read the
+    /// path — fact metadata builds one per fact.
+    pub(crate) fn path_str_for(&self, file: FileId) -> &str {
         self.file(file)
-            .map(|file| file.relative_path.clone())
-            .unwrap_or_else(|| "<unknown>".to_string())
+            .map(|file| file.relative_path.as_str())
+            .unwrap_or("<unknown>")
     }
 }
 
@@ -3779,17 +3785,18 @@ impl AnalysisDb {
         interner: &crate::core::StableKeyInterner,
         fact: &PackageFact,
     ) -> FactMeta {
-        fact_meta_from_parts(
+        let span = span_metadata_value(&fact.span);
+        fact_meta_from_borrowed_parts(
             interner,
             FactFamily::Package,
             syntax_provider_for_language(fact.language),
             FactPrecision::Syntax,
             FactConfidence::High,
             stable_parts([
-                ("path", self.path_for(fact.file)),
-                ("language", language_label(fact.language).to_string()),
-                ("name", fact.name.clone()),
-                ("span", span_metadata_value(&fact.span)),
+                ("path", self.path_str_for(fact.file)),
+                ("language", language_label(fact.language)),
+                ("name", fact.name.as_str()),
+                ("span", span.as_str()),
             ]),
             stable_parts([]),
         )
@@ -3800,26 +3807,26 @@ impl AnalysisDb {
         interner: &crate::core::StableKeyInterner,
         fact: &FunctionFact,
     ) -> FactMeta {
-        fact_meta_from_parts(
+        let span = span_metadata_value(&fact.span);
+        let cyclomatic_complexity = fact.cyclomatic_complexity.to_string();
+        let calls = fact.calls.join("\n");
+        fact_meta_from_borrowed_parts(
             interner,
             FactFamily::Function,
             syntax_provider_for_language(fact.language),
             FactPrecision::Syntax,
             FactConfidence::High,
             stable_parts([
-                ("path", self.path_for(fact.file)),
-                ("language", language_label(fact.language).to_string()),
-                ("name", fact.name.clone()),
-                ("span", span_metadata_value(&fact.span)),
+                ("path", self.path_str_for(fact.file)),
+                ("language", language_label(fact.language)),
+                ("name", fact.name.as_str()),
+                ("span", span.as_str()),
             ]),
             stable_parts([
-                ("is_test", fact.is_test.to_string()),
-                ("is_exported", fact.is_exported.to_string()),
-                (
-                    "cyclomatic_complexity",
-                    fact.cyclomatic_complexity.to_string(),
-                ),
-                ("calls", fact.calls.join("\n")),
+                ("is_test", bool_label(fact.is_test)),
+                ("is_exported", bool_label(fact.is_exported)),
+                ("cyclomatic_complexity", cyclomatic_complexity.as_str()),
+                ("calls", calls.as_str()),
             ]),
         )
     }
@@ -3829,22 +3836,20 @@ impl AnalysisDb {
         interner: &crate::core::StableKeyInterner,
         fact: &ImportFact,
     ) -> FactMeta {
-        fact_meta_from_parts(
+        let span = span_metadata_value(&fact.span);
+        fact_meta_from_borrowed_parts(
             interner,
             FactFamily::Import,
             syntax_provider_for_language(fact.language),
             FactPrecision::Syntax,
             FactConfidence::High,
             stable_parts([
-                ("path", self.path_for(fact.file)),
-                ("language", language_label(fact.language).to_string()),
-                ("import_path", fact.path.clone()),
-                ("span", span_metadata_value(&fact.span)),
+                ("path", self.path_str_for(fact.file)),
+                ("language", language_label(fact.language)),
+                ("import_path", fact.path.as_str()),
+                ("span", span.as_str()),
             ]),
-            stable_parts([(
-                "package",
-                fact.package.clone().unwrap_or_else(|| "none".to_string()),
-            )]),
+            stable_parts([("package", fact.package.as_deref().unwrap_or("none"))]),
         )
     }
 
@@ -3853,22 +3858,24 @@ impl AnalysisDb {
         interner: &crate::core::StableKeyInterner,
         fact: &BranchObligation,
     ) -> FactMeta {
-        fact_meta_from_parts(
+        let function = option_function_id(fact.function);
+        let span = span_metadata_value(&fact.decision_span);
+        fact_meta_from_borrowed_parts(
             interner,
             FactFamily::BranchObligation,
             GO_SYNTAX_PROVIDER_ID,
             FactPrecision::Heuristic,
             FactConfidence::Medium,
             stable_parts([
-                ("path", self.path_for(fact.file)),
-                ("stable_fingerprint", fact.stable_fingerprint.clone()),
+                ("path", self.path_str_for(fact.file)),
+                ("stable_fingerprint", fact.stable_fingerprint.as_str()),
             ]),
             stable_parts([
-                ("function", option_function_id(fact.function)),
-                ("span", span_metadata_value(&fact.decision_span)),
-                ("condition_text", fact.condition_text.clone()),
-                ("edge_label", fact.edge_label.clone()),
-                ("is_error_path", fact.is_error_path.to_string()),
+                ("function", function.as_str()),
+                ("span", span.as_str()),
+                ("condition_text", fact.condition_text.as_str()),
+                ("edge_label", fact.edge_label.as_str()),
+                ("is_error_path", bool_label(fact.is_error_path)),
             ]),
         )
     }
@@ -3878,24 +3885,31 @@ impl AnalysisDb {
         interner: &crate::core::StableKeyInterner,
         fact: &TestFact,
     ) -> FactMeta {
-        fact_meta_from_parts(
+        let span = span_metadata_value(&fact.span);
+        let function = option_function_id(fact.function);
+        let evidence_terms = fact.evidence_terms.join("\n");
+        let assertion_count = fact.assertion_count.to_string();
+        let subtest_count = fact.subtest_count.to_string();
+        let subtest_names = fact.subtest_names.join("\n");
+        let table_rows = fact.table_rows.to_string();
+        fact_meta_from_borrowed_parts(
             interner,
             FactFamily::Test,
             GO_SYNTAX_PROVIDER_ID,
             FactPrecision::Heuristic,
             FactConfidence::Medium,
             stable_parts([
-                ("path", self.path_for(fact.file)),
-                ("name", fact.name.clone()),
-                ("span", span_metadata_value(&fact.span)),
+                ("path", self.path_str_for(fact.file)),
+                ("name", fact.name.as_str()),
+                ("span", span.as_str()),
             ]),
             stable_parts([
-                ("function", option_function_id(fact.function)),
-                ("evidence_terms", fact.evidence_terms.join("\n")),
-                ("assertion_count", fact.assertion_count.to_string()),
-                ("subtest_count", fact.subtest_count.to_string()),
-                ("subtest_names", fact.subtest_names.join("\n")),
-                ("table_rows", fact.table_rows.to_string()),
+                ("function", function.as_str()),
+                ("evidence_terms", evidence_terms.as_str()),
+                ("assertion_count", assertion_count.as_str()),
+                ("subtest_count", subtest_count.as_str()),
+                ("subtest_names", subtest_names.as_str()),
+                ("table_rows", table_rows.as_str()),
             ]),
         )
     }
@@ -3909,23 +3923,27 @@ impl AnalysisDb {
             .branches()
             .iter()
             .find(|branch| branch.id == fact.branch);
+        let unresolved_fingerprint;
         let (path, branch_fingerprint, precision, confidence) = if let Some(branch) = branch {
             (
-                self.path_for(branch.file),
-                branch.stable_fingerprint.clone(),
+                self.path_str_for(branch.file),
+                branch.stable_fingerprint.as_str(),
                 FactPrecision::SetupAware,
                 FactConfidence::Medium,
             )
         } else {
+            unresolved_fingerprint = format!("unresolved:{}", fact.branch.0);
             (
-                "<unknown>".to_string(),
-                format!("unresolved:{}", fact.branch.0),
+                "<unknown>",
+                unresolved_fingerprint.as_str(),
                 FactPrecision::Unsupported,
                 FactConfidence::Low,
             )
         };
+        let branch_id = fact.branch.0.to_string();
+        let covered = option_bool(fact.covered);
 
-        fact_meta_from_parts(
+        fact_meta_from_borrowed_parts(
             interner,
             FactFamily::Coverage,
             branch
@@ -3936,11 +3954,11 @@ impl AnalysisDb {
             stable_parts([
                 ("path", path),
                 ("branch_fingerprint", branch_fingerprint),
-                ("source", fact.source.clone()),
+                ("source", fact.source.as_str()),
             ]),
             stable_parts([
-                ("branch", fact.branch.0.to_string()),
-                ("covered", option_bool(fact.covered)),
+                ("branch", branch_id.as_str()),
+                ("covered", covered.as_str()),
             ]),
         )
     }
@@ -5479,18 +5497,20 @@ impl AnalysisDb {
         interner: &crate::core::StableKeyInterner,
         fact: &TsComponentFact,
     ) -> FactMeta {
-        fact_meta_from_parts(
+        let span = span_metadata_value(&fact.span);
+        let function = option_function_id(fact.function);
+        fact_meta_from_borrowed_parts(
             interner,
             FactFamily::TsComponent,
             TS_SYNTAX_PROVIDER_ID,
             FactPrecision::Heuristic,
             FactConfidence::Medium,
             stable_parts([
-                ("path", self.path_for(fact.file)),
-                ("name", fact.name.clone()),
-                ("span", span_metadata_value(&fact.span)),
+                ("path", self.path_str_for(fact.file)),
+                ("name", fact.name.as_str()),
+                ("span", span.as_str()),
             ]),
-            stable_parts([("function", option_function_id(fact.function))]),
+            stable_parts([("function", function.as_str())]),
         )
     }
 
@@ -5499,20 +5519,21 @@ impl AnalysisDb {
         interner: &crate::core::StableKeyInterner,
         fact: &TsClassFact,
     ) -> FactMeta {
-        fact_meta_from_parts(
+        let span = span_metadata_value(&fact.span);
+        fact_meta_from_borrowed_parts(
             interner,
             FactFamily::TsClass,
             TS_SYNTAX_PROVIDER_ID,
             FactPrecision::Syntax,
             FactConfidence::High,
             stable_parts([
-                ("path", self.path_for(fact.file)),
-                ("name", fact.name.clone()),
-                ("span", span_metadata_value(&fact.span)),
+                ("path", self.path_str_for(fact.file)),
+                ("name", fact.name.as_str()),
+                ("span", span.as_str()),
             ]),
             stable_parts([
-                ("is_exported", fact.is_exported.to_string()),
-                ("is_component_like", fact.is_component_like.to_string()),
+                ("is_exported", bool_label(fact.is_exported)),
+                ("is_component_like", bool_label(fact.is_component_like)),
             ]),
         )
     }
@@ -5522,17 +5543,18 @@ impl AnalysisDb {
         interner: &crate::core::StableKeyInterner,
         fact: &StringLiteralFact,
     ) -> FactMeta {
-        fact_meta_from_parts(
+        let span = span_metadata_value(&fact.span);
+        fact_meta_from_borrowed_parts(
             interner,
             FactFamily::StringLiteral,
             syntax_provider_for_language(fact.language),
             FactPrecision::Syntax,
             FactConfidence::High,
             stable_parts([
-                ("path", self.path_for(fact.file)),
-                ("language", language_label(fact.language).to_string()),
-                ("value", fact.value.clone()),
-                ("span", span_metadata_value(&fact.span)),
+                ("path", self.path_str_for(fact.file)),
+                ("language", language_label(fact.language)),
+                ("value", fact.value.as_str()),
+                ("span", span.as_str()),
             ]),
             stable_parts([]),
         )
@@ -5543,17 +5565,19 @@ impl AnalysisDb {
         interner: &crate::core::StableKeyInterner,
         fact: &JsxAttributeFact,
     ) -> FactMeta {
-        fact_meta_from_parts(
+        let value = option_string(fact.value.as_deref());
+        let span = span_metadata_value(&fact.span);
+        fact_meta_from_borrowed_parts(
             interner,
             FactFamily::JsxAttribute,
             TS_SYNTAX_PROVIDER_ID,
             FactPrecision::Syntax,
             FactConfidence::High,
             stable_parts([
-                ("path", self.path_for(fact.file)),
-                ("name", fact.name.clone()),
-                ("value", option_string(fact.value.as_deref())),
-                ("span", span_metadata_value(&fact.span)),
+                ("path", self.path_str_for(fact.file)),
+                ("name", fact.name.as_str()),
+                ("value", value.as_str()),
+                ("span", span.as_str()),
             ]),
             stable_parts([]),
         )
