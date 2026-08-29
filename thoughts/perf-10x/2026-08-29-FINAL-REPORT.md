@@ -16,6 +16,12 @@ with named, measured blockers — not for lack of ideas (12 hypotheses investiga
 
 ## Baselines vs final (medians)
 
+Full-matrix cells were measured at a0ce9a64 (run-bench.sh, 3 runs/cell, all rc=0).
+The branch tip adds 16ef22bf (H9-lite) after a 3-run warm/cold re-measurement showed
+parity (plinty warm 2.21 s median, cold 12.6 s median with 8.7–13.1 s session spread;
+devloupe warm 4.75 s, cold 7.02 s) and byte-identity re-verified on both repos.
+Ice-cold cells are unaffected by H9-lite (it does not touch the build path).
+
 | repo | tier | 2026-08-28 baseline | final (this branch) | speedup | target | met |
 |---|---|---:|---:|---:|---|---|
 | plinty | warm | 15.7 s | 2.28 s | 6.89x | ≥5x | YES |
@@ -39,6 +45,7 @@ with named, measured blockers — not for lack of ideas (12 hypotheses investiga
 | c6371e43 | H5 fact metadata without per-fact string allocs; one-lock interner fast path | −0.3–0.5 s warm both repos |
 | 06469701 | H12 skip fact-DB teardown at CLI exit (drop-audited first) | −0.1–0.2 s all tiers |
 | a0ce9a64 | revert of d99d0e43 (H10 size-descending parse scheduling) | **landed change reverted on measurement**: it *cost* ~3 s plinty cold (15.5–16.4 s with, 12.7 s without, back-to-back) |
+| 16ef22bf | H9-lite: per-file cache adapter hands callers raw JSON bytes (was Value→to_vec→parse, three passes per file cold) | parity-or-better on warm/cold quick-bench; byte-identity re-verified on both repos |
 
 ## Why the remaining gaps exist (measured, not speculative)
 
