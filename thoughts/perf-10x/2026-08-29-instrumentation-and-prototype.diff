@@ -1,0 +1,1168 @@
+diff --git a/crates/polint/src/analysis_kernel/go_syntax_projection.rs b/crates/polint/src/analysis_kernel/go_syntax_projection.rs
+index ef6df333..6fa86ed6 100644
+--- a/crates/polint/src/analysis_kernel/go_syntax_projection.rs
++++ b/crates/polint/src/analysis_kernel/go_syntax_projection.rs
+@@ -137,7 +137,8 @@ impl CanonicalGoSyntaxOutput {
+         db: &AnalysisDb,
+         diagnostics: &[Diagnostic],
+     ) -> Result<Self, GoSyntaxProjectionError> {
+-        let context = GoContext::new(db)?;
++        let context = crate::perf_probe::timed("gosyn.context_new", || GoContext::new(db))?;
++        let _fp = crate::perf_probe::Probe::new("gosyn.functions_loop");
+         let mut functions = BTreeMap::new();
+         let mut function_rows = BTreeSet::new();
+         for fact in db.functions().iter().filter(|fact| context.owns(fact.file)) {
+@@ -146,7 +147,7 @@ impl CanonicalGoSyntaxOutput {
+             if fact.language != Language::Go || !fact.calls.is_sorted() {
+                 return Err(GoSyntaxProjectionError::Output);
+             }
+-            let span = canonical_span(&fact.span, source)?;
++            let span = canonical_span_with_lines(&fact.span, source, context.line_count(source))?;
+             let row = row_digest("function", |row| {
+                 append_path_span(row, &source.relative_path, span);
+                 row.field("name", &fact.name);
+@@ -167,6 +168,8 @@ impl CanonicalGoSyntaxOutput {
+                 return Err(GoSyntaxProjectionError::Output);
+             }
+         }
++        drop(_fp);
++        let _pp = crate::perf_probe::Probe::new("gosyn.packages_loop");
+         let mut packages = Vec::new();
+         for fact in db.packages().iter().filter(|fact| context.owns(fact.file)) {
+             ensure_capacity(packages.len(), GoSyntaxProjectionError::Output)?;
+@@ -174,13 +177,15 @@ impl CanonicalGoSyntaxOutput {
+             if fact.language != Language::Go {
+                 return Err(GoSyntaxProjectionError::Output);
+             }
+-            let span = canonical_span(&fact.span, source)?;
++            let span = canonical_span_with_lines(&fact.span, source, context.line_count(source))?;
+             packages.push(row_digest("package", |row| {
+                 append_path_span(row, &source.relative_path, span);
+                 row.field("name", &fact.name);
+                 row.field("language", "go");
+             }));
+         }
++        drop(_pp);
++        let _ip = crate::perf_probe::Probe::new("gosyn.imports_loop");
+         let mut imports = Vec::new();
+         for fact in db.imports().iter().filter(|fact| context.owns(fact.file)) {
+             ensure_capacity(imports.len(), GoSyntaxProjectionError::Output)?;
+@@ -188,7 +193,7 @@ impl CanonicalGoSyntaxOutput {
+             if fact.language != Language::Go {
+                 return Err(GoSyntaxProjectionError::Output);
+             }
+-            let span = canonical_span(&fact.span, source)?;
++            let span = canonical_span_with_lines(&fact.span, source, context.line_count(source))?;
+             imports.push(row_digest("import", |row| {
+                 append_path_span(row, &source.relative_path, span);
+                 row.field("package", fact.package.as_deref().unwrap_or(""));
+@@ -196,11 +201,13 @@ impl CanonicalGoSyntaxOutput {
+                 row.field("language", "go");
+             }));
+         }
++        drop(_ip);
++        let _tp = crate::perf_probe::Probe::new("gosyn.tests_loop");
+         let mut tests = Vec::new();
+         for fact in db.tests().iter().filter(|fact| context.owns(fact.file)) {
+             ensure_capacity(tests.len(), GoSyntaxProjectionError::Output)?;
+             let source = context.source(fact.file)?;
+-            let span = canonical_span(&fact.span, source)?;
++            let span = canonical_span_with_lines(&fact.span, source, context.line_count(source))?;
+             let function = function_ref(fact.function, fact.file, span, true, &functions)?;
+             tests.push(row_digest("test", |row| {
+                 append_path_span(row, &source.relative_path, span);
+@@ -217,11 +224,13 @@ impl CanonicalGoSyntaxOutput {
+                 row.u64_field("table-rows", u64::from(fact.table_rows));
+             }));
+         }
++        drop(_tp);
++        let _bp = crate::perf_probe::Probe::new("gosyn.branches_loop");
+         let mut branches = Vec::new();
+         for fact in db.branches().iter().filter(|fact| context.owns(fact.file)) {
+             ensure_capacity(branches.len(), GoSyntaxProjectionError::Output)?;
+             let source = context.source(fact.file)?;
+-            let span = canonical_span(&fact.decision_span, source)?;
++            let span = canonical_span_with_lines(&fact.decision_span, source, context.line_count(source))?;
+             let function = function_ref(fact.function, fact.file, span, false, &functions)?;
+             branches.push(row_digest("branch", |row| {
+                 append_path_span(row, &source.relative_path, span);
+@@ -232,6 +241,8 @@ impl CanonicalGoSyntaxOutput {
+                 row.field("fingerprint", &fact.stable_fingerprint);
+             }));
+         }
++        drop(_bp);
++        let _lp = crate::perf_probe::Probe::new("gosyn.literals_loop");
+         let mut literals = Vec::new();
+         for fact in db
+             .string_literals()
+@@ -243,13 +254,15 @@ impl CanonicalGoSyntaxOutput {
+             if fact.language != Language::Go {
+                 return Err(GoSyntaxProjectionError::Output);
+             }
+-            let span = canonical_span(&fact.span, source)?;
++            let span = canonical_span_with_lines(&fact.span, source, context.line_count(source))?;
+             literals.push(row_digest("string-literal", |row| {
+                 append_path_span(row, &source.relative_path, span);
+                 row.field("value", &fact.value);
+                 row.field("language", "go");
+             }));
+         }
++        drop(_lp);
++        let _dp = crate::perf_probe::Probe::new("gosyn.diagnostics_loop");
+         let mut parser_diagnostics = Vec::new();
+         for diagnostic in diagnostics {
+             if diagnostic.rule_id == "internal/cache" {
+@@ -269,6 +282,16 @@ impl CanonicalGoSyntaxOutput {
+                 row.field("fingerprint", &diagnostic.stable_fingerprint);
+             }));
+         }
++        drop(_dp);
++        crate::perf_probe::note(
++            "gosyn.canonical_span_calls",
++            SPAN_CALLS.load(std::sync::atomic::Ordering::Relaxed),
++        );
++        crate::perf_probe::note(
++            "gosyn.canonical_span_bytes_scanned",
++            SPAN_BYTES.load(std::sync::atomic::Ordering::Relaxed),
++        );
++        let _sp = crate::perf_probe::Probe::new("gosyn.sort_families");
+         let mut families = [
+             packages,
+             function_rows.into_iter().collect(),
+@@ -283,6 +306,7 @@ impl CanonicalGoSyntaxOutput {
+     }
+ 
+     pub(crate) fn digest(&self) -> Digest {
++        let _p = crate::perf_probe::Probe::new("gosyn.digest");
+         let mut digest = Digest::builder(DigestKind::ProviderOutput, "go-syntax-output-v1");
+         for (family, rows) in [
+             "packages",
+@@ -399,6 +423,7 @@ pub(crate) enum GoSyntaxProjectionError {
+ struct GoContext<'a> {
+     files: BTreeMap<FileId, &'a SourceFile>,
+     paths: BTreeMap<&'a str, &'a SourceFile>,
++    line_counts: std::cell::RefCell<BTreeMap<FileId, u32>>,
+ }
+ 
+ impl<'a> GoContext<'a> {
+@@ -423,7 +448,24 @@ impl<'a> GoContext<'a> {
+                 return Err(GoSyntaxProjectionError::Source);
+             }
+         }
+-        Ok(Self { files, paths })
++        Ok(Self {
++            files,
++            paths,
++            line_counts: std::cell::RefCell::new(BTreeMap::new()),
++        })
++    }
++
++    /// TEMPORARY (research prototype): memoized `source.lines().count()`.
++    fn line_count(&self, source: &SourceFile) -> Option<u32> {
++        if !crate::perf_probe::fix_enabled() {
++            return None;
++        }
++        if let Some(count) = self.line_counts.borrow().get(&source.id) {
++            return Some(*count);
++        }
++        let count = u32::try_from(source.source.lines().count()).unwrap_or(u32::MAX);
++        self.line_counts.borrow_mut().insert(source.id, count);
++        Some(count)
+     }
+     fn owns(&self, file: FileId) -> bool {
+         self.files.contains_key(&file)
+@@ -450,12 +492,33 @@ struct FunctionOccurrence {
+     span: CanonicalSpan,
+ }
+ 
++pub(crate) static SPAN_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
++pub(crate) static SPAN_BYTES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
++
+ fn canonical_span(
+     span: &Span,
+     source: &SourceFile,
+ ) -> Result<CanonicalSpan, GoSyntaxProjectionError> {
+-    let line_count = u32::try_from(source.source.lines().count())
+-        .map_err(|_| GoSyntaxProjectionError::Output)?;
++    canonical_span_with_lines(span, source, None)
++}
++
++fn canonical_span_with_lines(
++    span: &Span,
++    source: &SourceFile,
++    memo: Option<u32>,
++) -> Result<CanonicalSpan, GoSyntaxProjectionError> {
++    SPAN_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
++    let line_count = match memo {
++        Some(count) => count,
++        None => {
++            SPAN_BYTES.fetch_add(
++                source.source.len() as u64,
++                std::sync::atomic::Ordering::Relaxed,
++            );
++            u32::try_from(source.source.lines().count())
++                .map_err(|_| GoSyntaxProjectionError::Output)?
++        }
++    };
+     if span.file != source.id
+         || span.start_byte > span.end_byte
+         || usize::try_from(span.end_byte).map_or(true, |end| end > source.source.len())
+diff --git a/crates/polint/src/analysis_kernel/incremental/layer_cache.rs b/crates/polint/src/analysis_kernel/incremental/layer_cache.rs
+index dde6463c..5261b83c 100644
+--- a/crates/polint/src/analysis_kernel/incremental/layer_cache.rs
++++ b/crates/polint/src/analysis_kernel/incremental/layer_cache.rs
+@@ -23,7 +23,16 @@ use super::keys::{LayerKey, LayerKind, PrecisionTier};
+ use crate::cache::stable_hash;
+ 
+ pub(crate) const LAYER_CACHE_MANIFEST_SCHEMA: &str = "polint-layer-cache-manifest-2";
+-const LAYER_CACHE_MANIFEST_MAX_BYTES: u64 = 4 * 1_048_576;
++const LAYER_CACHE_MANIFEST_MAX_BYTES_DEFAULT: u64 = 4 * 1_048_576;
++/// TEMPORARY (research prototype): raise the manifest ceiling so an oversized
++/// metrics manifest can be read back instead of missing on every run.
++fn layer_cache_manifest_max_bytes() -> u64 {
++    if crate::perf_probe::fix_enabled() {
++        64 * 1_048_576
++    } else {
++        LAYER_CACHE_MANIFEST_MAX_BYTES_DEFAULT
++    }
++}
+ const LAYER_CACHE_PAYLOAD_MAX_BYTES: u64 = 64 * 1_048_576;
+ static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+ const MANIFEST_LAYER_DEPENDENCY_SOURCE: &str = "__manifest_layer__";
+@@ -298,9 +307,10 @@ impl LayerCacheStore {
+         let Some(manifest_path) = self.managed_existing_file(&manifest_path, &manifests_dir) else {
+             return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::InvalidEvicted);
+         };
++        let _mp = crate::perf_probe::Probe::new("layer.manifest_read_parse");
+         let Ok(raw_manifest) = crate::repo_fs::read_file_to_string_with_limit(
+             &manifest_path,
+-            LAYER_CACHE_MANIFEST_MAX_BYTES,
++            layer_cache_manifest_max_bytes(),
+         ) else {
+             evict_file(&manifest_path);
+             return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::Miss);
+@@ -321,6 +331,7 @@ impl LayerCacheStore {
+             return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::InvalidEvicted);
+         }
+ 
++        drop(_mp);
+         let Some(blob_path) = self.blob_path(&manifest.payload_digest) else {
+             evict_file(&manifest_path);
+             return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::InvalidEvicted);
+@@ -330,12 +341,16 @@ impl LayerCacheStore {
+             evict_file(&blob_path);
+             return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::InvalidEvicted);
+         };
++        let _bp = crate::perf_probe::Probe::new("layer.blob_read");
+         let Ok(payload_bytes) =
+             crate::repo_fs::read_file_with_limit(&blob_path, LAYER_CACHE_PAYLOAD_MAX_BYTES)
+         else {
+             evict_file(&manifest_path);
+             return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::InvalidEvicted);
+         };
++        drop(_bp);
++        crate::perf_probe::note("layer.blob_bytes", payload_bytes.len() as u64);
++        let _dp = crate::perf_probe::Probe::new("layer.payload_digest");
+         let Ok(payload_digest) = payload_digest_for_bytes(&payload_bytes) else {
+             evict_file(&manifest_path);
+             evict_file(&blob_path);
+@@ -346,6 +361,8 @@ impl LayerCacheStore {
+             evict_file(&blob_path);
+             return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::InvalidEvicted);
+         }
++        drop(_dp);
++        let _vp = crate::perf_probe::Probe::new("layer.validator");
+         if !validator(&payload_bytes, &manifest) {
+             evict_file(&manifest_path);
+             return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::InvalidEvicted);
+@@ -597,7 +614,7 @@ impl LayerCacheStore {
+             };
+             let Ok(raw_manifest) = crate::repo_fs::read_file_to_string_with_limit(
+                 &managed_path,
+-                LAYER_CACHE_MANIFEST_MAX_BYTES,
++                layer_cache_manifest_max_bytes(),
+             ) else {
+                 continue;
+             };
+diff --git a/crates/polint/src/analysis_kernel/mod.rs b/crates/polint/src/analysis_kernel/mod.rs
+index 9efa2528..ff78ef92 100644
+--- a/crates/polint/src/analysis_kernel/mod.rs
++++ b/crates/polint/src/analysis_kernel/mod.rs
+@@ -199,7 +199,9 @@ fn run_scheduled_providers<'a>(
+                 upstream_digests: &upstream_digests,
+                 host_attachment: &mut host_attachment,
+             };
+-            run_named_provider(provider_id, &mut ctx)
++            crate::perf_probe::timed(&format!("provider.run.{provider_id}"), || {
++                run_named_provider(provider_id, &mut ctx)
++            })
+         } else if provider_id == "polint.direct_summaries" {
+             skipped_direct_summaries_result(db, input_snapshot, &upstream_digests)
+         } else {
+@@ -234,15 +236,21 @@ fn run_scheduled_providers<'a>(
+             provider_id,
+             cache_stats.clone(),
+         ));
+-        provider_outputs.push(AnalysisKernel::provider_output_for_with_optional_digest(
+-            provider_id,
+-            db,
+-            cache_stats,
+-            output_digest.clone(),
+-            ready && matches!(execution, crate::analysis_api::ProviderExecution::Succeeded),
++        provider_outputs.push(crate::perf_probe::timed(
++            &format!("provider.output_meta.{provider_id}"),
++            || {
++                AnalysisKernel::provider_output_for_with_optional_digest(
++                    provider_id,
++                    db,
++                    cache_stats,
++                    output_digest.clone(),
++                    ready && matches!(execution, crate::analysis_api::ProviderExecution::Succeeded),
++                )
++            },
+         ));
+         if ready {
+             let manifest = AnalysisKernel::provider_manifest(provider_id);
++            let _digest_probe = crate::perf_probe::Probe::new(format!("provider.digest.{provider_id}"));
+             if let crate::analysis_api::ProviderExecution::Failed { stage, reason } = execution {
+                 let (status, stage, reason) = provider_failure_outcome(stage, reason);
+                 tracker
+@@ -405,10 +413,12 @@ impl AnalysisKernel {
+             "analysis kernel pipeline gate"
+         );
+ 
+-        let (mut db, load_diagnostics) =
+-            crate::fs::load_analysis_files_scoped(input.loaded, rule_scope.as_ref())?;
++        let (mut db, load_diagnostics) = crate::perf_probe::timed("kernel.load_files", || {
++            crate::fs::load_analysis_files_scoped(input.loaded, rule_scope.as_ref())
++        })?;
+         log_loaded_source_files(&db);
+ 
++        let _snapshot_probe = crate::perf_probe::Probe::new("kernel.input_snapshot");
+         let input_snapshot = incremental::input_snapshot_from_run_inputs(
+             input.loaded,
+             &db,
+@@ -417,6 +427,7 @@ impl AnalysisKernel {
+             input.plan.digest(),
+             Self::provider_manifests(),
+         );
++        drop(_snapshot_probe);
+         let mut diagnostics = load_diagnostics;
+         let mut provider_outputs = Vec::new();
+         let enabled_providers = providers_enabled_by_capability_closure(&requested_capabilities);
+@@ -441,6 +452,7 @@ impl AnalysisKernel {
+                 .collect::<Vec<_>>(),
+         );
+ 
++        let _providers_probe = crate::perf_probe::Probe::new("kernel.providers_total");
+         let (capability_support, scc_closure, provider_tracker, provider_telemetry) =
+             run_scheduled_providers(
+                 &mut db,
+@@ -450,28 +462,39 @@ impl AnalysisKernel {
+                 &mut diagnostics,
+                 &mut provider_outputs,
+             )?;
++        drop(_providers_probe);
+         tracing::info!(target: "polint::kernel", "phase: metrics + derived done");
+ 
+-        let validation_downgrades = if validation::fact_metadata_validation_enabled() {
+-            let validation_report =
+-                validation::validate_fact_metadata(&db, Self::provider_manifests());
+-            diagnostics.extend(validation_report.iter().cloned());
+-            validation_report.downgrades()
+-        } else {
+-            ValidationDowngrades::default()
+-        };
+-        let provider_outcomes = provider_tracker
+-            .seal(&validation_downgrades)
+-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
++        let validation_downgrades = crate::perf_probe::timed("kernel.validate_fact_metadata", || {
++            if validation::fact_metadata_validation_enabled() {
++                let validation_report =
++                    validation::validate_fact_metadata(&db, Self::provider_manifests());
++                diagnostics.extend(validation_report.iter().cloned());
++                validation_report.downgrades()
++            } else {
++                ValidationDowngrades::default()
++            }
++        });
++        let provider_outcomes = crate::perf_probe::timed("kernel.tracker_seal", || {
++            provider_tracker.seal(&validation_downgrades)
++        })
++        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+         let (runtime_blocked_rules, capability_diagnostics) =
+-            Self::runtime_capability_blockers(input.plan, &db, &provider_outcomes);
++            crate::perf_probe::timed("kernel.runtime_capability_blockers", || {
++                Self::runtime_capability_blockers(input.plan, &db, &provider_outcomes)
++            });
+         diagnostics.extend(capability_diagnostics);
+-        db.finish_all_fact_meta_insertions();
++        crate::perf_probe::timed("kernel.finish_fact_meta", || {
++            db.finish_all_fact_meta_insertions()
++        });
+         let store_config = store::StoreConfig::new(
+             input.cache.semantic_store_path(),
+             input.cache.semantic_store_enabled(),
+         );
+-        let store_status = store::SemanticStore::maintain(&store_config);
++        let store_status =
++            crate::perf_probe::timed("kernel.semantic_store_maintain", || {
++                store::SemanticStore::maintain(&store_config)
++            });
+         #[cfg(test)]
+         let scc_closure_debug = scc_closure
+             .as_ref()
+diff --git a/crates/polint/src/analysis_kernel/provider.rs b/crates/polint/src/analysis_kernel/provider.rs
+index 3dba87ff..878b856b 100644
+--- a/crates/polint/src/analysis_kernel/provider.rs
++++ b/crates/polint/src/analysis_kernel/provider.rs
+@@ -161,12 +161,14 @@ fn run_registered_frontend_syntax(
+     let db = crate::analysis_api::FactDatabase::as_any_mut(ctx.facts)
+         .downcast_mut::<AnalysisDb>()
+         .expect("facade AnalysisDb host");
+-    let owned: Vec<crate::core::SourceFile> = db
+-        .files()
+-        .iter()
+-        .filter(|file| file.language.id() == frontend_id)
+-        .cloned()
+-        .collect();
++    let owned: Vec<crate::core::SourceFile> =
++        crate::perf_probe::timed(&format!("frontend.clone_sources.{frontend_name}"), || {
++            db.files()
++                .iter()
++                .filter(|file| file.language.id() == frontend_id)
++                .cloned()
++                .collect()
++        });
+     debug_assert!(
+         owned.iter().all(|file| registry
+             .scheduled_for(&file.path)
+diff --git a/crates/polint/src/analysis_plan.rs b/crates/polint/src/analysis_plan.rs
+index be0e33d0..6b714bd3 100644
+--- a/crates/polint/src/analysis_plan.rs
++++ b/crates/polint/src/analysis_plan.rs
+@@ -224,6 +224,16 @@ impl AnalysisPlan {
+         file_paths: &[&str],
+         diagnostics: &[Diagnostic],
+     ) -> Vec<crate::diagnostics::RuleExecutionRow> {
++        crate::perf_probe::note("plan.rules", self.rules.len() as u64);
++        crate::perf_probe::note("plan.file_paths", file_paths.len() as u64);
++        if crate::perf_probe::fix_enabled() {
++            use rayon::prelude::*;
++            return self
++                .rules
++                .par_iter()
++                .map(|rule| self.rule_execution_row(rule, options, file_paths, diagnostics))
++                .collect();
++        }
+         self.rules
+             .iter()
+             .map(|rule| {
+@@ -234,10 +244,12 @@ impl AnalysisPlan {
+                 let planned = capabilities_ok;
+                 let default_options = RuleOptions::default();
+                 let rule_options = options.get(&rule.id).unwrap_or(&default_options);
+-                let files_in_scope = file_paths
+-                    .iter()
+-                    .filter(|path| crate::sdk::scope::file_matches_globs(rule_options, path))
+-                    .count();
++                let files_in_scope = crate::perf_probe::timed("plan.scope_count_one_rule", || {
++                    file_paths
++                        .iter()
++                        .filter(|path| crate::sdk::scope::file_matches_globs(rule_options, path))
++                        .count()
++                });
+                 let diagnostics_emitted = diagnostics
+                     .iter()
+                     .filter(|diagnostic| diagnostic.rule_id == rule.id)
+@@ -259,6 +271,46 @@ impl AnalysisPlan {
+             .collect()
+     }
+ 
++    /// TEMPORARY (research prototype): body of the `rule_execution_rows` closure,
++    /// extracted so it can also run under `par_iter`.
++    fn rule_execution_row(
++        &self,
++        rule: &PlannedRule,
++        options: &BTreeMap<String, RuleOptions>,
++        file_paths: &[&str],
++        diagnostics: &[Diagnostic],
++    ) -> crate::diagnostics::RuleExecutionRow {
++        let capabilities_ok = !self.support_view.entries().iter().any(|entry| {
++            entry.rules.iter().any(|id| id == &rule.id)
++                && entry.status != CapabilitySupportStatus::Supported
++        });
++        let planned = capabilities_ok;
++        let default_options = RuleOptions::default();
++        let rule_options = options.get(&rule.id).unwrap_or(&default_options);
++        let files_in_scope = file_paths
++            .iter()
++            .filter(|path| crate::sdk::scope::file_matches_globs(rule_options, path))
++            .count();
++        let diagnostics_emitted = diagnostics
++            .iter()
++            .filter(|diagnostic| diagnostic.rule_id == rule.id)
++            .count();
++        let skipped_reason = if planned && capabilities_ok {
++            None
++        } else {
++            capability_skip_reason_from_diagnostics(&rule.id, diagnostics)
++        };
++        crate::diagnostics::RuleExecutionRow {
++            rule_id: rule.id.clone(),
++            planned,
++            capabilities_ok,
++            files_in_scope,
++            diagnostics_emitted,
++            skipped_reason,
++        }
++    }
++
++
+     pub(crate) fn diagnostics(&self) -> Vec<Diagnostic> {
+         self.capabilities
+             .iter()
+diff --git a/crates/polint/src/fs/mod.rs b/crates/polint/src/fs/mod.rs
+index 32c59f4a..6cc8617b 100644
+--- a/crates/polint/src/fs/mod.rs
++++ b/crates/polint/src/fs/mod.rs
+@@ -165,6 +165,12 @@ fn load_analysis_files_with_timings_scoped(
+         db.set_path_contexts(path_ix);
+     }
+     timings.fingerprint_and_push = t2.elapsed();
++    crate::perf_probe::mark("fs.discover", timings.discover.as_secs_f64() * 1000.0);
++    crate::perf_probe::mark("fs.read_parallel", timings.read_parallel.as_secs_f64() * 1000.0);
++    crate::perf_probe::mark(
++        "fs.fingerprint_and_push",
++        timings.fingerprint_and_push.as_secs_f64() * 1000.0,
++    );
+ 
+     Ok((db, timings, diagnostics))
+ }
+diff --git a/crates/polint/src/go/adapter.rs b/crates/polint/src/go/adapter.rs
+index 5c30c12a..5bbd5d20 100644
+--- a/crates/polint/src/go/adapter.rs
++++ b/crates/polint/src/go/adapter.rs
+@@ -120,27 +120,39 @@ pub(crate) fn analyze_files_with_plan_options_and_cache_stats(
+         };
+     }
+ 
+-    let layer_key = go_syntax_layer_key(files, config_hash);
++    let layer_key =
++        crate::perf_probe::timed("go.layer_key", || go_syntax_layer_key(files, config_hash));
+     let mut validate = |bytes: &[u8], output_digest: Option<&Digest>| -> bool {
+-        let Ok(payload) = serde_json::from_slice::<SyntaxLayerPayload>(bytes) else {
++        crate::perf_probe::note("go.validate_bytes", bytes.len() as u64);
++        let Ok(payload) = crate::perf_probe::timed("go.validate_deserialize", || {
++            serde_json::from_slice::<SyntaxLayerPayload>(bytes)
++        }) else {
+             return false;
+         };
+-        validate_syntax_layer_payload(&payload, output_digest, GO_SYNTAX_LAYER_SCHEMA, files)
++        crate::perf_probe::timed("go.validate_payload", || {
++            validate_syntax_layer_payload(&payload, output_digest, GO_SYNTAX_LAYER_SCHEMA, files)
++        })
+     };
+-    let read = cache.read_layer_json(&layer_key, &mut validate);
++    let read = crate::perf_probe::timed("go.read_layer_json", || {
++        cache.read_layer_json(&layer_key, &mut validate)
++    });
+ 
+     match read.status {
+         LayerCacheReadStatus::Hit => {
+             cache_stats.record_hit();
+             cache_stats.record_verified_reuse();
+-            let payload = serde_json::from_slice::<SyntaxLayerPayload>(
+-                &read
+-                    .value
+-                    .expect("layer cache hit should include syntax payload"),
+-            )
+-            .expect("layer cache hit payload validated");
++            let payload = crate::perf_probe::timed("go.hit_deserialize", || {
++                serde_json::from_slice::<SyntaxLayerPayload>(
++                    &read
++                        .value
++                        .expect("layer cache hit should include syntax payload"),
++                )
++                .expect("layer cache hit payload validated")
++            });
+             ProviderRunResult {
+-                diagnostics: restore_syntax_layer_payload(db, payload),
++                diagnostics: crate::perf_probe::timed("go.restore", || {
++                    restore_syntax_layer_payload(db, payload)
++                }),
+                 cache_stats,
+                 output_digest: read.output_digest,
+                 execution: Default::default(),
+@@ -171,23 +183,28 @@ pub(crate) fn analyze_files_with_plan_options_and_cache_stats(
+                 cache_stats.record_invalid_evicted_read();
+             }
+             cache_stats.record_recompute();
+-            let payload = parse_go_syntax_layer_payload(
+-                files,
+-                cache,
+-                config_hash,
+-                rule_hash,
+-                plan_digest,
+-                parallel,
+-            );
++            let payload = crate::perf_probe::timed("go.parse_all", || {
++                parse_go_syntax_layer_payload(
++                    files,
++                    cache,
++                    config_hash,
++                    rule_hash,
++                    plan_digest,
++                    parallel,
++                )
++            });
+             let mut write_diagnostics = Vec::new();
+-            let output_digest = write_syntax_layer_payload(
+-                cache,
+-                &layer_key,
+-                &payload,
+-                &mut cache_stats,
+-                &mut write_diagnostics,
+-            );
+-            let mut diagnostics = restore_syntax_layer_payload(db, payload);
++            let output_digest = crate::perf_probe::timed("go.write_layer", || {
++                write_syntax_layer_payload(
++                    cache,
++                    &layer_key,
++                    &payload,
++                    &mut cache_stats,
++                    &mut write_diagnostics,
++                )
++            });
++            let mut diagnostics =
++                crate::perf_probe::timed("go.restore", || restore_syntax_layer_payload(db, payload));
+             diagnostics.extend(write_diagnostics);
+             ProviderRunResult {
+                 diagnostics,
+@@ -281,7 +298,12 @@ fn validate_syntax_layer_payload(
+         .collect::<Vec<_>>();
+     actual == expected
+         && output_digest
+-            .is_some_and(|digest| digest == &go_syntax_output_digest_for_payload(payload))
++            .is_some_and(|digest| {
++                digest
++                    == &crate::perf_probe::timed("go.validate_reserialize_digest", || {
++                        go_syntax_output_digest_for_payload(payload)
++                    })
++            })
+ }
+ 
+ fn parse_go_syntax_layer_payload(
+@@ -323,6 +345,7 @@ fn restore_syntax_layer_payload(
+     db: &mut dyn FactDatabase,
+     payload: SyntaxLayerPayload,
+ ) -> Vec<Diagnostic> {
++    let _p = crate::perf_probe::Probe::new("go.restore_inner");
+     // FileId is dense; build a path→id index once so restore is O(F), not O(F²).
+     let restores: Vec<(FileId, Option<_>, Vec<Diagnostic>)> = {
+         let file_id_by_path: HashMap<&str, FileId> = db
+@@ -339,13 +362,30 @@ fn restore_syntax_layer_payload(
+             })
+             .collect()
+     };
++    let mut fact_rows = 0u64;
+     let mut diagnostics = Vec::new();
++    let insert_start = std::time::Instant::now();
+     for (file_id, facts, file_diagnostics) in restores {
+         if let Some(facts) = facts {
++            fact_rows += (facts.packages.len()
++                + facts.functions.len()
++                + facts.imports.len()
++                + facts.branches.len()
++                + facts.tests.len()
++                + facts.coverage.len()
++                + facts.ts_components.len()
++                + facts.ts_classes.len()
++                + facts.string_literals.len()
++                + facts.jsx_attributes.len()) as u64;
+             db.restore_file_facts(file_id, facts);
+         }
+         diagnostics.extend(file_diagnostics);
+     }
++    crate::perf_probe::mark(
++        "go.restore_db_inserts",
++        insert_start.elapsed().as_secs_f64() * 1000.0,
++    );
++    crate::perf_probe::note("go.restore_fact_rows", fact_rows);
+     diagnostics
+ }
+ 
+diff --git a/crates/polint/src/lib.rs b/crates/polint/src/lib.rs
+index 91183a08..07ac1791 100644
+--- a/crates/polint/src/lib.rs
++++ b/crates/polint/src/lib.rs
+@@ -49,6 +49,8 @@ pub(crate) mod measure;
+ pub(crate) mod metrics;
+ pub(crate) mod module_graph;
+ pub(crate) mod path_context;
++#[allow(dead_code)]
++pub(crate) mod perf_probe;
+ pub(crate) mod policy_queries;
+ pub(crate) mod repo_fs;
+ pub(crate) mod rule_error;
+diff --git a/crates/polint/src/metrics.rs b/crates/polint/src/metrics.rs
+index 80610b13..ae981754 100644
+--- a/crates/polint/src/metrics.rs
++++ b/crates/polint/src/metrics.rs
+@@ -39,14 +39,29 @@ pub(crate) fn derive_requested_metrics_with_cache_stats(
+         return Ok(MetricsDerivation::default());
+     }
+ 
+-    let inputs = CanonicalMetricsInputs::from_db(db)?;
+-    let layer_key = metrics_layer_key(&inputs, manifest);
++    let inputs = crate::perf_probe::timed("metrics.inputs_from_db", || {
++        CanonicalMetricsInputs::from_db(db)
++    })?;
++    let layer_key =
++        crate::perf_probe::timed("metrics.layer_key", || metrics_layer_key(&inputs, manifest));
+     let store = cache.layer_cache_store();
+     let mut cache_stats = CacheStats::default();
+-    let read = store
+-        .read_json_validated::<MetricsLayerPayload, _>(&layer_key, |payload, manifest| {
+-            validate_metrics_layer_payload(db, payload, manifest)
+-        });
++    let read = crate::perf_probe::timed("metrics.read_layer", || {
++        store.read_json_validated::<MetricsLayerPayload, _>(&layer_key, |payload, manifest| {
++            crate::perf_probe::timed("metrics.validate_payload", || {
++                validate_metrics_layer_payload(db, payload, manifest)
++            })
++        })
++    });
++    crate::perf_probe::note(
++        "metrics.read_status",
++        match read.status {
++            LayerCacheReadStatus::Hit => 1,
++            LayerCacheReadStatus::Miss => 2,
++            LayerCacheReadStatus::InvalidEvicted => 3,
++            LayerCacheReadStatus::BypassedDisabled => 4,
++        },
++    );
+ 
+     Ok(match read.status {
+         LayerCacheReadStatus::Hit => {
+@@ -55,7 +70,9 @@ pub(crate) fn derive_requested_metrics_with_cache_stats(
+             let payload = read
+                 .value
+                 .expect("layer cache hit should include metrics payload");
+-            restore_metrics_layer_payload(db, &payload);
++            crate::perf_probe::timed("metrics.restore", || {
++                restore_metrics_layer_payload(db, &payload)
++            });
+             MetricsDerivation {
+                 cache_stats,
+                 diagnostics: Vec::new(),
+@@ -77,22 +94,30 @@ pub(crate) fn derive_requested_metrics_with_cache_stats(
+                 cache_stats.record_invalid_evicted_read();
+             }
+             cache_stats.record_recompute();
+-            let mut derivation = derive_requested_metrics_uncached(db, plan)?;
+-            let payload = metrics_layer_payload(db);
+-            let dependencies = metrics_layer_dependency_edges(&inputs, &layer_key);
++            let mut derivation = crate::perf_probe::timed("metrics.derive_uncached", || {
++                derive_requested_metrics_uncached(db, plan)
++            })?;
++            let payload = crate::perf_probe::timed("metrics.build_payload", || {
++                metrics_layer_payload(db)
++            });
++            let dependencies = crate::perf_probe::timed("metrics.dependency_edges", || {
++                metrics_layer_dependency_edges(&inputs, &layer_key)
++            });
+             let output_digest = derivation
+                 .output_digest
+                 .clone()
+                 .ok_or(MetricsProjectionError::Output)?;
+-            write_metrics_layer_payload(
+-                &store,
+-                layer_key,
+-                &payload,
+-                dependencies,
+-                output_digest,
+-                &mut cache_stats,
+-                &mut derivation.diagnostics,
+-            );
++            crate::perf_probe::timed("metrics.write_layer", || {
++                write_metrics_layer_payload(
++                    &store,
++                    layer_key,
++                    &payload,
++                    dependencies,
++                    output_digest,
++                    &mut cache_stats,
++                    &mut derivation.diagnostics,
++                )
++            });
+             derivation.cache_stats = cache_stats;
+             derivation
+         }
+@@ -120,8 +145,9 @@ fn derive_requested_metrics_uncached(
+         return Ok(MetricsDerivation::default());
+     }
+ 
+-    if let Some(output) = crate::analysis_neutral::metrics::derive_requested_metrics(db, requested)
+-    {
++    if let Some(output) = crate::perf_probe::timed("metrics.compute", || {
++        crate::analysis_neutral::metrics::derive_requested_metrics(db, requested)
++    }) {
+         db.replace_metric_facts(
+             output.file_metrics,
+             output.function_metrics,
+@@ -131,7 +157,9 @@ fn derive_requested_metrics_uncached(
+     Ok(MetricsDerivation {
+         cache_stats: CacheStats::default(),
+         diagnostics: Vec::new(),
+-        output_digest: Some(CanonicalMetricsOutput::from_db(db)?.digest()),
++        output_digest: Some(crate::perf_probe::timed("metrics.canonical_output", || {
++            CanonicalMetricsOutput::from_db(db).map(|out| out.digest())
++        })?),
+         execution: Default::default(),
+     })
+ }
+diff --git a/crates/polint/src/runner/mod.rs b/crates/polint/src/runner/mod.rs
+index cf29861f..e7e04b5b 100644
+--- a/crates/polint/src/runner/mod.rs
++++ b/crates/polint/src/runner/mod.rs
+@@ -231,16 +231,23 @@ fn render_inspect_rule_human(report: &InspectRuleReport) -> String {
+ }
+ 
+ fn check(root: PathBuf, args: &CheckArgs, rules: &[Rule]) -> Result<u8> {
++    crate::perf_probe::init();
++    let _check_probe = crate::perf_probe::Probe::new("check.total");
+     let (mut diagnostics, db, loaded, rule_execution) = analyze_and_run(&root, args, rules)?;
++    crate::perf_probe::note("check.diagnostics", diagnostics.len() as u64);
+     if args.ignore_comments {
+-        diagnostics = apply_ignores(&db, diagnostics, &loaded.config.ignores).diagnostics;
++        diagnostics = crate::perf_probe::timed("check.apply_ignores", || {
++            apply_ignores(&db, diagnostics, &loaded.config.ignores).diagnostics
++        });
+     }
+     diagnostics = apply_report_filters(diagnostics, args.only_rule.as_deref());
+-    let rendered_diagnostics = limit_report_diagnostics(diagnostics.clone(), args.max_diagnostics);
+-    let source_map = match args.format {
++    let rendered_diagnostics = crate::perf_probe::timed("check.clone_and_limit", || {
++        limit_report_diagnostics(diagnostics.clone(), args.max_diagnostics)
++    });
++    let source_map = crate::perf_probe::timed("check.source_map", || match args.format {
+         FormatArg::Human => db.sources_by_relative_path(),
+         _ => BTreeMap::new(),
+-    };
++    });
+ 
+     let format = match args.format {
+         FormatArg::Human => OutputFormat::Human,
+@@ -279,13 +286,26 @@ fn check(root: PathBuf, args: &CheckArgs, rules: &[Rule]) -> Result<u8> {
+             render_ai_friendly_stdout(&report, AI_FRIENDLY_LATEST_OUTPUT)
+         );
+     } else {
+-        print!(
+-            "{}",
++        let rendered = crate::perf_probe::timed("check.render", || {
+             render_with_sarif_help(format, &rendered_diagnostics, opts, sarif_map)
+-        );
++        });
++        crate::perf_probe::note("check.render_bytes", rendered.len() as u64);
++        crate::perf_probe::timed("check.print", || print!("{rendered}"));
+     }
+ 
+-    Ok(exit_code_for(&diagnostics, args.fail_on))
++    let code = exit_code_for(&diagnostics, args.fail_on);
++    let teardown_start = std::time::Instant::now();
++    drop(rendered_diagnostics);
++    drop(diagnostics);
++    drop(rule_execution);
++    drop(source_map);
++    drop(loaded);
++    drop(db);
++    crate::perf_probe::mark(
++        "check.teardown",
++        teardown_start.elapsed().as_secs_f64() * 1000.0,
++    );
++    Ok(code)
+ }
+ 
+ fn write_ai_friendly_report(
+@@ -388,9 +408,14 @@ fn analyze_and_run(
+     LoadedConfig,
+     Vec<crate::diagnostics::RuleExecutionRow>,
+ )> {
+-    let loaded = load_config_for_check(root, &args.paths)?;
++    crate::perf_probe::init();
++    let _analyze_probe = crate::perf_probe::Probe::new("run.analyze_and_run");
++    let loaded = crate::perf_probe::timed("run.load_config", || {
++        load_config_for_check(root, &args.paths)
++    })?;
+     let cache = crate::cache::Cache::default_for_repo(root, !args.no_cache);
+-    let config_digest = crate::cache::keys::config_hash(&loaded);
++    let config_digest =
++        crate::perf_probe::timed("run.config_digest", || crate::cache::keys::config_hash(&loaded));
+     let enabled = selected_rule_patterns(&loaded, args.profile.as_deref())?;
+     // Run only the requested rule kind. `polint check` runs `Check` rules;
+     // `polint review` runs `Review` rules. Filtering here (rather than in the
+@@ -407,11 +432,15 @@ fn analyze_and_run(
+     plan_inputs.retain_rule_pattern(args.only_rule.as_deref());
+     let exact_enabled = plan_inputs.exact_rule_ids();
+     let options = plan_inputs.rule_options_from_config(&loaded);
+-    let rule_digest = plan_inputs.rule_digest(&options);
+-    let plan = AnalysisPlan::from_inputs(&plan_inputs, &options);
++    let rule_digest =
++        crate::perf_probe::timed("run.rule_digest", || plan_inputs.rule_digest(&options));
++    let plan = crate::perf_probe::timed("run.analysis_plan", || {
++        AnalysisPlan::from_inputs(&plan_inputs, &options)
++    });
+ 
+     let mut diagnostics = plan_inputs.diagnostics();
+     diagnostics.extend(plan.diagnostics());
++    let _kernel_probe = crate::perf_probe::Probe::new("run.kernel_total");
+     let mut output = AnalysisKernel::run(KernelInput {
+         loaded: &loaded,
+         cache: &cache,
+@@ -420,6 +449,7 @@ fn analyze_and_run(
+         plan: &plan,
+         parallel: true,
+     })?;
++    drop(_kernel_probe);
+     diagnostics.extend(std::mem::take(&mut output.diagnostics));
+     // Inject the `polint review` changeset (if any) AFTER the kernel runs and
+     // BEFORE rules execute, so the `ChangedFiles` fact view sees the diff. The
+@@ -428,15 +458,18 @@ fn analyze_and_run(
+         let changeset = read_changeset(path)?;
+         output.db.set_changeset(changeset);
+     }
+-    diagnostics.extend(run_rules_with_runtime_provider_blockers(
+-        &output.db,
+-        rules,
+-        &options,
+-        Some(&exact_enabled),
+-        true,
+-        &output.capability_support,
+-        &output.runtime_blocked_rules,
+-    ));
++    diagnostics.extend(crate::perf_probe::timed("run.rules_total", || {
++        run_rules_with_runtime_provider_blockers(
++            &output.db,
++            rules,
++            &options,
++            Some(&exact_enabled),
++            true,
++            &output.capability_support,
++            &output.runtime_blocked_rules,
++        )
++    }));
++    let _rows_probe = crate::perf_probe::Probe::new("run.rule_execution_rows");
+     let file_paths = output
+         .db
+         .files()
+diff --git a/crates/polint/src/sdk/scope.rs b/crates/polint/src/sdk/scope.rs
+index 6839e40a..8edaf619 100644
+--- a/crates/polint/src/sdk/scope.rs
++++ b/crates/polint/src/sdk/scope.rs
+@@ -71,12 +71,51 @@ fn cached_matcher(pattern: &str) -> Option<GlobMatcher> {
+ /// `./` behave identically.
+ #[must_use]
+ pub fn glob_matches(pattern: &str, value: &str) -> bool {
++    if crate::perf_probe::fix_enabled() {
++        return glob_matches_borrowed(pattern, value);
++    }
+     match cached_matcher(pattern) {
+         Some(matcher) => matcher.is_match(value) || matcher.is_match(format!("./{value}")),
+         None => value.contains(pattern.trim_matches('*')),
+     }
+ }
+ 
++/// TEMPORARY (research prototype): same semantics as [`glob_matches`] without
++/// cloning the memoized `GlobMatcher` or allocating the `./` variant per call.
++fn glob_matches_borrowed(pattern: &str, value: &str) -> bool {
++    static CACHE: OnceLock<RwLock<HashMap<String, Option<GlobMatcher>>>> = OnceLock::new();
++    let cache = CACHE.get_or_init(|| RwLock::new(HashMap::new()));
++    {
++        if let Ok(read) = cache.read()
++            && let Some(cached) = read.get(pattern)
++        {
++            return match cached {
++                Some(matcher) => {
++                    matcher.is_match(value) || {
++                        DOT_SLASH.with(|buf| {
++                            let mut buf = buf.borrow_mut();
++                            buf.clear();
++                            buf.push_str("./");
++                            buf.push_str(value);
++                            matcher.is_match(buf.as_str())
++                        })
++                    }
++                }
++                None => value.contains(pattern.trim_matches('*')),
++            };
++        }
++    }
++    let compiled = Glob::new(pattern).ok().map(|glob| glob.compile_matcher());
++    if let Ok(mut write) = cache.write() {
++        write.insert(pattern.to_string(), compiled);
++    }
++    glob_matches_borrowed(pattern, value)
++}
++
++thread_local! {
++    static DOT_SLASH: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
++}
++
+ /// Return `true` when `file` is in the rule's path scope per [`RuleOptions`].
+ ///
+ /// Three clauses, all must hold:
+diff --git a/crates/polint/src/ts/adapter.rs b/crates/polint/src/ts/adapter.rs
+index 0bd6ecd1..027b564f 100644
+--- a/crates/polint/src/ts/adapter.rs
++++ b/crates/polint/src/ts/adapter.rs
+@@ -144,27 +144,39 @@ pub fn analyze_files_with_plan_options_and_cache_stats(
+         };
+     }
+ 
+-    let layer_key = ts_syntax_layer_key(files, config_hash);
++    let layer_key =
++        crate::perf_probe::timed("ts.layer_key", || ts_syntax_layer_key(files, config_hash));
+     let mut validate = |bytes: &[u8], output_digest: Option<&Digest>| -> bool {
+-        let Ok(payload) = serde_json::from_slice::<SyntaxLayerPayload>(bytes) else {
++        crate::perf_probe::note("ts.validate_bytes", bytes.len() as u64);
++        let Ok(payload) = crate::perf_probe::timed("ts.validate_deserialize", || {
++            serde_json::from_slice::<SyntaxLayerPayload>(bytes)
++        }) else {
+             return false;
+         };
+-        validate_syntax_layer_payload(&payload, output_digest, TS_SYNTAX_LAYER_SCHEMA, files)
++        crate::perf_probe::timed("ts.validate_payload", || {
++            validate_syntax_layer_payload(&payload, output_digest, TS_SYNTAX_LAYER_SCHEMA, files)
++        })
+     };
+-    let read = cache.read_layer_json(&layer_key, &mut validate);
++    let read = crate::perf_probe::timed("ts.read_layer_json", || {
++        cache.read_layer_json(&layer_key, &mut validate)
++    });
+ 
+     match read.status {
+         LayerCacheReadStatus::Hit => {
+             cache_stats.record_hit();
+             cache_stats.record_verified_reuse();
+-            let payload = serde_json::from_slice::<SyntaxLayerPayload>(
+-                &read
+-                    .value
+-                    .expect("layer cache hit should include syntax payload"),
+-            )
+-            .expect("layer cache hit payload validated");
++            let payload = crate::perf_probe::timed("ts.hit_deserialize", || {
++                serde_json::from_slice::<SyntaxLayerPayload>(
++                    &read
++                        .value
++                        .expect("layer cache hit should include syntax payload"),
++                )
++                .expect("layer cache hit payload validated")
++            });
+             ProviderRunResult {
+-                diagnostics: restore_syntax_layer_payload(db, payload),
++                diagnostics: crate::perf_probe::timed("ts.restore", || {
++                    restore_syntax_layer_payload(db, payload)
++                }),
+                 cache_stats,
+                 output_digest: read.output_digest,
+                 execution: Default::default(),
+@@ -195,23 +207,28 @@ pub fn analyze_files_with_plan_options_and_cache_stats(
+                 cache_stats.record_invalid_evicted_read();
+             }
+             cache_stats.record_recompute();
+-            let payload = parse_ts_syntax_layer_payload(
+-                files,
+-                cache,
+-                config_hash,
+-                rule_hash,
+-                plan_digest,
+-                parallel,
+-            );
++            let payload = crate::perf_probe::timed("ts.parse_all", || {
++                parse_ts_syntax_layer_payload(
++                    files,
++                    cache,
++                    config_hash,
++                    rule_hash,
++                    plan_digest,
++                    parallel,
++                )
++            });
+             let mut write_diagnostics = Vec::new();
+-            let output_digest = write_syntax_layer_payload(
+-                cache,
+-                &layer_key,
+-                &payload,
+-                &mut cache_stats,
+-                &mut write_diagnostics,
+-            );
+-            let mut diagnostics = restore_syntax_layer_payload(db, payload);
++            let output_digest = crate::perf_probe::timed("ts.write_layer", || {
++                write_syntax_layer_payload(
++                    cache,
++                    &layer_key,
++                    &payload,
++                    &mut cache_stats,
++                    &mut write_diagnostics,
++                )
++            });
++            let mut diagnostics =
++                crate::perf_probe::timed("ts.restore", || restore_syntax_layer_payload(db, payload));
+             diagnostics.extend(write_diagnostics);
+             ProviderRunResult {
+                 diagnostics,
+@@ -311,8 +328,12 @@ fn validate_syntax_layer_payload(
+         .map(|file| (file.relative_path.as_str(), file.content_hash.as_str()))
+         .collect::<Vec<_>>();
+     actual == expected
+-        && output_digest
+-            .is_some_and(|digest| digest == &ts_syntax_output_digest_for_payload(payload))
++        && output_digest.is_some_and(|digest| {
++            digest
++                == &crate::perf_probe::timed("ts.validate_reserialize_digest", || {
++                    ts_syntax_output_digest_for_payload(payload)
++                })
++        })
+ }
+ 
+ fn parse_ts_syntax_layer_payload(
+@@ -354,6 +375,7 @@ fn restore_syntax_layer_payload(
+     db: &mut dyn FactDatabase,
+     payload: SyntaxLayerPayload,
+ ) -> Vec<Diagnostic> {
++    let _p = crate::perf_probe::Probe::new("ts.restore_inner");
+     let restores: Vec<(FileId, Option<_>, Vec<Diagnostic>)> = {
+         let file_id_by_path: HashMap<&str, FileId> = db
+             .files()
+@@ -369,13 +391,30 @@ fn restore_syntax_layer_payload(
+             })
+             .collect()
+     };
++    let mut fact_rows = 0u64;
+     let mut diagnostics = Vec::new();
++    let insert_start = std::time::Instant::now();
+     for (file_id, facts, file_diagnostics) in restores {
+         if let Some(facts) = facts {
++            fact_rows += (facts.packages.len()
++                + facts.functions.len()
++                + facts.imports.len()
++                + facts.branches.len()
++                + facts.tests.len()
++                + facts.coverage.len()
++                + facts.ts_components.len()
++                + facts.ts_classes.len()
++                + facts.string_literals.len()
++                + facts.jsx_attributes.len()) as u64;
+             db.restore_file_facts(file_id, facts);
+         }
+         diagnostics.extend(file_diagnostics);
+     }
++    crate::perf_probe::mark(
++        "ts.restore_db_inserts",
++        insert_start.elapsed().as_secs_f64() * 1000.0,
++    );
++    crate::perf_probe::note("ts.restore_fact_rows", fact_rows);
+     diagnostics
+ }
+ 
