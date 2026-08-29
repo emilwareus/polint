@@ -112,11 +112,12 @@ internals, or eval/debug schemas.
 |----------|--------|
 | `POLINT_CARGO` | Executable used to spawn repo-local rule hosts (default: `cargo` or `CARGO`). |
 | `POLINT_CACHE_DIR` | Optional cache root. Defaults to `.polint/cache` relative to the checked repository. |
+| `POLINT_CACHE_STORE` | Absolute path to the machine-global store of compiled rule-host binaries, or `off` / `disabled` / `none` to share nothing. Defaults to the platform user cache directory (`$XDG_CACHE_HOME/polint/store`, `~/Library/Caches/polint/store`, `%LOCALAPPDATA%\polint\store`). |
 | `POLINT_GO_SYMBOLS` | Optional path to a `polint-go-symbols` binary or sidecar source directory. A binary can avoid requiring Go for that sidecar; a source directory still needs Go. |
 | `POLINT_GO_FRONTEND` | Internal/private override for the Go semantic frontend used by graph analysis experiments. A binary can avoid requiring Go for that sidecar; a source directory still needs Go 1.25+. This is not a rule-authoring SDK surface. |
 | `POLINT_RULES_PROFILE` | Cargo profile used for repo-local rule hosts. Defaults to `release`; set `dev` or `debug` for unoptimized rule-pack development, or any custom Cargo profile name. |
 | `POLINT_RULES_TARGET_DIR` | Optional Cargo target directory for repo-local rule hosts. Defaults to `$POLINT_CACHE_DIR/rules-target`. |
-| `POLINT_RULES_TOOLCHAIN` | When set to a non-empty value, forwarded as `RUSTUP_TOOLCHAIN` for the rules-host `cargo run` subprocess (parent `polint check` only). |
+| `POLINT_RULES_TOOLCHAIN` | When set to a non-empty value, forwarded as `RUSTUP_TOOLCHAIN` to every subprocess polint starts for a repo-local rule host (parent `polint check` only). |
 | `NO_COLOR` | Disables ANSI colors when `--color auto`. |
 
 ## Cache management
@@ -248,7 +249,7 @@ analysis artifacts. The cache primarily improves repeat CI runs.
 
 ## Rules host failures
 
-When the parent CLI runs `cargo run --manifest-path …/.polint/rules/Cargo.toml`,
+When the parent CLI compiles or runs `…/.polint/rules/Cargo.toml`,
 failures are reported on stderr with the prefix:
 
 `polint: rules host:`

@@ -1,4 +1,4 @@
-//! User-facing errors when the repo-local rules host (`cargo run` on `.polint/rules`) fails.
+//! User-facing errors when the repo-local rules host (`.polint/rules`) fails to build or run.
 
 const RULES_HOST_PREFIX: &str = "polint: rules host:";
 

@@ -4,7 +4,7 @@ milestone: v2.0
 milestone_name: Static Analysis 2.0 Implementation
 status: in_progress
 last_updated: "2026-08-11T11:29:22Z"
-last_activity: 2026-08-11
+last_activity: 2026-08-29
 progress:
   total_phases: 9
   completed_phases: 2
@@ -45,7 +45,7 @@ See: `.planning/PROJECT.md` (updated 2026-07-10)
 Phase: 65
 Plan: 02 (R2 only)
 Status: R1 and R2 complete and code-review clean; broader Phase 65 remains open for R3-R6
-Last activity: 2026-08-11 - Completed quick task 260811-inc: Configure a bounded sccache compiler cache shared across worktrees and disable per-worktree incremental compilation
+Last activity: 2026-08-29 - Completed quick task 260829-s1l: Refuse cross-checkout sharing for rule hosts that embed Cargo-provided checkout paths
 
 ### Active Milestone Phase Progress
 
@@ -59,6 +59,9 @@ Add `public surface leak gate (ubuntu-latest)` AND `public surface leak gate (ma
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260829-s1l | Refuse cross-checkout sharing for rule hosts that embed Cargo-provided checkout paths | 2026-08-29 | this commit | [260829-s1l-fix-cache-sharing-for-rule-hosts-that-em](./quick/260829-s1l-fix-cache-sharing-for-rule-hosts-that-em/) |
+| 260829-qto | Final v0.3.2 rule-host-store release review and blocker fixes | 2026-08-29 | c56d69de | [260829-qto-final-release-readiness-review-and-block](./quick/260829-qto-final-release-readiness-review-and-block/) |
+| 260829-q4d | Fix the Windows rules-store absolute override test | 2026-08-29 | working tree | [260829-q4d-fix-the-windows-rules-store-absolute-ove](./quick/260829-q4d-fix-the-windows-rules-store-absolute-ove/) |
 | 260826-bc1 | Build-cost baseline harness for the repo-local rule-host path (`polint-bench build-cost`, `make build-cost`, measured baseline) | 2026-08-26 | 6a08477f | [260826-bc1-build-cost-baseline-harness](./quick/260826-bc1-build-cost-baseline-harness/) |
 | 260811-t-intern-c-factmeta | PRE-SHIP T-INTERN-C: migrate FactMeta/stable_key_owners to StableKeyId | 2026-08-11 | 932cfd0b | [260811-t-intern-c-factmeta](./quick/260811-t-intern-c-factmeta/) |
 | 260810-t-intern-b-solver-summaries-audit-fix | PRE-SHIP T-INTERN-B solver/summaries audit-fix: StableKeyId Ord/serde/normalize findings | 2026-08-10 | 39097eeb | [260810-t-intern-b-solver-summaries-audit-fix](./quick/260810-t-intern-b-solver-summaries-audit-fix/) |

@@ -173,6 +173,7 @@ pub(crate) fn cargo_cmd() -> Command {
     command.env("CARGO_TARGET_DIR", shared_cargo_target_dir());
     command.env("POLINT_RULES_TARGET_DIR", shared_rules_target_dir());
     command.env("POLINT_RULES_PROFILE", "dev");
+    command.env("POLINT_CACHE_STORE", "off");
     command
 }
 
@@ -181,6 +182,11 @@ pub(crate) fn polint_cmd() -> Command {
     command.env("CARGO_TARGET_DIR", shared_cargo_target_dir());
     command.env("POLINT_RULES_TARGET_DIR", shared_rules_target_dir());
     command.env("POLINT_RULES_PROFILE", "dev");
+    // A test never reaches the developer's machine-global rule-host store: the
+    // suite would fill it with hosts nothing else will ask for, and a run's
+    // result must not depend on what another checkout left there. The tests
+    // that cover sharing point this at a directory of their own.
+    command.env("POLINT_CACHE_STORE", "off");
     command
 }
 
@@ -292,6 +298,7 @@ fn example_rule_cmd(package: &'static str) -> Command {
     command.env("CARGO_TARGET_DIR", shared_cargo_target_dir());
     command.env("POLINT_RULES_TARGET_DIR", shared_rules_target_dir());
     command.env("POLINT_RULES_PROFILE", "dev");
+    command.env("POLINT_CACHE_STORE", "off");
     command
 }
 

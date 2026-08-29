@@ -100,7 +100,7 @@ contribute to the digest.
 ```
 
 These are the Cargo target directories `polint check` uses when it builds
-repo-local rule packages (`cargo run --manifest-path .polint/rules/Cargo.toml`)
+repo-local rule packages (`--manifest-path .polint/rules/Cargo.toml`)
 and when the extension host builds `.polint/extensions/*`. Compiling those
 packages means compiling the `polint` library and its dependencies, which
 dominates the check phase on a cold runner.
