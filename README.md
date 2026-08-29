@@ -240,9 +240,10 @@ from every directory.
 Each entry is keyed by the build's **complete input surface**: the resolved
 `rustc` and `cargo`, the toolchain override, the compiler-flag environment
 variables, the cargo profile, the OS and architecture, the repository's
-`Cargo.toml`/`Cargo.lock`/`rust-toolchain.toml`/`.cargo/config*`, the rule
-package's manifest and lockfile, and the content of every Rust source in the
-package — `src/`, a `build.rs`, wherever a `[[bin]] path` points. Everything is
+`Cargo.toml`/`Cargo.lock`/`rust-toolchain*`, every applicable ancestor and Cargo
+home `.cargo/config*`, the rule package's manifests and lockfile, and the content
+of every file in the package — Rust sources, `build.rs`, and data consumed by
+`include_bytes!` or a build script. Everything is
 hashed from bytes, never modification times. A restored binary is re-hashed
 against the length and digest the entry recorded before it is moved into place
 and run, and any failure — a missing entry, an unreadable one, a corrupt blob —
@@ -251,12 +252,13 @@ is a miss that compiles locally instead. Committing the rule package's
 another one published under.
 
 Two constructs mean a rule package's key cannot stand for what its build
-compiles, and both make polint build locally and publish nothing: a relative
-`path` dependency that leaves the rule package (it names a different directory
-in every checkout — an absolute one names a single directory on this machine and
-is fine), and a cargo config with `patch`, `replace`, `paths`, or `include`
-(which sends the build to sources no manifest or lockfile records). A config
-polint cannot read or parse counts as a redirect.
+compiles, and both make polint build locally and publish nothing: any `path`
+dependency that leaves the rule package (including an absolute path, whose
+contents have no lockfile checksum), and a cargo config with `patch`, `replace`,
+`paths`, source replacement, `include`, `[env]`, or a target runner. The source
+settings can send the build to bytes no manifest or lockfile records; environment
+and runner settings cannot be reproduced by direct execution. A config polint
+cannot read or parse is local-only too.
 
 The store is one user's state on one machine, at the trust level of
 `~/.cargo/registry`: polint creates it `0700` on Unix and never shares it between

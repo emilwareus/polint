@@ -56,35 +56,26 @@ fn write_file(path: &Path, contents: &str) {
         .unwrap_or_else(|error| panic!("write fixture file {}: {error}", path.display()));
 }
 
-/// Point the generated rule pack at this checkout's `polint` by absolute path,
-/// and give the package a name no other test's package shares.
-///
-/// An absolute path names one directory on this machine, which is what makes
-/// this package shareable — the same reason a consumer's registry dependency is.
-/// The unique name keeps this build's units apart from every other test's inside
-/// the shared cargo target directory.
-fn point_generated_rule_pack_at_local_polint(root: &Path) {
+/// Replace the generated pack with a dependency-free host that emits a valid
+/// empty report. The store behavior under test does not depend on polint's SDK,
+/// and keeping every build input inside the package makes the sharing proof
+/// explicit.
+fn replace_generated_rule_pack_with_static_host(root: &Path) {
     let manifest_path = root.join(".polint/rules/Cargo.toml");
-    let manifest = fs::read_to_string(&manifest_path).unwrap();
-    let polint_path = repo_root()
-        .join("crates/polint")
-        .to_string_lossy()
-        .replace('\\', "/");
     let suffix = path_hash_suffix(&manifest_path);
-    let rewritten = manifest
-        .lines()
-        .map(|line| {
-            if line.starts_with("polint = ") {
-                format!(r#"polint = {{ path = "{polint_path}" }}"#)
-            } else if let Some(rest) = line.strip_prefix(r#"name = "polint-local-rules""#) {
-                format!(r#"name = "polint-local-rules-{suffix}"{rest}"#)
-            } else {
-                line.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    fs::write(&manifest_path, format!("{rewritten}\n")).unwrap();
+    write_file(
+        &manifest_path,
+        &format!(
+            "[package]\nname = \"polint-store-host-{suffix}\"\nversion = \"0.0.0\"\n\
+             edition = \"2024\"\n\n[workspace]\n"
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        "fn main() {\n    if std::env::var_os(\"POLINT_STORE_HOST_FAIL\").is_some() {\n        \
+         eprintln!(\"intentional host failure\");\n        std::process::exit(17);\n    }\n    \
+         println!(\"{{\\\"diagnostics\\\":[]}}\");\n}\n",
+    );
 }
 
 fn path_hash_suffix(path: &Path) -> String {
@@ -109,7 +100,7 @@ fn fixture_workspace() -> tempfile::TempDir {
         .args(["new-rule", "ts", "no-raw-colors"])
         .assert()
         .success();
-    point_generated_rule_pack_at_local_polint(workspace.path());
+    replace_generated_rule_pack_with_static_host(workspace.path());
     write_file(
         &workspace.path().join("src/theme.ts"),
         "export const color = \"#ff0000\";\n",
@@ -134,6 +125,7 @@ fn cargo_that_refuses_to_compile(directory: &Path) -> (PathBuf, PathBuf) {
             "#!/bin/sh\n\
              if [ \"$1\" = \"-V\" ]; then exec {real} \"$@\"; fi\n\
              echo \"$@\" >> {}\n\
+             echo \"fake cargo refused: $*\" >&2\n\
              exit 42\n",
             record.display()
         ),
@@ -228,8 +220,8 @@ fn a_rule_host_compiled_once_is_shared_with_every_other_checkout() {
         "the store changes how the host is obtained, never what it reports"
     );
 
-    // That restore stamped the checkout, so the next run there needs neither
-    // cargo nor the store.
+    // That restore stamped the checkout, so the next run needs neither a Cargo
+    // build/run nor the store (the version probe still protects toolchain identity).
     let stamped = stdout_string(
         polint_cmd()
             .current_dir(root)
@@ -243,23 +235,102 @@ fn a_rule_host_compiled_once_is_shared_with_every_other_checkout() {
     assert!(!invocations.exists(), "a stamped host is never compiled");
     assert_eq!(stamped, published);
 
+    // Cargo appends its own diagnostic when the host exits nonzero. A direct
+    // execution that fails therefore re-enters Cargo so the public failure is
+    // byte-identical to the original path.
+    let stamp_path = fresh_target.path().join("polint-store-stamp.json");
+    let stamp_bytes = fs::read(&stamp_path).expect("read stamp bytes");
+    let direct_nonzero = polint_cmd()
+        .current_dir(root)
+        .env("POLINT_CACHE_STORE", "off")
+        .env("POLINT_RULES_TARGET_DIR", fresh_target.path())
+        .env("POLINT_STORE_HOST_FAIL", "1")
+        .args(["check", "--format", "json", "--fail-on", "none"])
+        .output()
+        .expect("run failing stamped host");
+    assert!(!direct_nonzero.status.success());
+    fs::remove_file(&stamp_path).expect("remove stamp for nonzero baseline");
+    let cargo_nonzero = polint_cmd()
+        .current_dir(root)
+        .env("POLINT_CACHE_STORE", "off")
+        .env("POLINT_RULES_TARGET_DIR", fresh_target.path())
+        .env("POLINT_STORE_HOST_FAIL", "1")
+        .args(["check", "--format", "json", "--fail-on", "none"])
+        .output()
+        .expect("run failing host through cargo");
+    assert_eq!(direct_nonzero.status, cargo_nonzero.status);
+    assert_eq!(direct_nonzero.stdout, cargo_nonzero.stdout);
+    assert_eq!(direct_nonzero.stderr, cargo_nonzero.stderr);
+    fs::write(&stamp_path, &stamp_bytes).expect("restore stamp for spawn test");
+
+    // A stamp can still identify the right bytes when the executable bit was
+    // lost. Failure to spawn that direct host is a cache miss, and the exact
+    // original cargo-run failure is preserved.
+    let stamp: serde_json::Value = serde_json::from_slice(&stamp_bytes).expect("stamp is JSON");
+    let stamped_binary = fresh_target.path().join(
+        stamp["target_relative_path"]
+            .as_str()
+            .expect("stamp records target path"),
+    );
+    fs::set_permissions(&stamped_binary, fs::Permissions::from_mode(0o644))
+        .expect("remove executable bit");
+    let direct_spawn_miss = polint_cmd()
+        .current_dir(root)
+        .env("POLINT_CACHE_STORE", "off")
+        .env("POLINT_RULES_TARGET_DIR", fresh_target.path())
+        .env("POLINT_CARGO", &cargo)
+        .args(["check", "--format", "json", "--fail-on", "none"])
+        .output()
+        .expect("run with unusable stamped binary");
+    assert!(!direct_spawn_miss.status.success());
+    fs::remove_file(&stamp_path).expect("remove stamp for cargo-only baseline");
+    let cargo_only_failure = polint_cmd()
+        .current_dir(root)
+        .env("POLINT_CACHE_STORE", "off")
+        .env("POLINT_RULES_TARGET_DIR", fresh_target.path())
+        .env("POLINT_CARGO", &cargo)
+        .args(["check", "--format", "json", "--fail-on", "none"])
+        .output()
+        .expect("run cargo-only failure baseline");
+    assert_eq!(direct_spawn_miss.status, cargo_only_failure.status);
+    assert_eq!(direct_spawn_miss.stdout, cargo_only_failure.stdout);
+    assert_eq!(direct_spawn_miss.stderr, cargo_only_failure.stderr);
+    fs::remove_file(&invocations).expect("clear direct-spawn fallback invocations");
+
     // One changed byte of rule source is a different build, so neither the stamp
     // nor the store answers and cargo is asked to compile again.
     let rule = root.join(".polint/rules/src/main.rs");
     let source = fs::read_to_string(&rule).expect("read the rule source");
     fs::write(&rule, format!("{source}\n// one more byte\n")).expect("edit the rule source");
-    polint_cmd()
+    let speculative_failure = polint_cmd()
         .current_dir(root)
         .env("POLINT_CACHE_STORE", store.path())
         .env("POLINT_RULES_TARGET_DIR", fresh_target.path())
         .env("POLINT_CARGO", &cargo)
         .args(["check", "--format", "json", "--fail-on", "none"])
-        .assert()
-        .failure();
+        .output()
+        .expect("run changed-source failure");
+    assert!(!speculative_failure.status.success());
     assert!(
         invocations.exists(),
         "changed rule sources are compiled rather than restored"
     );
+    let attempted = fs::read_to_string(&invocations).expect("read cargo attempts");
+    assert!(attempted.lines().any(|line| line.starts_with("build ")));
+    assert!(attempted.lines().any(|line| line.starts_with("run ")));
+
+    fs::remove_file(&invocations).expect("clear speculative attempts");
+    let original_failure = polint_cmd()
+        .current_dir(root)
+        .env("POLINT_CACHE_STORE", "off")
+        .env("POLINT_RULES_TARGET_DIR", fresh_target.path())
+        .env("POLINT_CARGO", &cargo)
+        .args(["check", "--format", "json", "--fail-on", "none"])
+        .output()
+        .expect("run original cargo path");
+    assert_eq!(speculative_failure.status, original_failure.status);
+    assert_eq!(speculative_failure.stdout, original_failure.stdout);
+    assert_eq!(speculative_failure.stderr, original_failure.stderr);
 
     // The first build stamped the target directory the whole suite shares.
     // Leave it as it was found: every other test compiles for itself.

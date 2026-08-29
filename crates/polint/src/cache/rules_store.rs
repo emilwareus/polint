@@ -22,13 +22,10 @@
 //! the store at all. It is compiled locally instead, which is slower and never
 //! wrong.
 //!
-//! An absolute `path` dependency names one directory on this machine, so a
-//! fingerprint computed in any checkout identifies the same bytes; a relative
-//! one that leaves the rule package names a different directory in each
-//! checkout, and two checkouts with byte-identical rule sources would then
-//! compute one key over two different builds. That is the same rule the CI
-//! action's build-deps digest already exposes, and it is why absolute paths are
-//! shareable and escaping relative paths are not.
+//! A `path` dependency outside the rule package has no lockfile checksum, so its
+//! bytes can change without changing the fingerprint. Relative escapes and
+//! absolute paths are therefore both local-build-only. Paths that stay inside
+//! the package are covered by the package input walk.
 //!
 //! ## Trust
 //!
@@ -55,7 +52,8 @@
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::io::Read;
+use std::fs::File;
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 /// Overrides where the store lives, or turns sharing off.
@@ -101,12 +99,14 @@ const UNSET: &str = "<unset>";
 ///
 /// Cargo reads all of them from the environment polint spawns it in, and none of
 /// them leaves a trace in any file the fingerprint hashes.
-const CARGO_FLAG_VARIABLES: [(&str, &str); 7] = [
+const CARGO_FLAG_VARIABLES: [(&str, &str); 9] = [
     ("rustflags", "RUSTFLAGS"),
     ("cargo_encoded_rustflags", "CARGO_ENCODED_RUSTFLAGS"),
     ("cargo_build_rustflags", "CARGO_BUILD_RUSTFLAGS"),
     ("cargo_build_target", "CARGO_BUILD_TARGET"),
     ("cargo_incremental", "CARGO_INCREMENTAL"),
+    ("rustc", "RUSTC"),
+    ("rustc_bootstrap", "RUSTC_BOOTSTRAP"),
     ("rustc_wrapper", "RUSTC_WRAPPER"),
     ("rustc_workspace_wrapper", "RUSTC_WORKSPACE_WRAPPER"),
 ];
@@ -115,21 +115,44 @@ const CARGO_FLAG_VARIABLES: [(&str, &str); 7] = [
 /// and the extensionless one it kept honoring for projects written before 1.39.
 const CARGO_CONFIG_NAMES: [&str; 2] = ["config.toml", "config"];
 
-/// The cargo config keys that can put a package's source somewhere other than
-/// where the manifest and the lockfile say it is.
+/// The top-level cargo config keys that make direct, cross-checkout reuse unsafe.
 ///
-/// `patch` and `replace` send a named package to another source and `paths`
-/// overrides whatever packages it finds in the directories it lists; none of
-/// that is recorded in a lockfile, so the rule package can be byte-identical
-/// either side of such a config while the sources compiled through it are not.
+/// `patch`, `replace`, `paths`, and `source` can send a package to bytes no
+/// manifest or lockfile records. `env` changes the environment Cargo supplies to
+/// the build and the process it runs, while a restored host is executed directly.
 /// `include` is here because this never follows one: a config whose full content
 /// cannot be established is never one this claims to have proven.
-const CARGO_REDIRECT_KEYS: [&str; 4] = ["patch", "replace", "paths", "include"];
+const CARGO_UNSHAREABLE_KEYS: [&str; 6] = ["patch", "replace", "paths", "source", "env", "include"];
 
 /// A machine-global content-addressed store rooted at one directory.
 #[derive(Debug, Clone)]
 pub(crate) struct RuleHostStore {
     root: PathBuf,
+}
+
+/// An exclusive lease on one checkout's rule-host target directory.
+///
+/// The lease is held through restore/build and host execution. That prevents two
+/// polint processes from validating different binaries and then racing to run
+/// whichever one was moved into the shared destination last. Failure to acquire
+/// it is a cache miss: the caller uses Cargo's original path instead.
+pub(crate) struct TargetLock {
+    _file: File,
+}
+
+impl TargetLock {
+    pub(crate) fn acquire(target_dir: &Path) -> Option<Self> {
+        std::fs::create_dir_all(target_dir).ok()?;
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(target_dir.join("polint-store.lock"))
+            .ok()?;
+        file.lock().ok()?;
+        Some(Self { _file: file })
+    }
 }
 
 impl RuleHostStore {
@@ -196,24 +219,29 @@ impl RuleHostStore {
     /// content, so re-copying it could only produce the same bytes. If it has
     /// since been corrupted, the restore that reads it removes it, and the
     /// publish after the next build writes it again.
-    fn publish_blob(&self, hash: &str, source: &Path) {
+    fn publish_blob(&self, hash: &str, source: &Path) -> bool {
         let Some(path) = self.blob_path(hash) else {
-            return;
+            return false;
         };
         if path.is_file() {
-            return;
+            return true;
         }
         let Some(parent) = path.parent() else {
-            return;
+            return false;
         };
         if create_dir_all_private(parent).is_err() {
-            return;
+            return false;
         }
-        let temporary = temporary_beside(&path);
-        if std::fs::copy(source, &temporary).is_err() || std::fs::rename(&temporary, &path).is_err()
-        {
-            let _ = std::fs::remove_file(&temporary);
+        let Ok(temporary) = tempfile::Builder::new()
+            .prefix(".polint-blob-")
+            .tempfile_in(parent)
+        else {
+            return false;
+        };
+        if std::fs::copy(source, temporary.path()).is_err() {
+            return false;
         }
+        temporary.persist_noclobber(&path).is_ok() || path.is_file()
     }
 
     /// The file an entry for `key` is stored in, or `None` when `key` is not a
@@ -251,9 +279,9 @@ struct StoreEntry {
 
 /// The recorded identity of the rule host already in a cargo target directory.
 ///
-/// This is what lets a warm run skip cargo altogether: the fingerprint names the
+/// This is what lets a warm run skip Cargo build/run: the fingerprint names the
 /// build's whole input surface, so a stamp that still matches means the binary
-/// beside it is the one cargo would produce. The length and digest are re-read
+/// beside it is the one Cargo would produce. The length and digest are re-read
 /// from disk on every check, so a truncated or replaced binary is never run on
 /// the strength of a stale record.
 ///
@@ -351,26 +379,27 @@ pub(crate) fn restore(
     // the path polint is about to execute. Renaming rather than writing over the
     // destination is also what makes replacing a host this machine is currently
     // running safe: on Unix the running process keeps its own inode, and on
-    // Windows the rename fails instead of tearing the file, which is a miss like
-    // any other.
+    // Windows replacement is atomic when the destination is replaceable; if the
+    // OS refuses to replace a running executable, persistence fails as a miss.
     let destination = target_dir.join(relative);
     let parent = destination.parent()?;
     std::fs::create_dir_all(parent).ok()?;
-    let temporary = temporary_beside(&destination);
-    let restored = std::fs::copy(&blob, &temporary)
+    let temporary = tempfile::Builder::new()
+        .prefix(".polint-restore-")
+        .tempfile_in(parent)
+        .ok()?;
+    let restored = std::fs::copy(&blob, temporary.path())
         .ok()
-        .and_then(|_| file_identity(&temporary).ok())
+        .and_then(|_| file_identity(temporary.path()).ok())
         .is_some_and(|(len, sha256)| len == entry.len && sha256 == entry.sha256);
     if !restored {
-        let _ = std::fs::remove_file(&temporary);
         // The blob did not match the entry that named it, so neither is usable
         // by anyone.
         let _ = std::fs::remove_file(&blob);
         store.discard(fingerprint);
         return None;
     }
-    if make_executable(&temporary).is_err() || std::fs::rename(&temporary, &destination).is_err() {
-        let _ = std::fs::remove_file(&temporary);
+    if make_executable(temporary.path()).is_err() || temporary.persist(&destination).is_err() {
         return None;
     }
     write_stamp(target_dir, fingerprint, &entry);
@@ -415,11 +444,11 @@ pub(crate) fn record(
         len,
     };
     write_stamp(target_dir, fingerprint, &entry);
-    if let Some(store) = store {
-        store.publish_blob(&entry.sha256, binary);
-        if let Ok(bytes) = serde_json::to_vec(&entry) {
-            store.publish(fingerprint, &bytes);
-        }
+    if let Some(store) = store
+        && store.publish_blob(&entry.sha256, binary)
+        && let Ok(bytes) = serde_json::to_vec(&entry)
+    {
+        store.publish(fingerprint, &bytes);
     }
 }
 
@@ -456,9 +485,9 @@ fn shard(key: &str) -> Option<String> {
 
 /// Publish `bytes` at `path` so a reader sees either the whole file or no file.
 ///
-/// The temporary carries the writer's pid, so two processes publishing at once
-/// never collide, and the rename happens inside the destination directory, so it
-/// is a rename rather than a copy.
+/// The temporary has a randomized name, so concurrent writers never collide,
+/// and persistence happens inside the destination directory so replacement is
+/// atomic on every supported platform.
 fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let Some(parent) = path.parent() else {
         return Err(std::io::Error::other(
@@ -466,24 +495,13 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         ));
     };
     create_dir_all_private(parent)?;
-    let temporary = temporary_beside(path);
-    if let Err(err) = std::fs::write(&temporary, bytes) {
-        let _ = std::fs::remove_file(&temporary);
-        return Err(err);
-    }
-    if let Err(err) = std::fs::rename(&temporary, path) {
-        let _ = std::fs::remove_file(&temporary);
-        return Err(err);
-    }
+    let mut temporary = tempfile::Builder::new()
+        .prefix(".polint-entry-")
+        .tempfile_in(parent)?;
+    temporary.write_all(bytes)?;
+    temporary.flush()?;
+    temporary.persist(path).map_err(|error| error.error)?;
     Ok(())
-}
-
-/// A temporary name beside `path`, unique to this process.
-fn temporary_beside(path: &Path) -> PathBuf {
-    let name = path
-        .file_name()
-        .map_or_else(|| "entry".to_string(), |name| name.to_string_lossy().into());
-    path.with_file_name(format!(".{name}.{}.tmp", std::process::id()))
 }
 
 /// Create `dir` and its parents, private to the invoking user.
@@ -618,19 +636,44 @@ pub(crate) struct BuildEnvironment {
     profile: String,
     toolchain: ToolchainIdentity,
     /// The value of each [`CARGO_FLAG_VARIABLES`] entry, in that order.
-    cargo_flags: [String; CARGO_FLAG_VARIABLES.len()],
+    cargo_flags: Vec<String>,
+    /// Target- and profile-specific Cargo environment overrides, sorted by name.
+    cargo_overrides: Vec<(String, String)>,
+    /// Cargo's user-wide configuration/source root for this build.
+    cargo_home: Option<PathBuf>,
 }
 
 impl BuildEnvironment {
     /// The build environment of this process, for a host compiled under
     /// `profile` by `toolchain`.
-    pub(crate) fn new(profile: String, toolchain: ToolchainIdentity) -> Self {
-        Self {
+    pub(crate) fn new(profile: String, toolchain: ToolchainIdentity) -> Option<Self> {
+        let mut cargo_flags = Vec::with_capacity(CARGO_FLAG_VARIABLES.len());
+        for (_, variable) in CARGO_FLAG_VARIABLES {
+            let value = match std::env::var_os(variable) {
+                Some(value) => value.into_string().ok()?,
+                None => UNSET.to_string(),
+            };
+            cargo_flags.push(value);
+        }
+        let mut cargo_overrides = Vec::new();
+        for (name, value) in std::env::vars_os() {
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            if (name.starts_with("CARGO_PROFILE_") || name.starts_with("CARGO_TARGET_"))
+                && name != "CARGO_TARGET_DIR"
+            {
+                cargo_overrides.push((name.to_string(), value.into_string().ok()?));
+            }
+        }
+        cargo_overrides.sort();
+        Some(Self {
             profile,
             toolchain,
-            cargo_flags: CARGO_FLAG_VARIABLES
-                .map(|(_, variable)| std::env::var(variable).unwrap_or_else(|_| UNSET.to_string())),
-        }
+            cargo_flags,
+            cargo_overrides,
+            cargo_home: cargo_home(),
+        })
     }
 }
 
@@ -732,6 +775,19 @@ pub(crate) fn build_fingerprint(
     for ((key, _), value) in CARGO_FLAG_VARIABLES.iter().zip(&environment.cargo_flags) {
         digest.line(key, value);
     }
+    for (name, value) in &environment.cargo_overrides {
+        digest.line(&format!("cargo_override_{name}"), value);
+    }
+    digest.line(
+        "cargo_home",
+        &environment
+            .cargo_home
+            .as_deref()
+            .map(path_digest)
+            .transpose()
+            .ok()?
+            .unwrap_or_else(|| UNSET.to_string()),
+    );
 
     // The files cargo and rustup discover from the directory polint spawns cargo
     // in, and then the rule package's own. Both lockfiles matter: the one beside
@@ -748,10 +804,37 @@ pub(crate) fn build_fingerprint(
     );
     for (key, relative) in [
         ("rust_toolchain_toml", "rust-toolchain.toml"),
-        ("cargo_config_toml", ".cargo/config.toml"),
-        ("cargo_config", ".cargo/config"),
+        ("rust_toolchain", "rust-toolchain"),
     ] {
         digest.line(key, &optional_file_digest(&repo_root.join(relative))?);
+    }
+    for (index, config) in
+        cargo_config_files(rule_pkg_dir, repo_root, environment.cargo_home.clone())
+            .iter()
+            .enumerate()
+    {
+        digest.line(
+            &format!("cargo_config_{index:03}"),
+            &optional_file_digest(config)?,
+        );
+    }
+    for (index, manifest) in ancestor_files(rule_pkg_dir, "Cargo.toml")?
+        .iter()
+        .enumerate()
+    {
+        digest.line(
+            &format!("ancestor_manifest_{index:03}"),
+            &file_digest(manifest).ok()?,
+        );
+    }
+    for (index, lockfile) in ancestor_files(rule_pkg_dir, "Cargo.lock")?
+        .iter()
+        .enumerate()
+    {
+        digest.lockfile_line(
+            &format!("ancestor_lockfile_{index:03}"),
+            &file_digest(lockfile).ok()?,
+        );
     }
     digest.line("package", &package_label(repo_root, rule_pkg_dir));
     digest.line(
@@ -762,7 +845,7 @@ pub(crate) fn build_fingerprint(
         "package_cargo_lock",
         &optional_file_digest(&rule_pkg_dir.join("Cargo.lock"))?,
     );
-    for (relative, source) in rule_sources(rule_pkg_dir)? {
+    for (relative, source) in rule_inputs(rule_pkg_dir)? {
         digest.line(&relative, &source);
     }
     digest.line(
@@ -783,22 +866,20 @@ fn package_label(repo_root: &Path, rule_pkg_dir: &Path) -> String {
         .replace('\\', "/")
 }
 
-/// Every Rust source in the package, as `<package-relative path>` and digest
-/// pairs ordered by path.
+/// Every potential build input in the package, as `<package-relative path>` and
+/// digest pairs ordered by path.
 ///
-/// The whole package is walked rather than just `src/`, because `src/` is a
-/// convention and not a boundary: a `[[bin]] path` may name a file anywhere in
-/// the package, and a `build.rs` beside the manifest runs in the compiler and
-/// decides what the crate becomes. A key that stands in for cargo's own
-/// freshness check has to cover both. Files a binary does not compile — a
-/// `tests/` directory, say — cost a rebuild when they change and can never cause
-/// a stale host to run.
+/// The whole package is walked rather than just `src/`: `include_bytes!`, a
+/// build script, or a nested path dependency can consume any file. Files a
+/// binary does not compile cost a rebuild when they change and can never cause a
+/// stale host to run. Cargo lockfiles are folded separately because Cargo may
+/// create or update them during the build.
 ///
 /// `None` when a directory or a file that is there cannot be read: the set would
 /// then describe fewer sources than the build compiles.
-fn rule_sources(rule_pkg_dir: &Path) -> Option<Vec<(String, String)>> {
+fn rule_inputs(rule_pkg_dir: &Path) -> Option<Vec<(String, String)>> {
     let files = package_files(rule_pkg_dir, &|path| {
-        path.extension().is_some_and(|extension| extension == "rs")
+        path.file_name().is_none_or(|name| name != "Cargo.lock")
     })?;
     let mut out = Vec::with_capacity(files.len());
     for path in files {
@@ -826,34 +907,53 @@ fn rule_sources(rule_pkg_dir: &Path) -> Option<Vec<(String, String)>> {
 /// package — what it compiles, and where its manifests point — so the two can
 /// never disagree about what "in the package" means.
 fn package_files(rule_pkg_dir: &Path, keep: &dyn Fn(&Path) -> bool) -> Option<Vec<PathBuf>> {
-    fn collect(
-        root: &Path,
-        dir: &Path,
-        keep: &dyn Fn(&Path) -> bool,
-        out: &mut Vec<PathBuf>,
-    ) -> Option<()> {
-        for entry in std::fs::read_dir(dir).ok()? {
+    let mut out = Vec::new();
+    let mut pending = vec![rule_pkg_dir.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).ok()? {
             let entry = entry.ok()?;
             let kind = entry.file_type().ok()?;
             if kind.is_symlink() {
-                continue;
+                // Cargo follows a symlink used as a module, build input, or path
+                // dependency. This walk deliberately does not leave the package,
+                // so it cannot prove a complete input set when one is present.
+                return None;
             }
             let path = entry.path();
             if kind.is_dir() {
-                if dir == root && path.file_name().is_some_and(|name| name == "target") {
+                if dir == rule_pkg_dir && path.file_name().is_some_and(|name| name == "target") {
                     continue;
                 }
-                collect(root, &path, keep, out)?;
-            } else if keep(&path) {
-                out.push(path);
+                pending.push(path);
+            } else if kind.is_file() {
+                if keep(&path) {
+                    out.push(path);
+                }
+            } else {
+                // Sockets, devices, and FIFOs cannot be safely fingerprinted as
+                // finite package inputs. Cargo handles the package locally.
+                return None;
             }
         }
-        Some(())
     }
-
-    let mut out = Vec::new();
-    collect(rule_pkg_dir, rule_pkg_dir, keep, &mut out)?;
     Some(out)
+}
+
+/// Existing Cargo files from the package directory through every ancestor.
+///
+/// Cargo may attach a package to a workspace above the repository root, and
+/// workspace manifests and lockfiles affect dependency resolution and profiles.
+fn ancestor_files(start: &Path, name: &str) -> Option<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    for path in start.ancestors().map(|ancestor| ancestor.join(name)) {
+        match std::fs::metadata(&path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return None,
+            Ok(metadata) if metadata.is_file() => files.push(path),
+            Ok(_) => return None,
+        }
+    }
+    Some(files)
 }
 
 /// The binary targets a manifest declares, sorted and comma-joined.
@@ -904,9 +1004,40 @@ fn file_digest(path: &Path) -> std::io::Result<String> {
     Ok(file_identity(path)?.1)
 }
 
+/// A path folded to a digest without placing path-shaped text in the store key.
+fn path_digest(path: &Path) -> std::io::Result<String> {
+    let mut hasher = Sha256::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        hasher.update(path.as_os_str().as_bytes());
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        for unit in path.as_os_str().encode_wide() {
+            hasher.update(unit.to_le_bytes());
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let text = path.to_str().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "non-UTF-8 cargo home")
+        })?;
+        hasher.update(text.as_bytes());
+    }
+    Ok(hex(&hasher.finalize()))
+}
+
 /// A file's length and the sha256 of its bytes, read in one streaming pass so a
 /// rule host of any size costs one buffer rather than its own size in memory.
 fn file_identity(path: &Path) -> std::io::Result<(u64, String)> {
+    if !std::fs::metadata(path)?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "fingerprinted input is not a regular file",
+        ));
+    }
     let mut file = std::fs::File::open(path)?;
     let mut hasher = Sha256::new();
     let mut buffer = vec![0_u8; 64 * 1024];
@@ -940,19 +1071,15 @@ fn hex(bytes: &[u8]) -> String {
 /// from a registry or a git revision: the lockfile pins those and cargo verifies
 /// them by checksum. Two constructs break that.
 ///
-/// A `path` dependency is what a manifest has for naming sources the fingerprint
-/// cannot see, and a RELATIVE one is resolved against the manifest — so
-/// `../helpers` names a different directory in every checkout, and two checkouts
-/// holding byte-identical rule sources would compute one fingerprint over two
-/// different builds. An absolute path names one directory on this machine, and a
-/// path that stays inside the package is hashed by content like every other
-/// input; both mean the fingerprint identifies the same bytes wherever it is
-/// computed.
+/// A path dependency does it from inside a manifest: an absolute path names
+/// sources outside the fingerprint, while a relative `../helpers` names a
+/// different directory in every checkout. A relative path that stays inside the
+/// package is hashed by content like every other input.
 ///
-/// A cargo config does it from outside the tree altogether: `[patch]`,
-/// `[replace]` and `paths` send a build to sources no manifest and no lockfile
-/// records, so the package is byte-identical either side of such a config while
-/// what it compiles is not.
+/// A cargo config does it from outside the tree altogether: dependency source
+/// redirects send a build to bytes no manifest and no lockfile records. Config
+/// `[env]` and target runners also change how Cargo executes the built host, so a
+/// direct restored-host execution cannot reproduce their behavior.
 ///
 /// Anything unreadable or unparseable answers `false`: a surface that cannot be
 /// proven is never shared. A false yes costs a local build; a false no shares the
@@ -972,7 +1099,7 @@ fn shareable_with_cargo_home(
     cargo_home: Option<PathBuf>,
 ) -> bool {
     every_manifest_path_stays_put(rule_pkg_dir)
-        && !a_cargo_config_redirects_a_dependency(rule_pkg_dir, repo_root, cargo_home)
+        && !a_cargo_config_prevents_direct_reuse(rule_pkg_dir, repo_root, cargo_home)
 }
 
 /// Whether every `path` declared by every manifest under the rule package names
@@ -985,7 +1112,15 @@ fn every_manifest_path_stays_put(rule_pkg_dir: &Path) -> bool {
     let manifests = package_files(rule_pkg_dir, &|path| {
         path.file_name().is_some_and(|name| name == "Cargo.toml")
     });
-    manifests.is_some_and(|manifests| {
+    manifests.is_some_and(|mut manifests| {
+        let Some(workspace_manifests) = ancestor_files(rule_pkg_dir, "Cargo.toml") else {
+            return false;
+        };
+        for workspace_manifest in workspace_manifests {
+            if !manifests.contains(&workspace_manifest) {
+                manifests.push(workspace_manifest);
+            }
+        }
         manifests
             .iter()
             .all(|manifest| manifest_paths_stay_put(rule_pkg_dir, manifest))
@@ -1006,9 +1141,29 @@ fn manifest_paths_stay_put(rule_pkg_dir: &Path, manifest: &Path) -> bool {
     };
     let mut declared = Vec::new();
     collect_declared_paths(&value, &mut declared);
+    if let Some(workspace) = value
+        .get("package")
+        .and_then(|package| package.get("workspace"))
+        .and_then(toml::Value::as_str)
+    {
+        declared.push(workspace.to_string());
+    }
     declared.iter().all(|path| {
         let path = Path::new(path);
-        path.is_absolute() || resolved_lexically(manifest_dir, path).starts_with(rule_pkg_dir)
+        if path.is_absolute() {
+            // Cargo's lockfile carries no checksum for a path dependency. Even
+            // though the path names one machine-local directory, its contents
+            // can change while this package's fingerprint stays unchanged.
+            return false;
+        }
+        let resolved = resolved_lexically(manifest_dir, path);
+        let Ok(package) = std::fs::canonicalize(rule_pkg_dir) else {
+            return false;
+        };
+        let Ok(resolved) = std::fs::canonicalize(resolved) else {
+            return false;
+        };
+        resolved.starts_with(package)
     })
 }
 
@@ -1043,9 +1198,9 @@ fn collect_declared_paths(value: &toml::Value, out: &mut Vec<String>) {
 
 /// `path` joined to `base` and reduced without touching the filesystem.
 ///
-/// Lexical rather than canonical because the question is where the manifest
-/// points, not where a symlink would land, and because the directory need not
-/// exist for the answer to be knowable.
+/// Lexical reduction happens before canonicalization so `..` is resolved from
+/// the manifest directory. The caller then canonicalizes the result to catch a
+/// symlink that leaves the package.
 fn resolved_lexically(base: &Path, path: &Path) -> PathBuf {
     let mut out = base.to_path_buf();
     for part in path.components() {
@@ -1060,8 +1215,7 @@ fn resolved_lexically(base: &Path, path: &Path) -> PathBuf {
     out
 }
 
-/// Whether a cargo config that applies to this build redirects where a
-/// dependency's source is read from.
+/// Whether a cargo config that applies to this build prevents direct reuse.
 ///
 /// It never asks WHICH package is redirected. A `paths` entry names directories
 /// rather than packages and could only be attributed by reading the manifests it
@@ -1069,23 +1223,24 @@ fn resolved_lexically(base: &Path, path: &Path) -> PathBuf {
 /// to be attributed, and a patch of any crate in the host's graph moves bytes the
 /// fingerprint cannot see exactly as a patch of `polint` does. One question —
 /// does this build read sources the fingerprint cannot name — has one answer for
-/// all of them.
-fn a_cargo_config_redirects_a_dependency(
+/// all of them. Runtime environment and runner settings are equally categorical:
+/// only Cargo knows how to apply them, so direct execution is not equivalent.
+fn a_cargo_config_prevents_direct_reuse(
     rule_pkg_dir: &Path,
     repo_root: &Path,
     cargo_home: Option<PathBuf>,
 ) -> bool {
     cargo_config_files(rule_pkg_dir, repo_root, cargo_home)
         .iter()
-        .any(|path| redirects_a_dependency(path))
+        .any(|path| cargo_config_prevents_direct_reuse(path))
 }
 
 /// Every cargo config file that can apply to a rule-host build.
 ///
 /// polint spawns cargo with the repository root as its working directory, and
 /// cargo merges the `.cargo/` config of that directory with those of every
-/// ancestor and with `$CARGO_HOME`'s. The rule package's own is read too, for a
-/// cargo run from inside it. Both file names are taken at every location because
+/// ancestor and with `$CARGO_HOME`'s. The rule package's own is considered
+/// conservatively as well. Both file names are taken at every location because
 /// cargo still honors the extensionless one it used before 1.39. Nothing here
 /// requires a file to exist; a name that is not there is read as absent.
 fn cargo_config_files(
@@ -1121,17 +1276,20 @@ fn env_path(variable: &str) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// Whether one cargo config file redirects where a package's source is read
-/// from.
+/// Whether one cargo config changes inputs or execution behavior that direct
+/// reuse cannot reproduce.
 ///
 /// A file that is not there redirects nothing — nor does a location where cargo
 /// could not keep one, such as a `.cargo` that is a file rather than a directory.
 /// A file that IS there and cannot be read or parsed is treated as if it did
 /// redirect: the store may only ever make a run faster, so a config whose effect
 /// this run could not establish is never one it claims to have proven.
-fn redirects_a_dependency(path: &Path) -> bool {
-    if !path.is_file() {
-        return false;
+fn cargo_config_prevents_direct_reuse(path: &Path) -> bool {
+    match std::fs::metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(_) => return true,
+        Ok(metadata) if !metadata.is_file() => return true,
+        Ok(_) => {}
     }
     let Ok(text) = std::fs::read_to_string(path) else {
         return true;
@@ -1139,9 +1297,17 @@ fn redirects_a_dependency(path: &Path) -> bool {
     let Ok(config) = toml::from_str::<toml::Value>(&text) else {
         return true;
     };
-    CARGO_REDIRECT_KEYS
+    CARGO_UNSHAREABLE_KEYS
         .iter()
         .any(|key| config.get(key).is_some())
+        || config
+            .get("target")
+            .and_then(toml::Value::as_table)
+            .is_some_and(|targets| {
+                targets
+                    .values()
+                    .any(|target| target.get("runner").is_some())
+            })
 }
 
 #[cfg(test)]
@@ -1170,7 +1336,12 @@ mod tests {
                 cargo: "cargo 1.95.0 (abcdef 2026-01-01)".to_string(),
                 rustup_toolchain: None,
             },
-            cargo_flags: CARGO_FLAG_VARIABLES.map(|_| UNSET.to_string()),
+            cargo_flags: CARGO_FLAG_VARIABLES
+                .iter()
+                .map(|_| UNSET.to_string())
+                .collect(),
+            cargo_overrides: Vec::new(),
+            cargo_home: None,
         }
     }
 
@@ -1387,10 +1558,31 @@ mod tests {
             Some(changed_manifest),
             "RUSTFLAGS is part of the key"
         );
+
+        let with_rustc = build_fingerprint(
+            root,
+            &package,
+            &environment_with("rustc", "/opt/custom/bin/rustc"),
+        );
+        assert_ne!(
+            with_rustc,
+            build_fingerprint(root, &package, &environment),
+            "RUSTC selects the compiler Cargo actually executes"
+        );
+
+        let mut with_profile_override = environment.clone();
+        with_profile_override
+            .cargo_overrides
+            .push(("CARGO_PROFILE_RELEASE_LTO".to_string(), "thin".to_string()));
+        assert_ne!(
+            build_fingerprint(root, &package, &with_profile_override),
+            build_fingerprint(root, &package, &environment),
+            "Cargo profile environment overrides change the built artifact"
+        );
     }
 
     #[test]
-    fn every_rust_source_in_the_package_is_part_of_the_key() {
+    fn every_package_build_input_is_part_of_the_key() {
         let temp = temp_dir("sources");
         let root = temp.path();
         let package = rule_package(root);
@@ -1418,8 +1610,64 @@ mod tests {
         write(&package.join("target/debug/build/stale.rs"), "// output\n");
         assert_eq!(
             build_fingerprint(root, &package, &environment),
-            Some(with_build_script),
+            Some(with_build_script.clone()),
             "a package-local cargo target directory is output, not input"
+        );
+
+        write(
+            &package.join("assets/policy.json"),
+            "{\"mode\":\"strict\"}\n",
+        );
+        let with_asset = build_fingerprint(root, &package, &environment).expect("a fingerprint");
+        assert_ne!(
+            with_build_script, with_asset,
+            "non-Rust files can be consumed by include_bytes! or build scripts"
+        );
+
+        std::fs::write(package.join("assets/raw.bin"), [0_u8, 0xff, 0x7f])
+            .expect("write non-UTF-8 input bytes");
+        let with_raw_bytes =
+            build_fingerprint(root, &package, &environment).expect("a fingerprint");
+        assert_ne!(
+            with_asset, with_raw_bytes,
+            "input contents are hashed as bytes rather than decoded as text"
+        );
+    }
+
+    #[test]
+    fn cargo_configs_and_cargo_home_are_part_of_the_key() {
+        let temp = temp_dir("cargo-config-fingerprint");
+        let root = temp.path().join("repo");
+        let package = rule_package(&root);
+        let mut environment = release_environment();
+        environment.cargo_home = Some(temp.path().join("cargo-home"));
+
+        let baseline = build_fingerprint(&root, &package, &environment).expect("a fingerprint");
+        write(
+            &temp.path().join(".cargo/config.toml"),
+            "[build]\nrustflags = [\"-C\", \"target-cpu=native\"]\n",
+        );
+        let ancestor = build_fingerprint(&root, &package, &environment).expect("a fingerprint");
+        assert_ne!(
+            baseline, ancestor,
+            "a config above the repository changes Cargo's build"
+        );
+
+        write(
+            &temp.path().join("cargo-home/config.toml"),
+            "[target.x86_64-unknown-linux-gnu]\nlinker = \"clang\"\n",
+        );
+        let user_config = build_fingerprint(&root, &package, &environment).expect("a fingerprint");
+        assert_ne!(
+            ancestor, user_config,
+            "Cargo home configuration is part of the build identity"
+        );
+
+        environment.cargo_home = Some(temp.path().join("other-cargo-home"));
+        assert_ne!(
+            build_fingerprint(&root, &package, &environment),
+            Some(user_config),
+            "Cargo home location affects relative config and registry paths"
         );
     }
 
@@ -1458,7 +1706,51 @@ mod tests {
     }
 
     #[test]
-    fn an_absolute_path_dependency_names_one_directory_and_is_shareable() {
+    fn a_workspace_path_dependency_outside_the_rule_package_is_not_shareable() {
+        let temp = temp_dir("workspace-escape");
+        let root = temp.path();
+        let package = rule_package(root);
+        write(
+            &root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\".polint/rules\", \"helpers\"]\n\n\
+             [workspace.dependencies]\nhelpers = { path = \"helpers\" }\n",
+        );
+        write(
+            &root.join("helpers/Cargo.toml"),
+            "[package]\nname = \"helpers\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+        );
+        assert!(!shareable(&package, root));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_path_dependency_symlinked_outside_the_package_is_not_shareable() {
+        use std::os::unix::fs::symlink;
+
+        let temp = temp_dir("symlink-escape");
+        let root = temp.path();
+        let package = rule_package(root);
+        let external = root.join("external-helper");
+        write(
+            &external.join("Cargo.toml"),
+            "[package]\nname = \"helpers\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+        );
+        symlink(&external, package.join("helpers")).expect("create dependency symlink");
+        write(
+            &package.join("Cargo.toml"),
+            "[package]\nname = \"polint-local-rules\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n\
+             [dependencies]\nhelpers = { path = \"helpers\" }\n\n[workspace]\n",
+        );
+        assert!(!shareable(&package, root));
+        assert_eq!(
+            build_fingerprint(root, &package, &release_environment()),
+            None,
+            "a symlinked source tree cannot produce a complete fingerprint"
+        );
+    }
+
+    #[test]
+    fn an_absolute_path_dependency_is_not_shareable_without_a_content_digest() {
         let temp = temp_dir("absolute");
         let root = temp.path();
         let package = rule_package(root);
@@ -1470,7 +1762,7 @@ mod tests {
                  [dependencies]\npolint = {{ path = \"{elsewhere}\" }}\n\n[workspace]\n"
             ),
         );
-        assert!(shareable(&package, root));
+        assert!(!shareable(&package, root));
     }
 
     #[test]
@@ -1500,22 +1792,46 @@ mod tests {
     }
 
     #[test]
-    fn a_cargo_config_that_redirects_a_dependency_is_not_shareable() {
-        for redirect in [
+    fn a_cargo_config_with_unreproducible_build_or_run_semantics_is_not_shareable() {
+        for setting in [
             "[patch.crates-io]\npolint = { path = \"/tmp/polint\" }\n",
             "[replace]\n\"polint:0.3.1\" = { path = \"/tmp/polint\" }\n",
             "paths = [\"/tmp/polint\"]\n",
+            "[source.crates-io]\nreplace-with = \"vendored\"\n",
+            "[env]\nPOLINT_TEST_MODE = \"store-sensitive\"\n",
+            "[target.x86_64-unknown-linux-gnu]\nrunner = \"host-wrapper\"\n",
             "include = \"other.toml\"\n",
         ] {
             let temp = temp_dir("redirect");
             let root = temp.path();
             let package = rule_package(root);
-            write(&root.join(".cargo/config.toml"), redirect);
+            write(&root.join(".cargo/config.toml"), setting);
             assert!(
                 !shareable(&package, root),
-                "a config declaring {redirect:?} must not be shared"
+                "a config declaring {setting:?} must not be shared"
             );
         }
+    }
+
+    #[test]
+    fn a_cargo_config_or_workspace_manifest_that_is_not_a_file_is_not_shareable() {
+        let config_temp = temp_dir("config-directory");
+        let config_root = config_temp.path();
+        let config_package = rule_package(config_root);
+        std::fs::create_dir_all(config_root.join(".cargo/config.toml"))
+            .expect("create non-file config");
+        assert!(!shareable(&config_package, config_root));
+
+        let manifest_temp = temp_dir("manifest-directory");
+        let manifest_root = manifest_temp.path();
+        let manifest_package = rule_package(manifest_root);
+        std::fs::create_dir_all(manifest_root.join("Cargo.toml"))
+            .expect("create non-file workspace manifest");
+        assert!(!shareable(&manifest_package, manifest_root));
+        assert_eq!(
+            build_fingerprint(manifest_root, &manifest_package, &release_environment()),
+            None
+        );
     }
 
     #[test]
@@ -1556,7 +1872,7 @@ mod tests {
         let root = temp.path();
         let package = rule_package(root);
         write(&root.join(".cargo/config.toml"), "[build]\njobs = 2\n");
-        assert!(!a_cargo_config_redirects_a_dependency(&package, root, None));
+        assert!(!a_cargo_config_prevents_direct_reuse(&package, root, None));
     }
 
     #[test]
@@ -1585,6 +1901,40 @@ mod tests {
             binary_recorded_by_stamp(&restored_into, &"ab".repeat(32)).as_deref(),
             Some(restored.as_path()),
             "a restore stamps the checkout it restored into"
+        );
+    }
+
+    #[test]
+    fn restore_and_stamp_atomically_replace_an_existing_host() {
+        let temp = temp_dir("replace-existing");
+        let store = RuleHostStore::at(temp.path().join("store"));
+        let first_target = temp.path().join("first");
+        let first_binary = first_target.join("release/polint-local-rules");
+        write(&first_binary, "first compiled host\n");
+        record(Some(&store), &first_target, &"ab".repeat(32), &first_binary);
+
+        let destination = temp.path().join("destination");
+        restore(&store, &destination, &"ab".repeat(32)).expect("restore first host");
+
+        let second_target = temp.path().join("second");
+        let second_binary = second_target.join("release/polint-local-rules");
+        write(&second_binary, "second compiled host\n");
+        record(
+            Some(&store),
+            &second_target,
+            &"cd".repeat(32),
+            &second_binary,
+        );
+        let restored =
+            restore(&store, &destination, &"cd".repeat(32)).expect("replace existing host");
+
+        assert_eq!(
+            std::fs::read_to_string(restored).expect("read replacement"),
+            "second compiled host\n"
+        );
+        assert!(
+            binary_recorded_by_stamp(&destination, &"cd".repeat(32)).is_some(),
+            "the replacement stamp must supersede the old fingerprint"
         );
     }
 

@@ -4272,11 +4272,13 @@ fn run_local_rule_host_kind(
 
     if let Some(plan) = local_rule_host_plan(root, manifest, &cargo, &rules_target_dir) {
         // The host this checkout compiled last, when it is still the host these
-        // inputs name. Nothing else has to run, cargo included.
+        // inputs name. No Cargo build or run is needed.
         if let Some(binary) =
             rules_store::binary_recorded_by_stamp(&rules_target_dir, &plan.fingerprint.complete)
+            && let Some(result) =
+                run_local_rule_host_binary(root, manifest, &binary, &cache_layout, &host_args)
         {
-            return run_local_rule_host_binary(root, manifest, &binary, &cache_layout, &host_args);
+            return result;
         }
         // The store answers a question asked from another checkout, so it may
         // only be reached when this fingerprint names the same bytes there.
@@ -4289,31 +4291,25 @@ fn run_local_rule_host_kind(
         if let Some(store) = store {
             if let Some(binary) =
                 rules_store::restore(store, &rules_target_dir, &plan.fingerprint.complete)
+                && let Some(result) =
+                    run_local_rule_host_binary(root, manifest, &binary, &cache_layout, &host_args)
             {
                 tracing::info!(target: "polint::rules", "rule host restored from store");
-                return run_local_rule_host_binary(
-                    root,
-                    manifest,
-                    &binary,
-                    &cache_layout,
-                    &host_args,
-                );
+                return result;
             }
             // Compiling and running are separated here so the binary can be
             // named, recorded, and shared. A build that cannot be attributed to
             // one binary falls through to the combined `cargo run` below, which
             // needs no such answer.
-            if let Some(binary) =
-                build_local_rule_host_binary(root, manifest, &cargo, &cache_layout)?
+            if let Ok(Some(binary)) =
+                build_local_rule_host_binary(root, manifest, &cargo, &cache_layout)
             {
                 record_built_rule_host(root, &plan, store, &rules_target_dir, &binary);
-                return run_local_rule_host_binary(
-                    root,
-                    manifest,
-                    &binary,
-                    &cache_layout,
-                    &host_args,
-                );
+                if let Some(result) =
+                    run_local_rule_host_binary(root, manifest, &binary, &cache_layout, &host_args)
+                {
+                    return result;
+                }
             }
         }
     }
@@ -4331,6 +4327,8 @@ fn local_rule_host_cargo() -> String {
 /// How a rule host's build inputs are named, and where a build already done may
 /// be found.
 struct LocalRuleHostPlan {
+    /// Serializes this target directory through verification and execution.
+    _target_lock: rules_store::TargetLock,
     /// The digests over every input the build reads, taken before it runs.
     fingerprint: rules_store::BuildFingerprint,
     /// The directory holding the rule package, whose sources the fingerprint
@@ -4359,12 +4357,14 @@ fn local_rule_host_plan(
     if store.is_none() && !rules_store::is_stamped(rules_target_dir) {
         return None;
     }
+    let target_lock = rules_store::TargetLock::acquire(rules_target_dir)?;
     let rule_package_dir = manifest.parent()?.to_path_buf();
     let environment = rules_store::BuildEnvironment::new(
         LocalRuleHostProfile::from_env().name(),
         local_rule_host_toolchain(root, cargo)?,
-    );
+    )?;
     Some(LocalRuleHostPlan {
+        _target_lock: target_lock,
         fingerprint: rules_store::build_fingerprint(root, &rule_package_dir, &environment)?,
         rule_package_dir,
         environment,
@@ -4424,7 +4424,11 @@ fn local_rule_host_toolchain(root: &Path, cargo: &str) -> Option<rules_store::To
         }
         command.spawn().ok()
     };
-    let rustc = start("rustc", "-vV")?;
+    let rustc_program = match std::env::var_os("RUSTC") {
+        Some(value) => value.into_string().ok()?,
+        None => "rustc".to_string(),
+    };
+    let rustc = start(&rustc_program, "-vV")?;
     let cargo = start(cargo, "-V")?;
     let rustc = rustc.wait_with_output().ok()?;
     let cargo = cargo.wait_with_output().ok()?;
@@ -4505,13 +4509,13 @@ fn apply_local_rule_host_env(command: &mut ProcessCommand, cache_layout: &CacheL
 /// The machine-readable stream is what names the binary; it is cargo's own
 /// answer rather than a path this reconstructs, so a target directory laid out
 /// for a cross-compilation target or a named profile needs no special case.
-/// Diagnostics stay rendered on stderr, so a build that fails reports exactly
-/// what it always reported.
+/// The caller treats every error as a miss and invokes the original `cargo run`
+/// path, so a failed speculative build cannot change user-facing behavior.
 ///
 /// # Errors
 ///
-/// Returns the same rule-host build error `cargo run` produces when the build
-/// fails.
+/// Errors are internal to the speculative store path and must be degraded by the
+/// caller.
 fn build_local_rule_host_binary(
     root: &Path,
     manifest: &Path,
@@ -4535,31 +4539,13 @@ fn build_local_rule_host_binary(
         )
     })?;
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        // Only what cargo wrote outside the machine-readable stream is output a
-        // user was meant to read.
-        let stdout = unstructured_cargo_stdout(&output.stdout);
-        anyhow::bail!(rules_host_error::rules_host_error_message(
-            &manifest.display().to_string(),
-            output.status,
-            &stdout,
-            stderr.as_ref(),
-        ));
+        anyhow::bail!("speculative local rule-host build failed");
     }
     Ok(built_rule_host_binary(
         &output.stdout,
         &cache_layout.rules_target_dir(),
         &LocalRuleHostProfile::from_env().target_subdirectory(),
     ))
-}
-
-/// The lines cargo wrote to stdout that are not machine-readable messages.
-fn unstructured_cargo_stdout(stdout: &[u8]) -> String {
-    String::from_utf8_lossy(stdout)
-        .lines()
-        .filter(|line| serde_json::from_str::<serde_json::Value>(line).is_err())
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 /// The one executable a rule-host build produced, or `None` when the build
@@ -4609,18 +4595,19 @@ fn run_local_rule_host_binary(
     binary: &Path,
     cache_layout: &CacheLayout,
     host_args: &[OsString],
-) -> Result<(Vec<Diagnostic>, Vec<crate::diagnostics::RuleExecutionRow>)> {
+) -> Option<Result<(Vec<Diagnostic>, Vec<crate::diagnostics::RuleExecutionRow>)>> {
     let mut command = ProcessCommand::new(binary);
     command.current_dir(root).args(host_args);
     apply_local_rule_host_env(&mut command, cache_layout);
-    let output = command.output().with_context(|| {
-        format!(
-            "failed to run local rule host {} from {}",
-            manifest.display(),
-            binary.display()
-        )
-    })?;
-    local_rule_host_report(manifest, &output)
+    let output = command.output().ok()?;
+    // Cargo adds its own process-failure diagnostic when a host exits nonzero.
+    // Re-enter the original path so that stderr and the final error remain
+    // byte-for-byte identical instead of reporting only the direct child's
+    // streams. A successful process has no Cargo wrapper output to reproduce.
+    if !output.status.success() {
+        return None;
+    }
+    Some(local_rule_host_report(manifest, &output))
 }
 
 /// Compile and run the rule host in one cargo invocation.
