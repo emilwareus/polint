@@ -68,6 +68,7 @@ fn polint_cmd() -> AssertCommand {
         repo_root().join("target/polint-cli-test-rules"),
     );
     command.env("POLINT_RULES_PROFILE", "dev");
+    command.env("POLINT_CACHE_STORE", "off");
     command
 }
 
