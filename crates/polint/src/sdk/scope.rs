@@ -35,6 +35,7 @@
 
 use crate::core::RuleOptions;
 use globset::{Glob, GlobMatcher};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
 
@@ -45,22 +46,22 @@ use std::sync::{OnceLock, RwLock};
 /// Without the memo a metrics rule over a few thousand files recompiles the same
 /// handful of config patterns hundreds of thousands of times — seconds of pure
 /// overhead per `polint check`. The cache is bounded by the number of distinct
-/// patterns in `.polint.toml`, and `GlobMatcher` clones are cheap (the inner
-/// regex is reference-counted). Invalid patterns memoize as `None` so the
-/// substring fallback below stays cheap too.
-fn cached_matcher(pattern: &str) -> Option<GlobMatcher> {
+/// patterns in `.polint.toml`. Invalid patterns memoize as `None` so the
+/// substring fallback stays cheap too.
+///
+/// Entries must be matched **borrowed**, never cloned out of the map: a
+/// `GlobMatcher` clone deep-copies the inner `Glob`'s owned pattern strings, and
+/// at one clone per (rule, fact row) that copying costs far more than the match
+/// itself — enough to undo most of what the memo saves.
+fn matcher_cache() -> &'static RwLock<HashMap<String, Option<GlobMatcher>>> {
     static CACHE: OnceLock<RwLock<HashMap<String, Option<GlobMatcher>>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| RwLock::new(HashMap::new()));
-    if let Ok(read) = cache.read()
-        && let Some(cached) = read.get(pattern)
-    {
-        return cached.clone();
-    }
-    let compiled = Glob::new(pattern).ok().map(|glob| glob.compile_matcher());
-    if let Ok(mut write) = cache.write() {
-        write.insert(pattern.to_string(), compiled.clone());
-    }
-    compiled
+    CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+thread_local! {
+    /// Scratch buffer for the `./`-prefixed match candidate, reused across calls
+    /// so the fallback attempt does not allocate once per non-matching row.
+    static DOT_SLASH_CANDIDATE: RefCell<String> = const { RefCell::new(String::new()) };
 }
 
 /// Match `value` against a single glob `pattern`.
@@ -71,8 +72,34 @@ fn cached_matcher(pattern: &str) -> Option<GlobMatcher> {
 /// `./` behave identically.
 #[must_use]
 pub fn glob_matches(pattern: &str, value: &str) -> bool {
-    match cached_matcher(pattern) {
-        Some(matcher) => matcher.is_match(value) || matcher.is_match(format!("./{value}")),
+    let cache = matcher_cache();
+    if let Ok(read) = cache.read()
+        && let Some(cached) = read.get(pattern)
+    {
+        return matches_memoized(cached.as_ref(), pattern, value);
+    }
+    let compiled = Glob::new(pattern).ok().map(|glob| glob.compile_matcher());
+    let Ok(mut write) = cache.write() else {
+        return matches_memoized(compiled.as_ref(), pattern, value);
+    };
+    let cached = write.entry(pattern.to_string()).or_insert(compiled);
+    matches_memoized(cached.as_ref(), pattern, value)
+}
+
+/// Decide a single match from a memo entry: `Some` is a compiled matcher tried
+/// against `value` and its `./`-prefixed variant, `None` is a pattern that failed
+/// to compile and falls back to a substring test.
+fn matches_memoized(matcher: Option<&GlobMatcher>, pattern: &str, value: &str) -> bool {
+    match matcher {
+        Some(matcher) => {
+            matcher.is_match(value)
+                || DOT_SLASH_CANDIDATE.with_borrow_mut(|candidate| {
+                    candidate.clear();
+                    candidate.push_str("./");
+                    candidate.push_str(value);
+                    matcher.is_match(candidate.as_str())
+                })
+        }
         None => value.contains(pattern.trim_matches('*')),
     }
 }
@@ -113,6 +140,7 @@ pub fn file_matches_globs(options: &RuleOptions, file: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     fn opts(files: &[&str], allow_files: &[&str], allow: &[&str]) -> RuleOptions {
         RuleOptions {
@@ -179,5 +207,145 @@ mod tests {
     #[test]
     fn invalid_glob_falls_back_to_substring() {
         assert!(glob_matches("[unclosed", "x[unclosedy"));
+    }
+
+    /// Compile, try the value, try an allocated `./` variant, else substring —
+    /// the formulation [`glob_matches`] replaced, kept as an oracle so the memo
+    /// and the borrowed match path cannot drift from the documented semantics.
+    fn reference_glob_matches(pattern: &str, value: &str) -> bool {
+        match Glob::new(pattern).ok().map(|glob| glob.compile_matcher()) {
+            Some(matcher) => matcher.is_match(value) || matcher.is_match(format!("./{value}")),
+            None => value.contains(pattern.trim_matches('*')),
+        }
+    }
+
+    fn repo_root() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .expect("canonical repo root")
+    }
+
+    fn shipped_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("readable example directory") {
+            let path = entry.expect("directory entry").path();
+            if path.is_dir() {
+                shipped_files(&path, out);
+            } else {
+                out.push(path);
+            }
+        }
+    }
+
+    /// Every `files` / `allow_files` pattern shipped in `examples/**/.polint.toml`,
+    /// plus patterns that fail to compile so the substring fallback is covered.
+    fn scope_patterns() -> Vec<String> {
+        let examples = repo_root().join("examples");
+        let mut paths = Vec::new();
+        shipped_files(&examples, &mut paths);
+        let mut patterns = vec![
+            "[unclosed".to_string(),
+            "src/[a-".to_string(),
+            "{unbalanced".to_string(),
+            "**".to_string(),
+            "*".to_string(),
+            String::new(),
+        ];
+        for path in paths
+            .iter()
+            .filter(|path| path.file_name().is_some_and(|name| name == ".polint.toml"))
+        {
+            let config = std::fs::read_to_string(path).expect("readable example config");
+            for line in config.lines().map(str::trim) {
+                let Some((key, list)) = line.split_once('=') else {
+                    continue;
+                };
+                if !matches!(key.trim(), "files" | "allow_files") {
+                    continue;
+                }
+                patterns.extend(
+                    list.split('"')
+                        .skip(1)
+                        .step_by(2)
+                        .map(std::string::ToString::to_string),
+                );
+            }
+        }
+        patterns.sort();
+        patterns.dedup();
+        assert!(
+            patterns.len() > 6,
+            "no scope patterns were read from examples/**/.polint.toml"
+        );
+        patterns
+    }
+
+    /// Every path shipped under `examples/`, relative to its example root — the
+    /// shape rules actually pass in — in both bare and `./`-prefixed form.
+    fn corpus_paths() -> Vec<String> {
+        let examples = repo_root().join("examples");
+        let mut paths = Vec::new();
+        shipped_files(&examples, &mut paths);
+        let mut values = paths
+            .iter()
+            .filter_map(|path| path.strip_prefix(&examples).ok())
+            .filter_map(|relative| {
+                relative
+                    .iter()
+                    .skip(1)
+                    .collect::<std::path::PathBuf>()
+                    .to_str()
+                    .map(str::to_string)
+            })
+            .filter(|relative| !relative.is_empty())
+            .flat_map(|relative| [format!("./{relative}"), relative])
+            .collect::<Vec<_>>();
+        values.sort();
+        values.dedup();
+        assert!(
+            !values.is_empty(),
+            "no corpus paths were read from examples/"
+        );
+        values
+    }
+
+    /// Every shipped scope pattern against every shipped corpus path. The space is
+    /// small enough to sweep exhaustively, which the sampled property below cannot
+    /// promise.
+    #[test]
+    fn every_shipped_pattern_matches_every_corpus_path_as_the_reference_does() {
+        let patterns = scope_patterns();
+        let values = corpus_paths();
+        let mut matched = 0;
+        for pattern in &patterns {
+            for value in &values {
+                let actual = glob_matches(pattern, value);
+                assert_eq!(
+                    actual,
+                    reference_glob_matches(pattern, value),
+                    "pattern {pattern:?} against {value:?}"
+                );
+                matched += usize::from(actual);
+            }
+        }
+        assert!(
+            matched > 0,
+            "the sweep matched nothing, so it proves nothing about the match path"
+        );
+    }
+
+    proptest! {
+        #[test]
+        fn borrowed_matching_agrees_with_the_reference_semantics(
+            (pattern, value) in (proptest::sample::select(scope_patterns()), proptest::sample::select(corpus_paths())),
+        ) {
+            prop_assert_eq!(
+                glob_matches(&pattern, &value),
+                reference_glob_matches(&pattern, &value),
+                "pattern {:?} against {:?}",
+                pattern,
+                value
+            );
+        }
     }
 }
