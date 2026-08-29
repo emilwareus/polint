@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::digest::{Digest, DigestKind};
+use crate::analysis_api::TS_MODULE_RESOLVER;
 use crate::analysis_kernel::ProviderManifest;
 use crate::cache::{CACHE_VERSION, CacheKey};
 use crate::core::AnalysisDb;
@@ -34,6 +35,14 @@ pub(crate) const MODULE_GRAPH_TOPOLOGY_INPUT_FILE_NAMES: &[&str] = &[
     "bun.lock",
     "tsconfig.json",
 ];
+
+fn module_graph_toolchain_digest(resolver: &str) -> Digest {
+    Digest::from_parts(
+        DigestKind::ToolInvocation,
+        "module_graph_toolchain",
+        &[resolver],
+    )
+}
 
 pub(crate) use crate::analysis_api::LayerKind;
 
@@ -244,7 +253,7 @@ impl LayerKey {
             module_graph_parameter_digest,
             lifecycle_digest,
             config_digest,
-            Digest::absent(DigestKind::ToolInvocation, "module_graph_toolchain"),
+            module_graph_toolchain_digest(TS_MODULE_RESOLVER),
             input_digests,
             upstream_syntax_output_digests
                 .into_iter()
@@ -1640,6 +1649,26 @@ mod tests {
         ] {
             assert_ne!(base, changed);
         }
+    }
+
+    #[test]
+    fn module_graph_layer_key_tracks_the_resolver_toolchain() {
+        let key = module_graph_key(
+            digest("import_shape", "base"),
+            digest("go_lifecycle", "base"),
+            digest("ts_js_lifecycle", "base"),
+            digest("config", "base"),
+            digest("syntax", "base"),
+        );
+
+        assert_eq!(
+            key.toolchain_digest,
+            module_graph_toolchain_digest(TS_MODULE_RESOLVER)
+        );
+        assert_ne!(
+            key.toolchain_digest,
+            module_graph_toolchain_digest("oxc-resolver-0.0.0")
+        );
     }
 
     #[test]

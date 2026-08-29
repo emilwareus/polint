@@ -7,8 +7,8 @@
 //! grammar change reuse facts produced by the previous one, at a key that claims
 //! they are current.
 //!
-//! `parser_identity_labels_track_the_resolved_dependency_versions` enforces that
-//! against the workspace lockfile.
+//! `cache_toolchain_identities_track_exact_dependency_versions` enforces that
+//! against the workspace manifest and lockfile.
 
 /// Backend that parses Go sources.
 ///
@@ -23,6 +23,9 @@ pub const GO_PARSER_GRAMMAR: &str = "tree-sitter-go-0.25.0";
 
 /// Backend that parses TypeScript and JavaScript sources.
 pub const TS_PARSER_BACKEND: &str = "oxc-0.129.0";
+
+/// Resolver used to derive the TypeScript and JavaScript module graph.
+pub const TS_MODULE_RESOLVER: &str = "oxc-resolver-11.19.1";
 
 /// Every parser label this engine links, joined.
 ///
@@ -43,19 +46,21 @@ mod tests {
     /// provider identity and cache keys, so facts produced by the previous parser
     /// are reused as if current.
     ///
-    /// This guards *this* workspace. A downstream host that resolves a different
-    /// patch version under a caret requirement is not detected, because the label
-    /// is compiled in from here.
     #[test]
-    fn parser_identity_labels_track_the_resolved_dependency_versions() {
-        let lock = std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .and_then(Path::parent)
-                .expect("workspace root")
-                .join("Cargo.lock"),
-        )
-        .expect("Cargo.lock is readable");
+    fn cache_toolchain_identities_track_exact_dependency_versions() {
+        let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("workspace root");
+        let lock = std::fs::read_to_string(workspace_root.join("Cargo.lock"))
+            .expect("Cargo.lock is readable");
+        let manifest = std::fs::read_to_string(workspace_root.join("Cargo.toml"))
+            .expect("Cargo.toml is readable")
+            .parse::<toml::Table>()
+            .expect("Cargo.toml is valid TOML");
+        let dependencies = manifest["workspace"]["dependencies"]
+            .as_table()
+            .expect("workspace dependencies are a table");
         let resolved = |crate_name: &str| {
             lock.split("[[package]]")
                 .find_map(|block| {
@@ -76,6 +81,12 @@ mod tests {
                 })
                 .unwrap_or_else(|| panic!("{crate_name} is not in Cargo.lock"))
         };
+        let requirement = |crate_name: &str| {
+            dependencies[crate_name]
+                .as_str()
+                .or_else(|| dependencies[crate_name].get("version")?.as_str())
+                .unwrap_or_else(|| panic!("{crate_name} has a version requirement"))
+        };
         for (label, crate_name, prefix, constant) in [
             (
                 "Go backend",
@@ -90,13 +101,34 @@ mod tests {
                 GO_PARSER_GRAMMAR,
             ),
             ("TypeScript backend", "oxc_parser", "oxc", TS_PARSER_BACKEND),
+            (
+                "TypeScript module resolver",
+                "oxc_resolver",
+                "oxc-resolver",
+                TS_MODULE_RESOLVER,
+            ),
         ] {
+            let version = resolved(crate_name);
             assert_eq!(
                 constant,
-                format!("{prefix}-{}", resolved(crate_name)),
+                format!("{prefix}-{version}"),
                 "the {label} label drifted from the locked {crate_name} version; update the \
                  constant, and for a Go label also add a semantic-store migration for the new \
                  CHECK value"
+            );
+            assert_eq!(
+                requirement(crate_name),
+                format!("={version}"),
+                "{crate_name} must be pinned exactly because its version is compiled into a \
+                 persistent cache identity"
+            );
+        }
+        for crate_name in ["oxc_allocator", "oxc_ast", "oxc_semantic", "oxc_span"] {
+            let version = resolved(crate_name);
+            assert_eq!(
+                requirement(crate_name),
+                format!("={version}"),
+                "{crate_name} must resolve with the Oxc parser identity"
             );
         }
     }

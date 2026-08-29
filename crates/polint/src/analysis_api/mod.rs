@@ -38,7 +38,8 @@ pub use module_facts::{
     ResolvedImportFact, UnresolvedReason,
 };
 pub use parser_identity::{
-    GO_PARSER_BACKEND, GO_PARSER_GRAMMAR, TS_PARSER_BACKEND, engine_parser_identity,
+    GO_PARSER_BACKEND, GO_PARSER_GRAMMAR, TS_MODULE_RESOLVER, TS_PARSER_BACKEND,
+    engine_parser_identity,
 };
 pub use provider::{
     CachePolicy, CaptureEnrichment, FactDatabase, HostAttachment, NullCaptureEnrichment,
