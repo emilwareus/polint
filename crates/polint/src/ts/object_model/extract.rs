@@ -13,7 +13,7 @@ use oxc_semantic::{AstNodes, NodeId, Scoping, SemanticBuilder, SymbolId as OxcSy
 use oxc_span::GetSpan;
 
 use crate::analysis_api::SourceFile;
-use crate::internal_core::{Span, StableKeyInterner, span_from_byte_range};
+use crate::internal_core::{Span, StableKeyInterner};
 use crate::ts::inventory::extract::extract_ts_inventory_from_program;
 use crate::ts::inventory::store::TsInventoryOutput;
 use crate::ts::object_model::facts::{
@@ -345,7 +345,7 @@ impl<'a> ObjectModelExtractor<'a> {
                     output.property_writes.push(TsPropertyWriteFact {
                         id: TsPropertyWriteId(0),
                         file: self.file.id,
-                        span: span_from_oxc(self.file.id, self.source, property.span),
+                        span: span_from_oxc(self.file, property.span),
                         stable_key: crate::ts::intern_frontend_stable_key(
                             self.operation_stable_key(
                                 "ts_object_property_write",
@@ -376,7 +376,7 @@ impl<'a> ObjectModelExtractor<'a> {
                     output.property_writes.push(TsPropertyWriteFact {
                         id: TsPropertyWriteId(0),
                         file: self.file.id,
-                        span: span_from_oxc(self.file.id, self.source, spread.span),
+                        span: span_from_oxc(self.file, spread.span),
                         stable_key: crate::ts::intern_frontend_stable_key(
                             self.operation_stable_key(
                                 "ts_object_property_write",
@@ -425,7 +425,7 @@ impl<'a> ObjectModelExtractor<'a> {
         output.allocations.push(TsObjectAllocationFact {
             id: TsObjectAllocationId(0),
             file: self.file.id,
-            span: span_from_oxc(self.file.id, self.source, class.body.span),
+            span: span_from_oxc(self.file, class.body.span),
             stable_key: crate::ts::intern_frontend_stable_key(prototype_key.clone()),
             lexical_parent_key: self
                 .lexical_parent_key(node_id)
@@ -440,7 +440,7 @@ impl<'a> ObjectModelExtractor<'a> {
         output.prototype_links.push(TsPrototypeLinkFact {
             id: TsPrototypeLinkId(0),
             file: self.file.id,
-            span: span_from_oxc(self.file.id, self.source, class.span),
+            span: span_from_oxc(self.file, class.span),
             stable_key: crate::ts::intern_frontend_stable_key(self.operation_stable_key(
                 "ts_object_prototype_link",
                 class.span,
@@ -463,7 +463,7 @@ impl<'a> ObjectModelExtractor<'a> {
             output.prototype_links.push(TsPrototypeLinkFact {
                 id: TsPrototypeLinkId(0),
                 file: self.file.id,
-                span: span_from_oxc(self.file.id, self.source, super_class.span()),
+                span: span_from_oxc(self.file, super_class.span()),
                 stable_key: crate::ts::intern_frontend_stable_key(self.operation_stable_key(
                     "ts_object_prototype_link",
                     super_class.span(),
@@ -502,7 +502,7 @@ impl<'a> ObjectModelExtractor<'a> {
         output.property_writes.push(TsPropertyWriteFact {
             id: TsPropertyWriteId(0),
             file: self.file.id,
-            span: span_from_oxc(self.file.id, self.source, method.span),
+            span: span_from_oxc(self.file, method.span),
             stable_key: crate::ts::intern_frontend_stable_key(self.operation_stable_key(
                 "ts_object_property_write",
                 method.span,
@@ -548,7 +548,7 @@ impl<'a> ObjectModelExtractor<'a> {
             output.prototype_links.push(TsPrototypeLinkFact {
                 id: TsPrototypeLinkId(0),
                 file: self.file.id,
-                span: span_from_oxc(self.file.id, self.source, expression.span),
+                span: span_from_oxc(self.file, expression.span),
                 stable_key: crate::ts::intern_frontend_stable_key(self.operation_stable_key(
                     "ts_object_prototype_link",
                     expression.span,
@@ -611,7 +611,7 @@ impl<'a> ObjectModelExtractor<'a> {
         TsPropertyReadFact {
             id: TsPropertyReadId(0),
             file: self.file.id,
-            span: span_from_oxc(self.file.id, self.source, span),
+            span: span_from_oxc(self.file, span),
             stable_key: crate::ts::intern_frontend_stable_key(self.operation_stable_key(
                 "ts_object_property_read",
                 span,
@@ -662,7 +662,7 @@ impl<'a> ObjectModelExtractor<'a> {
         Some(TsPropertyWriteFact {
             id: TsPropertyWriteId(0),
             file: self.file.id,
-            span: span_from_oxc(self.file.id, self.source, span),
+            span: span_from_oxc(self.file, span),
             stable_key: crate::ts::intern_frontend_stable_key(self.operation_stable_key(
                 "ts_object_property_write",
                 span,
@@ -729,7 +729,7 @@ impl<'a> ObjectModelExtractor<'a> {
         TsReceiverBindingFact {
             id: TsReceiverBindingId(0),
             file: self.file.id,
-            span: span_from_oxc(self.file.id, self.source, span),
+            span: span_from_oxc(self.file, span),
             stable_key: crate::ts::intern_frontend_stable_key(
                 self.operation_stable_key(
                     "ts_object_receiver_binding",
@@ -764,7 +764,7 @@ impl<'a> ObjectModelExtractor<'a> {
         TsObjectAllocationFact {
             id: TsObjectAllocationId(0),
             file: self.file.id,
-            span: span_from_oxc(self.file.id, self.source, span),
+            span: span_from_oxc(self.file, span),
             stable_key: crate::ts::intern_frontend_stable_key(self.allocation_stable_key(
                 span,
                 kind,
@@ -1401,8 +1401,8 @@ fn length_prefixed(value: &str) -> String {
     format!("{}:{}", value.len(), value)
 }
 
-fn span_from_oxc(file: crate::internal_core::FileId, source: &str, span: oxc_span::Span) -> Span {
-    span_from_byte_range(file, source, span.start as usize, span.end as usize)
+fn span_from_oxc(file: &SourceFile, span: oxc_span::Span) -> Span {
+    file.span_from_byte_range(span.start as usize, span.end as usize)
 }
 
 #[cfg(test)]

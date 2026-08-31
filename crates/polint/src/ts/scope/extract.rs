@@ -15,7 +15,7 @@ use oxc_semantic::{
 use oxc_span::GetSpan;
 
 use crate::analysis_api::SourceFile;
-use crate::internal_core::{FileId, Span, StableKeyInterner, span_from_byte_range};
+use crate::internal_core::{FileId, Span, StableKeyInterner};
 use crate::ts::ids::{TsBindingId, TsScopeId};
 use crate::ts::parse::{PARTIAL_AST_REASON, parse_ts_file};
 use crate::ts::scope::facts::{
@@ -112,7 +112,7 @@ pub fn extract_ts_scope_from_program(
 
 fn extract_scope_rows(
     file: &SourceFile,
-    source: &str,
+    _source: &str,
     scoping: &Scoping,
     nodes: &AstNodes<'_>,
 ) -> (Vec<TsScopeFact>, BTreeMap<OxcScopeId, String>) {
@@ -122,7 +122,7 @@ fn extract_scope_rows(
     for scope_id in scoping.scope_descendants_from_root() {
         let node_id = scoping.get_node_id(scope_id);
         let kind = ts_scope_kind(nodes.kind(node_id));
-        let span = span_from_oxc(file.id, source, nodes.kind(node_id).span());
+        let span = span_from_oxc(file, nodes.kind(node_id).span());
         let stable_key = scope_stable_key(file, &span, kind);
         scope_keys.insert(scope_id, stable_key.clone());
         let parent_scope_key = scoping
@@ -174,7 +174,7 @@ fn extract_semantic_binding_rows(
 
 fn semantic_binding_row(
     file: &SourceFile,
-    source: &str,
+    _source: &str,
     scoping: &Scoping,
     nodes: &AstNodes<'_>,
     scope_keys: &BTreeMap<OxcScopeId, String>,
@@ -192,7 +192,7 @@ fn semantic_binding_row(
     let declaration_node = scoping.symbol_declaration(symbol);
     let declaration_kind = declaration_kind_for_symbol(flags, nodes, declaration_node);
     let binding_kind = binding_kind_for_symbol(flags, declaration_kind);
-    let span = span_from_oxc(file.id, source, scoping.symbol_span(symbol));
+    let span = span_from_oxc(file, scoping.symbol_span(symbol));
     let name = scoping.symbol_name(symbol).to_string();
     let status = if flags.is_import() {
         TsBindingStatus::external("<semantic-import>")
@@ -255,7 +255,7 @@ fn extract_import_export_rows(
                     rows.push(binding_row(BindingRowDraft {
                         file,
                         source,
-                        span: span_from_oxc(file.id, source, import.span),
+                        span: span_from_oxc(file, import.span),
                         scope_key: module_scope.clone(),
                         name: import_path.clone(),
                         declaration_kind: TsDeclarationKind::Import,
@@ -320,7 +320,7 @@ fn extract_import_export_rows(
                                 rows.push(binding_row(BindingRowDraft {
                                     file,
                                     source,
-                                    span: span_from_oxc(file.id, source, named.span),
+                                    span: span_from_oxc(file, named.span),
                                     scope_key: module_scope.clone(),
                                     name: local,
                                     declaration_kind: TsDeclarationKind::Alias,
@@ -343,7 +343,7 @@ fn extract_import_export_rows(
                         rows.push(binding_row(BindingRowDraft {
                             file,
                             source,
-                            span: span_from_oxc(file.id, source, specifier.span),
+                            span: span_from_oxc(file, specifier.span),
                             scope_key: module_scope.clone(),
                             name: exported.clone(),
                             declaration_kind: TsDeclarationKind::ReExport,
@@ -367,7 +367,7 @@ fn extract_import_export_rows(
                         rows.push(local_export_row(
                             file,
                             source,
-                            span_from_oxc(file.id, source, specifier.span),
+                            span_from_oxc(file, specifier.span),
                             module_scope.clone(),
                             module_export_name_text(&specifier.local),
                             module_export_name_text(&specifier.exported),
@@ -379,7 +379,7 @@ fn extract_import_export_rows(
                 rows.push(binding_row(BindingRowDraft {
                     file,
                     source,
-                    span: span_from_oxc(file.id, source, export.span),
+                    span: span_from_oxc(file, export.span),
                     scope_key: module_scope.clone(),
                     name: "default".to_string(),
                     declaration_kind: TsDeclarationKind::ReExport,
@@ -398,7 +398,7 @@ fn extract_import_export_rows(
                     rows.push(local_export_row(
                         file,
                         source,
-                        span_from_oxc(file.id, source, span),
+                        span_from_oxc(file, span),
                         module_scope.clone(),
                         imported,
                         exported,
@@ -409,7 +409,7 @@ fn extract_import_export_rows(
                 rows.push(binding_row(BindingRowDraft {
                     file,
                     source,
-                    span: span_from_oxc(file.id, source, export.span),
+                    span: span_from_oxc(file, export.span),
                     scope_key: module_scope.clone(),
                     name: "*".to_string(),
                     declaration_kind: TsDeclarationKind::ReExport,
@@ -455,7 +455,7 @@ fn local_export_declaration_rows(
                 vec![local_export_row(
                     file,
                     source,
-                    span_from_oxc(file.id, source, function.span),
+                    span_from_oxc(file, function.span),
                     module_scope,
                     id.name.to_string(),
                     id.name.to_string(),
@@ -470,7 +470,7 @@ fn local_export_declaration_rows(
                 Some(local_export_row(
                     file,
                     source,
-                    span_from_oxc(file.id, source, declarator.span),
+                    span_from_oxc(file, declarator.span),
                     module_scope.clone(),
                     name.clone(),
                     name,
@@ -572,7 +572,7 @@ fn extract_alias_rows(
             Expression::Identifier(target) => rows.push(binding_row(BindingRowDraft {
                 file,
                 source,
-                span: span_from_oxc(file.id, source, declarator.span),
+                span: span_from_oxc(file, declarator.span),
                 scope_key: scope_key.clone(),
                 name: identifier.name.clone(),
                 declaration_kind: TsDeclarationKind::Alias,
@@ -596,7 +596,7 @@ fn extract_alias_rows(
                     Some(binding_row(BindingRowDraft {
                         file,
                         source,
-                        span: span_from_oxc(file.id, source, declarator.span),
+                        span: span_from_oxc(file, declarator.span),
                         scope_key: scope_key.clone(),
                         name: format!("{}.{}", identifier.name, property_name),
                         declaration_kind: TsDeclarationKind::Alias,
@@ -615,7 +615,7 @@ fn extract_alias_rows(
                 rows.push(binding_row(BindingRowDraft {
                     file,
                     source,
-                    span: span_from_oxc(file.id, source, declarator.span),
+                    span: span_from_oxc(file, declarator.span),
                     scope_key: scope_key.clone(),
                     name: identifier.name.clone(),
                     declaration_kind: TsDeclarationKind::Import,
@@ -637,7 +637,7 @@ fn extract_alias_rows(
                 rows.push(binding_row(BindingRowDraft {
                     file,
                     source,
-                    span: span_from_oxc(file.id, source, declarator.span),
+                    span: span_from_oxc(file, declarator.span),
                     scope_key,
                     name: identifier.name,
                     declaration_kind: TsDeclarationKind::Import,
@@ -715,7 +715,7 @@ fn extract_destructuring_rows(
             rows.push(binding_row(BindingRowDraft {
                 file,
                 source,
-                span: span_from_oxc(file.id, source, declarator.span),
+                span: span_from_oxc(file, declarator.span),
                 scope_key,
                 name: binding.name,
                 declaration_kind: TsDeclarationKind::Destructuring,
@@ -805,7 +805,7 @@ fn extract_boundary_rows(
         rows.push(binding_row(BindingRowDraft {
             file,
             source,
-            span: span_from_oxc(file.id, source, call.span),
+            span: span_from_oxc(file, call.span),
             scope_key: call_scope,
             name,
             declaration_kind: TsDeclarationKind::UnsupportedDynamic,
@@ -907,13 +907,13 @@ fn visible_binding_in_rows<'a>(
 
 fn scope_key_for_span(
     file: &SourceFile,
-    source: &str,
+    _source: &str,
     scope_keys: &BTreeMap<OxcScopeId, String>,
     scoping: &Scoping,
     nodes: &AstNodes<'_>,
     span: oxc_span::Span,
 ) -> Option<String> {
-    let target = span_from_oxc(file.id, source, span);
+    let target = span_from_oxc(file, span);
     scoping
         .scope_descendants_from_root()
         .filter_map(|scope| {
@@ -922,7 +922,7 @@ fn scope_key_for_span(
             if kind == TsScopeKind::Module {
                 return None;
             }
-            let scope_span = span_from_oxc(file.id, source, nodes.kind(node_id).span());
+            let scope_span = span_from_oxc(file, nodes.kind(node_id).span());
             if !span_contains(&scope_span, &target) {
                 return None;
             }
@@ -1022,7 +1022,7 @@ fn import_binding_row(
     binding_row(BindingRowDraft {
         file,
         source,
-        span: span_from_oxc(file.id, source, span),
+        span: span_from_oxc(file, span),
         scope_key,
         name: local,
         declaration_kind: TsDeclarationKind::Import,
@@ -1338,8 +1338,8 @@ fn length_prefixed(value: &str) -> String {
     format!("{}:{}", value.len(), value)
 }
 
-fn span_from_oxc(file: FileId, source: &str, span: oxc_span::Span) -> Span {
-    span_from_byte_range(file, source, span.start as usize, span.end as usize)
+fn span_from_oxc(file: &SourceFile, span: oxc_span::Span) -> Span {
+    file.span_from_byte_range(span.start as usize, span.end as usize)
 }
 
 fn span_contains(container: &Span, span: &Span) -> bool {

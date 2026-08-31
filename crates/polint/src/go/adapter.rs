@@ -7,7 +7,7 @@ use crate::analysis_api::{
 };
 use crate::internal_core::{
     BranchId, Diagnostic, DiagnosticRange as TextRange, FileId, FunctionId, Language, Span,
-    fingerprint, span_from_byte_range,
+    fingerprint,
 };
 use anyhow::{Context, Result};
 use rayon::prelude::*;
@@ -487,14 +487,7 @@ fn analyze_go_source_file(
     }
 
     let mut local_db = LocalFactDb::new();
-    let local_file = FactDatabase::add_source_file(
-        &mut local_db,
-        file.path.clone(),
-        file.relative_path.clone(),
-        file.language,
-        Arc::clone(&file.source),
-        file.content_hash.clone(),
-    );
+    let local_file = local_db.add_source_file_from(file);
     let mut diagnostics = match parse_go_file(&mut local_db, local_file) {
         Ok(file_diagnostics) => file_diagnostics,
         Err(error) => {
@@ -567,7 +560,7 @@ fn parse_go_file(db: &mut dyn FactDatabase, file_id: FileId) -> Result<Vec<Diagn
     let mut diagnostics = Vec::new();
 
     if root.has_error() {
-        diagnostics.push(parser_error_diagnostic(db, file_id, source, root));
+        diagnostics.push(parser_error_diagnostic(db, file_id, root));
     }
 
     extract_package(db, file_id, source, root);
@@ -577,14 +570,9 @@ fn parse_go_file(db: &mut dyn FactDatabase, file_id: FileId) -> Result<Vec<Diagn
     Ok(diagnostics)
 }
 
-fn parser_error_diagnostic(
-    db: &dyn FactDatabase,
-    file_id: FileId,
-    source: &str,
-    root: Node<'_>,
-) -> Diagnostic {
+fn parser_error_diagnostic(db: &dyn FactDatabase, file_id: FileId, root: Node<'_>) -> Diagnostic {
     let range = first_error_node(root)
-        .map(|node| node_span(file_id, source, node).diagnostic_range())
+        .map(|node| node_span(db, file_id, node).diagnostic_range())
         .unwrap_or_else(|| TextRange::point(1, 1));
 
     Diagnostic::error(
@@ -616,13 +604,19 @@ fn extract_package(db: &mut dyn FactDatabase, file: FileId, source: &str, root: 
         crate::internal_core::PackageId::from_raw(0),
         file,
         name.to_string(),
-        node_span(file, source, identifier),
+        node_span(db, file, identifier),
         Language::Go,
     ));
 }
 
-fn node_span(file: FileId, source: &str, node: Node<'_>) -> Span {
-    span_from_byte_range(file, source, node.start_byte(), node.end_byte())
+fn indexed_span(db: &dyn FactDatabase, file: FileId, start_byte: usize, end_byte: usize) -> Span {
+    db.file(file)
+        .map(|source_file| source_file.span_from_byte_range(start_byte, end_byte))
+        .unwrap_or_else(|| Span::point(file, 1, 1))
+}
+
+fn node_span(db: &dyn FactDatabase, file: FileId, node: Node<'_>) -> Span {
+    indexed_span(db, file, node.start_byte(), node.end_byte())
 }
 
 fn node_text<'source>(source: &'source str, node: Node<'_>) -> Option<&'source str> {
@@ -714,7 +708,7 @@ fn push_import_from_node(db: &mut dyn FactDatabase, file: FileId, source: &str, 
         file,
         package,
         path,
-        node_span(file, source, node),
+        node_span(db, file, node),
         Language::Go,
     ));
 }
@@ -769,7 +763,7 @@ fn extract_string_literals(db: &mut dyn FactDatabase, file: FileId, source: &str
         db.push_string_literal(StringLiteralFact::new(
             file,
             value,
-            node_span(file, source, node),
+            node_span(db, file, node),
             Language::Go,
         ));
     });
@@ -804,7 +798,7 @@ fn extract_functions(db: &mut dyn FactDatabase, file: FileId, source: &str, root
         } else {
             simple_name.clone()
         };
-        let span = node_span(file, source, node);
+        let span = node_span(db, file, node);
         let is_test = is_go_test_entry(&file_path, &simple_name, node, source);
         let fact = FunctionFact::new(
             FunctionId::from_raw(0),
@@ -1290,7 +1284,7 @@ fn extract_branches(
             source,
             node,
         ),
-        "select_statement" => push_select_branch(db, file, function, function_name, source, node),
+        "select_statement" => push_select_branch(db, file, function, function_name, node),
         _ => {}
     });
 }
@@ -1310,7 +1304,7 @@ fn push_if_branches(
         .unwrap_or("if")
         .trim()
         .to_string();
-    let span = node_span(file, source, decision);
+    let span = node_span(db, file, decision);
     let true_body = node
         .child_by_field_name("consequence")
         .or_else(|| node.child_by_field_name("body"));
@@ -1359,6 +1353,7 @@ fn push_switch_branch(
     let condition = trimmed_text(source, start, end)
         .unwrap_or("switch")
         .to_string();
+    let decision_span = trimmed_span(db, file, source, start, end);
     push_branch(
         db,
         BranchTarget {
@@ -1366,7 +1361,7 @@ fn push_switch_branch(
             function,
             function_name,
         },
-        trimmed_span(file, source, start, end),
+        decision_span,
         condition.clone(),
         "switch",
         is_go_error_path_heuristic(source, &condition, Some(node), false),
@@ -1393,10 +1388,11 @@ fn push_case_branch(
             .unwrap_or("case")
             .to_string()
     };
+    let decision_span = trimmed_span(db, target.file, source, start, end);
     push_branch(
         db,
         target,
-        trimmed_span(target.file, source, start, end),
+        decision_span,
         condition.clone(),
         edge_label,
         is_go_error_path_heuristic(source, &condition, Some(node), function_returns_error),
@@ -1417,6 +1413,7 @@ fn push_for_branch(
             .unwrap_or("range")
             .trim()
             .to_string();
+        let decision_span = node_span(db, file, range);
         push_branch(
             db,
             BranchTarget {
@@ -1424,7 +1421,7 @@ fn push_for_branch(
                 function,
                 function_name,
             },
-            node_span(file, source, range),
+            decision_span,
             condition.clone(),
             "range",
             is_go_error_path_heuristic(source, &condition, Some(node), function_returns_error),
@@ -1436,6 +1433,7 @@ fn push_for_branch(
     let condition = trimmed_text(source, start, end)
         .unwrap_or("for")
         .to_string();
+    let decision_span = trimmed_span(db, file, source, start, end);
     push_branch(
         db,
         BranchTarget {
@@ -1443,7 +1441,7 @@ fn push_for_branch(
             function,
             function_name,
         },
-        trimmed_span(file, source, start, end),
+        decision_span,
         condition.clone(),
         "loop",
         is_go_error_path_heuristic(source, &condition, Some(node), function_returns_error),
@@ -1461,10 +1459,10 @@ fn push_select_branch(
     file: FileId,
     function: FunctionId,
     function_name: &str,
-    source: &str,
     node: Node<'_>,
 ) {
     let end = node.start_byte().saturating_add("select".len());
+    let decision_span = indexed_span(db, file, node.start_byte(), end);
     push_branch(
         db,
         BranchTarget {
@@ -1472,7 +1470,7 @@ fn push_select_branch(
             function,
             function_name,
         },
-        span_from_byte_range(file, source, node.start_byte(), end),
+        decision_span,
         "select".to_string(),
         "select",
         false,
@@ -1596,13 +1594,19 @@ fn trimmed_text(source: &str, start: usize, end: usize) -> Option<&str> {
     source.get(start..end).map(str::trim)
 }
 
-fn trimmed_span(file: FileId, source: &str, start: usize, end: usize) -> Span {
+fn trimmed_span(
+    db: &dyn FactDatabase,
+    file: FileId,
+    source: &str,
+    start: usize,
+    end: usize,
+) -> Span {
     let Some(text) = source.get(start..end) else {
-        return span_from_byte_range(file, source, start, end);
+        return indexed_span(db, file, start, end);
     };
     let leading = text.len() - text.trim_start().len();
     let trailing = text.len() - text.trim_end().len();
-    span_from_byte_range(file, source, start + leading, end - trailing)
+    indexed_span(db, file, start + leading, end - trailing)
 }
 
 #[derive(Clone, Copy)]

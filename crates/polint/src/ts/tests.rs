@@ -699,18 +699,14 @@ fn ast_helpers_preserve_source_byte_spans() {
 
     let production_source = include_str!("adapter.rs");
     let span_helper = ["fn span_from", "_oxc"].concat();
-    let span_conversion = [
-        "span_from_byte_range(file, source, ",
-        "span.start as usize, span.end as usize)",
-    ]
-    .concat();
+    let span_conversion = "indexed_span(db, file, span.start as usize, span.end as usize)";
     assert!(
         production_source.contains(&span_helper),
         "expected span_from_oxc helper"
     );
     assert!(
-        production_source.contains(&span_conversion),
-        "span_from_oxc should convert Oxc byte spans through core span conversion"
+        production_source.contains(span_conversion),
+        "span_from_oxc should convert Oxc byte spans through the retained source index"
     );
 }
 

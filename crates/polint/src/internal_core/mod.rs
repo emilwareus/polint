@@ -22,7 +22,8 @@ pub use lang::Language;
 pub use language_id::{
     LANGUAGE_IDS_GO, LANGUAGE_IDS_GO_AND_TS, LANGUAGE_IDS_NONE, LANGUAGE_IDS_TS, LanguageId,
 };
-pub use span::{Span, TextRange, span_from_byte_range};
+pub(crate) use span::{SourceTextIndex, span_from_byte_range};
+pub use span::{Span, TextRange};
 pub use stable_key::{StableKeyId, StableKeyInterner};
 
 #[doc(hidden)]

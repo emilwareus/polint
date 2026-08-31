@@ -8,7 +8,6 @@ use crate::analysis_api::{
 };
 use crate::internal_core::{
     Diagnostic, DiagnosticRange as TextRange, FileId, FunctionId, Language, Span,
-    span_from_byte_range,
 };
 use anyhow::{Context, Result};
 use oxc_allocator::Allocator;
@@ -511,14 +510,7 @@ fn analyze_ts_source_file(
     }
 
     let mut local_db = LocalFactDb::new();
-    let local_file = FactDatabase::add_source_file(
-        &mut local_db,
-        file.path.clone(),
-        file.relative_path.clone(),
-        file.language,
-        Arc::clone(&file.source),
-        file.content_hash.clone(),
-    );
+    let local_file = local_db.add_source_file_from(file);
     let mut diagnostics = match extract_ts_file_facts(&mut local_db, local_file) {
         Ok(file_diagnostics) => file_diagnostics,
         Err(error) => {
@@ -578,9 +570,7 @@ fn extract_ts_file_facts(db: &mut dyn FactDatabase, file_id: FileId) -> Result<V
 
     for error in &parsed.errors {
         let range = match (error.start_byte, error.end_byte) {
-            (Some(start), Some(end)) => {
-                span_from_byte_range(file_id, source, start, end).diagnostic_range()
-            }
+            (Some(start), Some(end)) => indexed_span(db, file_id, start, end).diagnostic_range(),
             _ => TextRange::point(1, 1),
         };
 
@@ -618,13 +608,8 @@ fn extract_ts_file_facts(db: &mut dyn FactDatabase, file_id: FileId) -> Result<V
         module_requests.sort_by_key(|(start, _, _)| *start);
 
         for (_, statement_span, path) in module_requests {
-            push_module_import(
-                db,
-                file_id,
-                path,
-                span_from_oxc(file_id, source, statement_span),
-                language,
-            );
+            let span = span_from_oxc(db, file_id, statement_span);
+            push_module_import(db, file_id, path, span, language);
         }
     }
     Ok(diagnostics)
@@ -642,8 +627,14 @@ fn extract_from_program(
     extract_literals_and_jsx(db, file_id, source, language, program);
 }
 
-fn span_from_oxc(file: FileId, source: &str, span: oxc_span::Span) -> Span {
-    span_from_byte_range(file, source, span.start as usize, span.end as usize)
+fn indexed_span(db: &dyn FactDatabase, file: FileId, start_byte: usize, end_byte: usize) -> Span {
+    db.file(file)
+        .map(|source_file| source_file.span_from_byte_range(start_byte, end_byte))
+        .unwrap_or_else(|| Span::point(file, 1, 1))
+}
+
+fn span_from_oxc(db: &dyn FactDatabase, file: FileId, span: oxc_span::Span) -> Span {
+    indexed_span(db, file, span.start as usize, span.end as usize)
 }
 
 fn extract_imports_and_exports(
@@ -656,32 +647,17 @@ fn extract_imports_and_exports(
     for statement in &program.body {
         match statement {
             Statement::ImportDeclaration(declaration) => {
-                push_module_import(
-                    db,
-                    file,
-                    declaration.source.value.as_str(),
-                    span_from_oxc(file, source, declaration.source.span),
-                    language,
-                );
+                let span = span_from_oxc(db, file, declaration.source.span);
+                push_module_import(db, file, declaration.source.value.as_str(), span, language);
             }
             Statement::ExportAllDeclaration(declaration) => {
-                push_module_import(
-                    db,
-                    file,
-                    declaration.source.value.as_str(),
-                    span_from_oxc(file, source, declaration.source.span),
-                    language,
-                );
+                let span = span_from_oxc(db, file, declaration.source.span);
+                push_module_import(db, file, declaration.source.value.as_str(), span, language);
             }
             Statement::ExportNamedDeclaration(declaration) => {
                 if let Some(module_source) = &declaration.source {
-                    push_module_import(
-                        db,
-                        file,
-                        module_source.value.as_str(),
-                        span_from_oxc(file, source, module_source.span),
-                        language,
-                    );
+                    let span = span_from_oxc(db, file, module_source.span);
+                    push_module_import(db, file, module_source.value.as_str(), span, language);
                 }
             }
             _ => {}
@@ -825,13 +801,8 @@ fn collect_require_imports_from_expression(
             if callee_text(&call.callee).as_deref() == Some("require")
                 && let Some(Argument::StringLiteral(path)) = call.arguments.first()
             {
-                push_module_import(
-                    db,
-                    ctx.file,
-                    path.value.as_str(),
-                    span_from_oxc(ctx.file, ctx.source, path.span),
-                    ctx.language,
-                );
+                let span = span_from_oxc(db, ctx.file, path.span);
+                push_module_import(db, ctx.file, path.value.as_str(), span, ctx.language);
             }
             collect_require_imports_from_expression(db, ctx, &call.callee);
             for argument in &call.arguments {
@@ -980,13 +951,8 @@ fn collect_require_imports_from_export_default(
             if callee_text(&call.callee).as_deref() == Some("require")
                 && let Some(Argument::StringLiteral(path)) = call.arguments.first()
             {
-                push_module_import(
-                    db,
-                    ctx.file,
-                    path.value.as_str(),
-                    span_from_oxc(ctx.file, ctx.source, path.span),
-                    ctx.language,
-                );
+                let span = span_from_oxc(db, ctx.file, path.span);
+                push_module_import(db, ctx.file, path.value.as_str(), span, ctx.language);
             }
             for argument in &call.arguments {
                 collect_require_imports_from_argument(db, ctx, argument);
@@ -1072,13 +1038,8 @@ fn collect_require_imports_from_for_init(
             if callee_text(&call.callee).as_deref() == Some("require")
                 && let Some(Argument::StringLiteral(path)) = call.arguments.first()
             {
-                push_module_import(
-                    db,
-                    ctx.file,
-                    path.value.as_str(),
-                    span_from_oxc(ctx.file, ctx.source, path.span),
-                    ctx.language,
-                );
+                let span = span_from_oxc(db, ctx.file, path.span);
+                push_module_import(db, ctx.file, path.value.as_str(), span, ctx.language);
             }
             for argument in &call.arguments {
                 collect_require_imports_from_argument(db, ctx, argument);
@@ -1104,13 +1065,8 @@ fn collect_require_imports_from_argument(
             if callee_text(&call.callee).as_deref() == Some("require")
                 && let Some(Argument::StringLiteral(path)) = call.arguments.first()
             {
-                push_module_import(
-                    db,
-                    ctx.file,
-                    path.value.as_str(),
-                    span_from_oxc(ctx.file, ctx.source, path.span),
-                    ctx.language,
-                );
+                let span = span_from_oxc(db, ctx.file, path.span);
+                push_module_import(db, ctx.file, path.value.as_str(), span, ctx.language);
             }
             for argument in &call.arguments {
                 collect_require_imports_from_argument(db, ctx, argument);
@@ -1133,22 +1089,12 @@ fn push_dynamic_import_expression(
 ) {
     match &import_expression.source {
         Expression::StringLiteral(path) => {
-            push_module_import(
-                db,
-                ctx.file,
-                path.value.as_str(),
-                span_from_oxc(ctx.file, ctx.source, path.span),
-                ctx.language,
-            );
+            let span = span_from_oxc(db, ctx.file, path.span);
+            push_module_import(db, ctx.file, path.value.as_str(), span, ctx.language);
         }
         _ => {
-            push_module_import(
-                db,
-                ctx.file,
-                DYNAMIC_IMPORT_SPECIFIER,
-                span_from_oxc(ctx.file, ctx.source, import_expression.span),
-                ctx.language,
-            );
+            let span = span_from_oxc(db, ctx.file, import_expression.span);
+            push_module_import(db, ctx.file, DYNAMIC_IMPORT_SPECIFIER, span, ctx.language);
         }
     }
 }
@@ -1296,7 +1242,7 @@ fn push_ts_module_function(db: &mut dyn FactDatabase, ctx: TsAstCtx<'_>) -> Func
         FunctionId::from_raw(0),
         ctx.file,
         TS_JS_MODULE_FUNCTION_NAME.to_string(),
-        span_from_byte_range(ctx.file, ctx.source, 0, ctx.source.len()),
+        indexed_span(db, ctx.file, 0, ctx.source.len()),
         ctx.language,
         false,
         false,
@@ -2029,7 +1975,7 @@ fn push_ts_function(
 ) -> FunctionId {
     spec.calls.sort();
     spec.calls.dedup();
-    let span = span_from_oxc(ctx.file, ctx.source, spec.span);
+    let span = span_from_oxc(db, ctx.file, spec.span);
     // Idempotent by (file, span): a function reached via body recursion (nested
     // declarations) must not duplicate a fact already emitted at a top-level
     // position (call argument, array element, …). `push_function` does no dedup,
@@ -2077,7 +2023,7 @@ fn push_ts_class(
     is_exported: bool,
 ) {
     let is_component_like = is_component_like_name(&name);
-    let span = span_from_oxc(file, source, class.span);
+    let span = span_from_oxc(db, file, class.span);
     // Idempotent by class span: a class expression / nested class declaration reached
     // via the anonymous-callable walk must not duplicate facts already emitted by the
     // top-level declaration or `var x = class` declarator path (duplicate FunctionFacts
@@ -3888,7 +3834,7 @@ fn push_string_literal_from_oxc(
     db.push_string_literal(StringLiteralFact::new(
         ctx.file,
         value,
-        span_from_oxc(ctx.file, ctx.source, span),
+        span_from_oxc(db, ctx.file, span),
         ctx.language,
     ));
 }
@@ -3918,7 +3864,7 @@ fn extract_jsx_element_attributes(
                         ctx.file,
                         name,
                         attribute.value.as_ref().and_then(jsx_attribute_value),
-                        span_from_oxc(ctx.file, ctx.source, attribute.span),
+                        span_from_oxc(db, ctx.file, attribute.span),
                     ));
                 }
                 if let Some(value) = &attribute.value {

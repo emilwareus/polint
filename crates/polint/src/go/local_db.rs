@@ -72,6 +72,12 @@ impl LocalFactDb {
             })
             .expect("GoSyntaxStore installed")
     }
+
+    pub(crate) fn add_source_file_from(&mut self, file: &SourceFile) -> FileId {
+        let id = FileId::from_raw(self.files.len() as u32);
+        self.files.push(file.clone_with_id(id));
+        id
+    }
 }
 
 impl FactDatabase for LocalFactDb {

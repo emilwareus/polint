@@ -1444,6 +1444,7 @@ export function narrow(user, value, dynamicKey) {
             .find(end)
             .map(|offset| start_byte + offset + end.len())
             .expect(end);
-        crate::internal_core::span_from_byte_range(file, source, start_byte, end_byte)
+        let index = crate::internal_core::SourceTextIndex::new(source);
+        crate::internal_core::span_from_byte_range(file, source, &index, start_byte, end_byte)
     }
 }

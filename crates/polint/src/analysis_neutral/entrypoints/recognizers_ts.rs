@@ -12,7 +12,7 @@ use crate::analysis_neutral::entrypoints::facts::{
 use crate::analysis_neutral::entrypoints::provider::ENTRYPOINTS_PROVIDER_ID;
 use crate::analysis_neutral::ids::{EntrypointId, UnresolvedFrameworkId};
 use crate::analysis_neutral::places::PlaceRoot;
-use crate::internal_core::{FileId, FunctionId, Language, Span, span_from_byte_range};
+use crate::internal_core::{FileId, FunctionId, Language, Span};
 
 // ---------------------------------------------------------------------------
 // Public output
@@ -1249,12 +1249,7 @@ fn push_source_entrypoint(
     entrypoints: &mut Vec<EntrypointFact>,
 ) {
     let file_key = file.relative_path.replace('\\', "/");
-    let span = span_from_byte_range(
-        file.id,
-        &file.source,
-        start_byte as usize,
-        end_byte as usize,
-    );
+    let span = file.span_from_byte_range(start_byte as usize, end_byte as usize);
     let kind_label = format!("{kind:?}");
     let stable_key = entrypoint_stable_key(
         interner,

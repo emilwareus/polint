@@ -378,12 +378,7 @@ impl TsMirLowering {
         let parsed = parse_ts_file(&allocator, file);
         for error in &parsed.errors {
             let span = match (error.start_byte, error.end_byte) {
-                (Some(start), Some(end)) => crate::internal_core::span_from_byte_range(
-                    file.id,
-                    file.source.as_ref(),
-                    start,
-                    end,
-                ),
+                (Some(start), Some(end)) => file.span_from_byte_range(start, end),
                 _ => Span::point(file.id, 1, 1),
             };
             self.unsupported
@@ -433,7 +428,7 @@ impl TsMirLowering {
 
         let mut prepared = Vec::new();
         for function in functions {
-            let span = span_from_oxc(file.id, file.source.as_ref(), function.span);
+            let span = span_from_oxc(file, function.span);
             let Some(function_fact) =
                 matching_function(db, file.id, file.language, &function.name, &span)
                     .or_else(|| enclosing_function(db, file.id, file.language, &span))
@@ -451,12 +446,7 @@ impl TsMirLowering {
             closure_capture_names(db, file.id, file.source.as_ref(), &prepared);
 
         if let Some(module_function) = matching_module_function(db, file.id, file.language) {
-            let span = crate::internal_core::span_from_byte_range(
-                file.id,
-                file.source.as_ref(),
-                0,
-                file.source.len(),
-            );
+            let span = file.span_from_byte_range(0, file.source.len());
             let body = self.push_body(interner, db, file, module_function, span);
             let mut module_lowering = FunctionLowering::new(
                 interner,
@@ -1341,6 +1331,7 @@ fn binding_identifier_name(pattern: &BindingPattern<'_>) -> Option<String> {
 struct FunctionLowering<'source> {
     language: Language,
     file: FileId,
+    source_file: &'source SourceFile,
     source: &'source str,
     function: FunctionId,
     body: MirBodyId,
@@ -1354,7 +1345,7 @@ struct FunctionLowering<'source> {
 impl<'source> FunctionLowering<'source> {
     fn new(
         interner: &crate::internal_core::StableKeyInterner,
-        file: &SourceFile,
+        file: &'source SourceFile,
         source: &'source str,
         function: FunctionId,
         body: &MirBody,
@@ -1364,6 +1355,7 @@ impl<'source> FunctionLowering<'source> {
         Self {
             language: file.language,
             file: file.id,
+            source_file: file,
             source,
             function,
             body: body.id,
@@ -3697,7 +3689,7 @@ impl<'source> FunctionLowering<'source> {
         let source_evidence = source_text(self.source, span)
             .unwrap_or(construct)
             .to_string();
-        let span = span_from_oxc(self.file, self.source, span);
+        let span = span_from_oxc(self.source_file, span);
         unsupported.push(UnsupportedDraft::new(UnsupportedDraftInput {
             id: unsupported_id,
             body: Some(self.body),
@@ -3741,7 +3733,7 @@ impl<'source> FunctionLowering<'source> {
             self.body,
             self.stable_context.body_key(),
             span.start,
-            span_from_oxc(self.file, self.source, span),
+            span_from_oxc(self.source_file, span),
             (kind, status),
         ));
     }
@@ -4375,8 +4367,8 @@ fn owner_stable_key(
     .into_string()
 }
 
-fn span_from_oxc(file: FileId, source: &str, span: oxc_span::Span) -> Span {
-    crate::internal_core::span_from_byte_range(file, source, span.start as usize, span.end as usize)
+fn span_from_oxc(file: &SourceFile, span: oxc_span::Span) -> Span {
+    file.span_from_byte_range(span.start as usize, span.end as usize)
 }
 
 fn call_site_for_span(span: oxc_span::Span) -> CallSiteId {

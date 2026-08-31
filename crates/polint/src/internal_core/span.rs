@@ -1,6 +1,46 @@
+use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
+
 use crate::internal_core::diagnostic::TextRange as DiagnosticRange;
 use crate::internal_core::ids::FileId;
-use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone)]
+pub(crate) struct SourceTextIndex {
+    line_starts: Arc<[u32]>,
+}
+
+impl SourceTextIndex {
+    pub(crate) fn new(source: &str) -> Self {
+        let mut line_starts = vec![0];
+        line_starts.extend(
+            source
+                .bytes()
+                .enumerate()
+                .filter_map(|(offset, byte)| (byte == b'\n').then_some((offset + 1) as u32)),
+        );
+        Self {
+            line_starts: line_starts.into(),
+        }
+    }
+
+    fn line_col(&self, source: &str, byte_offset: usize) -> (u32, u32) {
+        let limit = byte_offset.min(source.len());
+        let limit_u32 = limit as u32;
+        let line_index = match self.line_starts.binary_search(&limit_u32) {
+            Ok(index) => index,
+            Err(0) => 0,
+            Err(index) => index - 1,
+        };
+        let line_start = self.line_starts[line_index] as usize;
+        let column = source[line_start..]
+            .char_indices()
+            .take_while(|(offset, _)| line_start + offset < limit)
+            .count()
+            + 1;
+        ((line_index + 1) as u32, column as u32)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 // Deliberately NOT `#[non_exhaustive]`: rule packs legitimately construct these when they
@@ -69,17 +109,18 @@ impl Span {
     }
 }
 
-/// Build a [`Span`] from UTF-8 byte offsets in `source`.
-pub fn span_from_byte_range(
+/// Build a [`Span`] from UTF-8 byte offsets using a source's retained line index.
+pub(crate) fn span_from_byte_range(
     file: FileId,
     source: &str,
+    index: &SourceTextIndex,
     start_byte: usize,
     end_byte: usize,
 ) -> Span {
     let start_byte = start_byte.min(source.len());
     let end_byte = end_byte.min(source.len()).max(start_byte);
-    let (start_line, start_col) = line_col(source, start_byte);
-    let (end_line, end_col) = line_col(source, end_byte);
+    let (start_line, start_col) = index.line_col(source, start_byte);
+    let (end_line, end_col) = index.line_col(source, end_byte);
     Span::new(
         file,
         start_byte as u32,
@@ -91,20 +132,66 @@ pub fn span_from_byte_range(
     )
 }
 
-fn line_col(source: &str, byte_offset: usize) -> (u32, u32) {
-    let mut line = 1_u32;
-    let mut col = 1_u32;
-    let limit = byte_offset.min(source.len());
-    for (idx, ch) in source.char_indices() {
-        if idx >= limit {
-            break;
-        }
-        if ch == '\n' {
-            line += 1;
-            col = 1;
-        } else {
-            col += 1;
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn span(source: &str, start: usize, end: usize) -> Span {
+        let index = SourceTextIndex::new(source);
+        span_from_byte_range(FileId::from_raw(0), source, &index, start, end)
     }
-    (line, col)
+
+    #[test]
+    fn indexed_span_preserves_unicode_character_columns() {
+        let span = span("aé中\nx", 2, 5);
+
+        assert_eq!((span.start_line, span.start_col, span.end_col), (1, 3, 4));
+    }
+
+    #[test]
+    fn indexed_span_preserves_crlf_line_and_column_semantics() {
+        let span = span("a\r\nb", 2, 3);
+
+        assert_eq!(
+            (span.start_line, span.start_col, span.end_line, span.end_col),
+            (1, 3, 2, 1)
+        );
+    }
+
+    #[test]
+    fn indexed_span_handles_eof_offsets() {
+        let span = span("abc", 3, usize::MAX);
+
+        assert_eq!(
+            (
+                span.start_byte,
+                span.end_byte,
+                span.start_line,
+                span.start_col
+            ),
+            (3, 3, 1, 4)
+        );
+    }
+
+    #[test]
+    fn indexed_span_handles_empty_source() {
+        let span = span("", 1, 2);
+
+        assert_eq!(
+            (
+                span.start_byte,
+                span.end_byte,
+                span.start_line,
+                span.start_col
+            ),
+            (0, 0, 1, 1)
+        );
+    }
+
+    #[test]
+    fn indexed_span_counts_a_non_character_boundary_like_the_legacy_scan() {
+        let span = span("aé", 2, 2);
+
+        assert_eq!((span.start_col, span.end_col), (3, 3));
+    }
 }
