@@ -66,6 +66,7 @@ use metadata::*;
 
 mod capability;
 mod db;
+mod fact_index;
 mod fact_store;
 mod facts;
 mod ids;

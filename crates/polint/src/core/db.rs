@@ -101,8 +101,9 @@ use crate::ts::object_model::facts::{
 use crate::ts::object_model::store::{TsObjectModelOutput, TsObjectModelStore};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
+use super::fact_index::{DenseFileIndex, DenseIdIndex};
 use super::fact_store::{
     ACCESS_PATH_STORE_FAMILY, ADAPTATION_STORE_FAMILY, ALIAS_STORE_FAMILY, AdaptationFactStore,
     CALL_STORE_FAMILY, CFG_STORE_FAMILY, CfgFactStore, DATA_FLOW_STORE_FAMILY, DOMAIN_STORE_FAMILY,
@@ -138,6 +139,108 @@ use super::{
     SEMANTIC_MIR_PROVIDER_ID, SYMBOL_GRAPH_PROVIDER_ID, TS_SYNTAX_PROVIDER_ID,
 };
 
+#[derive(Debug, Clone)]
+struct FactViewIndexes {
+    functions_by_file: DenseFileIndex,
+    imports_by_file: DenseFileIndex,
+    resolved_imports_by_file: DenseFileIndex,
+    module_node_by_file: DenseIdIndex,
+    branches_by_file: DenseFileIndex,
+    tests_by_file: DenseFileIndex,
+    function_metrics_by_file: DenseFileIndex,
+    complexity_metrics_by_file: DenseFileIndex,
+    file_metric_by_file: DenseIdIndex,
+    function_metric_by_function: DenseIdIndex,
+    complexity_metric_by_function: DenseIdIndex,
+    symbols_by_file: DenseFileIndex,
+    definitions_by_file: DenseFileIndex,
+    references_by_file: DenseFileIndex,
+    ts_components_by_file: DenseFileIndex,
+    ts_classes_by_file: DenseFileIndex,
+    string_literals_by_file: DenseFileIndex,
+    jsx_attributes_by_file: DenseFileIndex,
+}
+
+impl FactViewIndexes {
+    fn build(db: &AnalysisDb) -> Self {
+        let file_count = db.files().len();
+        let function_count = db
+            .functions()
+            .len()
+            .max(db.function_metrics().len())
+            .max(db.complexity_metrics().len());
+        Self {
+            functions_by_file: DenseFileIndex::build(file_count, db.functions(), |fact| {
+                Some(fact.file)
+            }),
+            imports_by_file: DenseFileIndex::build(file_count, db.imports(), |fact| {
+                Some(fact.file)
+            }),
+            resolved_imports_by_file: DenseFileIndex::build(
+                file_count,
+                db.resolved_imports(),
+                |fact| Some(fact.from_file),
+            ),
+            module_node_by_file: DenseIdIndex::build(file_count, db.module_nodes(), |node| {
+                node.file.map(|file| u64::from(file.raw()))
+            }),
+            branches_by_file: DenseFileIndex::build(file_count, db.branches(), |fact| {
+                Some(fact.file)
+            }),
+            tests_by_file: DenseFileIndex::build(file_count, db.tests(), |fact| Some(fact.file)),
+            function_metrics_by_file: DenseFileIndex::build(
+                file_count,
+                db.function_metrics(),
+                |fact| Some(fact.file),
+            ),
+            complexity_metrics_by_file: DenseFileIndex::build(
+                file_count,
+                db.complexity_metrics(),
+                |fact| Some(fact.file),
+            ),
+            file_metric_by_file: DenseIdIndex::build(file_count, db.file_metrics(), |fact| {
+                Some(u64::from(fact.file.raw()))
+            }),
+            function_metric_by_function: DenseIdIndex::build(
+                function_count,
+                db.function_metrics(),
+                |fact| Some(fact.function.raw()),
+            ),
+            complexity_metric_by_function: DenseIdIndex::build(
+                function_count,
+                db.complexity_metrics(),
+                |fact| Some(fact.function.raw()),
+            ),
+            symbols_by_file: DenseFileIndex::build(file_count, db.symbols(), |fact| fact.file),
+            definitions_by_file: DenseFileIndex::build(file_count, db.definitions(), |fact| {
+                fact.file
+            }),
+            references_by_file: DenseFileIndex::build_sorted_by(
+                file_count,
+                db.references(),
+                |fact| fact.file,
+                |left, right| left.id.cmp(&right.id),
+            ),
+            ts_components_by_file: DenseFileIndex::build(file_count, db.ts_components(), |fact| {
+                Some(fact.file)
+            }),
+            ts_classes_by_file: DenseFileIndex::build(file_count, db.ts_classes(), |fact| {
+                Some(fact.file)
+            }),
+            string_literals_by_file: DenseFileIndex::build(
+                file_count,
+                db.string_literals(),
+                |fact| Some(fact.file),
+            ),
+            jsx_attributes_by_file: DenseFileIndex::build(
+                file_count,
+                db.jsx_attributes(),
+                |fact| Some(fact.file),
+            ),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct AnalysisDb {
     pub(crate) files: Vec<SourceFile>,
@@ -145,6 +248,7 @@ pub struct AnalysisDb {
     pub(crate) fact_meta: FactMetaStore,
     /// Provider-owned stores keyed by primary [`FactFamily`]. Iteration stays ordered.
     pub(crate) fact_stores: BTreeMap<FactFamily, FactStoreEntry>,
+    fact_view_indexes: OnceLock<FactViewIndexes>,
     pub(crate) path_contexts: Option<crate::path_context::PathContextIndex>,
     /// Diff-to-target-ref facts, injected by the host for `polint review`.
     ///
@@ -162,6 +266,7 @@ impl Clone for AnalysisDb {
             stable_keys: self.stable_keys.detached_clone(),
             fact_meta: self.fact_meta.clone(),
             fact_stores: self.fact_stores.clone(),
+            fact_view_indexes: self.fact_view_indexes.clone(),
             path_contexts: self.path_contexts.clone(),
             changeset: self.changeset.clone(),
         }
@@ -289,6 +394,7 @@ impl Default for AnalysisDb {
             },
             fact_meta: FactMetaStore::default(),
             fact_stores,
+            fact_view_indexes: OnceLock::new(),
             path_contexts: None,
             changeset: None,
         }
@@ -632,9 +738,23 @@ impl AnalysisDb {
 
     /// Mutable typed downcast helper for registry stores.
     pub(crate) fn fact_store_mut<T: 'static>(&mut self, family: FactFamily) -> Option<&mut T> {
+        self.invalidate_fact_view_indexes();
         self.fact_stores
             .get_mut(&family)
             .and_then(|entry| entry.as_store_mut().as_any_mut().downcast_mut::<T>())
+    }
+
+    pub(crate) fn invalidate_fact_view_indexes(&mut self) {
+        let _ = self.fact_view_indexes.take();
+    }
+
+    fn fact_view_indexes(&self) -> &FactViewIndexes {
+        self.fact_view_indexes
+            .get_or_init(|| FactViewIndexes::build(self))
+    }
+
+    fn finalize_fact_view_indexes(&mut self) {
+        self.fact_view_indexes = OnceLock::from(FactViewIndexes::build(self));
     }
 
     /// Injects diff-to-target-ref facts for `polint review`.
@@ -696,6 +816,7 @@ impl AnalysisDb {
         source: Arc<str>,
         content_hash: String,
     ) -> FileId {
+        self.invalidate_fact_view_indexes();
         let id = FileId::from_raw(self.files.len() as u32);
         let metadata = source_file_metadata(interner, &relative_path, language, &content_hash);
         self.files.push(SourceFile::new(
@@ -3360,16 +3481,46 @@ impl AnalysisDb {
         self.go_syntax_store().functions()
     }
 
+    pub(crate) fn functions_for_file(
+        &self,
+        file: FileId,
+    ) -> impl Iterator<Item = &FunctionFact> + '_ {
+        self.fact_view_indexes()
+            .functions_by_file
+            .facts(file, self.functions())
+    }
+
     pub fn imports(&self) -> &[ImportFact] {
         self.go_syntax_store().imports()
+    }
+
+    pub(crate) fn imports_for_file(&self, file: FileId) -> impl Iterator<Item = &ImportFact> + '_ {
+        self.fact_view_indexes()
+            .imports_by_file
+            .facts(file, self.imports())
     }
 
     pub fn resolved_imports(&self) -> &[ResolvedImportFact] {
         self.module_graph_store().resolved_imports()
     }
 
+    pub(crate) fn resolved_imports_for_file(
+        &self,
+        file: FileId,
+    ) -> impl Iterator<Item = &ResolvedImportFact> + '_ {
+        self.fact_view_indexes()
+            .resolved_imports_by_file
+            .facts(file, self.resolved_imports())
+    }
+
     pub fn module_nodes(&self) -> &[ModuleNode] {
         self.module_graph_store().module_nodes()
+    }
+
+    pub(crate) fn module_node_for_file(&self, file: FileId) -> Option<&ModuleNode> {
+        self.fact_view_indexes()
+            .module_node_by_file
+            .get(u64::from(file.raw()), self.module_nodes())
     }
 
     pub fn module_edges(&self) -> &[ModuleEdge] {
@@ -3525,8 +3676,23 @@ impl AnalysisDb {
         self.symbol_store().symbols()
     }
 
+    pub(crate) fn symbols_for_file(&self, file: FileId) -> impl Iterator<Item = &SymbolFact> + '_ {
+        self.fact_view_indexes()
+            .symbols_by_file
+            .facts(file, self.symbols())
+    }
+
     pub fn definitions(&self) -> &[DefinitionFact] {
         self.symbol_store().definitions()
+    }
+
+    pub(crate) fn definitions_for_file(
+        &self,
+        file: FileId,
+    ) -> impl Iterator<Item = &DefinitionFact> + '_ {
+        self.fact_view_indexes()
+            .definitions_by_file
+            .facts(file, self.definitions())
     }
 
     pub fn references(&self) -> &[ReferenceFact] {
@@ -3557,15 +3723,32 @@ impl AnalysisDb {
         &self,
         file: FileId,
     ) -> impl Iterator<Item = &ReferenceFact> + '_ {
-        self.symbol_store().references_for_file(file)
+        self.fact_view_indexes()
+            .references_by_file
+            .facts(file, self.references())
     }
 
     pub fn branches(&self) -> &[BranchObligation] {
         self.go_syntax_store().branches()
     }
 
+    pub(crate) fn branches_for_file(
+        &self,
+        file: FileId,
+    ) -> impl Iterator<Item = &BranchObligation> + '_ {
+        self.fact_view_indexes()
+            .branches_by_file
+            .facts(file, self.branches())
+    }
+
     pub fn tests(&self) -> &[TestFact] {
         self.go_syntax_store().tests()
+    }
+
+    pub(crate) fn tests_for_file(&self, file: FileId) -> impl Iterator<Item = &TestFact> + '_ {
+        self.fact_view_indexes()
+            .tests_by_file
+            .facts(file, self.tests())
     }
 
     pub fn coverage(&self) -> &[CoverageFact] {
@@ -3576,28 +3759,106 @@ impl AnalysisDb {
         self.metrics_store().file_metrics()
     }
 
+    pub(crate) fn file_metric_for_file(&self, file: FileId) -> Option<&FileMetricFact> {
+        self.fact_view_indexes()
+            .file_metric_by_file
+            .get(u64::from(file.raw()), self.file_metrics())
+    }
+
     pub fn function_metrics(&self) -> &[FunctionMetricFact] {
         self.metrics_store().function_metrics()
+    }
+
+    pub(crate) fn function_metrics_for_file(
+        &self,
+        file: FileId,
+    ) -> impl Iterator<Item = &FunctionMetricFact> + '_ {
+        self.fact_view_indexes()
+            .function_metrics_by_file
+            .facts(file, self.function_metrics())
+    }
+
+    pub(crate) fn function_metric_for_function(
+        &self,
+        function: FunctionId,
+    ) -> Option<&FunctionMetricFact> {
+        self.fact_view_indexes()
+            .function_metric_by_function
+            .get(function.raw(), self.function_metrics())
     }
 
     pub fn complexity_metrics(&self) -> &[ComplexityMetricFact] {
         self.metrics_store().complexity_metrics()
     }
 
+    pub(crate) fn complexity_metrics_for_file(
+        &self,
+        file: FileId,
+    ) -> impl Iterator<Item = &ComplexityMetricFact> + '_ {
+        self.fact_view_indexes()
+            .complexity_metrics_by_file
+            .facts(file, self.complexity_metrics())
+    }
+
+    pub(crate) fn complexity_metric_for_function(
+        &self,
+        function: FunctionId,
+    ) -> Option<&ComplexityMetricFact> {
+        self.fact_view_indexes()
+            .complexity_metric_by_function
+            .get(function.raw(), self.complexity_metrics())
+    }
+
     pub fn ts_components(&self) -> &[TsComponentFact] {
         self.ts_syntax_store().ts_components()
+    }
+
+    pub(crate) fn ts_components_for_file(
+        &self,
+        file: FileId,
+    ) -> impl Iterator<Item = &TsComponentFact> + '_ {
+        self.fact_view_indexes()
+            .ts_components_by_file
+            .facts(file, self.ts_components())
     }
 
     pub fn ts_classes(&self) -> &[TsClassFact] {
         self.ts_syntax_store().ts_classes()
     }
 
+    pub(crate) fn ts_classes_for_file(
+        &self,
+        file: FileId,
+    ) -> impl Iterator<Item = &TsClassFact> + '_ {
+        self.fact_view_indexes()
+            .ts_classes_by_file
+            .facts(file, self.ts_classes())
+    }
+
     pub fn string_literals(&self) -> &[StringLiteralFact] {
         self.ts_syntax_store().string_literals()
     }
 
+    pub(crate) fn string_literals_for_file(
+        &self,
+        file: FileId,
+    ) -> impl Iterator<Item = &StringLiteralFact> + '_ {
+        self.fact_view_indexes()
+            .string_literals_by_file
+            .facts(file, self.string_literals())
+    }
+
     pub fn jsx_attributes(&self) -> &[JsxAttributeFact] {
         self.ts_syntax_store().jsx_attributes()
+    }
+
+    pub(crate) fn jsx_attributes_for_file(
+        &self,
+        file: FileId,
+    ) -> impl Iterator<Item = &JsxAttributeFact> + '_ {
+        self.fact_view_indexes()
+            .jsx_attributes_by_file
+            .facts(file, self.jsx_attributes())
     }
 
     pub fn path_for(&self, file: FileId) -> String {
@@ -3778,6 +4039,7 @@ impl AnalysisDb {
 
     pub(crate) fn finish_all_fact_meta_insertions(&mut self) {
         self.fact_meta.finish_all_insertions();
+        self.finalize_fact_view_indexes();
     }
 
     fn package_metadata(

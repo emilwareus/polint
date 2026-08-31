@@ -141,6 +141,7 @@ impl FactDatabase for AnalysisDb {
     }
 
     fn store_mut(&mut self, family: FactFamily) -> Option<&mut dyn FactStore> {
+        self.invalidate_fact_view_indexes();
         self.fact_stores
             .get_mut(&family)
             .map(|entry| entry.as_store_mut())

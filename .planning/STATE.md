@@ -601,8 +601,8 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 ## Session
 
 - Last session: 2026-08-31
-- Last activity: 2026-08-31 - Resumed quick task 260830-nzd after the Wave 1 implementation was salvaged, gated, and benchmarked.
-- Stopped at: Quick task 260830-nzd resumed at the Wave 1 quality review before H2 implementation.
+- Last activity: 2026-08-31 - Resumed quick task 260830-nzd after H4 landed; recovering interrupted H8 dense fact-view index work.
+- Stopped at: Assess and complete partial H8 work, then gate, benchmark, and retain or revert by measured evidence.
 - Resume file: `.planning/quick/260830-nzd-implement-and-a-b-benchmark-the-polint-1/260830-nzd-PLAN.md`
 
 ### Quick Tasks Completed
