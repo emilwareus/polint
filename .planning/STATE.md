@@ -59,6 +59,7 @@ Add `public surface leak gate (ubuntu-latest)` AND `public surface leak gate (ma
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260830-nzd | Implement and A/B benchmark byte-identical Polint algorithmic scan speedups | 2026-08-31 | d196786d | [260830-nzd-implement-and-a-b-benchmark-the-polint-1](./quick/260830-nzd-implement-and-a-b-benchmark-the-polint-1/) |
 | 260829-s1l | Refuse cross-checkout sharing for rule hosts that embed Cargo-provided checkout paths | 2026-08-29 | this commit | [260829-s1l-fix-cache-sharing-for-rule-hosts-that-em](./quick/260829-s1l-fix-cache-sharing-for-rule-hosts-that-em/) |
 | 260829-qto | Final v0.3.2 rule-host-store release review and blocker fixes | 2026-08-29 | c56d69de | [260829-qto-final-release-readiness-review-and-block](./quick/260829-qto-final-release-readiness-review-and-block/) |
 | 260829-q4d | Fix the Windows rules-store absolute override test | 2026-08-29 | working tree | [260829-q4d-fix-the-windows-rules-store-absolute-ove](./quick/260829-q4d-fix-the-windows-rules-store-absolute-ove/) |
@@ -601,9 +602,9 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 ## Session
 
 - Last session: 2026-08-31
-- Last activity: 2026-08-31 - Resumed quick task 260830-nzd after H4 landed; recovering interrupted H8 dense fact-view index work.
-- Stopped at: Assess and complete partial H8 work, then gate, benchmark, and retain or revert by measured evidence.
-- Resume file: `.planning/quick/260830-nzd-implement-and-a-b-benchmark-the-polint-1/260830-nzd-PLAN.md`
+- Last activity: 2026-08-31 - Completed quick task 260830-nzd after retained H1/H2/H4/H8/H12 waves and the final byte-identity benchmark matrix.
+- Stopped at: Quick task complete; PR #104 is pushed and ready for review but remains unmerged.
+- Resume file: None.
 
 ### Quick Tasks Completed
 

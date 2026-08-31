@@ -1,6 +1,6 @@
 ---
 quick_id: 260830-nzd
-status: in_progress
+status: complete
 description: Implement and A/B benchmark the Polint 10x algorithmic scan speedups from the completed research, retaining only byte-identical measured wins.
 ---
 
