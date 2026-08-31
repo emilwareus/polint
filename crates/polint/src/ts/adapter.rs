@@ -1,7 +1,7 @@
 use crate::analysis_api::{
-    AnalysisCache, CacheStats, CachedFileAnalysis, Digest, DigestKind, DisabledAnalysisCache,
-    FactDatabase, FileCacheKeyParts, FileCacheReadStatus, FunctionFact, ImportFact,
-    JsxAttributeFact, LayerCacheEntryDigests, LayerCacheKeyParts, LayerCacheKind,
+    AnalysisCache, CacheStats, CachedFileAnalysis, CachedFileFacts, Digest, DigestKind,
+    DisabledAnalysisCache, FactDatabase, FileCacheKeyParts, FileCacheReadStatus, FunctionFact,
+    ImportFact, JsxAttributeFact, LayerCacheEntryDigests, LayerCacheKeyParts, LayerCacheKind,
     LayerCachePrecision, LayerCacheReadStatus, LayerCacheWriteStatus, ProviderRunResult,
     SourceFile, StringLiteralFact, TS_JS_MODULE_FUNCTION_NAME, TS_PARSER_BACKEND, TsClassFact,
     TsComponentFact,
@@ -187,10 +187,11 @@ pub fn analyze_files_with_plan_options_and_cache_stats(
                 plan_digest,
                 parallel,
             );
+            let output_digest = payload.output_digest.clone();
             ProviderRunResult {
                 diagnostics: restore_syntax_layer_payload(db, payload),
                 cache_stats,
-                output_digest: None,
+                output_digest,
                 execution: Default::default(),
             }
         }
@@ -234,11 +235,14 @@ struct TsFileAnalysis {
     content_hash: String,
     diagnostics: Vec<Diagnostic>,
     facts: Option<crate::analysis_api::CachedFileFacts>,
+    output_digest: Option<Digest>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct SyntaxLayerPayload {
     schema: String,
+    #[serde(default)]
+    output_digest: Option<Digest>,
     files: Vec<SyntaxLayerFile>,
 }
 
@@ -304,13 +308,12 @@ fn parser_parameter_digest(files: &[&SourceFile]) -> Digest {
     )
 }
 
-/// Accepts a cached payload when it describes exactly `files` and its recorded
-/// output digest matches the one the write path would have produced.
+/// Accepts a cached payload when it describes exactly `files` and its embedded
+/// native output digest matches the layer manifest.
 ///
-/// The write path derives the output digest from the payload digest, and a cache
-/// verifies the payload digest against the stored blob before calling this, so
-/// deriving it again here is exact — no re-serialization, and no assumption that
-/// re-encoding the parsed payload reproduces the original bytes.
+/// The cache verifies the digest of the complete blob before calling this
+/// validator, so the embedded identity is already covered by the payload's
+/// integrity check. This avoids reserializing every fact on warm reads.
 fn validate_syntax_layer_payload(
     payload: &SyntaxLayerPayload,
     digests: LayerCacheEntryDigests<'_>,
@@ -331,12 +334,11 @@ fn validate_syntax_layer_payload(
         .map(|file| (file.relative_path.as_str(), file.content_hash.as_str()))
         .collect::<Vec<_>>();
     actual == expected
-        && match (digests.output, digests.payload) {
-            (Some(output_digest), Some(payload_digest)) => {
-                output_digest == &ts_syntax_output_digest(payload_digest)
-            }
-            _ => false,
-        }
+        && digests.payload.is_some()
+        && payload
+            .output_digest
+            .as_ref()
+            .is_some_and(|expected| digests.output == Some(expected))
 }
 
 fn parse_ts_syntax_layer_payload(
@@ -360,8 +362,15 @@ fn parse_ts_syntax_layer_payload(
     };
     results.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
 
+    let output_digest = results
+        .iter()
+        .map(|result| result.output_digest.clone())
+        .collect::<Option<Vec<_>>>()
+        .map(|file_digests| ts_syntax_output_digest(&file_digests));
+
     SyntaxLayerPayload {
         schema: TS_SYNTAX_LAYER_SCHEMA.to_string(),
+        output_digest,
         files: results
             .into_iter()
             .map(|result| SyntaxLayerFile {
@@ -410,6 +419,7 @@ fn write_syntax_layer_payload(
     stats: &mut CacheStats,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<Digest> {
+    let output_digest = payload.output_digest.clone()?;
     let payload_bytes = match serde_json::to_vec(payload) {
         Ok(bytes) => bytes,
         Err(error) => {
@@ -430,7 +440,6 @@ fn write_syntax_layer_payload(
             return None;
         }
     };
-    let output_digest = ts_syntax_output_digest(&payload_digest);
     match cache.write_layer_json(
         layer_key,
         &output_digest,
@@ -439,35 +448,87 @@ fn write_syntax_layer_payload(
         "native_trusted",
         &payload_bytes,
     ) {
-        Ok(LayerCacheWriteStatus::Written) => stats.record_write(),
-        Ok(LayerCacheWriteStatus::BypassedDisabled) => stats.record_disabled_bypass(),
-        Err(error) => diagnostics.push(cache_write_diagnostic(
-            "ts syntax layer",
-            anyhow::anyhow!(error),
-        )),
+        Ok(LayerCacheWriteStatus::Written) => {
+            stats.record_write();
+            Some(output_digest)
+        }
+        Ok(LayerCacheWriteStatus::BypassedDisabled) => {
+            stats.record_disabled_bypass();
+            Some(output_digest)
+        }
+        Err(error) => {
+            diagnostics.push(cache_write_diagnostic(
+                "ts syntax layer",
+                anyhow::anyhow!(error),
+            ));
+            None
+        }
     }
-    Some(output_digest)
 }
 
-/// Recomputes the output digest the long way, by re-serializing the payload.
-///
-/// Only used to prove that the derivation in [`validate_syntax_layer_payload`]
-/// agrees with what the write path recorded.
+#[derive(Serialize)]
+struct CachedFileOutput<'a> {
+    schema: &'a str,
+    diagnostics: &'a [Diagnostic],
+    facts: Option<&'a CachedFileFacts>,
+}
+
+fn ts_file_output_digest_from_bytes(
+    relative_path: &str,
+    content_hash: &str,
+    cached_file_bytes: &[u8],
+) -> Digest {
+    let mut digest = Digest::builder(DigestKind::ProviderOutput, "ts-syntax-file-output-v1");
+    digest.field("path", relative_path);
+    digest.field("content-hash", content_hash);
+    digest.bytes_field("cached-file", cached_file_bytes);
+    digest.finish()
+}
+
+fn ts_file_output_digest(
+    relative_path: &str,
+    content_hash: &str,
+    diagnostics: &[Diagnostic],
+    facts: Option<&CachedFileFacts>,
+) -> Option<Digest> {
+    let bytes = serde_json::to_vec(&CachedFileOutput {
+        schema: TS_CACHE_SCHEMA,
+        diagnostics,
+        facts,
+    })
+    .ok()?;
+    Some(ts_file_output_digest_from_bytes(
+        relative_path,
+        content_hash,
+        &bytes,
+    ))
+}
+
+fn ts_syntax_output_digest(file_digests: &[Digest]) -> Digest {
+    let mut digest = Digest::builder(DigestKind::ProviderOutput, "ts-syntax-output-v1");
+    digest.field("schema", TS_SYNTAX_LAYER_SCHEMA);
+    digest.u64_field("file-count", file_digests.len() as u64);
+    for file_digest in file_digests {
+        digest.field("file", &file_digest.to_string());
+    }
+    digest.finish()
+}
+
 #[cfg(test)]
-fn ts_syntax_output_digest_for_payload(payload: &SyntaxLayerPayload) -> Digest {
-    let payload_bytes = serde_json::to_vec(payload).unwrap_or_default();
-    let payload_digest = DisabledAnalysisCache
-        .payload_digest_for_json_bytes(&payload_bytes)
-        .unwrap_or_else(|_| Digest::unsupported(DigestKind::LayerOutput, "ts_syntax", "json"));
-    ts_syntax_output_digest(&payload_digest)
-}
-
-fn ts_syntax_output_digest(payload_digest: &Digest) -> Digest {
-    Digest::from_parts(
-        DigestKind::ProviderOutput,
-        "ts_syntax_layer_output",
-        &[&payload_digest.to_string()],
-    )
+fn ts_syntax_output_digest_for_payload(payload: &SyntaxLayerPayload) -> Option<Digest> {
+    let file_digests = payload
+        .files
+        .iter()
+        .map(|file| {
+            ts_file_output_digest(
+                &file.relative_path,
+                &file.content_hash,
+                &file.diagnostics,
+                file.facts.as_ref(),
+            )
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(ts_syntax_output_digest(&file_digests))
 }
 
 fn ts_file_cache_key(
@@ -501,11 +562,17 @@ fn analyze_ts_source_file(
         && let Ok(cached) = serde_json::from_slice::<CachedFileAnalysis>(&bytes)
         && cached.schema == TS_CACHE_SCHEMA
     {
+        let output_digest = Some(ts_file_output_digest_from_bytes(
+            &file.relative_path,
+            &file.content_hash,
+            &bytes,
+        ));
         return TsFileAnalysis {
             relative_path: file.relative_path.clone(),
             content_hash: file.content_hash.clone(),
             diagnostics: cached.diagnostics,
             facts: Some(cached.facts),
+            output_digest,
         };
     }
 
@@ -514,16 +581,20 @@ fn analyze_ts_source_file(
     let mut diagnostics = match extract_ts_file_facts(&mut local_db, local_file) {
         Ok(file_diagnostics) => file_diagnostics,
         Err(error) => {
+            let diagnostics = vec![Diagnostic::error(
+                "parser/ts",
+                file.relative_path.clone(),
+                TextRange::point(1, 1),
+                format!("Failed to parse TS/JS file: {error}"),
+            )];
+            let output_digest =
+                ts_file_output_digest(&file.relative_path, &file.content_hash, &diagnostics, None);
             return TsFileAnalysis {
                 relative_path: file.relative_path.clone(),
                 content_hash: file.content_hash.clone(),
-                diagnostics: vec![Diagnostic::error(
-                    "parser/ts",
-                    file.relative_path.clone(),
-                    TextRange::point(1, 1),
-                    format!("Failed to parse TS/JS file: {error}"),
-                )],
+                diagnostics,
                 facts: None,
+                output_digest,
             };
         }
     };
@@ -533,19 +604,27 @@ fn analyze_ts_source_file(
         diagnostics: diagnostics.clone(),
         facts: facts.clone(),
     };
-    if let Ok(bytes) = serde_json::to_vec(&cached)
-        && let Err(error) = cache.write_file_json(&key, &bytes)
-    {
-        diagnostics.push(cache_write_diagnostic(
-            file.relative_path.as_str(),
-            anyhow::anyhow!(error),
+    let mut output_digest = None;
+    if let Ok(bytes) = serde_json::to_vec(&cached) {
+        output_digest = Some(ts_file_output_digest_from_bytes(
+            &file.relative_path,
+            &file.content_hash,
+            &bytes,
         ));
+        if let Err(error) = cache.write_file_json(&key, &bytes) {
+            diagnostics.push(cache_write_diagnostic(
+                file.relative_path.as_str(),
+                anyhow::anyhow!(error),
+            ));
+            output_digest = None;
+        }
     }
     TsFileAnalysis {
         relative_path: file.relative_path.clone(),
         content_hash: file.content_hash.clone(),
         diagnostics,
         facts: Some(facts),
+        output_digest,
     }
 }
 
@@ -4474,14 +4553,11 @@ mod layer_digest_tests {
         (db, payload)
     }
 
-    /// The read path derives the output digest from the payload digest the cache
-    /// already verified against the blob. Prove that derivation agrees with the
-    /// re-serializing one across a real write-then-read round trip.
     #[test]
-    fn the_output_digest_derived_from_the_payload_digest_matches_reserialization() {
+    fn native_output_digest_survives_a_validated_write_and_read() {
         let cache_root = unique_cache_root();
         let cache = FsAnalysisCache::new(cache_root.join("analysis"), true);
-        let (db, payload) = payload_for("package main\nfunc main() {}\n");
+        let (db, payload) = payload_for("export function main() {}\n");
         let owned = db.files().to_vec();
         let files = owned.iter().collect::<Vec<_>>();
         let layer_key = ts_syntax_layer_key(&files, "config");
@@ -4498,28 +4574,28 @@ mod layer_digest_tests {
         .expect("layer cache write records an output digest");
         assert!(write_diagnostics.is_empty());
 
-        let mut derivations = None;
+        let mut validated_digest = None;
         let read = {
             let mut validate = |bytes: &[u8], digests: LayerCacheEntryDigests<'_>| -> bool {
                 let payload = serde_json::from_slice::<SyntaxLayerPayload>(bytes)
                     .expect("written payload parses");
-                derivations = Some((
-                    ts_syntax_output_digest(
-                        digests.payload.expect("the cache records a payload digest"),
-                    ),
-                    ts_syntax_output_digest_for_payload(&payload),
-                ));
+                let recorded = payload
+                    .output_digest
+                    .clone()
+                    .expect("written payload records its native output identity");
+                let recomputed = ts_syntax_output_digest_for_payload(&payload)
+                    .expect("written payload can be independently digested");
+                assert_eq!(recorded, recomputed);
+                validated_digest = Some(recorded);
                 validate_syntax_layer_payload(&payload, digests, TS_SYNTAX_LAYER_SCHEMA, &files)
             };
             cache.read_layer_json(&layer_key, &mut validate)
         };
 
         assert_eq!(read.status, LayerCacheReadStatus::Hit);
-        let (from_payload_digest, from_reserialization) =
-            derivations.expect("a hit runs the validator");
-        assert_eq!(from_payload_digest, from_reserialization);
+        let validated_digest = validated_digest.expect("a hit runs the validator");
         assert_eq!(read.output_digest, Some(written));
-        assert_eq!(read.output_digest, Some(from_payload_digest));
+        assert_eq!(read.output_digest, Some(validated_digest));
 
         std::fs::remove_dir_all(&cache_root).ok();
     }
@@ -4531,7 +4607,7 @@ mod layer_digest_tests {
     fn a_substituted_payload_is_evicted_rather_than_reused() {
         let cache_root = unique_cache_root();
         let cache = FsAnalysisCache::new(cache_root.join("analysis"), true);
-        let (db, payload) = payload_for("package main\nfunc main() {}\n");
+        let (db, payload) = payload_for("export function main() {}\n");
         let owned = db.files().to_vec();
         let files = owned.iter().collect::<Vec<_>>();
         let layer_key = ts_syntax_layer_key(&files, "config");
@@ -4547,7 +4623,7 @@ mod layer_digest_tests {
         )
         .expect("layer cache write records an output digest");
 
-        let (_, other) = payload_for("package main\nfunc other() {}\n");
+        let (_, other) = payload_for("export function other() {}\n");
         let payload_bytes = serde_json::to_vec(&payload).expect("payload serializes");
         let payload_digest = DisabledAnalysisCache
             .payload_digest_for_json_bytes(&payload_bytes)
