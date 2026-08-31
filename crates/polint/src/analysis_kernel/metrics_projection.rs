@@ -4,6 +4,7 @@ use super::{
     ProviderManifest, ProviderOutcome, ProviderOutcomeStatus, ProviderOutputIdentity, provider,
 };
 use crate::analysis_api::is_synthetic_ts_js_module_function;
+use crate::analysis_neutral::metrics::MetricFileSummary;
 use crate::core::{
     AnalysisDb, ComplexityMetricFact, FileId, FileMetricFact, FunctionFact, FunctionId,
     FunctionMetricFact, Language, Span,
@@ -60,18 +61,16 @@ pub(crate) enum MetricsProjectionError {
     #[error("metrics projection contains an invalid sealed outcome")]
     Outcome(#[from] ProviderOutcomeError),
 }
-struct CanonicalContext {
+pub(crate) struct CanonicalMetricsContext {
     inputs: CanonicalMetricsInputs,
     sources: BTreeMap<FileId, CanonicalMetricSource>,
     functions: BTreeMap<FunctionId, (CanonicalMetricFunction, FunctionFact)>,
-    /// Owned function count per file, tallied once. Recounting it per file
-    /// metric would make the projection O(files x functions), and it runs on
-    /// both the cold metrics path and every warm layer-cache validation.
-    functions_per_file: BTreeMap<FileId, u32>,
+    file_summaries: BTreeMap<FileId, MetricFileSummary>,
 }
 impl CanonicalMetricsInputs {
+    #[cfg(test)]
     pub(crate) fn from_db(db: &AnalysisDb) -> Result<Self, MetricsProjectionError> {
-        Ok(canonical_context(db)?.inputs)
+        Ok(CanonicalMetricsContext::from_db(db)?.inputs)
     }
     pub(crate) fn source_digests(&self) -> Vec<Digest> {
         self.sources
@@ -107,21 +106,33 @@ impl CanonicalMetricFunction {
     }
 }
 impl CanonicalMetricsOutput {
+    #[cfg(test)]
     pub(crate) fn from_db(db: &AnalysisDb) -> Result<Self, MetricsProjectionError> {
-        Self::from_metric_facts(
-            db,
+        let context = CanonicalMetricsContext::from_db(db)?;
+        Self::from_metric_facts_with_context(
+            &context,
             db.file_metrics(),
             db.function_metrics(),
             db.complexity_metrics(),
         )
     }
-    pub(crate) fn from_metric_facts(
+    pub(crate) fn from_db_with_context(
+        context: &CanonicalMetricsContext,
         db: &AnalysisDb,
+    ) -> Result<Self, MetricsProjectionError> {
+        Self::from_metric_facts_with_context(
+            context,
+            db.file_metrics(),
+            db.function_metrics(),
+            db.complexity_metrics(),
+        )
+    }
+    pub(crate) fn from_metric_facts_with_context(
+        context: &CanonicalMetricsContext,
         stored_file_metrics: &[FileMetricFact],
         stored_function_metrics: &[FunctionMetricFact],
         stored_complexity_metrics: &[ComplexityMetricFact],
     ) -> Result<Self, MetricsProjectionError> {
-        let context = canonical_context(db)?;
         let mut seen_files = BTreeSet::new();
         let mut file_metrics = Vec::with_capacity(stored_file_metrics.len());
         for metric in stored_file_metrics {
@@ -130,9 +141,9 @@ impl CanonicalMetricsOutput {
                 .get(&metric.file)
                 .ok_or(MetricsProjectionError::Output)?;
             let function_count = context
-                .functions_per_file
+                .file_summaries
                 .get(&metric.file)
-                .copied()
+                .map(|summary| summary.function_count)
                 .ok_or(MetricsProjectionError::Output)?;
             if !seen_files.insert(metric.file)
                 || (
@@ -165,7 +176,7 @@ impl CanonicalMetricsOutput {
         let mut function_metrics = Vec::with_capacity(stored_function_metrics.len());
         for metric in stored_function_metrics {
             let function = linked_function(
-                &context,
+                context,
                 metric.function,
                 metric.file,
                 &metric.span,
@@ -188,7 +199,7 @@ impl CanonicalMetricsOutput {
         let mut complexity_metrics = Vec::with_capacity(stored_complexity_metrics.len());
         for metric in stored_complexity_metrics {
             let function = linked_function(
-                &context,
+                context,
                 metric.function,
                 metric.file,
                 &metric.span,
@@ -249,11 +260,13 @@ impl MetricsProviderProjection {
                     .output_identity
                     .as_ref()
                     .ok_or(MetricsProjectionError::Output)?;
-                let inputs = CanonicalMetricsInputs::from_db(db)?;
-                if identity.output_digest != CanonicalMetricsOutput::from_db(db)?.digest() {
+                let context = CanonicalMetricsContext::from_db(db)?;
+                if identity.output_digest
+                    != CanonicalMetricsOutput::from_db_with_context(&context, db)?.digest()
+                {
                     return Err(MetricsProjectionError::Output);
                 }
-                Some(inputs)
+                Some(context.inputs)
             }
             _ => None,
         };
@@ -334,110 +347,121 @@ fn validate_inputs(inputs: &CanonicalMetricsInputs) -> Result<(), MetricsProject
     }
     Ok(())
 }
-fn canonical_context(db: &AnalysisDb) -> Result<CanonicalContext, MetricsProjectionError> {
-    if db.files().len() > MAX_METRIC_ROWS || db.functions().len() > MAX_METRIC_ROWS {
-        return Err(MetricsProjectionError::Source);
-    }
-    let mut sources = BTreeMap::new();
-    let mut paths = BTreeSet::new();
-    for file in db.files() {
-        let path = canonical_path(&file.relative_path)?;
-        if file.language == Language::Unknown
-            || file.content_hash != crate::diagnostics::fingerprint(&[file.source.as_ref()])
-            || !valid_digest_value(&file.content_hash)
-            || !paths.insert(path.clone())
-        {
+impl CanonicalMetricsContext {
+    pub(crate) fn from_db(db: &AnalysisDb) -> Result<Self, MetricsProjectionError> {
+        if db.files().len() > MAX_METRIC_ROWS || db.functions().len() > MAX_METRIC_ROWS {
             return Err(MetricsProjectionError::Source);
         }
-        let row = CanonicalMetricSource {
-            path,
-            language: file.language,
-            source_digest: Digest {
-                kind: DigestKind::SourceText,
-                value: file.content_hash.clone(),
+        let mut sources = BTreeMap::new();
+        let mut file_summaries = BTreeMap::new();
+        let mut paths = BTreeSet::new();
+        for file in db.files() {
+            let path = canonical_path(&file.relative_path)?;
+            if file.language == Language::Unknown
+                || file.content_hash != crate::diagnostics::fingerprint(&[file.source.as_ref()])
+                || !valid_digest_value(&file.content_hash)
+                || !paths.insert(path.clone())
+            {
+                return Err(MetricsProjectionError::Source);
+            }
+            let summary = MetricFileSummary {
+                byte_count: u32::try_from(file.byte_count())
+                    .map_err(|_| MetricsProjectionError::Source)?,
+                line_count: u32::try_from(file.line_count())
+                    .map_err(|_| MetricsProjectionError::Source)?,
+                non_empty_line_count: u32::try_from(file.non_empty_line_count())
+                    .map_err(|_| MetricsProjectionError::Source)?,
+                function_count: 0,
+            };
+            let row = CanonicalMetricSource {
+                path,
+                language: file.language,
+                source_digest: Digest {
+                    kind: DigestKind::SourceText,
+                    value: file.content_hash.clone(),
+                },
+                byte_count: summary.byte_count,
+                line_count: summary.line_count,
+                non_empty_line_count: summary.non_empty_line_count,
+            };
+            if sources.insert(file.id, row).is_some()
+                || file_summaries.insert(file.id, summary).is_some()
+            {
+                return Err(MetricsProjectionError::Source);
+            }
+        }
+        let mut functions = BTreeMap::new();
+        for function in db
+            .functions()
+            .iter()
+            .filter(|function| !is_synthetic_ts_js_module_function(function))
+        {
+            let source = sources
+                .get(&function.file)
+                .ok_or(MetricsProjectionError::Source)?;
+            let span = &function.span;
+            if span.file != function.file
+                || function.language != source.language
+                || span.start_byte > span.end_byte
+                || span.end_byte > source.byte_count
+                || span.start_line == 0
+                || span.start_line > span.end_line
+                || span.end_line > source.line_count
+            {
+                return Err(MetricsProjectionError::Source);
+            }
+            let row = CanonicalMetricFunction {
+                path: source.path.clone(),
+                name: function.name.clone(),
+                start_byte: span.start_byte,
+                end_byte: span.end_byte,
+                start_line: span.start_line,
+                end_line: span.end_line,
+                language: function.language,
+                cyclomatic_complexity: function.cyclomatic_complexity,
+            };
+            if functions
+                .insert(function.id, (row, function.clone()))
+                .is_some()
+            {
+                return Err(MetricsProjectionError::Source);
+            }
+            let summary = file_summaries
+                .get_mut(&function.file)
+                .ok_or(MetricsProjectionError::Source)?;
+            summary.function_count = summary
+                .function_count
+                .checked_add(1)
+                .ok_or(MetricsProjectionError::Source)?;
+        }
+        let mut source_rows = sources.values().cloned().collect::<Vec<_>>();
+        let mut function_rows = functions
+            .values()
+            .map(|(row, _)| row.clone())
+            .collect::<Vec<_>>();
+        source_rows.sort();
+        function_rows.sort();
+        Ok(Self {
+            inputs: CanonicalMetricsInputs {
+                sources: source_rows,
+                functions: function_rows,
             },
-            byte_count: u32::try_from(file.source.len())
-                .map_err(|_| MetricsProjectionError::Source)?,
-            line_count: u32::try_from(file.source.lines().count())
-                .map_err(|_| MetricsProjectionError::Source)?,
-            non_empty_line_count: u32::try_from(
-                file.source
-                    .lines()
-                    .filter(|line| !line.trim().is_empty())
-                    .count(),
-            )
-            .map_err(|_| MetricsProjectionError::Source)?,
-        };
-        if sources.insert(file.id, row).is_some() {
-            return Err(MetricsProjectionError::Source);
-        }
+            sources,
+            functions,
+            file_summaries,
+        })
     }
-    let mut functions = BTreeMap::new();
-    for function in db
-        .functions()
-        .iter()
-        .filter(|function| !is_synthetic_ts_js_module_function(function))
-    {
-        let source = sources
-            .get(&function.file)
-            .ok_or(MetricsProjectionError::Source)?;
-        let span = &function.span;
-        if span.file != function.file
-            || function.language != source.language
-            || span.start_byte > span.end_byte
-            || span.end_byte > source.byte_count
-            || span.start_line == 0
-            || span.start_line > span.end_line
-            || span.end_line > source.line_count
-        {
-            return Err(MetricsProjectionError::Source);
-        }
-        let row = CanonicalMetricFunction {
-            path: source.path.clone(),
-            name: function.name.clone(),
-            start_byte: span.start_byte,
-            end_byte: span.end_byte,
-            start_line: span.start_line,
-            end_line: span.end_line,
-            language: function.language,
-            cyclomatic_complexity: function.cyclomatic_complexity,
-        };
-        if functions
-            .insert(function.id, (row, function.clone()))
-            .is_some()
-        {
-            return Err(MetricsProjectionError::Source);
-        }
+
+    pub(crate) fn inputs(&self) -> &CanonicalMetricsInputs {
+        &self.inputs
     }
-    let mut functions_per_file = sources
-        .keys()
-        .map(|file| (*file, 0u32))
-        .collect::<BTreeMap<_, _>>();
-    for (_, function) in functions.values() {
-        let count = functions_per_file
-            .get_mut(&function.file)
-            .ok_or(MetricsProjectionError::Source)?;
-        *count = count.checked_add(1).ok_or(MetricsProjectionError::Source)?;
+
+    pub(crate) fn file_summaries(&self) -> &BTreeMap<FileId, MetricFileSummary> {
+        &self.file_summaries
     }
-    let mut source_rows = sources.values().cloned().collect::<Vec<_>>();
-    let mut function_rows = functions
-        .values()
-        .map(|(row, _)| row.clone())
-        .collect::<Vec<_>>();
-    source_rows.sort();
-    function_rows.sort();
-    Ok(CanonicalContext {
-        inputs: CanonicalMetricsInputs {
-            sources: source_rows,
-            functions: function_rows,
-        },
-        sources,
-        functions,
-        functions_per_file,
-    })
 }
 fn linked_function<'a>(
-    context: &'a CanonicalContext,
+    context: &'a CanonicalMetricsContext,
     id: FunctionId,
     file: FileId,
     span: &Span,

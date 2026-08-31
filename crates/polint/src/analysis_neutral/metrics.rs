@@ -33,6 +33,16 @@ pub struct MetricsOutput {
     pub complexity_metrics: Vec<ComplexityMetricFact>,
 }
 
+/// Source statistics validated once by the composition root and reused while
+/// deriving metric facts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MetricFileSummary {
+    pub(crate) line_count: u32,
+    pub(crate) non_empty_line_count: u32,
+    pub(crate) byte_count: u32,
+    pub(crate) function_count: u32,
+}
+
 /// Schema label for the normalized metric layer.
 pub const METRICS_LAYER_SCHEMA: &str = "metrics-facts-v1";
 
@@ -40,32 +50,26 @@ pub const METRICS_LAYER_SCHEMA: &str = "metrics-facts-v1";
 pub fn derive_requested_metrics(
     db: &(impl AnalysisHost + ?Sized),
     requested: bool,
+    file_summaries: &BTreeMap<FileId, MetricFileSummary>,
 ) -> Option<MetricsOutput> {
     if !requested {
         return None;
-    }
-
-    let mut function_counts = BTreeMap::<FileId, u32>::new();
-    for function in db
-        .functions()
-        .iter()
-        .filter(|function| !is_synthetic_ts_js_module_function(function))
-    {
-        let count = function_counts.entry(function.file).or_default();
-        *count = count.saturating_add(1);
     }
 
     let file_metrics = db
         .files()
         .iter()
         .map(|file| {
+            let summary = file_summaries
+                .get(&file.id)
+                .expect("validated metrics context covers every source file");
             FileMetricFact::new(
                 file.id,
                 file.language,
-                line_count(&file.source),
-                non_empty_line_count(&file.source),
-                saturating_u32(file.source.len()),
-                function_counts.get(&file.id).copied().unwrap_or_default(),
+                summary.line_count,
+                summary.non_empty_line_count,
+                summary.byte_count,
+                summary.function_count,
             )
         })
         .collect::<Vec<_>>();
@@ -244,19 +248,6 @@ pub fn language_cache_label(language: Language) -> &'static str {
     }
 }
 
-fn line_count(source: &str) -> u32 {
-    saturating_u32(source.lines().count())
-}
-
-fn non_empty_line_count(source: &str) -> u32 {
-    saturating_u32(
-        source
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .count(),
-    )
-}
-
 fn span_line_count(span: &Span) -> u32 {
     if span.end_line < span.start_line {
         return 0;
@@ -264,8 +255,4 @@ fn span_line_count(span: &Span) -> u32 {
     span.end_line
         .saturating_sub(span.start_line)
         .saturating_add(1)
-}
-
-fn saturating_u32(value: usize) -> u32 {
-    u32::try_from(value).unwrap_or(u32::MAX)
 }

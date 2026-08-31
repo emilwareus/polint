@@ -263,11 +263,6 @@ fn run_scheduled_providers<'a>(
                     .ok()
                     .map(|output| output.digest())
                 }
-                "polint.metrics" => {
-                    crate::analysis_kernel::metrics_projection::CanonicalMetricsOutput::from_db(db)
-                        .ok()
-                        .map(|output| output.digest())
-                }
                 _ => output_digest,
             }
             .or_else(|| {

@@ -60,4 +60,16 @@ impl SourceFile {
             end_byte,
         )
     }
+
+    pub(crate) fn byte_count(&self) -> usize {
+        self.source_index.byte_count()
+    }
+
+    pub(crate) fn line_count(&self) -> usize {
+        self.source_index.line_count()
+    }
+
+    pub(crate) fn non_empty_line_count(&self) -> usize {
+        self.source_index.non_empty_line_count(&self.source)
+    }
 }

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use serde::{Deserialize, Serialize};
 
@@ -8,6 +8,9 @@ use crate::internal_core::ids::FileId;
 #[derive(Debug, Clone)]
 pub(crate) struct SourceTextIndex {
     line_starts: Arc<[u32]>,
+    byte_count: usize,
+    line_count: usize,
+    non_empty_line_count: Arc<OnceLock<usize>>,
 }
 
 impl SourceTextIndex {
@@ -19,9 +22,34 @@ impl SourceTextIndex {
                 .enumerate()
                 .filter_map(|(offset, byte)| (byte == b'\n').then_some((offset + 1) as u32)),
         );
+        let line_count = if source.is_empty() {
+            0
+        } else {
+            line_starts.len() - usize::from(source.ends_with('\n'))
+        };
         Self {
             line_starts: line_starts.into(),
+            byte_count: source.len(),
+            line_count,
+            non_empty_line_count: Arc::new(OnceLock::new()),
         }
+    }
+
+    pub(crate) fn byte_count(&self) -> usize {
+        self.byte_count
+    }
+
+    pub(crate) fn line_count(&self) -> usize {
+        self.line_count
+    }
+
+    pub(crate) fn non_empty_line_count(&self, source: &str) -> usize {
+        *self.non_empty_line_count.get_or_init(|| {
+            source
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .count()
+        })
     }
 
     fn line_col(&self, source: &str, byte_offset: usize) -> (u32, u32) {
@@ -193,5 +221,29 @@ mod tests {
         let span = span("aé", 2, 2);
 
         assert_eq!((span.start_col, span.end_col), (3, 3));
+    }
+
+    #[test]
+    fn source_metrics_match_rust_line_semantics_and_memoize_unicode_whitespace() {
+        for source in ["", "a", "a\n", "a\r\nb", "\u{2003}\nvalue\r\n\n"] {
+            let index = SourceTextIndex::new(source);
+
+            assert_eq!(index.byte_count(), source.len());
+            assert_eq!(index.line_count(), source.lines().count());
+            assert_eq!(
+                index.non_empty_line_count(source),
+                source
+                    .lines()
+                    .filter(|line| !line.trim().is_empty())
+                    .count()
+            );
+            assert_eq!(
+                index.non_empty_line_count(source),
+                source
+                    .lines()
+                    .filter(|line| !line.trim().is_empty())
+                    .count()
+            );
+        }
     }
 }
