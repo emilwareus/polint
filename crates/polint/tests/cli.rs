@@ -7676,6 +7676,67 @@ pub(crate) fn no_todo_literals(
 }
 
 #[test]
+fn external_rule_json_preserves_indexed_unicode_crlf_and_eof_span() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_phase41_rule_pack(
+        temp.path(),
+        r#"use std::process::ExitCode;
+use polint::runner;
+mod rule;
+fn main() -> ExitCode { runner::run_cli(vec![rule::rule()]) }
+"#,
+        r#"use polint::sdk::prelude::*;
+
+#[polint::rule(id = "local/indexed-span", description = "Indexed span", severity = "warn")]
+pub(crate) fn rule(ctx: &mut RuleCtx<'_>, literals: StringLiterals<'_>) -> RuleResult {
+    for literal in literals.iter().filter(|literal| literal.value == "πneedle") {
+        ctx.warn(&literal.span, "indexed span matched");
+    }
+    Ok(())
+}
+"#,
+    );
+    write_file(
+        &temp.path().join("src/component.ts"),
+        "const prior = \"é\";\r\nconst target = \"πneedle\"",
+    );
+
+    let json = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    let diagnostics = diagnostics_for_rule(&json, "local/indexed-span");
+    let range = &diagnostics
+        .first()
+        .unwrap_or_else(|| panic!("missing indexed-span diagnostic: {json:#?}"))["range"];
+
+    assert_eq!(
+        (
+            diagnostics.len(),
+            range["start_line"].as_u64(),
+            range["start_col"].as_u64(),
+            range["end_line"].as_u64(),
+            range["end_col"].as_u64(),
+        ),
+        (1, Some(2), Some(16), Some(2), Some(25))
+    );
+}
+
+#[test]
 fn check_ai_friendly_saves_full_json_and_prints_compact_summary() {
     let temp = tempfile::tempdir().unwrap();
     polint_cmd()

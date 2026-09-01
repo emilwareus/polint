@@ -18,7 +18,6 @@ use crate::go::lifecycle::{self, GoAnalysisConfig};
 use crate::go::process_runner::{GO_SUBPROCESS_TIMEOUT, GoProcessError, run_bounded};
 use crate::internal_core::{
     Diagnostic, DiagnosticRange as TextRange, FileId, Language, Span, SymbolId,
-    span_from_byte_range,
 };
 use serde::{Deserialize, Deserializer};
 use std::collections::{BTreeMap, BTreeSet};
@@ -1313,12 +1312,7 @@ fn span_for_file(
     span: &GoSidecarSpan,
 ) -> Option<Span> {
     let file = file_for_path(files, path)?;
-    Some(span_from_byte_range(
-        file.id,
-        file.source.as_ref(),
-        span.start_byte,
-        span.end_byte,
-    ))
+    Some(file.span_from_byte_range(span.start_byte, span.end_byte))
 }
 
 fn symbol_kind(kind: &str) -> SymbolKind {

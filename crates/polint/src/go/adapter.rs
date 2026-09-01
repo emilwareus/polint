@@ -1,13 +1,14 @@
 use crate::analysis_api::{
-    AnalysisCache, BranchObligation, CacheStats, CachedFileAnalysis, Digest, DigestKind,
-    DisabledAnalysisCache, FactDatabase, FileCacheKeyParts, FileCacheReadStatus, FunctionFact,
-    GO_PARSER_BACKEND, GO_PARSER_GRAMMAR, ImportFact, LayerCacheEntryDigests, LayerCacheKeyParts,
-    LayerCacheKind, LayerCachePrecision, LayerCacheReadStatus, LayerCacheWriteStatus, PackageFact,
-    ProviderRunResult, SourceFile, StringLiteralFact, TestFact,
+    AnalysisCache, BranchObligation, CacheStats, CachedFileAnalysis, CachedFileFacts, Digest,
+    DigestKind, DisabledAnalysisCache, FactDatabase, FileCacheKeyParts, FileCacheReadStatus,
+    FunctionFact, GO_PARSER_BACKEND, GO_PARSER_GRAMMAR, GoTypeDeclFact, GoTypeDeclKind, ImportFact,
+    LayerCacheEntryDigests, LayerCacheKeyParts, LayerCacheKind, LayerCachePrecision,
+    LayerCacheReadStatus, LayerCacheWriteStatus, PackageFact, ProviderRunResult, SourceFile,
+    StringLiteralFact, TestFact,
 };
 use crate::internal_core::{
     BranchId, Diagnostic, DiagnosticRange as TextRange, FileId, FunctionId, Language, Span,
-    fingerprint, span_from_byte_range,
+    fingerprint,
 };
 use anyhow::{Context, Result};
 use rayon::prelude::*;
@@ -19,9 +20,9 @@ use tree_sitter::{Node, Parser};
 
 use crate::go::local_db::LocalFactDb;
 
-const GO_CACHE_SCHEMA: &str = "go-facts-v2";
+const GO_CACHE_SCHEMA: &str = "go-facts-v3";
 const GO_PROVIDER_ID: &str = "polint.go.syntax";
-const GO_SYNTAX_LAYER_SCHEMA: &str = "go-syntax-layer-v1";
+const GO_SYNTAX_LAYER_SCHEMA: &str = "go-syntax-layer-v2";
 
 thread_local! {
     static GO_PARSER: RefCell<Option<Parser>> = const { RefCell::new(None) };
@@ -164,10 +165,11 @@ pub(crate) fn analyze_files_with_plan_options_and_cache_stats(
                 plan_digest,
                 parallel,
             );
+            let output_digest = payload.output_digest.clone();
             ProviderRunResult {
                 diagnostics: restore_syntax_layer_payload(db, payload),
                 cache_stats,
-                output_digest: None,
+                output_digest,
                 execution: Default::default(),
             }
         }
@@ -211,11 +213,14 @@ struct GoFileAnalysis {
     content_hash: String,
     diagnostics: Vec<Diagnostic>,
     facts: Option<crate::analysis_api::CachedFileFacts>,
+    output_digest: Option<Digest>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct SyntaxLayerPayload {
     schema: String,
+    #[serde(default)]
+    output_digest: Option<Digest>,
     files: Vec<SyntaxLayerFile>,
 }
 
@@ -297,13 +302,12 @@ fn parser_parameter_digest(files: &[&SourceFile]) -> Digest {
     )
 }
 
-/// Accepts a cached payload when it describes exactly `files` and its recorded
-/// output digest matches the one the write path would have produced.
+/// Accepts a cached payload when it describes exactly `files` and its embedded
+/// native output digest matches the layer manifest.
 ///
-/// The write path derives the output digest from the payload digest, and a cache
-/// verifies the payload digest against the stored blob before calling this, so
-/// deriving it again here is exact — no re-serialization, and no assumption that
-/// re-encoding the parsed payload reproduces the original bytes.
+/// The cache verifies the digest of the complete blob before calling this
+/// validator, so the embedded identity is already covered by the payload's
+/// integrity check. This avoids reserializing every fact on warm reads.
 fn validate_syntax_layer_payload(
     payload: &SyntaxLayerPayload,
     digests: LayerCacheEntryDigests<'_>,
@@ -324,12 +328,11 @@ fn validate_syntax_layer_payload(
         .map(|file| (file.relative_path.as_str(), file.content_hash.as_str()))
         .collect::<Vec<_>>();
     actual == expected
-        && match (digests.output, digests.payload) {
-            (Some(output_digest), Some(payload_digest)) => {
-                output_digest == &go_syntax_output_digest(payload_digest)
-            }
-            _ => false,
-        }
+        && digests.payload.is_some()
+        && payload
+            .output_digest
+            .as_ref()
+            .is_some_and(|expected| digests.output == Some(expected))
 }
 
 fn parse_go_syntax_layer_payload(
@@ -353,8 +356,15 @@ fn parse_go_syntax_layer_payload(
     };
     results.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
 
+    let output_digest = results
+        .iter()
+        .map(|result| result.output_digest.clone())
+        .collect::<Option<Vec<_>>>()
+        .map(|file_digests| go_syntax_output_digest(&file_digests));
+
     SyntaxLayerPayload {
         schema: GO_SYNTAX_LAYER_SCHEMA.to_string(),
+        output_digest,
         files: results
             .into_iter()
             .map(|result| SyntaxLayerFile {
@@ -404,6 +414,7 @@ fn write_syntax_layer_payload(
     stats: &mut CacheStats,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<Digest> {
+    let output_digest = payload.output_digest.clone()?;
     let payload_bytes = match serde_json::to_vec(payload) {
         Ok(bytes) => bytes,
         Err(error) => {
@@ -424,7 +435,6 @@ fn write_syntax_layer_payload(
             return None;
         }
     };
-    let output_digest = go_syntax_output_digest(&payload_digest);
     match cache.write_layer_json(
         layer_key,
         &output_digest,
@@ -433,35 +443,87 @@ fn write_syntax_layer_payload(
         "native_trusted",
         &payload_bytes,
     ) {
-        Ok(LayerCacheWriteStatus::Written) => stats.record_write(),
-        Ok(LayerCacheWriteStatus::BypassedDisabled) => stats.record_disabled_bypass(),
-        Err(error) => diagnostics.push(cache_write_diagnostic(
-            "go syntax layer",
-            anyhow::anyhow!(error),
-        )),
+        Ok(LayerCacheWriteStatus::Written) => {
+            stats.record_write();
+            Some(output_digest)
+        }
+        Ok(LayerCacheWriteStatus::BypassedDisabled) => {
+            stats.record_disabled_bypass();
+            Some(output_digest)
+        }
+        Err(error) => {
+            diagnostics.push(cache_write_diagnostic(
+                "go syntax layer",
+                anyhow::anyhow!(error),
+            ));
+            None
+        }
     }
-    Some(output_digest)
 }
 
-/// Recomputes the output digest the long way, by re-serializing the payload.
-///
-/// Only used to prove that the derivation in [`validate_syntax_layer_payload`]
-/// agrees with what the write path recorded.
+#[derive(Serialize)]
+struct CachedFileOutput<'a> {
+    schema: &'a str,
+    diagnostics: &'a [Diagnostic],
+    facts: Option<&'a CachedFileFacts>,
+}
+
+fn go_file_output_digest_from_bytes(
+    relative_path: &str,
+    content_hash: &str,
+    cached_file_bytes: &[u8],
+) -> Digest {
+    let mut digest = Digest::builder(DigestKind::ProviderOutput, "go-syntax-file-output-v1");
+    digest.field("path", relative_path);
+    digest.field("content-hash", content_hash);
+    digest.bytes_field("cached-file", cached_file_bytes);
+    digest.finish()
+}
+
+fn go_file_output_digest(
+    relative_path: &str,
+    content_hash: &str,
+    diagnostics: &[Diagnostic],
+    facts: Option<&CachedFileFacts>,
+) -> Option<Digest> {
+    let bytes = serde_json::to_vec(&CachedFileOutput {
+        schema: GO_CACHE_SCHEMA,
+        diagnostics,
+        facts,
+    })
+    .ok()?;
+    Some(go_file_output_digest_from_bytes(
+        relative_path,
+        content_hash,
+        &bytes,
+    ))
+}
+
+fn go_syntax_output_digest(file_digests: &[Digest]) -> Digest {
+    let mut digest = Digest::builder(DigestKind::ProviderOutput, "go-syntax-output-v1");
+    digest.field("schema", GO_SYNTAX_LAYER_SCHEMA);
+    digest.u64_field("file-count", file_digests.len() as u64);
+    for file_digest in file_digests {
+        digest.field("file", &file_digest.to_string());
+    }
+    digest.finish()
+}
+
 #[cfg(test)]
-fn go_syntax_output_digest_for_payload(payload: &SyntaxLayerPayload) -> Digest {
-    let payload_bytes = serde_json::to_vec(payload).unwrap_or_default();
-    let payload_digest = DisabledAnalysisCache
-        .payload_digest_for_json_bytes(&payload_bytes)
-        .unwrap_or_else(|_| Digest::unsupported(DigestKind::LayerOutput, "go_syntax", "json"));
-    go_syntax_output_digest(&payload_digest)
-}
-
-fn go_syntax_output_digest(payload_digest: &Digest) -> Digest {
-    Digest::from_parts(
-        DigestKind::ProviderOutput,
-        "go_syntax_layer_output",
-        &[&payload_digest.to_string()],
-    )
+fn go_syntax_output_digest_for_payload(payload: &SyntaxLayerPayload) -> Option<Digest> {
+    let file_digests = payload
+        .files
+        .iter()
+        .map(|file| {
+            go_file_output_digest(
+                &file.relative_path,
+                &file.content_hash,
+                &file.diagnostics,
+                file.facts.as_ref(),
+            )
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(go_syntax_output_digest(&file_digests))
 }
 
 fn analyze_go_source_file(
@@ -478,36 +540,39 @@ fn analyze_go_source_file(
         && let Ok(cached) = serde_json::from_slice::<CachedFileAnalysis>(&bytes)
         && cached.schema == GO_CACHE_SCHEMA
     {
+        let output_digest = Some(go_file_output_digest_from_bytes(
+            &file.relative_path,
+            &file.content_hash,
+            &bytes,
+        ));
         return GoFileAnalysis {
             relative_path: file.relative_path.clone(),
             content_hash: file.content_hash.clone(),
             diagnostics: cached.diagnostics,
             facts: Some(cached.facts),
+            output_digest,
         };
     }
 
     let mut local_db = LocalFactDb::new();
-    let local_file = FactDatabase::add_source_file(
-        &mut local_db,
-        file.path.clone(),
-        file.relative_path.clone(),
-        file.language,
-        Arc::clone(&file.source),
-        file.content_hash.clone(),
-    );
+    let local_file = local_db.add_source_file_from(file);
     let mut diagnostics = match parse_go_file(&mut local_db, local_file) {
         Ok(file_diagnostics) => file_diagnostics,
         Err(error) => {
+            let diagnostics = vec![Diagnostic::error(
+                "parser/go",
+                file.relative_path.clone(),
+                TextRange::point(1, 1),
+                format!("Failed to parse Go file: {error}"),
+            )];
+            let output_digest =
+                go_file_output_digest(&file.relative_path, &file.content_hash, &diagnostics, None);
             return GoFileAnalysis {
                 relative_path: file.relative_path.clone(),
                 content_hash: file.content_hash.clone(),
-                diagnostics: vec![Diagnostic::error(
-                    "parser/go",
-                    file.relative_path.clone(),
-                    TextRange::point(1, 1),
-                    format!("Failed to parse Go file: {error}"),
-                )],
+                diagnostics,
                 facts: None,
+                output_digest,
             };
         }
     };
@@ -517,19 +582,27 @@ fn analyze_go_source_file(
         diagnostics: diagnostics.clone(),
         facts: facts.clone(),
     };
-    if let Ok(bytes) = serde_json::to_vec(&cached)
-        && let Err(error) = cache.write_file_json(&key, &bytes)
-    {
-        diagnostics.push(cache_write_diagnostic(
-            file.relative_path.as_str(),
-            anyhow::anyhow!(error),
+    let mut output_digest = None;
+    if let Ok(bytes) = serde_json::to_vec(&cached) {
+        output_digest = Some(go_file_output_digest_from_bytes(
+            &file.relative_path,
+            &file.content_hash,
+            &bytes,
         ));
+        if let Err(error) = cache.write_file_json(&key, &bytes) {
+            diagnostics.push(cache_write_diagnostic(
+                file.relative_path.as_str(),
+                anyhow::anyhow!(error),
+            ));
+            output_digest = None;
+        }
     };
     GoFileAnalysis {
         relative_path: file.relative_path.clone(),
         content_hash: file.content_hash.clone(),
         diagnostics,
         facts: Some(facts),
+        output_digest,
     }
 }
 
@@ -567,24 +640,20 @@ fn parse_go_file(db: &mut dyn FactDatabase, file_id: FileId) -> Result<Vec<Diagn
     let mut diagnostics = Vec::new();
 
     if root.has_error() {
-        diagnostics.push(parser_error_diagnostic(db, file_id, source, root));
+        diagnostics.push(parser_error_diagnostic(db, file_id, root));
     }
 
     extract_package(db, file_id, source, root);
     extract_imports(db, file_id, source, root);
     extract_string_literals(db, file_id, source, root);
     extract_functions(db, file_id, source, root);
+    extract_go_types(db, file_id, source, root);
     Ok(diagnostics)
 }
 
-fn parser_error_diagnostic(
-    db: &dyn FactDatabase,
-    file_id: FileId,
-    source: &str,
-    root: Node<'_>,
-) -> Diagnostic {
+fn parser_error_diagnostic(db: &dyn FactDatabase, file_id: FileId, root: Node<'_>) -> Diagnostic {
     let range = first_error_node(root)
-        .map(|node| node_span(file_id, source, node).diagnostic_range())
+        .map(|node| node_span(db, file_id, node).diagnostic_range())
         .unwrap_or_else(|| TextRange::point(1, 1));
 
     Diagnostic::error(
@@ -616,13 +685,19 @@ fn extract_package(db: &mut dyn FactDatabase, file: FileId, source: &str, root: 
         crate::internal_core::PackageId::from_raw(0),
         file,
         name.to_string(),
-        node_span(file, source, identifier),
+        node_span(db, file, identifier),
         Language::Go,
     ));
 }
 
-fn node_span(file: FileId, source: &str, node: Node<'_>) -> Span {
-    span_from_byte_range(file, source, node.start_byte(), node.end_byte())
+fn indexed_span(db: &dyn FactDatabase, file: FileId, start_byte: usize, end_byte: usize) -> Span {
+    db.file(file)
+        .map(|source_file| source_file.span_from_byte_range(start_byte, end_byte))
+        .unwrap_or_else(|| Span::point(file, 1, 1))
+}
+
+fn node_span(db: &dyn FactDatabase, file: FileId, node: Node<'_>) -> Span {
+    indexed_span(db, file, node.start_byte(), node.end_byte())
 }
 
 fn node_text<'source>(source: &'source str, node: Node<'_>) -> Option<&'source str> {
@@ -714,7 +789,7 @@ fn push_import_from_node(db: &mut dyn FactDatabase, file: FileId, source: &str, 
         file,
         package,
         path,
-        node_span(file, source, node),
+        node_span(db, file, node),
         Language::Go,
     ));
 }
@@ -769,7 +844,7 @@ fn extract_string_literals(db: &mut dyn FactDatabase, file: FileId, source: &str
         db.push_string_literal(StringLiteralFact::new(
             file,
             value,
-            node_span(file, source, node),
+            node_span(db, file, node),
             Language::Go,
         ));
     });
@@ -804,7 +879,7 @@ fn extract_functions(db: &mut dyn FactDatabase, file: FileId, source: &str, root
         } else {
             simple_name.clone()
         };
-        let span = node_span(file, source, node);
+        let span = node_span(db, file, node);
         let is_test = is_go_test_entry(&file_path, &simple_name, node, source);
         let fact = FunctionFact::new(
             FunctionId::from_raw(0),
@@ -838,6 +913,157 @@ fn extract_functions(db: &mut dyn FactDatabase, file: FileId, source: &str, root
             db.push_test(go_test_fact(file, function_id, name, span, source, body));
         }
     });
+}
+
+/// Extracts typed Go structural facts: one row per named `type_spec`/`type_alias`
+/// plus one row per anonymous `struct_type` occurrence that is not the body of a
+/// top-level, non-grouped, non-alias declaration (those are fully described by their
+/// named row, mirroring the line-anchored `^type NAME struct {` shape consumers
+/// historically matched).
+fn extract_go_types(db: &mut dyn FactDatabase, file: FileId, source: &str, root: Node<'_>) {
+    visit_named_descendants(root, &mut |node| match node.kind() {
+        "type_spec" | "type_alias" => push_named_go_type(db, file, source, node),
+        "struct_type" if !is_suppressed_named_struct(node) => {
+            push_anonymous_go_struct(db, file, node);
+        }
+        _ => {}
+    });
+}
+
+fn push_named_go_type(db: &mut dyn FactDatabase, file: FileId, source: &str, spec: Node<'_>) {
+    let Some(name_node) = spec.child_by_field_name("name") else {
+        return;
+    };
+    let Some(type_node) = spec.child_by_field_name("type") else {
+        return;
+    };
+    let Some(declaration) = spec.parent() else {
+        return;
+    };
+    let Some(name) = node_text(source, name_node).map(str::to_string) else {
+        return;
+    };
+
+    let (kind, direct_name, body_range) = go_type_shape(source, type_node);
+    let fact = GoTypeDeclFact::new(
+        file,
+        node_span(db, file, name_node),
+        Some(name),
+        kind,
+        spec.kind() == "type_alias",
+        is_grouped_go_declaration(declaration),
+        declaration
+            .parent()
+            .is_some_and(|grand| grand.kind() == "source_file"),
+        spec.child_by_field_name("type_parameters").is_some(),
+        direct_name,
+        body_range,
+        declaration.start_byte() as u32,
+    );
+    db.push_go_type(fact);
+}
+
+fn push_anonymous_go_struct(db: &mut dyn FactDatabase, file: FileId, node: Node<'_>) {
+    let Some(open) = go_body_open_byte(node) else {
+        return;
+    };
+    let end = node.end_byte() as u32;
+    let fact = GoTypeDeclFact::new(
+        file,
+        node_span(db, file, node),
+        None,
+        GoTypeDeclKind::Struct,
+        false,
+        false,
+        false,
+        false,
+        None,
+        Some((open + 1, end.saturating_sub(1))),
+        node.start_byte() as u32,
+    );
+    db.push_go_type(fact);
+}
+
+/// A `struct_type` directly under a top-level, non-grouped, non-alias declaration is
+/// already represented by that declaration's named row, so it gets no anonymous row.
+fn is_suppressed_named_struct(node: Node<'_>) -> bool {
+    let Some(spec) = node.parent() else {
+        return false;
+    };
+    if !matches!(spec.kind(), "type_spec" | "type_alias") || spec.kind() == "type_alias" {
+        return false;
+    }
+    let Some(declaration) = spec.parent() else {
+        return false;
+    };
+    declaration
+        .parent()
+        .is_some_and(|grand| grand.kind() == "source_file")
+        && !is_grouped_go_declaration(declaration)
+}
+
+fn go_type_shape(
+    source: &str,
+    type_node: Node<'_>,
+) -> (GoTypeDeclKind, Option<String>, Option<(u32, u32)>) {
+    match type_node.kind() {
+        "struct_type" => (GoTypeDeclKind::Struct, None, go_body_range(type_node)),
+        "interface_type" => (GoTypeDeclKind::Interface, None, go_body_range(type_node)),
+        _ => (
+            GoTypeDeclKind::Named,
+            go_direct_type_name(source, type_node),
+            None,
+        ),
+    }
+}
+
+/// Final identifier of a named underlying type expression: `Y`, `Y.Z` -> `Z`,
+/// `Y[T]` -> `Y`. Pointer, map, slice, function, and channel heads yield `None`.
+fn go_direct_type_name(source: &str, type_node: Node<'_>) -> Option<String> {
+    match type_node.kind() {
+        "type_identifier" => node_text(source, type_node).map(str::to_string),
+        "qualified_type" => type_node
+            .child_by_field_name("name")
+            .and_then(|name| node_text(source, name))
+            .map(str::to_string),
+        "parameterized_type" | "generic_type" => type_node
+            .child_by_field_name("type")
+            .and_then(|inner| go_direct_type_name(source, inner)),
+        _ => None,
+    }
+}
+
+/// Byte position of the `{` that opens a struct or interface body.
+fn go_body_open_byte(node: Node<'_>) -> Option<u32> {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "{" || child.kind() == "field_declaration_list" {
+            return Some(child.start_byte() as u32);
+        }
+    }
+    None
+}
+
+fn go_body_range(node: Node<'_>) -> Option<(u32, u32)> {
+    let open = go_body_open_byte(node)?;
+    let end = node.end_byte() as u32;
+    Some((open + 1, end.saturating_sub(1)))
+}
+
+/// True when the `type_declaration` groups its specs: the first meaningful child
+/// after the `type` keyword is an opening parenthesis.
+fn is_grouped_go_declaration(declaration: Node<'_>) -> bool {
+    let mut cursor = declaration.walk();
+    let mut seen_type_keyword = false;
+    for child in declaration.children(&mut cursor) {
+        match child.kind() {
+            "type" if !seen_type_keyword => seen_type_keyword = true,
+            "comment" => {}
+            "(" => return true,
+            _ => return false,
+        }
+    }
+    false
 }
 
 fn declaration_name(source: &str, node: Node<'_>) -> Option<String> {
@@ -1290,7 +1516,7 @@ fn extract_branches(
             source,
             node,
         ),
-        "select_statement" => push_select_branch(db, file, function, function_name, source, node),
+        "select_statement" => push_select_branch(db, file, function, function_name, node),
         _ => {}
     });
 }
@@ -1310,7 +1536,7 @@ fn push_if_branches(
         .unwrap_or("if")
         .trim()
         .to_string();
-    let span = node_span(file, source, decision);
+    let span = node_span(db, file, decision);
     let true_body = node
         .child_by_field_name("consequence")
         .or_else(|| node.child_by_field_name("body"));
@@ -1359,6 +1585,7 @@ fn push_switch_branch(
     let condition = trimmed_text(source, start, end)
         .unwrap_or("switch")
         .to_string();
+    let decision_span = trimmed_span(db, file, source, start, end);
     push_branch(
         db,
         BranchTarget {
@@ -1366,7 +1593,7 @@ fn push_switch_branch(
             function,
             function_name,
         },
-        trimmed_span(file, source, start, end),
+        decision_span,
         condition.clone(),
         "switch",
         is_go_error_path_heuristic(source, &condition, Some(node), false),
@@ -1393,10 +1620,11 @@ fn push_case_branch(
             .unwrap_or("case")
             .to_string()
     };
+    let decision_span = trimmed_span(db, target.file, source, start, end);
     push_branch(
         db,
         target,
-        trimmed_span(target.file, source, start, end),
+        decision_span,
         condition.clone(),
         edge_label,
         is_go_error_path_heuristic(source, &condition, Some(node), function_returns_error),
@@ -1417,6 +1645,7 @@ fn push_for_branch(
             .unwrap_or("range")
             .trim()
             .to_string();
+        let decision_span = node_span(db, file, range);
         push_branch(
             db,
             BranchTarget {
@@ -1424,7 +1653,7 @@ fn push_for_branch(
                 function,
                 function_name,
             },
-            node_span(file, source, range),
+            decision_span,
             condition.clone(),
             "range",
             is_go_error_path_heuristic(source, &condition, Some(node), function_returns_error),
@@ -1436,6 +1665,7 @@ fn push_for_branch(
     let condition = trimmed_text(source, start, end)
         .unwrap_or("for")
         .to_string();
+    let decision_span = trimmed_span(db, file, source, start, end);
     push_branch(
         db,
         BranchTarget {
@@ -1443,7 +1673,7 @@ fn push_for_branch(
             function,
             function_name,
         },
-        trimmed_span(file, source, start, end),
+        decision_span,
         condition.clone(),
         "loop",
         is_go_error_path_heuristic(source, &condition, Some(node), function_returns_error),
@@ -1461,10 +1691,10 @@ fn push_select_branch(
     file: FileId,
     function: FunctionId,
     function_name: &str,
-    source: &str,
     node: Node<'_>,
 ) {
     let end = node.start_byte().saturating_add("select".len());
+    let decision_span = indexed_span(db, file, node.start_byte(), end);
     push_branch(
         db,
         BranchTarget {
@@ -1472,7 +1702,7 @@ fn push_select_branch(
             function,
             function_name,
         },
-        span_from_byte_range(file, source, node.start_byte(), end),
+        decision_span,
         "select".to_string(),
         "select",
         false,
@@ -1596,13 +1826,19 @@ fn trimmed_text(source: &str, start: usize, end: usize) -> Option<&str> {
     source.get(start..end).map(str::trim)
 }
 
-fn trimmed_span(file: FileId, source: &str, start: usize, end: usize) -> Span {
+fn trimmed_span(
+    db: &dyn FactDatabase,
+    file: FileId,
+    source: &str,
+    start: usize,
+    end: usize,
+) -> Span {
     let Some(text) = source.get(start..end) else {
-        return span_from_byte_range(file, source, start, end);
+        return indexed_span(db, file, start, end);
     };
     let leading = text.len() - text.trim_start().len();
     let trailing = text.len() - text.trim_end().len();
-    span_from_byte_range(file, source, start + leading, end - trailing)
+    indexed_span(db, file, start + leading, end - trailing)
 }
 
 #[derive(Clone, Copy)]
@@ -1864,11 +2100,8 @@ mod layer_digest_tests {
         (db, payload)
     }
 
-    /// The read path derives the output digest from the payload digest the cache
-    /// already verified against the blob. Prove that derivation agrees with the
-    /// re-serializing one across a real write-then-read round trip.
     #[test]
-    fn the_output_digest_derived_from_the_payload_digest_matches_reserialization() {
+    fn native_output_digest_survives_a_validated_write_and_read() {
         let cache_root = unique_cache_root();
         let cache = FsAnalysisCache::new(cache_root.join("analysis"), true);
         let (db, payload) = payload_for("package main\nfunc main() {}\n");
@@ -1888,28 +2121,28 @@ mod layer_digest_tests {
         .expect("layer cache write records an output digest");
         assert!(write_diagnostics.is_empty());
 
-        let mut derivations = None;
+        let mut validated_digest = None;
         let read = {
             let mut validate = |bytes: &[u8], digests: LayerCacheEntryDigests<'_>| -> bool {
                 let payload = serde_json::from_slice::<SyntaxLayerPayload>(bytes)
                     .expect("written payload parses");
-                derivations = Some((
-                    go_syntax_output_digest(
-                        digests.payload.expect("the cache records a payload digest"),
-                    ),
-                    go_syntax_output_digest_for_payload(&payload),
-                ));
+                let recorded = payload
+                    .output_digest
+                    .clone()
+                    .expect("written payload records its native output identity");
+                let recomputed = go_syntax_output_digest_for_payload(&payload)
+                    .expect("written payload can be independently digested");
+                assert_eq!(recorded, recomputed);
+                validated_digest = Some(recorded);
                 validate_syntax_layer_payload(&payload, digests, GO_SYNTAX_LAYER_SCHEMA, &files)
             };
             cache.read_layer_json(&layer_key, &mut validate)
         };
 
         assert_eq!(read.status, LayerCacheReadStatus::Hit);
-        let (from_payload_digest, from_reserialization) =
-            derivations.expect("a hit runs the validator");
-        assert_eq!(from_payload_digest, from_reserialization);
+        let validated_digest = validated_digest.expect("a hit runs the validator");
         assert_eq!(read.output_digest, Some(written));
-        assert_eq!(read.output_digest, Some(from_payload_digest));
+        assert_eq!(read.output_digest, Some(validated_digest));
 
         std::fs::remove_dir_all(&cache_root).ok();
     }

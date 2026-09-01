@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use crate::analysis_api::{
     BranchObligation, CachedFileFacts, CoverageFact, FactDatabase, FactFamily, FactMetaStore,
-    FactStore, FactStoreEntry, FunctionFact, ImportFact, JsxAttributeFact, PackageFact, SourceFile,
-    StringLiteralFact, TestFact, TsClassFact, TsComponentFact,
+    FactStore, FactStoreEntry, FunctionFact, GoTypeDeclFact, ImportFact, JsxAttributeFact,
+    PackageFact, SourceFile, StringLiteralFact, TestFact, TsClassFact, TsComponentFact,
 };
 use crate::internal_core::{
     BranchId, FileId, FunctionId, ImportId, Language, PackageId, StableKeyInterner, fingerprint,
@@ -71,6 +71,12 @@ impl LocalFactDb {
                     .downcast_mut::<GoSyntaxStore>()
             })
             .expect("GoSyntaxStore installed")
+    }
+
+    pub(crate) fn add_source_file_from(&mut self, file: &SourceFile) -> FileId {
+        let id = FileId::from_raw(self.files.len() as u32);
+        self.files.push(file.clone_with_id(id));
+        id
     }
 }
 
@@ -191,6 +197,10 @@ impl FactDatabase for LocalFactDb {
         self.jsx_attributes.push(fact);
     }
 
+    fn push_go_type(&mut self, fact: GoTypeDeclFact) {
+        self.go_syntax_mut().push_go_type(fact);
+    }
+
     fn packages(&self) -> &[PackageFact] {
         self.go_syntax().packages()
     }
@@ -229,6 +239,10 @@ impl FactDatabase for LocalFactDb {
 
     fn jsx_attributes(&self) -> &[JsxAttributeFact] {
         &self.jsx_attributes
+    }
+
+    fn go_types(&self) -> &[GoTypeDeclFact] {
+        self.go_syntax().go_types()
     }
 
     fn module_nodes(&self) -> &[crate::analysis_api::ModuleNode] {
@@ -321,6 +335,12 @@ impl FactDatabase for LocalFactDb {
                 .filter(|fact| fact.file == file)
                 .cloned()
                 .collect(),
+            go_types: self
+                .go_types()
+                .iter()
+                .filter(|fact| fact.file == file)
+                .cloned()
+                .collect(),
         }
     }
 
@@ -390,6 +410,11 @@ impl FactDatabase for LocalFactDb {
             attribute.file = file;
             attribute.span.file = file;
             self.push_jsx_attribute(attribute);
+        }
+        for mut go_type in facts.go_types {
+            go_type.file = file;
+            go_type.span.file = file;
+            self.push_go_type(go_type);
         }
     }
 }

@@ -382,7 +382,7 @@ impl GoMirLowering {
             let Some(name) = function_name(file.source.as_ref(), node) else {
                 continue;
             };
-            let span = node_span(file.id, file.source.as_ref(), node);
+            let span = node_span(file, node);
             let Some(function) = matching_function(db, file.id, &name, &span) else {
                 continue;
             };
@@ -397,13 +397,8 @@ impl GoMirLowering {
             let closure_bodies = literals
                 .iter()
                 .map(|node| {
-                    let closure_body = self.push_body(
-                        interner,
-                        db,
-                        file,
-                        function,
-                        node_span(file.id, file.source.as_ref(), *node),
-                    );
+                    let closure_body =
+                        self.push_body(interner, db, file, function, node_span(file, *node));
                     (
                         (node.start_byte() as u32, node.end_byte() as u32),
                         closure_body,
@@ -531,7 +526,7 @@ impl GoMirLowering {
             if descendant.is_error() || descendant.kind() == "ERROR" {
                 let unsupported_id = UnsupportedId(self.unsupported.len() as u64);
                 let operation_id = MirOpId(self.operations.len() as u64);
-                let span = node_span(file.id, file.source.as_ref(), descendant);
+                let span = node_span(file, descendant);
                 self.unsupported
                     .push(UnsupportedDraft::new(UnsupportedDraftInput {
                         id: unsupported_id,
@@ -631,6 +626,7 @@ fn identifier_tokens(source: &str) -> impl Iterator<Item = String> + '_ {
 
 struct FunctionLowering<'source> {
     file: FileId,
+    source_file: &'source SourceFile,
     source: &'source str,
     function: FunctionId,
     body: MirBodyId,
@@ -644,7 +640,7 @@ struct FunctionLowering<'source> {
 impl<'source> FunctionLowering<'source> {
     fn new(
         interner: &crate::internal_core::StableKeyInterner,
-        file: &SourceFile,
+        file: &'source SourceFile,
         source: &'source str,
         function: FunctionId,
         body: &MirBody,
@@ -653,6 +649,7 @@ impl<'source> FunctionLowering<'source> {
     ) -> Self {
         Self {
             file: file.id,
+            source_file: file,
             source,
             function,
             body: body.id,
@@ -1475,7 +1472,7 @@ impl<'source> FunctionLowering<'source> {
                 operation: None,
                 file_key: self.stable_context.file_key().to_string(),
                 file: self.file,
-                span: node_span(self.file, self.source, node),
+                span: node_span(self.source_file, node),
                 construct: construct.to_string(),
                 source_evidence: text,
                 affected_domains: unsupported_domains_for(construct),
@@ -1496,7 +1493,7 @@ impl<'source> FunctionLowering<'source> {
         let (domains, action) = pair;
         let unsupported_id = UnsupportedId(unsupported.len() as u64);
         let operation_id = MirOpId(operations.len() as u64);
-        let span = node_span(self.file, self.source, node);
+        let span = node_span(self.source_file, node);
         unsupported.push(UnsupportedDraft::new(UnsupportedDraftInput {
             id: unsupported_id,
             body: Some(self.body),
@@ -1586,7 +1583,7 @@ impl<'source> FunctionLowering<'source> {
             self.body,
             self.stable_context.body_key(),
             self.ordinal_for(node),
-            node_span(self.file, self.source, node),
+            node_span(self.source_file, node),
             (kind, status),
         ));
     }
@@ -2193,8 +2190,8 @@ fn owner_stable_key(
     .into_string()
 }
 
-fn node_span(file: FileId, source: &str, node: Node<'_>) -> Span {
-    crate::internal_core::span_from_byte_range(file, source, node.start_byte(), node.end_byte())
+fn node_span(file: &SourceFile, node: Node<'_>) -> Span {
+    file.span_from_byte_range(node.start_byte(), node.end_byte())
 }
 
 fn node_text<'source>(source: &'source str, node: Node<'_>) -> Option<&'source str> {

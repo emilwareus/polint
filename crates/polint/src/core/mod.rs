@@ -66,6 +66,7 @@ use metadata::*;
 
 mod capability;
 mod db;
+mod fact_index;
 mod fact_store;
 mod facts;
 mod ids;
@@ -79,11 +80,11 @@ mod stable_key;
 
 pub use facts::{
     BranchObligation, ComplexityMetricFact, CoverageFact, DefinitionFact, DefinitionKind,
-    FileMetricFact, FunctionFact, FunctionMetricFact, ImportFact, JsxAttributeFact, ModuleEdge,
-    ModuleEdgeKind, ModuleNode, ModuleNodeKind, PackageFact, ReferenceFact, ReferenceKind,
-    ResolutionPrecision, ResolutionStatus, ResolvedImportFact, SourceFile, StringLiteralFact,
-    SymbolFact, SymbolKind, SymbolNamespace, SymbolPrecision, SymbolResolutionStatus, TestFact,
-    TsClassFact, TsComponentFact, UnresolvedReason,
+    FileMetricFact, FunctionFact, FunctionMetricFact, GoTypeDeclFact, GoTypeDeclKind, ImportFact,
+    JsxAttributeFact, ModuleEdge, ModuleEdgeKind, ModuleNode, ModuleNodeKind, PackageFact,
+    ReferenceFact, ReferenceKind, ResolutionPrecision, ResolutionStatus, ResolvedImportFact,
+    SourceFile, StringLiteralFact, SymbolFact, SymbolKind, SymbolNamespace, SymbolPrecision,
+    SymbolResolutionStatus, TestFact, TsClassFact, TsComponentFact, UnresolvedReason,
 };
 #[cfg(test)]
 pub(crate) use facts::{CachedFileAnalysis, CachedFileFacts, TS_JS_MODULE_FUNCTION_NAME};

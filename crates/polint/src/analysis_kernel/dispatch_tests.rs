@@ -213,7 +213,7 @@ fn cold_warm_production_semantic_projection_matches() {
     let warm_projection = project(&warm, &rules, &counters);
     let disabled_cache = Cache::new(temp.path().join("disabled-cache"), false);
     let disabled = run_kernel(&loaded, &disabled_cache, &plan);
-    let mut disabled_projection = project(&disabled, &rules, &counters);
+    let disabled_projection = project(&disabled, &rules, &counters);
     assert_eq!(cold_projection, warm_projection);
     let cold_metrics = cold.run_report.provider_outcomes.last().unwrap();
     let disabled_metrics = disabled.run_report.provider_outcomes.last().unwrap();
@@ -229,7 +229,17 @@ fn cold_warm_production_semantic_projection_matches() {
     };
     assert_eq!(go(&cold), go(&disabled));
     assert!(go(&cold).output_identity.is_some());
-    disabled_projection.provider_outcomes = cold_projection.provider_outcomes.clone();
+    let ts = |output: &KernelOutput| {
+        output
+            .run_report
+            .provider_outcomes
+            .iter()
+            .find(|outcome| outcome.provider_id == "polint.ts.syntax")
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(ts(&cold), ts(&disabled));
+    assert!(ts(&cold).output_identity.is_some());
     assert_eq!(cold_projection, disabled_projection);
     assert_eq!(cold_projection.decisions, [1, 1]);
     let answers = &cold_projection.policy_answers;
@@ -257,7 +267,22 @@ fn cold_warm_production_semantic_projection_matches() {
     std::fs::create_dir_all(warning_cache.root()).expect("warning cache root");
     std::fs::write(warning_cache.layer_cache_dir(), b"not a directory").expect("block writes");
     let warned = run_kernel(&loaded, &warning_cache, &plan);
-    assert_eq!(expected_outcomes, &warned.run_report.provider_outcomes);
+    let mut normalized_warned_outcomes = warned.run_report.provider_outcomes.clone();
+    let expected_ts_identity = expected_outcomes
+        .iter()
+        .find(|outcome| outcome.provider_id == "polint.ts.syntax")
+        .and_then(|outcome| outcome.output_identity.clone())
+        .expect("warm TS provider identity");
+    let warned_ts = normalized_warned_outcomes
+        .iter_mut()
+        .find(|outcome| outcome.provider_id == "polint.ts.syntax")
+        .expect("TS provider outcome");
+    let fallback_ts_identity = warned_ts
+        .output_identity
+        .replace(expected_ts_identity.clone())
+        .expect("failed cache write still receives a deterministic kernel fallback");
+    assert_ne!(fallback_ts_identity, expected_ts_identity);
+    assert_eq!(expected_outcomes, &normalized_warned_outcomes);
     let mut warnings = warned.diagnostics.iter();
     let write_warning = warnings.any(|d| d.message.contains("cache write failed"));
     assert!(write_warning);

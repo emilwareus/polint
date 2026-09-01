@@ -56,6 +56,10 @@ const ALLOWED_PRELUDE: &[&str] = &[
     "FunctionFact",
     "FunctionId",
     "FunctionMetricFact",
+    // H7 promotion (perf/algo-10x wave 5): typed Go structural facts behind the
+    // GoTypeDecls view so consumer rules stop regex-parsing Go source.
+    "GoTypeDeclFact",
+    "GoTypeDeclKind",
     "ImportFact",
     "ImportId",
     "JsxAttributeFact",
@@ -132,6 +136,7 @@ const ALLOWED_PRELUDE: &[&str] = &[
     "FunctionMetrics",
     "Functions",
     "GoTests",
+    "GoTypeDecls",
     "Imports",
     "JsxAttributes",
     "ModuleGraphFacts",
@@ -656,11 +661,11 @@ fn allowlist_has_no_duplicates_and_expected_count() {
         ALLOWED_PRELUDE.len(),
         "ALLOWED_PRELUDE contains duplicate entries"
     );
-    // Locked count derived from sdk/mod.rs after StructuredEvidenceV1 promotion;
-    // see docs/API-VISIBILITY-PLAN.md.
+    // Locked count derived from sdk/mod.rs; last bumped by the H7 GoTypeDeclFact /
+    // GoTypeDeclKind / GoTypeDecls promotion (perf/algo-10x wave 5).
     assert_eq!(
         ALLOWED_PRELUDE.len(),
-        116,
+        119,
         "ALLOWED_PRELUDE count changed — update this assertion ONLY alongside a sanctioned \
          API promotion record"
     );

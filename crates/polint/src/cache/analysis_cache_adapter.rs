@@ -63,10 +63,9 @@ impl AnalysisCache for CacheAnalysisCache {
             &key.schema,
             &key.parser_identity,
         );
-        let value: serde_json::Value =
-            serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
         self.cache
-            .write_json(&facade_key, &value)
+            .write_json_bytes_with_status(&facade_key, bytes)
+            .map(|_| ())
             .map_err(|error| error.to_string())
     }
 

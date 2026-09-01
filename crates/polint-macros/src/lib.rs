@@ -352,7 +352,7 @@ fn capability_for_type(ty: &Type) -> syn::Result<(Ident, Ident, String, String)>
         ));
     }
     let method = match segment.ident.to_string().as_str() {
-        "SourceFiles" | "Packages" | "Functions" => "syntax",
+        "SourceFiles" | "Packages" | "Functions" | "GoTypeDecls" => "syntax",
         "Imports" => "imports",
         "ResolvedImports" => "resolved_imports",
         "ModuleGraphFacts" => "module_graph",

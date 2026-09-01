@@ -7,10 +7,10 @@
 use crate::core::{
     AnalysisDb, BranchObligation, ChangeStatus, ChangedFile, ComplexityMetricFact, CoverageFact,
     DefinitionFact, FileId, FileMetricFact, FunctionFact, FunctionId, FunctionMetricFact,
-    ImportFact, ImportId, JsxAttributeFact, Language, ModuleEdge, ModuleNode, ModuleNodeId,
-    PackageFact, ReferenceFact, ResolutionStatus, ResolvedImportFact, ReviewChangeset, SourceFile,
-    StringLiteralFact, SymbolFact, SymbolId, SymbolKind, SymbolResolutionStatus, TestFact,
-    TsClassFact, TsComponentFact,
+    GoTypeDeclFact, ImportFact, ImportId, JsxAttributeFact, Language, ModuleEdge, ModuleNode,
+    ModuleNodeId, PackageFact, ReferenceFact, ResolutionStatus, ResolvedImportFact,
+    ReviewChangeset, SourceFile, StringLiteralFact, SymbolFact, SymbolId, SymbolKind,
+    SymbolResolutionStatus, TestFact, TsClassFact, TsComponentFact,
 };
 use crate::sdk::policy::{
     EventPattern, FlowQuery, GuardQuery, LifecycleQuery, PolicyViolation, ReachQuery,
@@ -90,10 +90,7 @@ impl<'a> Functions<'a> {
 
     /// Returns function facts for a file without cloning facts.
     pub fn for_file(self, file: FileId) -> impl Iterator<Item = &'a FunctionFact> {
-        self.db
-            .functions()
-            .iter()
-            .filter(move |function| function.file == file)
+        self.db.functions_for_file(file)
     }
 }
 
@@ -117,10 +114,7 @@ impl<'a> FileMetrics<'a> {
 
     /// Returns derived metrics for one source file.
     pub fn get(self, file: FileId) -> Option<&'a FileMetricFact> {
-        self.db
-            .file_metrics()
-            .iter()
-            .find(|metric| metric.file == file)
+        self.db.file_metric_for_file(file)
     }
 
     /// Returns file metrics for one language.
@@ -176,18 +170,12 @@ impl<'a> FunctionMetrics<'a> {
 
     /// Returns function-size metrics for a file without cloning facts.
     pub fn for_file(self, file: FileId) -> impl Iterator<Item = &'a FunctionMetricFact> {
-        self.db
-            .function_metrics()
-            .iter()
-            .filter(move |metric| metric.file == file)
+        self.db.function_metrics_for_file(file)
     }
 
     /// Returns function-size metrics for one function.
     pub fn get(self, function: FunctionId) -> Option<&'a FunctionMetricFact> {
-        self.db
-            .function_metrics()
-            .iter()
-            .find(|metric| metric.function == function)
+        self.db.function_metric_for_function(function)
     }
 
     /// Iterates functions whose total line count is greater than `max`.
@@ -227,18 +215,12 @@ impl<'a> ComplexityMetrics<'a> {
 
     /// Returns complexity metrics for a file without cloning facts.
     pub fn for_file(self, file: FileId) -> impl Iterator<Item = &'a ComplexityMetricFact> {
-        self.db
-            .complexity_metrics()
-            .iter()
-            .filter(move |metric| metric.file == file)
+        self.db.complexity_metrics_for_file(file)
     }
 
     /// Returns complexity metrics for one function.
     pub fn get(self, function: FunctionId) -> Option<&'a ComplexityMetricFact> {
-        self.db
-            .complexity_metrics()
-            .iter()
-            .find(|metric| metric.function == function)
+        self.db.complexity_metric_for_function(function)
     }
 
     /// Iterates functions whose cyclomatic complexity is greater than `max`.
@@ -275,10 +257,7 @@ impl<'a> Imports<'a> {
 
     /// Returns import facts for a file without cloning facts.
     pub fn for_file(self, file: FileId) -> impl Iterator<Item = &'a ImportFact> {
-        self.db
-            .imports()
-            .iter()
-            .filter(move |import| import.file == file)
+        self.db.imports_for_file(file)
     }
 
     /// Returns syntactic import graph edges as `(source file, import)` pairs.
@@ -310,10 +289,7 @@ impl<'a> ResolvedImports<'a> {
 
     /// Returns resolved import facts for a source file without cloning facts.
     pub fn for_file(self, file: FileId) -> impl Iterator<Item = &'a ResolvedImportFact> {
-        self.db
-            .resolved_imports()
-            .iter()
-            .filter(move |resolved| resolved.from_file == file)
+        self.db.resolved_imports_for_file(file)
     }
 
     /// Returns resolved imports for a source file.
@@ -399,11 +375,7 @@ impl<'a> ModuleGraphFacts<'a> {
 
     /// Returns the first file node for a source file ID, if one exists.
     pub fn node_for_file(self, file: FileId) -> Option<ModuleNodeId> {
-        self.db
-            .module_nodes()
-            .iter()
-            .find(|node| node.file == Some(file))
-            .map(|node| node.id)
+        self.db.module_node_for_file(file).map(|node| node.id)
     }
 
     /// Returns graph nodes attached to a package name or label.
@@ -511,7 +483,7 @@ impl<'a> Symbols<'a> {
 
     /// Returns a symbol fact for a stable symbol ID.
     pub fn get(self, symbol: SymbolId) -> Option<&'a SymbolFact> {
-        query::symbol_by_id(self.db, symbol)
+        self.db.symbol_by_id(symbol)
     }
 
     /// Resolves a symbol's stable identity text.
@@ -526,7 +498,7 @@ impl<'a> Symbols<'a> {
 
     /// Returns symbol facts for one source file without cloning facts.
     pub fn for_file(self, file: FileId) -> impl Iterator<Item = &'a SymbolFact> {
-        query::symbols_for_file(self.db, file)
+        self.db.symbols_for_file(file)
     }
 
     /// Returns symbol facts with the exact public name.
@@ -552,10 +524,7 @@ impl<'a> Symbols<'a> {
 
     /// Returns definitions whose primary location is in a source file.
     pub fn definitions_in_file(self, file: FileId) -> impl Iterator<Item = &'a DefinitionFact> {
-        self.db
-            .definitions()
-            .iter()
-            .filter(move |definition| definition.file == Some(file))
+        self.db.definitions_for_file(file)
     }
 
     /// Returns the primary definition for a symbol, if one is known.
@@ -565,7 +534,7 @@ impl<'a> Symbols<'a> {
 
     /// Returns all definitions for a symbol, including declaration-merged definitions.
     pub fn definitions(self, symbol: SymbolId) -> impl Iterator<Item = &'a DefinitionFact> {
-        query::definitions_for_symbol(self.db, symbol)
+        self.db.definitions_for_symbol(symbol)
     }
 
     /// Returns exported symbols without cloning facts.
@@ -604,7 +573,7 @@ impl<'a> References<'a> {
 
     /// Returns references in one source file without cloning facts.
     pub fn for_file(self, file: FileId) -> impl Iterator<Item = &'a ReferenceFact> {
-        query::references_for_file(self.db, file)
+        self.db.references_for_file(file)
     }
 
     /// Returns references explicitly marked unresolved.
@@ -676,10 +645,7 @@ impl<'a> BranchObligations<'a> {
 
     /// Returns branch obligations for a file without cloning facts.
     pub fn for_file(self, file: FileId) -> impl Iterator<Item = &'a BranchObligation> {
-        self.db
-            .branches()
-            .iter()
-            .filter(move |branch| branch.file == file)
+        self.db.branches_for_file(file)
     }
 
     /// Returns branch obligations for a function without cloning facts.
@@ -711,7 +677,7 @@ impl<'a> GoTests<'a> {
 
     /// Returns Go test facts for a file without cloning facts.
     pub fn for_file(self, file: FileId) -> impl Iterator<Item = &'a TestFact> {
-        self.db.tests().iter().filter(move |test| test.file == file)
+        self.db.tests_for_file(file)
     }
 
     /// Returns Go tests related to a source file.
@@ -758,6 +724,34 @@ impl<'a> GoTests<'a> {
     }
 }
 
+/// Go structural type fact view. Requesting this view maps to the `syntax` capability.
+///
+/// Exposes typed Go declarations (`type X struct|interface|...`, aliases, grouped and
+/// function-local specs) plus anonymous `struct { ... }` occurrences so rules can stop
+/// re-parsing Go source with regexes and brace matching. See `docs/facts/go-types.md`.
+#[derive(Clone, Copy)]
+#[non_exhaustive]
+pub struct GoTypeDecls<'a> {
+    db: &'a AnalysisDb,
+}
+
+impl<'a> GoTypeDecls<'a> {
+    /// Returns all Go structural type facts in deterministic database order.
+    pub fn all(self) -> &'a [GoTypeDeclFact] {
+        self.db.go_types()
+    }
+
+    /// Iterates all Go structural type facts in deterministic database order.
+    pub fn iter(self) -> std::slice::Iter<'a, GoTypeDeclFact> {
+        self.db.go_types().iter()
+    }
+
+    /// Returns Go structural type facts for a file without cloning facts.
+    pub fn for_file(self, file: FileId) -> impl Iterator<Item = &'a GoTypeDeclFact> {
+        self.db.go_types_for_file(file)
+    }
+}
+
 /// TS/JS component fact view. Requesting this view maps to the `ts_components` capability.
 #[derive(Clone, Copy)]
 #[non_exhaustive]
@@ -778,10 +772,7 @@ impl<'a> TsComponents<'a> {
 
     /// Returns component facts for a file without cloning facts.
     pub fn for_file(self, file: FileId) -> impl Iterator<Item = &'a TsComponentFact> {
-        self.db
-            .ts_components()
-            .iter()
-            .filter(move |component| component.file == file)
+        self.db.ts_components_for_file(file)
     }
 }
 
@@ -805,10 +796,7 @@ impl<'a> TsClasses<'a> {
 
     /// Returns class facts for a file without cloning facts.
     pub fn for_file(self, file: FileId) -> impl Iterator<Item = &'a TsClassFact> {
-        self.db
-            .ts_classes()
-            .iter()
-            .filter(move |class| class.file == file)
+        self.db.ts_classes_for_file(file)
     }
 }
 
@@ -832,10 +820,7 @@ impl<'a> StringLiterals<'a> {
 
     /// Returns string literal facts for a file without cloning facts.
     pub fn for_file(self, file: FileId) -> impl Iterator<Item = &'a StringLiteralFact> {
-        self.db
-            .string_literals()
-            .iter()
-            .filter(move |literal| literal.file == file)
+        self.db.string_literals_for_file(file)
     }
 }
 
@@ -859,10 +844,7 @@ impl<'a> JsxAttributes<'a> {
 
     /// Returns JSX attribute facts for a file without cloning facts.
     pub fn for_file(self, file: FileId) -> impl Iterator<Item = &'a JsxAttributeFact> {
-        self.db
-            .jsx_attributes()
-            .iter()
-            .filter(move |attribute| attribute.file == file)
+        self.db.jsx_attributes_for_file(file)
     }
 }
 
@@ -1130,6 +1112,7 @@ impl_fact_view!(Symbols);
 impl_fact_view!(References);
 impl_fact_view!(BranchObligations);
 impl_fact_view!(GoTests);
+impl_fact_view!(GoTypeDecls);
 impl_fact_view!(TsComponents);
 impl_fact_view!(TsClasses);
 impl_fact_view!(StringLiterals);
@@ -1149,10 +1132,10 @@ mod tests {
     use super::*;
     use crate::core::{
         AnalysisDb, ComplexityMetricFact, DefinitionFact, DefinitionId, DefinitionKind,
-        FileMetricFact, FunctionId, FunctionMetricFact, ImportFact, ModuleEdge, ModuleEdgeId,
-        ModuleEdgeKind, ModuleNode, ModuleNodeId, ModuleNodeKind, ReferenceFact, ReferenceId,
-        ReferenceKind, ResolutionPrecision, ResolutionStatus, ResolvedImportFact, ResolvedImportId,
-        Span, SymbolFact, SymbolId, SymbolKind, SymbolNamespace, SymbolPrecision,
+        FileMetricFact, FunctionFact, FunctionId, FunctionMetricFact, ImportFact, ModuleEdge,
+        ModuleEdgeId, ModuleEdgeKind, ModuleNode, ModuleNodeId, ModuleNodeKind, ReferenceFact,
+        ReferenceId, ReferenceKind, ResolutionPrecision, ResolutionStatus, ResolvedImportFact,
+        ResolvedImportId, Span, SymbolFact, SymbolId, SymbolKind, SymbolNamespace, SymbolPrecision,
         SymbolResolutionStatus, UnresolvedReason,
     };
     use std::path::PathBuf;
@@ -1298,6 +1281,349 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![panel_function]
         );
+    }
+
+    #[test]
+    fn function_file_index_preserves_sparse_order_and_refreshes_after_mutation() {
+        let mut db = AnalysisDb::new();
+        let first_file = db.add_file(
+            PathBuf::from("src/first.go"),
+            "src/first.go".to_string(),
+            "package first\n".to_string(),
+        );
+        let second_file = db.add_file(
+            PathBuf::from("src/second.go"),
+            "src/second.go".to_string(),
+            "package second\n".to_string(),
+        );
+        let first_span = Span::point(first_file, 1, 1);
+        let second_span = Span::point(second_file, 1, 1);
+
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(99),
+            first_file,
+            "first".to_string(),
+            first_span.clone(),
+            Language::Go,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(99),
+            second_file,
+            "second".to_string(),
+            second_span,
+            Language::Go,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(99),
+            first_file,
+            "third".to_string(),
+            first_span.clone(),
+            Language::Go,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
+
+        let first_query = Functions::build(&db)
+            .for_file(first_file)
+            .map(|function| function.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(first_query, ["first", "third"]);
+
+        db.push_function(FunctionFact::new(
+            FunctionId::from_raw(99),
+            first_file,
+            "fourth".to_string(),
+            first_span,
+            Language::Go,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
+
+        let functions = Functions::build(&db);
+        let refreshed = functions.for_file(first_file).collect::<Vec<_>>();
+        assert_eq!(
+            refreshed
+                .iter()
+                .map(|function| function.name.as_str())
+                .collect::<Vec<_>>(),
+            ["first", "third", "fourth"]
+        );
+        assert!(std::ptr::eq(refreshed[1], &functions.all()[2]));
+    }
+
+    #[test]
+    fn go_syntax_file_indexes_preserve_sparse_storage_order_after_finalization() {
+        let mut db = AnalysisDb::new();
+        let first_file = db.add_file(
+            PathBuf::from("src/first.go"),
+            "src/first.go".to_string(),
+            "package first\n".to_string(),
+        );
+        let second_file = db.add_file(
+            PathBuf::from("src/second.go"),
+            "src/second.go".to_string(),
+            "package second\n".to_string(),
+        );
+        let first_span = Span::point(first_file, 1, 1);
+        let second_span = Span::point(second_file, 1, 1);
+
+        for (file, path, span) in [
+            (first_file, "first-a", first_span.clone()),
+            (second_file, "second", second_span.clone()),
+            (first_file, "first-b", first_span.clone()),
+        ] {
+            db.push_import(ImportFact::new(
+                ImportId::from_raw(99),
+                file,
+                None,
+                path.to_string(),
+                span,
+                Language::Go,
+            ));
+        }
+        for (file, condition, span) in [
+            (first_file, "first-a", first_span.clone()),
+            (second_file, "second", second_span.clone()),
+            (first_file, "first-b", first_span.clone()),
+        ] {
+            db.push_branch(BranchObligation::new(
+                crate::core::BranchId::from_raw(99),
+                None,
+                file,
+                span,
+                condition.to_string(),
+                "true".to_string(),
+                false,
+                condition.to_string(),
+            ));
+        }
+        for (file, name, span) in [
+            (first_file, "first-a", first_span.clone()),
+            (second_file, "second", second_span),
+            (first_file, "first-b", first_span),
+        ] {
+            db.push_test(TestFact::new(
+                file,
+                None,
+                name.to_string(),
+                span,
+                Vec::new(),
+                0,
+                0,
+                Vec::new(),
+                0,
+            ));
+        }
+        db.finish_all_fact_meta_insertions();
+
+        assert_eq!(
+            (
+                Imports::build(&db)
+                    .for_file(first_file)
+                    .map(|fact| fact.path.as_str())
+                    .collect::<Vec<_>>(),
+                BranchObligations::build(&db)
+                    .for_file(first_file)
+                    .map(|fact| fact.condition_text.as_str())
+                    .collect::<Vec<_>>(),
+                GoTests::build(&db)
+                    .for_file(first_file)
+                    .map(|fact| fact.name.as_str())
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                vec!["first-a", "first-b"],
+                vec!["first-a", "first-b"],
+                vec!["first-a", "first-b"],
+            )
+        );
+    }
+
+    #[test]
+    fn ts_syntax_file_indexes_preserve_sparse_storage_order_after_finalization() {
+        let mut db = AnalysisDb::new();
+        let first_file = db.add_file(
+            PathBuf::from("src/first.tsx"),
+            "src/first.tsx".to_string(),
+            "export const First = () => null;\n".to_string(),
+        );
+        let second_file = db.add_file(
+            PathBuf::from("src/second.tsx"),
+            "src/second.tsx".to_string(),
+            "export const Second = () => null;\n".to_string(),
+        );
+        let first_span = Span::point(first_file, 1, 1);
+        let second_span = Span::point(second_file, 1, 1);
+
+        for (file, name, span) in [
+            (first_file, "first-a", first_span.clone()),
+            (second_file, "second", second_span.clone()),
+            (first_file, "first-b", first_span.clone()),
+        ] {
+            db.push_ts_component(TsComponentFact::new(file, None, name.to_string(), span));
+        }
+        for (file, name, span) in [
+            (first_file, "first-a", first_span.clone()),
+            (second_file, "second", second_span.clone()),
+            (first_file, "first-b", first_span.clone()),
+        ] {
+            db.push_ts_class(TsClassFact::new(file, name.to_string(), span, true, true));
+        }
+        for (file, value, span) in [
+            (first_file, "first-a", first_span.clone()),
+            (second_file, "second", second_span.clone()),
+            (first_file, "first-b", first_span.clone()),
+        ] {
+            db.push_string_literal(StringLiteralFact::new(
+                file,
+                value.to_string(),
+                span,
+                Language::Tsx,
+            ));
+        }
+        for (file, name, span) in [
+            (first_file, "first-a", first_span.clone()),
+            (second_file, "second", second_span),
+            (first_file, "first-b", first_span),
+        ] {
+            db.push_jsx_attribute(JsxAttributeFact::new(file, name.to_string(), None, span));
+        }
+        db.finish_all_fact_meta_insertions();
+
+        assert_eq!(
+            (
+                TsComponents::build(&db)
+                    .for_file(first_file)
+                    .map(|fact| fact.name.as_str())
+                    .collect::<Vec<_>>(),
+                TsClasses::build(&db)
+                    .for_file(first_file)
+                    .map(|fact| fact.name.as_str())
+                    .collect::<Vec<_>>(),
+                StringLiterals::build(&db)
+                    .for_file(first_file)
+                    .map(|fact| fact.value.as_str())
+                    .collect::<Vec<_>>(),
+                JsxAttributes::build(&db)
+                    .for_file(first_file)
+                    .map(|fact| fact.name.as_str())
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                vec!["first-a", "first-b"],
+                vec!["first-a", "first-b"],
+                vec!["first-a", "first-b"],
+                vec!["first-a", "first-b"],
+            )
+        );
+    }
+
+    #[test]
+    fn metric_id_indexes_follow_ids_instead_of_fact_positions() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            "function first() {}\nfunction second() {}\n".to_string(),
+        );
+        let first_span = Span::new(file, 0, 19, 1, 1, 1, 20);
+        let second_span = Span::new(file, 20, 40, 2, 1, 2, 21);
+        let first = db.push_function(FunctionFact::new(
+            FunctionId::from_raw(99),
+            file,
+            "first".to_string(),
+            first_span.clone(),
+            Language::TypeScript,
+            false,
+            true,
+            1,
+            Vec::new(),
+        ));
+        let second = db.push_function(FunctionFact::new(
+            FunctionId::from_raw(99),
+            file,
+            "second".to_string(),
+            second_span.clone(),
+            Language::TypeScript,
+            false,
+            true,
+            4,
+            Vec::new(),
+        ));
+
+        db.replace_metric_facts(
+            Vec::new(),
+            vec![
+                FunctionMetricFact::new(
+                    second,
+                    file,
+                    "second".to_string(),
+                    second_span.clone(),
+                    Language::TypeScript,
+                    1,
+                    20,
+                ),
+                FunctionMetricFact::new(
+                    first,
+                    file,
+                    "first".to_string(),
+                    first_span.clone(),
+                    Language::TypeScript,
+                    1,
+                    19,
+                ),
+            ],
+            vec![
+                ComplexityMetricFact::new(
+                    second,
+                    file,
+                    "second".to_string(),
+                    second_span,
+                    Language::TypeScript,
+                    4,
+                ),
+                ComplexityMetricFact::new(
+                    first,
+                    file,
+                    "first".to_string(),
+                    first_span,
+                    Language::TypeScript,
+                    1,
+                ),
+            ],
+        );
+        db.finish_all_fact_meta_insertions();
+
+        let function_metrics = FunctionMetrics::build(&db);
+        let complexity_metrics = ComplexityMetrics::build(&db);
+        assert_eq!(
+            function_metrics
+                .get(first)
+                .map(|metric| metric.name.as_str()),
+            Some("first")
+        );
+        assert_eq!(
+            complexity_metrics
+                .get(second)
+                .map(|metric| metric.cyclomatic_complexity),
+            Some(4)
+        );
+        assert!(std::ptr::eq(
+            function_metrics.get(first).unwrap(),
+            &function_metrics.all()[1]
+        ));
     }
 
     #[test]
@@ -1688,62 +2014,66 @@ mod tests {
                 interner.intern("ts|src/app.ts|definition|Button".to_string()),
                 SymbolPrecision::ExactLocal,
             )],
-            vec![
-                ReferenceFact::new(
-                    ReferenceId::from_raw(40),
-                    Language::TypeScript,
-                    "theme".to_string(),
-                    "src/theme.ts::theme".to_string(),
-                    ReferenceKind::Read,
-                    SymbolNamespace::Value,
-                    Some(app_file),
-                    None,
-                    Some(ModuleNodeId::from_raw(0)),
-                    Some(button),
-                    Some(Span::point(app_file, 1, 28)),
-                    Some(theme),
-                    Vec::new(),
-                    interner.intern("ts|src/app.ts|reference|theme".to_string()),
-                    SymbolResolutionStatus::Resolved,
-                    SymbolPrecision::ModuleLinked,
-                ),
-                ReferenceFact::new(
-                    ReferenceId::from_raw(50),
-                    Language::TypeScript,
-                    "missing".to_string(),
-                    "missing".to_string(),
-                    ReferenceKind::Read,
-                    SymbolNamespace::Value,
-                    Some(app_file),
-                    None,
-                    Some(ModuleNodeId::from_raw(0)),
-                    Some(button),
-                    Some(Span::point(app_file, 1, 35)),
-                    None,
-                    Vec::new(),
-                    interner.intern("ts|src/app.ts|reference|missing".to_string()),
-                    SymbolResolutionStatus::Unresolved,
-                    SymbolPrecision::Unresolved,
-                ),
-                ReferenceFact::new(
-                    ReferenceId::from_raw(60),
-                    Language::TypeScript,
-                    "ambiguous".to_string(),
-                    "ambiguous".to_string(),
-                    ReferenceKind::Read,
-                    SymbolNamespace::Value,
-                    Some(app_file),
-                    None,
-                    Some(ModuleNodeId::from_raw(0)),
-                    Some(button),
-                    Some(Span::point(app_file, 1, 44)),
-                    None,
-                    vec![button, theme],
-                    interner.intern("ts|src/app.ts|reference|ambiguous".to_string()),
-                    SymbolResolutionStatus::Ambiguous,
-                    SymbolPrecision::Ambiguous,
-                ),
-            ],
+            {
+                let mut references = vec![
+                    ReferenceFact::new(
+                        ReferenceId::from_raw(40),
+                        Language::TypeScript,
+                        "theme".to_string(),
+                        "src/theme.ts::theme".to_string(),
+                        ReferenceKind::Read,
+                        SymbolNamespace::Value,
+                        Some(app_file),
+                        None,
+                        Some(ModuleNodeId::from_raw(0)),
+                        Some(button),
+                        Some(Span::point(app_file, 1, 28)),
+                        Some(theme),
+                        Vec::new(),
+                        interner.intern("ts|src/app.ts|reference|theme".to_string()),
+                        SymbolResolutionStatus::Resolved,
+                        SymbolPrecision::ModuleLinked,
+                    ),
+                    ReferenceFact::new(
+                        ReferenceId::from_raw(50),
+                        Language::TypeScript,
+                        "missing".to_string(),
+                        "missing".to_string(),
+                        ReferenceKind::Read,
+                        SymbolNamespace::Value,
+                        Some(app_file),
+                        None,
+                        Some(ModuleNodeId::from_raw(0)),
+                        Some(button),
+                        Some(Span::point(app_file, 1, 35)),
+                        None,
+                        Vec::new(),
+                        interner.intern("ts|src/app.ts|reference|missing".to_string()),
+                        SymbolResolutionStatus::Unresolved,
+                        SymbolPrecision::Unresolved,
+                    ),
+                    ReferenceFact::new(
+                        ReferenceId::from_raw(60),
+                        Language::TypeScript,
+                        "ambiguous".to_string(),
+                        "ambiguous".to_string(),
+                        ReferenceKind::Read,
+                        SymbolNamespace::Value,
+                        Some(app_file),
+                        None,
+                        Some(ModuleNodeId::from_raw(0)),
+                        Some(button),
+                        Some(Span::point(app_file, 1, 44)),
+                        None,
+                        vec![button, theme],
+                        interner.intern("ts|src/app.ts|reference|ambiguous".to_string()),
+                        SymbolResolutionStatus::Ambiguous,
+                        SymbolPrecision::Ambiguous,
+                    ),
+                ];
+                references.rotate_right(1);
+                references
+            },
         );
 
         let symbols = Symbols::build(&db);
@@ -1819,9 +2149,9 @@ mod tests {
                 .map(|reference| reference.id)
                 .collect::<Vec<_>>(),
             vec![
+                ReferenceId::from_raw(60),
                 ReferenceId::from_raw(40),
-                ReferenceId::from_raw(50),
-                ReferenceId::from_raw(60)
+                ReferenceId::from_raw(50)
             ]
         );
         assert_eq!(

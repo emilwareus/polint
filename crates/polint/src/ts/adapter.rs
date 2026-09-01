@@ -1,14 +1,13 @@
 use crate::analysis_api::{
-    AnalysisCache, CacheStats, CachedFileAnalysis, Digest, DigestKind, DisabledAnalysisCache,
-    FactDatabase, FileCacheKeyParts, FileCacheReadStatus, FunctionFact, ImportFact,
-    JsxAttributeFact, LayerCacheEntryDigests, LayerCacheKeyParts, LayerCacheKind,
+    AnalysisCache, CacheStats, CachedFileAnalysis, CachedFileFacts, Digest, DigestKind,
+    DisabledAnalysisCache, FactDatabase, FileCacheKeyParts, FileCacheReadStatus, FunctionFact,
+    ImportFact, JsxAttributeFact, LayerCacheEntryDigests, LayerCacheKeyParts, LayerCacheKind,
     LayerCachePrecision, LayerCacheReadStatus, LayerCacheWriteStatus, ProviderRunResult,
     SourceFile, StringLiteralFact, TS_JS_MODULE_FUNCTION_NAME, TS_PARSER_BACKEND, TsClassFact,
     TsComponentFact,
 };
 use crate::internal_core::{
     Diagnostic, DiagnosticRange as TextRange, FileId, FunctionId, Language, Span,
-    span_from_byte_range,
 };
 use anyhow::{Context, Result};
 use oxc_allocator::Allocator;
@@ -188,10 +187,11 @@ pub fn analyze_files_with_plan_options_and_cache_stats(
                 plan_digest,
                 parallel,
             );
+            let output_digest = payload.output_digest.clone();
             ProviderRunResult {
                 diagnostics: restore_syntax_layer_payload(db, payload),
                 cache_stats,
-                output_digest: None,
+                output_digest,
                 execution: Default::default(),
             }
         }
@@ -235,11 +235,14 @@ struct TsFileAnalysis {
     content_hash: String,
     diagnostics: Vec<Diagnostic>,
     facts: Option<crate::analysis_api::CachedFileFacts>,
+    output_digest: Option<Digest>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct SyntaxLayerPayload {
     schema: String,
+    #[serde(default)]
+    output_digest: Option<Digest>,
     files: Vec<SyntaxLayerFile>,
 }
 
@@ -305,13 +308,12 @@ fn parser_parameter_digest(files: &[&SourceFile]) -> Digest {
     )
 }
 
-/// Accepts a cached payload when it describes exactly `files` and its recorded
-/// output digest matches the one the write path would have produced.
+/// Accepts a cached payload when it describes exactly `files` and its embedded
+/// native output digest matches the layer manifest.
 ///
-/// The write path derives the output digest from the payload digest, and a cache
-/// verifies the payload digest against the stored blob before calling this, so
-/// deriving it again here is exact — no re-serialization, and no assumption that
-/// re-encoding the parsed payload reproduces the original bytes.
+/// The cache verifies the digest of the complete blob before calling this
+/// validator, so the embedded identity is already covered by the payload's
+/// integrity check. This avoids reserializing every fact on warm reads.
 fn validate_syntax_layer_payload(
     payload: &SyntaxLayerPayload,
     digests: LayerCacheEntryDigests<'_>,
@@ -332,12 +334,11 @@ fn validate_syntax_layer_payload(
         .map(|file| (file.relative_path.as_str(), file.content_hash.as_str()))
         .collect::<Vec<_>>();
     actual == expected
-        && match (digests.output, digests.payload) {
-            (Some(output_digest), Some(payload_digest)) => {
-                output_digest == &ts_syntax_output_digest(payload_digest)
-            }
-            _ => false,
-        }
+        && digests.payload.is_some()
+        && payload
+            .output_digest
+            .as_ref()
+            .is_some_and(|expected| digests.output == Some(expected))
 }
 
 fn parse_ts_syntax_layer_payload(
@@ -361,8 +362,15 @@ fn parse_ts_syntax_layer_payload(
     };
     results.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
 
+    let output_digest = results
+        .iter()
+        .map(|result| result.output_digest.clone())
+        .collect::<Option<Vec<_>>>()
+        .map(|file_digests| ts_syntax_output_digest(&file_digests));
+
     SyntaxLayerPayload {
         schema: TS_SYNTAX_LAYER_SCHEMA.to_string(),
+        output_digest,
         files: results
             .into_iter()
             .map(|result| SyntaxLayerFile {
@@ -411,6 +419,7 @@ fn write_syntax_layer_payload(
     stats: &mut CacheStats,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<Digest> {
+    let output_digest = payload.output_digest.clone()?;
     let payload_bytes = match serde_json::to_vec(payload) {
         Ok(bytes) => bytes,
         Err(error) => {
@@ -431,7 +440,6 @@ fn write_syntax_layer_payload(
             return None;
         }
     };
-    let output_digest = ts_syntax_output_digest(&payload_digest);
     match cache.write_layer_json(
         layer_key,
         &output_digest,
@@ -440,35 +448,87 @@ fn write_syntax_layer_payload(
         "native_trusted",
         &payload_bytes,
     ) {
-        Ok(LayerCacheWriteStatus::Written) => stats.record_write(),
-        Ok(LayerCacheWriteStatus::BypassedDisabled) => stats.record_disabled_bypass(),
-        Err(error) => diagnostics.push(cache_write_diagnostic(
-            "ts syntax layer",
-            anyhow::anyhow!(error),
-        )),
+        Ok(LayerCacheWriteStatus::Written) => {
+            stats.record_write();
+            Some(output_digest)
+        }
+        Ok(LayerCacheWriteStatus::BypassedDisabled) => {
+            stats.record_disabled_bypass();
+            Some(output_digest)
+        }
+        Err(error) => {
+            diagnostics.push(cache_write_diagnostic(
+                "ts syntax layer",
+                anyhow::anyhow!(error),
+            ));
+            None
+        }
     }
-    Some(output_digest)
 }
 
-/// Recomputes the output digest the long way, by re-serializing the payload.
-///
-/// Only used to prove that the derivation in [`validate_syntax_layer_payload`]
-/// agrees with what the write path recorded.
+#[derive(Serialize)]
+struct CachedFileOutput<'a> {
+    schema: &'a str,
+    diagnostics: &'a [Diagnostic],
+    facts: Option<&'a CachedFileFacts>,
+}
+
+fn ts_file_output_digest_from_bytes(
+    relative_path: &str,
+    content_hash: &str,
+    cached_file_bytes: &[u8],
+) -> Digest {
+    let mut digest = Digest::builder(DigestKind::ProviderOutput, "ts-syntax-file-output-v1");
+    digest.field("path", relative_path);
+    digest.field("content-hash", content_hash);
+    digest.bytes_field("cached-file", cached_file_bytes);
+    digest.finish()
+}
+
+fn ts_file_output_digest(
+    relative_path: &str,
+    content_hash: &str,
+    diagnostics: &[Diagnostic],
+    facts: Option<&CachedFileFacts>,
+) -> Option<Digest> {
+    let bytes = serde_json::to_vec(&CachedFileOutput {
+        schema: TS_CACHE_SCHEMA,
+        diagnostics,
+        facts,
+    })
+    .ok()?;
+    Some(ts_file_output_digest_from_bytes(
+        relative_path,
+        content_hash,
+        &bytes,
+    ))
+}
+
+fn ts_syntax_output_digest(file_digests: &[Digest]) -> Digest {
+    let mut digest = Digest::builder(DigestKind::ProviderOutput, "ts-syntax-output-v1");
+    digest.field("schema", TS_SYNTAX_LAYER_SCHEMA);
+    digest.u64_field("file-count", file_digests.len() as u64);
+    for file_digest in file_digests {
+        digest.field("file", &file_digest.to_string());
+    }
+    digest.finish()
+}
+
 #[cfg(test)]
-fn ts_syntax_output_digest_for_payload(payload: &SyntaxLayerPayload) -> Digest {
-    let payload_bytes = serde_json::to_vec(payload).unwrap_or_default();
-    let payload_digest = DisabledAnalysisCache
-        .payload_digest_for_json_bytes(&payload_bytes)
-        .unwrap_or_else(|_| Digest::unsupported(DigestKind::LayerOutput, "ts_syntax", "json"));
-    ts_syntax_output_digest(&payload_digest)
-}
-
-fn ts_syntax_output_digest(payload_digest: &Digest) -> Digest {
-    Digest::from_parts(
-        DigestKind::ProviderOutput,
-        "ts_syntax_layer_output",
-        &[&payload_digest.to_string()],
-    )
+fn ts_syntax_output_digest_for_payload(payload: &SyntaxLayerPayload) -> Option<Digest> {
+    let file_digests = payload
+        .files
+        .iter()
+        .map(|file| {
+            ts_file_output_digest(
+                &file.relative_path,
+                &file.content_hash,
+                &file.diagnostics,
+                file.facts.as_ref(),
+            )
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(ts_syntax_output_digest(&file_digests))
 }
 
 fn ts_file_cache_key(
@@ -502,36 +562,39 @@ fn analyze_ts_source_file(
         && let Ok(cached) = serde_json::from_slice::<CachedFileAnalysis>(&bytes)
         && cached.schema == TS_CACHE_SCHEMA
     {
+        let output_digest = Some(ts_file_output_digest_from_bytes(
+            &file.relative_path,
+            &file.content_hash,
+            &bytes,
+        ));
         return TsFileAnalysis {
             relative_path: file.relative_path.clone(),
             content_hash: file.content_hash.clone(),
             diagnostics: cached.diagnostics,
             facts: Some(cached.facts),
+            output_digest,
         };
     }
 
     let mut local_db = LocalFactDb::new();
-    let local_file = FactDatabase::add_source_file(
-        &mut local_db,
-        file.path.clone(),
-        file.relative_path.clone(),
-        file.language,
-        Arc::clone(&file.source),
-        file.content_hash.clone(),
-    );
+    let local_file = local_db.add_source_file_from(file);
     let mut diagnostics = match extract_ts_file_facts(&mut local_db, local_file) {
         Ok(file_diagnostics) => file_diagnostics,
         Err(error) => {
+            let diagnostics = vec![Diagnostic::error(
+                "parser/ts",
+                file.relative_path.clone(),
+                TextRange::point(1, 1),
+                format!("Failed to parse TS/JS file: {error}"),
+            )];
+            let output_digest =
+                ts_file_output_digest(&file.relative_path, &file.content_hash, &diagnostics, None);
             return TsFileAnalysis {
                 relative_path: file.relative_path.clone(),
                 content_hash: file.content_hash.clone(),
-                diagnostics: vec![Diagnostic::error(
-                    "parser/ts",
-                    file.relative_path.clone(),
-                    TextRange::point(1, 1),
-                    format!("Failed to parse TS/JS file: {error}"),
-                )],
+                diagnostics,
                 facts: None,
+                output_digest,
             };
         }
     };
@@ -541,19 +604,27 @@ fn analyze_ts_source_file(
         diagnostics: diagnostics.clone(),
         facts: facts.clone(),
     };
-    if let Ok(bytes) = serde_json::to_vec(&cached)
-        && let Err(error) = cache.write_file_json(&key, &bytes)
-    {
-        diagnostics.push(cache_write_diagnostic(
-            file.relative_path.as_str(),
-            anyhow::anyhow!(error),
+    let mut output_digest = None;
+    if let Ok(bytes) = serde_json::to_vec(&cached) {
+        output_digest = Some(ts_file_output_digest_from_bytes(
+            &file.relative_path,
+            &file.content_hash,
+            &bytes,
         ));
+        if let Err(error) = cache.write_file_json(&key, &bytes) {
+            diagnostics.push(cache_write_diagnostic(
+                file.relative_path.as_str(),
+                anyhow::anyhow!(error),
+            ));
+            output_digest = None;
+        }
     }
     TsFileAnalysis {
         relative_path: file.relative_path.clone(),
         content_hash: file.content_hash.clone(),
         diagnostics,
         facts: Some(facts),
+        output_digest,
     }
 }
 
@@ -578,9 +649,7 @@ fn extract_ts_file_facts(db: &mut dyn FactDatabase, file_id: FileId) -> Result<V
 
     for error in &parsed.errors {
         let range = match (error.start_byte, error.end_byte) {
-            (Some(start), Some(end)) => {
-                span_from_byte_range(file_id, source, start, end).diagnostic_range()
-            }
+            (Some(start), Some(end)) => indexed_span(db, file_id, start, end).diagnostic_range(),
             _ => TextRange::point(1, 1),
         };
 
@@ -618,13 +687,8 @@ fn extract_ts_file_facts(db: &mut dyn FactDatabase, file_id: FileId) -> Result<V
         module_requests.sort_by_key(|(start, _, _)| *start);
 
         for (_, statement_span, path) in module_requests {
-            push_module_import(
-                db,
-                file_id,
-                path,
-                span_from_oxc(file_id, source, statement_span),
-                language,
-            );
+            let span = span_from_oxc(db, file_id, statement_span);
+            push_module_import(db, file_id, path, span, language);
         }
     }
     Ok(diagnostics)
@@ -642,8 +706,14 @@ fn extract_from_program(
     extract_literals_and_jsx(db, file_id, source, language, program);
 }
 
-fn span_from_oxc(file: FileId, source: &str, span: oxc_span::Span) -> Span {
-    span_from_byte_range(file, source, span.start as usize, span.end as usize)
+fn indexed_span(db: &dyn FactDatabase, file: FileId, start_byte: usize, end_byte: usize) -> Span {
+    db.file(file)
+        .map(|source_file| source_file.span_from_byte_range(start_byte, end_byte))
+        .unwrap_or_else(|| Span::point(file, 1, 1))
+}
+
+fn span_from_oxc(db: &dyn FactDatabase, file: FileId, span: oxc_span::Span) -> Span {
+    indexed_span(db, file, span.start as usize, span.end as usize)
 }
 
 fn extract_imports_and_exports(
@@ -656,32 +726,17 @@ fn extract_imports_and_exports(
     for statement in &program.body {
         match statement {
             Statement::ImportDeclaration(declaration) => {
-                push_module_import(
-                    db,
-                    file,
-                    declaration.source.value.as_str(),
-                    span_from_oxc(file, source, declaration.source.span),
-                    language,
-                );
+                let span = span_from_oxc(db, file, declaration.source.span);
+                push_module_import(db, file, declaration.source.value.as_str(), span, language);
             }
             Statement::ExportAllDeclaration(declaration) => {
-                push_module_import(
-                    db,
-                    file,
-                    declaration.source.value.as_str(),
-                    span_from_oxc(file, source, declaration.source.span),
-                    language,
-                );
+                let span = span_from_oxc(db, file, declaration.source.span);
+                push_module_import(db, file, declaration.source.value.as_str(), span, language);
             }
             Statement::ExportNamedDeclaration(declaration) => {
                 if let Some(module_source) = &declaration.source {
-                    push_module_import(
-                        db,
-                        file,
-                        module_source.value.as_str(),
-                        span_from_oxc(file, source, module_source.span),
-                        language,
-                    );
+                    let span = span_from_oxc(db, file, module_source.span);
+                    push_module_import(db, file, module_source.value.as_str(), span, language);
                 }
             }
             _ => {}
@@ -825,13 +880,8 @@ fn collect_require_imports_from_expression(
             if callee_text(&call.callee).as_deref() == Some("require")
                 && let Some(Argument::StringLiteral(path)) = call.arguments.first()
             {
-                push_module_import(
-                    db,
-                    ctx.file,
-                    path.value.as_str(),
-                    span_from_oxc(ctx.file, ctx.source, path.span),
-                    ctx.language,
-                );
+                let span = span_from_oxc(db, ctx.file, path.span);
+                push_module_import(db, ctx.file, path.value.as_str(), span, ctx.language);
             }
             collect_require_imports_from_expression(db, ctx, &call.callee);
             for argument in &call.arguments {
@@ -980,13 +1030,8 @@ fn collect_require_imports_from_export_default(
             if callee_text(&call.callee).as_deref() == Some("require")
                 && let Some(Argument::StringLiteral(path)) = call.arguments.first()
             {
-                push_module_import(
-                    db,
-                    ctx.file,
-                    path.value.as_str(),
-                    span_from_oxc(ctx.file, ctx.source, path.span),
-                    ctx.language,
-                );
+                let span = span_from_oxc(db, ctx.file, path.span);
+                push_module_import(db, ctx.file, path.value.as_str(), span, ctx.language);
             }
             for argument in &call.arguments {
                 collect_require_imports_from_argument(db, ctx, argument);
@@ -1072,13 +1117,8 @@ fn collect_require_imports_from_for_init(
             if callee_text(&call.callee).as_deref() == Some("require")
                 && let Some(Argument::StringLiteral(path)) = call.arguments.first()
             {
-                push_module_import(
-                    db,
-                    ctx.file,
-                    path.value.as_str(),
-                    span_from_oxc(ctx.file, ctx.source, path.span),
-                    ctx.language,
-                );
+                let span = span_from_oxc(db, ctx.file, path.span);
+                push_module_import(db, ctx.file, path.value.as_str(), span, ctx.language);
             }
             for argument in &call.arguments {
                 collect_require_imports_from_argument(db, ctx, argument);
@@ -1104,13 +1144,8 @@ fn collect_require_imports_from_argument(
             if callee_text(&call.callee).as_deref() == Some("require")
                 && let Some(Argument::StringLiteral(path)) = call.arguments.first()
             {
-                push_module_import(
-                    db,
-                    ctx.file,
-                    path.value.as_str(),
-                    span_from_oxc(ctx.file, ctx.source, path.span),
-                    ctx.language,
-                );
+                let span = span_from_oxc(db, ctx.file, path.span);
+                push_module_import(db, ctx.file, path.value.as_str(), span, ctx.language);
             }
             for argument in &call.arguments {
                 collect_require_imports_from_argument(db, ctx, argument);
@@ -1133,22 +1168,12 @@ fn push_dynamic_import_expression(
 ) {
     match &import_expression.source {
         Expression::StringLiteral(path) => {
-            push_module_import(
-                db,
-                ctx.file,
-                path.value.as_str(),
-                span_from_oxc(ctx.file, ctx.source, path.span),
-                ctx.language,
-            );
+            let span = span_from_oxc(db, ctx.file, path.span);
+            push_module_import(db, ctx.file, path.value.as_str(), span, ctx.language);
         }
         _ => {
-            push_module_import(
-                db,
-                ctx.file,
-                DYNAMIC_IMPORT_SPECIFIER,
-                span_from_oxc(ctx.file, ctx.source, import_expression.span),
-                ctx.language,
-            );
+            let span = span_from_oxc(db, ctx.file, import_expression.span);
+            push_module_import(db, ctx.file, DYNAMIC_IMPORT_SPECIFIER, span, ctx.language);
         }
     }
 }
@@ -1296,7 +1321,7 @@ fn push_ts_module_function(db: &mut dyn FactDatabase, ctx: TsAstCtx<'_>) -> Func
         FunctionId::from_raw(0),
         ctx.file,
         TS_JS_MODULE_FUNCTION_NAME.to_string(),
-        span_from_byte_range(ctx.file, ctx.source, 0, ctx.source.len()),
+        indexed_span(db, ctx.file, 0, ctx.source.len()),
         ctx.language,
         false,
         false,
@@ -2029,7 +2054,7 @@ fn push_ts_function(
 ) -> FunctionId {
     spec.calls.sort();
     spec.calls.dedup();
-    let span = span_from_oxc(ctx.file, ctx.source, spec.span);
+    let span = span_from_oxc(db, ctx.file, spec.span);
     // Idempotent by (file, span): a function reached via body recursion (nested
     // declarations) must not duplicate a fact already emitted at a top-level
     // position (call argument, array element, …). `push_function` does no dedup,
@@ -2077,7 +2102,7 @@ fn push_ts_class(
     is_exported: bool,
 ) {
     let is_component_like = is_component_like_name(&name);
-    let span = span_from_oxc(file, source, class.span);
+    let span = span_from_oxc(db, file, class.span);
     // Idempotent by class span: a class expression / nested class declaration reached
     // via the anonymous-callable walk must not duplicate facts already emitted by the
     // top-level declaration or `var x = class` declarator path (duplicate FunctionFacts
@@ -3888,7 +3913,7 @@ fn push_string_literal_from_oxc(
     db.push_string_literal(StringLiteralFact::new(
         ctx.file,
         value,
-        span_from_oxc(ctx.file, ctx.source, span),
+        span_from_oxc(db, ctx.file, span),
         ctx.language,
     ));
 }
@@ -3918,7 +3943,7 @@ fn extract_jsx_element_attributes(
                         ctx.file,
                         name,
                         attribute.value.as_ref().and_then(jsx_attribute_value),
-                        span_from_oxc(ctx.file, ctx.source, attribute.span),
+                        span_from_oxc(db, ctx.file, attribute.span),
                     ));
                 }
                 if let Some(value) = &attribute.value {
@@ -4528,14 +4553,11 @@ mod layer_digest_tests {
         (db, payload)
     }
 
-    /// The read path derives the output digest from the payload digest the cache
-    /// already verified against the blob. Prove that derivation agrees with the
-    /// re-serializing one across a real write-then-read round trip.
     #[test]
-    fn the_output_digest_derived_from_the_payload_digest_matches_reserialization() {
+    fn native_output_digest_survives_a_validated_write_and_read() {
         let cache_root = unique_cache_root();
         let cache = FsAnalysisCache::new(cache_root.join("analysis"), true);
-        let (db, payload) = payload_for("package main\nfunc main() {}\n");
+        let (db, payload) = payload_for("export function main() {}\n");
         let owned = db.files().to_vec();
         let files = owned.iter().collect::<Vec<_>>();
         let layer_key = ts_syntax_layer_key(&files, "config");
@@ -4552,28 +4574,28 @@ mod layer_digest_tests {
         .expect("layer cache write records an output digest");
         assert!(write_diagnostics.is_empty());
 
-        let mut derivations = None;
+        let mut validated_digest = None;
         let read = {
             let mut validate = |bytes: &[u8], digests: LayerCacheEntryDigests<'_>| -> bool {
                 let payload = serde_json::from_slice::<SyntaxLayerPayload>(bytes)
                     .expect("written payload parses");
-                derivations = Some((
-                    ts_syntax_output_digest(
-                        digests.payload.expect("the cache records a payload digest"),
-                    ),
-                    ts_syntax_output_digest_for_payload(&payload),
-                ));
+                let recorded = payload
+                    .output_digest
+                    .clone()
+                    .expect("written payload records its native output identity");
+                let recomputed = ts_syntax_output_digest_for_payload(&payload)
+                    .expect("written payload can be independently digested");
+                assert_eq!(recorded, recomputed);
+                validated_digest = Some(recorded);
                 validate_syntax_layer_payload(&payload, digests, TS_SYNTAX_LAYER_SCHEMA, &files)
             };
             cache.read_layer_json(&layer_key, &mut validate)
         };
 
         assert_eq!(read.status, LayerCacheReadStatus::Hit);
-        let (from_payload_digest, from_reserialization) =
-            derivations.expect("a hit runs the validator");
-        assert_eq!(from_payload_digest, from_reserialization);
+        let validated_digest = validated_digest.expect("a hit runs the validator");
         assert_eq!(read.output_digest, Some(written));
-        assert_eq!(read.output_digest, Some(from_payload_digest));
+        assert_eq!(read.output_digest, Some(validated_digest));
 
         std::fs::remove_dir_all(&cache_root).ok();
     }
@@ -4585,7 +4607,7 @@ mod layer_digest_tests {
     fn a_substituted_payload_is_evicted_rather_than_reused() {
         let cache_root = unique_cache_root();
         let cache = FsAnalysisCache::new(cache_root.join("analysis"), true);
-        let (db, payload) = payload_for("package main\nfunc main() {}\n");
+        let (db, payload) = payload_for("export function main() {}\n");
         let owned = db.files().to_vec();
         let files = owned.iter().collect::<Vec<_>>();
         let layer_key = ts_syntax_layer_key(&files, "config");
@@ -4601,7 +4623,7 @@ mod layer_digest_tests {
         )
         .expect("layer cache write records an output digest");
 
-        let (_, other) = payload_for("package main\nfunc other() {}\n");
+        let (_, other) = payload_for("export function other() {}\n");
         let payload_bytes = serde_json::to_vec(&payload).expect("payload serializes");
         let payload_digest = DisabledAnalysisCache
             .payload_digest_for_json_bytes(&payload_bytes)

@@ -6,7 +6,7 @@ use crate::analysis_kernel::incremental::{
     ShapeKind,
 };
 use crate::analysis_kernel::metrics_projection::{
-    CanonicalMetricsInputs, CanonicalMetricsOutput, MetricsProjectionError,
+    CanonicalMetricsContext, CanonicalMetricsInputs, CanonicalMetricsOutput, MetricsProjectionError,
 };
 use crate::analysis_neutral::metrics::{
     METRIC_CAPABILITIES, METRICS_LAYER_SCHEMA, MetricsLayerPayload,
@@ -26,7 +26,11 @@ pub(crate) struct MetricsDerivation {
 
 #[cfg(test)]
 pub(crate) fn derive_requested_metrics(db: &mut AnalysisDb, plan: &AnalysisPlan) {
-    let _ = derive_requested_metrics_uncached(db, plan);
+    if !plan.requests_any_capability(METRIC_CAPABILITIES) {
+        return;
+    }
+    let context = CanonicalMetricsContext::from_db(db).expect("valid canonical metrics context");
+    let _ = derive_requested_metrics_uncached(db, plan, &context);
 }
 
 pub(crate) fn derive_requested_metrics_with_cache_stats(
@@ -39,13 +43,14 @@ pub(crate) fn derive_requested_metrics_with_cache_stats(
         return Ok(MetricsDerivation::default());
     }
 
-    let inputs = CanonicalMetricsInputs::from_db(db)?;
-    let layer_key = metrics_layer_key(&inputs, manifest);
+    let context = CanonicalMetricsContext::from_db(db)?;
+    let inputs = context.inputs();
+    let layer_key = metrics_layer_key(inputs, manifest);
     let store = cache.layer_cache_store();
     let mut cache_stats = CacheStats::default();
     let read = store
         .read_json_validated::<MetricsLayerPayload, _>(&layer_key, |payload, manifest| {
-            validate_metrics_layer_payload(db, payload, manifest)
+            validate_metrics_layer_payload(&context, payload, manifest)
         });
 
     Ok(match read.status {
@@ -66,7 +71,7 @@ pub(crate) fn derive_requested_metrics_with_cache_stats(
         LayerCacheReadStatus::BypassedDisabled => {
             cache_stats.record_disabled_bypass();
             cache_stats.record_recompute();
-            let mut derivation = derive_requested_metrics_uncached(db, plan)?;
+            let mut derivation = derive_requested_metrics_uncached(db, plan, &context)?;
             derivation.cache_stats = cache_stats;
             derivation
         }
@@ -77,9 +82,9 @@ pub(crate) fn derive_requested_metrics_with_cache_stats(
                 cache_stats.record_invalid_evicted_read();
             }
             cache_stats.record_recompute();
-            let mut derivation = derive_requested_metrics_uncached(db, plan)?;
+            let mut derivation = derive_requested_metrics_uncached(db, plan, &context)?;
             let payload = metrics_layer_payload(db);
-            let dependencies = metrics_layer_dependency_edges(&inputs, &layer_key);
+            let dependencies = metrics_layer_dependency_edges(inputs, &layer_key);
             let output_digest = derivation
                 .output_digest
                 .clone()
@@ -114,14 +119,18 @@ pub(crate) fn metrics_layer_key(
 fn derive_requested_metrics_uncached(
     db: &mut AnalysisDb,
     plan: &AnalysisPlan,
+    context: &CanonicalMetricsContext,
 ) -> Result<MetricsDerivation, MetricsProjectionError> {
     let requested = plan.requests_any_capability(METRIC_CAPABILITIES);
     if !requested {
         return Ok(MetricsDerivation::default());
     }
 
-    if let Some(output) = crate::analysis_neutral::metrics::derive_requested_metrics(db, requested)
-    {
+    if let Some(output) = crate::analysis_neutral::metrics::derive_requested_metrics(
+        db,
+        requested,
+        context.file_summaries(),
+    ) {
         db.replace_metric_facts(
             output.file_metrics,
             output.function_metrics,
@@ -131,7 +140,7 @@ fn derive_requested_metrics_uncached(
     Ok(MetricsDerivation {
         cache_stats: CacheStats::default(),
         diagnostics: Vec::new(),
-        output_digest: Some(CanonicalMetricsOutput::from_db(db)?.digest()),
+        output_digest: Some(CanonicalMetricsOutput::from_db_with_context(context, db)?.digest()),
         execution: Default::default(),
     })
 }
@@ -205,13 +214,13 @@ fn restore_metrics_layer_payload(db: &mut AnalysisDb, payload: &MetricsLayerPayl
 }
 
 fn validate_metrics_layer_payload(
-    db: &AnalysisDb,
+    context: &CanonicalMetricsContext,
     payload: &MetricsLayerPayload,
     manifest: &LayerCacheManifest,
 ) -> bool {
     payload.schema == METRICS_LAYER_SCHEMA
-        && CanonicalMetricsOutput::from_metric_facts(
-            db,
+        && CanonicalMetricsOutput::from_metric_facts_with_context(
+            context,
             &payload.file_metrics,
             &payload.function_metrics,
             &payload.complexity_metrics,

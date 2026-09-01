@@ -90,6 +90,12 @@ impl LocalFactDb {
             })
             .expect("TsSyntaxStore installed")
     }
+
+    pub(crate) fn add_source_file_from(&mut self, file: &SourceFile) -> FileId {
+        let id = FileId::from_raw(self.files.len() as u32);
+        self.files.push(file.clone_with_id(id));
+        id
+    }
 }
 
 impl FactDatabase for LocalFactDb {
@@ -217,6 +223,10 @@ impl FactDatabase for LocalFactDb {
         let _ = self.ts_syntax_mut().push_ts_class(fact);
     }
 
+    fn push_go_type(&mut self, _fact: crate::analysis_api::GoTypeDeclFact) {
+        // Go structural facts are Go-frontend-only; TS never produces them.
+    }
+
     fn push_jsx_attribute(&mut self, fact: JsxAttributeFact) {
         let _ = self.ts_syntax_mut().push_jsx_attribute(fact);
     }
@@ -259,6 +269,10 @@ impl FactDatabase for LocalFactDb {
 
     fn jsx_attributes(&self) -> &[JsxAttributeFact] {
         self.ts_syntax().jsx_attributes()
+    }
+
+    fn go_types(&self) -> &[crate::analysis_api::GoTypeDeclFact] {
+        &[]
     }
 
     fn module_nodes(&self) -> &[crate::analysis_api::ModuleNode] {
@@ -351,6 +365,7 @@ impl FactDatabase for LocalFactDb {
                 .filter(|fact| fact.file == file)
                 .cloned()
                 .collect(),
+            go_types: Vec::new(),
         }
     }
 

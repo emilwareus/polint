@@ -10,7 +10,7 @@ use oxc_semantic::{AstNodes, NodeId, SemanticBuilder};
 use oxc_span::GetSpan;
 
 use crate::analysis_api::SourceFile;
-use crate::internal_core::{Span, StableKeyInterner, span_from_byte_range};
+use crate::internal_core::{Span, StableKeyInterner};
 use crate::ts::ids::{TsInventoryCallsiteId, TsInventoryFunctionId};
 use crate::ts::inventory::facts::{
     TsCallsiteInventoryKind, TsFunctionInventoryKind, TsInventoryCallsiteFact,
@@ -75,7 +75,7 @@ pub fn extract_ts_inventory_from_program(
 
     let mut function_rows = Vec::new();
     for (_, _, kind, node_id, ast_kind) in node_entries {
-        let span = span_from_oxc(file.id, source, ast_kind.span());
+        let span = span_from_oxc(file, ast_kind.span());
         let display_name = function_display_name(nodes, node_id, ast_kind);
         let lexical_parent_key =
             lexical_parent_key(file, nodes, node_id).map(|key| interner.intern(key));
@@ -113,8 +113,7 @@ pub fn extract_ts_inventory_from_program(
     let mut callsite_rows = Vec::new();
     for (_, _, kind, node_id, ast_kind) in callsite_entries {
         let span = span_from_oxc(
-            file.id,
-            source,
+            file,
             crate::ts::spans::normalized_callsite_span(source, ast_kind)
                 .expect("callsite entries have normalized callsite spans"),
         );
@@ -452,6 +451,6 @@ fn length_prefixed(value: &str) -> String {
     format!("{}:{}", value.len(), value)
 }
 
-fn span_from_oxc(file: crate::internal_core::FileId, source: &str, span: oxc_span::Span) -> Span {
-    span_from_byte_range(file, source, span.start as usize, span.end as usize)
+fn span_from_oxc(file: &SourceFile, span: oxc_span::Span) -> Span {
+    file.span_from_byte_range(span.start as usize, span.end as usize)
 }

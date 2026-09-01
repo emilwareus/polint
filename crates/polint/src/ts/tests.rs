@@ -252,7 +252,67 @@ fn ts_syntax_layer_cache_disabled_bypass() {
     assert_eq!(result.cache_stats.bypasses_disabled, 1);
     assert_eq!(result.cache_stats.recomputes, 1);
     assert_eq!(result.cache_stats.writes, 0);
+    assert!(result.output_digest.is_some());
     assert!(!cache_root.join("layers").exists());
+}
+
+#[test]
+fn ts_syntax_output_identity_matches_disabled_cold_and_warm_runs() {
+    let source = "export function main() {}\n";
+    let disabled_cache = crate::ts::test_cache::FsAnalysisCache::new("", false);
+    let mut disabled_db = db_with_ts_file("main.ts", source);
+    let disabled = analyze_with_plan_options_and_cache_stats(
+        &mut disabled_db,
+        &disabled_cache,
+        "config",
+        "rule",
+        "",
+        false,
+    );
+
+    let cache_root = unique_cache_root();
+    let cache = crate::ts::test_cache::FsAnalysisCache::new(cache_root.join("analysis"), true);
+    let mut cold_db = db_with_ts_file("main.ts", source);
+    let cold = analyze_with_plan_options_and_cache_stats(
+        &mut cold_db,
+        &cache,
+        "config",
+        "rule",
+        "",
+        false,
+    );
+    let mut warm_db = db_with_ts_file("main.ts", source);
+    let warm = analyze_with_plan_options_and_cache_stats(
+        &mut warm_db,
+        &cache,
+        "config",
+        "rule",
+        "",
+        false,
+    );
+
+    assert!(disabled.output_digest.is_some());
+    assert_eq!(disabled.output_digest, cold.output_digest);
+    assert_eq!(disabled.output_digest, warm.output_digest);
+
+    fs::remove_dir_all(cache_root).ok();
+}
+
+#[test]
+fn ts_syntax_layer_write_failure_withholds_native_output_identity() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let blocked_root = temp.path().join("blocked-cache-root");
+    fs::write(&blocked_root, "not a directory").expect("write blocker");
+    let cache = crate::ts::test_cache::FsAnalysisCache::new(blocked_root.join("analysis"), true);
+    let mut db = db_with_ts_file("main.ts", "export function main() {}\n");
+
+    let result =
+        analyze_with_plan_options_and_cache_stats(&mut db, &cache, "config", "rule", "", false);
+
+    assert!(result.output_digest.is_none());
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic.rule_id == "internal/cache" && diagnostic.message.contains("cache write failed")
+    }));
 }
 
 #[test]
@@ -699,18 +759,14 @@ fn ast_helpers_preserve_source_byte_spans() {
 
     let production_source = include_str!("adapter.rs");
     let span_helper = ["fn span_from", "_oxc"].concat();
-    let span_conversion = [
-        "span_from_byte_range(file, source, ",
-        "span.start as usize, span.end as usize)",
-    ]
-    .concat();
+    let span_conversion = "indexed_span(db, file, span.start as usize, span.end as usize)";
     assert!(
         production_source.contains(&span_helper),
         "expected span_from_oxc helper"
     );
     assert!(
-        production_source.contains(&span_conversion),
-        "span_from_oxc should convert Oxc byte spans through core span conversion"
+        production_source.contains(span_conversion),
+        "span_from_oxc should convert Oxc byte spans through the retained source index"
     );
 }
 

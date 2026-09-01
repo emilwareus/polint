@@ -16,7 +16,7 @@ use crate::analysis_neutral::symbol_graph::{
 };
 use crate::internal_core::{
     Diagnostic, DiagnosticRange as TextRange, FileId, Language, ModuleNodeId, Span, StableKeyId,
-    SymbolId as PolintSymbolId, span_from_byte_range,
+    SymbolId as PolintSymbolId,
 };
 use crate::ts::parse::parse_ts_file;
 use oxc_allocator::Allocator;
@@ -237,7 +237,7 @@ fn derive_ts_file_symbols(
         let namespace = symbol_namespace(flags);
         let owner_chain = owner_chain(scoping, nodes, scoping.symbol_scope_id(oxc_symbol));
         let qualified_name = qualified_name(&file.relative_path, &owner_chain, &name);
-        let primary_span = span_from_oxc(file.id, source, scoping.symbol_span(oxc_symbol));
+        let primary_span = span_from_oxc(file, scoping.symbol_span(oxc_symbol));
         let is_exported = export_names.contains_key(&oxc_symbol);
 
         let symbol = builder.add_symbol(SymbolDraft {
@@ -439,7 +439,7 @@ fn ts_symbol_stable_key(
 
 fn ts_symbol_stable_key_input(
     file: &SourceFile,
-    source: &str,
+    _source: &str,
     scoping: &Scoping,
     nodes: &AstNodes<'_>,
     oxc_symbol: OxcSymbolId,
@@ -450,7 +450,7 @@ fn ts_symbol_stable_key_input(
     let kind = symbol_kind(flags, parameter_symbols.contains(&oxc_symbol));
     let namespace = symbol_namespace(flags);
     let owner_chain = owner_chain(scoping, nodes, scoping.symbol_scope_id(oxc_symbol));
-    let primary_span = span_from_oxc(file.id, source, scoping.symbol_span(oxc_symbol));
+    let primary_span = span_from_oxc(file, scoping.symbol_span(oxc_symbol));
 
     StableSymbolKey::new(
         file.language,
@@ -1386,7 +1386,7 @@ fn add_ts_semantic_resolution_rows(
 
 fn semantic_resolved_reference_key(
     file: &SourceFile,
-    source: &str,
+    _source: &str,
     nodes: &AstNodes<'_>,
     reference: &Reference,
     target: StableSymbolKey,
@@ -1394,14 +1394,14 @@ fn semantic_resolved_reference_key(
     StableReferenceKey::resolved(
         target,
         file.relative_path.clone(),
-        span_from_oxc(file.id, source, nodes.kind(reference.node_id()).span()),
+        span_from_oxc(file, nodes.kind(reference.node_id()).span()),
     )
     .stable_key()
 }
 
 fn semantic_unresolved_reference_key(
     file: &SourceFile,
-    source: &str,
+    _source: &str,
     nodes: &AstNodes<'_>,
     reference: &Reference,
     name: &str,
@@ -1410,7 +1410,7 @@ fn semantic_unresolved_reference_key(
         file.language,
         file.relative_path.clone(),
         name.to_string(),
-        span_from_oxc(file.id, source, nodes.kind(reference.node_id()).span()),
+        span_from_oxc(file, nodes.kind(reference.node_id()).span()),
     )
     .stable_key()
 }
@@ -1712,7 +1712,7 @@ fn reference_order_key(
 
 fn reference_draft(
     file: &SourceFile,
-    source: &str,
+    _source: &str,
     nodes: &AstNodes<'_>,
     reference: &Reference,
     name: String,
@@ -1730,11 +1730,7 @@ fn reference_draft(
         module: None,
         owner: None,
         file_key: file.relative_path.clone(),
-        primary_span: Some(span_from_oxc(
-            file.id,
-            source,
-            nodes.kind(reference.node_id()).span(),
-        )),
+        primary_span: Some(span_from_oxc(file, nodes.kind(reference.node_id()).span())),
         precision,
     }
 }
@@ -1797,7 +1793,7 @@ fn reference_namespace(flags: ReferenceFlags) -> SymbolNamespace {
 fn add_symbol_definitions(
     builder: &mut SymbolGraphBuilder,
     file: &SourceFile,
-    source: &str,
+    _source: &str,
     scoping: &Scoping,
     oxc_symbol: OxcSymbolId,
     symbol: PolintSymbolId,
@@ -1809,7 +1805,7 @@ fn add_symbol_definitions(
     let redeclarations = scoping.symbol_redeclarations(oxc_symbol);
     if redeclarations.is_empty() {
         let flags = scoping.symbol_flags(oxc_symbol);
-        let span = span_from_oxc(file.id, source, scoping.symbol_span(oxc_symbol));
+        let span = span_from_oxc(file, scoping.symbol_span(oxc_symbol));
         builder.add_definition(
             symbol,
             definition_draft(
@@ -1835,7 +1831,7 @@ fn add_symbol_definitions(
                 qualified_name.clone(),
                 namespace,
                 redeclaration.flags,
-                Some(span_from_oxc(file.id, source, redeclaration.span)),
+                Some(span_from_oxc(file, redeclaration.span)),
                 index == 0,
                 is_exported,
             ),
@@ -2002,7 +1998,7 @@ fn qualified_name(file_key: &str, owner_chain: &[String], name: &str) -> String 
 
 fn collect_import_aliases(
     file: &SourceFile,
-    source: &str,
+    _source: &str,
     program: &Program<'_>,
 ) -> Vec<ImportAlias> {
     let mut aliases = Vec::new();
@@ -2015,7 +2011,7 @@ fn collect_import_aliases(
             continue;
         };
         let import_path = import.source.value.to_string();
-        let import_source_span = span_from_oxc(file.id, source, import.source.span);
+        let import_source_span = span_from_oxc(file, import.source.span);
 
         for specifier in specifiers {
             match specifier {
@@ -2028,7 +2024,7 @@ fn collect_import_aliases(
                         import_path: import_path.clone(),
                         import_source_span: import_source_span.clone(),
                         local_name: default.local.name.to_string(),
-                        local_span: span_from_oxc(file.id, source, default.local.span),
+                        local_span: span_from_oxc(file, default.local.span),
                         target: ImportAliasTarget::Default,
                         namespace: SymbolNamespace::Value,
                     });
@@ -2042,7 +2038,7 @@ fn collect_import_aliases(
                         import_path: import_path.clone(),
                         import_source_span: import_source_span.clone(),
                         local_name: namespace.local.name.to_string(),
-                        local_span: span_from_oxc(file.id, source, namespace.local.span),
+                        local_span: span_from_oxc(file, namespace.local.span),
                         target: ImportAliasTarget::Namespace,
                         namespace: SymbolNamespace::Namespace,
                     });
@@ -2057,7 +2053,7 @@ fn collect_import_aliases(
                         import_path: import_path.clone(),
                         import_source_span: import_source_span.clone(),
                         local_name: named.local.name.to_string(),
-                        local_span: span_from_oxc(file.id, source, named.local.span),
+                        local_span: span_from_oxc(file, named.local.span),
                         target: ImportAliasTarget::Named(module_export_name_text(&named.imported)),
                         namespace: if is_type_import {
                             SymbolNamespace::Type
@@ -2254,8 +2250,8 @@ fn module_export_name_text(name: &ModuleExportName<'_>) -> String {
     }
 }
 
-fn span_from_oxc(file: crate::internal_core::FileId, source: &str, span: oxc_span::Span) -> Span {
-    span_from_byte_range(file, source, span.start as usize, span.end as usize)
+fn span_from_oxc(file: &SourceFile, span: oxc_span::Span) -> Span {
+    file.span_from_byte_range(span.start as usize, span.end as usize)
 }
 
 fn oxc_diagnostics(

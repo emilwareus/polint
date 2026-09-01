@@ -63,6 +63,7 @@ pub struct LocalAnalysisDb {
     ts_components: Vec<TsComponentFact>,
     ts_classes: Vec<TsClassFact>,
     jsx_attributes: Vec<JsxAttributeFact>,
+    go_types: Vec<crate::analysis_api::GoTypeDeclFact>,
     symbols: Vec<SymbolFact>,
     definitions: Vec<DefinitionFact>,
     references: Vec<ReferenceFact>,
@@ -135,6 +136,7 @@ impl LocalAnalysisDb {
             ts_components: Vec::new(),
             ts_classes: Vec::new(),
             jsx_attributes: Vec::new(),
+            go_types: Vec::new(),
             symbols: Vec::new(),
             definitions: Vec::new(),
             references: Vec::new(),
@@ -490,6 +492,10 @@ impl FactDatabase for LocalAnalysisDb {
         self.ts_components.push(fact);
     }
 
+    fn push_go_type(&mut self, fact: crate::analysis_api::GoTypeDeclFact) {
+        self.go_types.push(fact);
+    }
+
     fn push_ts_class(&mut self, fact: TsClassFact) {
         self.ts_classes.push(fact);
     }
@@ -536,6 +542,10 @@ impl FactDatabase for LocalAnalysisDb {
 
     fn jsx_attributes(&self) -> &[JsxAttributeFact] {
         &self.jsx_attributes
+    }
+
+    fn go_types(&self) -> &[crate::analysis_api::GoTypeDeclFact] {
+        &self.go_types
     }
 
     fn module_nodes(&self) -> &[crate::analysis_api::ModuleNode] {
@@ -642,6 +652,12 @@ impl FactDatabase for LocalAnalysisDb {
                 .collect(),
             jsx_attributes: self
                 .jsx_attributes()
+                .iter()
+                .filter(|fact| fact.file == file)
+                .cloned()
+                .collect(),
+            go_types: self
+                .go_types()
                 .iter()
                 .filter(|fact| fact.file == file)
                 .cloned()

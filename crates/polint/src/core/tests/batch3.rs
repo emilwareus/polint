@@ -178,6 +178,7 @@
                 ts_classes: vec![TsClassFact::new(file, "Dialog".to_string(), span.clone(), true, false)],
                 string_literals: vec![StringLiteralFact::new(file, "Save".to_string(), span.clone(), Language::Tsx)],
                 jsx_attributes: vec![JsxAttributeFact::new(file, "aria-label".to_string(), Some("Save".to_string()), span)],
+                go_types: Vec::new(),
             },
         );
 

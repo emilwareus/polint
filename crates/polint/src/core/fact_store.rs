@@ -10,7 +10,7 @@ use crate::core::facts::{
     ComplexityMetricFact, CoverageFact, DefinitionFact, FileMetricFact, FunctionMetricFact,
     ModuleEdge, ModuleNode, ReferenceFact, ResolvedImportFact, SymbolFact,
 };
-use crate::core::ids::{FileId, SymbolId};
+use crate::core::ids::SymbolId;
 pub(crate) use crate::go::semantic::store::GO_SEMANTIC_STORE_FAMILY;
 pub(crate) use crate::go::{GO_SYNTAX_STORE_FAMILY, GoSyntaxStore};
 use crate::module_graph::topology::{
@@ -175,7 +175,6 @@ pub(crate) struct SymbolStore {
     pub(crate) references: Vec<ReferenceFact>,
     pub(crate) symbols_by_id: BTreeMap<SymbolId, usize>,
     pub(crate) definitions_by_symbol: BTreeMap<SymbolId, Vec<usize>>,
-    pub(crate) references_by_file: BTreeMap<FileId, Vec<usize>>,
 }
 
 impl SymbolStore {
@@ -223,24 +222,9 @@ impl SymbolStore {
             })
     }
 
-    pub(crate) fn references_for_file(
-        &self,
-        file: FileId,
-    ) -> impl Iterator<Item = &ReferenceFact> + '_ {
-        self.references_by_file
-            .get(&file)
-            .into_iter()
-            .flat_map(|indexes| {
-                indexes
-                    .iter()
-                    .filter_map(|index| self.references.get(*index))
-            })
-    }
-
     fn rebuild_indexes(&mut self) {
         self.symbols_by_id.clear();
         self.definitions_by_symbol.clear();
-        self.references_by_file.clear();
 
         for (index, symbol) in self.symbols.iter().enumerate() {
             self.symbols_by_id.insert(symbol.id, index);
@@ -253,20 +237,9 @@ impl SymbolStore {
                 .push(index);
         }
 
-        for (index, reference) in self.references.iter().enumerate() {
-            if let Some(file) = reference.file {
-                self.references_by_file.entry(file).or_default().push(index);
-            }
-        }
-
         let definitions = &self.definitions;
         for indexes in self.definitions_by_symbol.values_mut() {
             indexes.sort_by_key(|index| definitions[*index].id);
-        }
-
-        let references = &self.references;
-        for indexes in self.references_by_file.values_mut() {
-            indexes.sort_by_key(|index| references[*index].id);
         }
     }
 }

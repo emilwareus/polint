@@ -318,6 +318,28 @@ impl Cache {
         Ok(CacheWriteStatus::Written)
     }
 
+    /// Validates and stores JSON bytes without materializing an intermediate
+    /// [`serde_json::Value`] or serializing the payload a second time.
+    ///
+    /// Frontends use this after serializing their concrete cache payload. A
+    /// disabled cache returns before validation so cache bypass never parses a
+    /// payload that will not be persisted.
+    pub(crate) fn write_json_bytes_with_status(
+        &self,
+        key: &CacheKey,
+        bytes: &[u8],
+    ) -> Result<CacheWriteStatus> {
+        if !self.enabled {
+            return Ok(CacheWriteStatus::Disabled);
+        }
+        serde_json::from_slice::<serde::de::IgnoredAny>(bytes)
+            .context("cache bytes must contain valid JSON")?;
+        let path = self.path_for(key);
+        self.write_cache_file_atomic(&path, bytes)
+            .with_context(|| format!("failed to write cache {}", path.display()))?;
+        Ok(CacheWriteStatus::Written)
+    }
+
     fn path_for(&self, key: &CacheKey) -> PathBuf {
         self.root.join(format!("{}.json", key.stable_id()))
     }
@@ -1339,6 +1361,54 @@ mod tests {
 
             assert_eq!(status, CacheWriteStatus::Written);
             assert_eq!(restored, value);
+        }
+
+        #[test]
+        fn write_json_bytes_preserves_the_validated_representation() {
+            let temp = tempfile::tempdir().unwrap();
+            let cache = Cache::default_for_repo(temp.path(), true);
+            let key = key();
+            let bytes = br#"{"z":1,"a":[true,false]}"#;
+
+            let status = cache.write_json_bytes_with_status(&key, bytes).unwrap();
+            let outcome = cache.read_json_bytes_with_status(&key);
+
+            assert_eq!(status, CacheWriteStatus::Written);
+            assert_eq!(outcome.status, CacheReadStatus::Hit);
+            assert_eq!(outcome.value.as_deref(), Some(bytes.as_slice()));
+            assert_eq!(fs::read(cache.path_for(&key)).unwrap(), bytes);
+        }
+
+        #[test]
+        fn write_json_bytes_rejects_invalid_json_when_enabled() {
+            let temp = tempfile::tempdir().unwrap();
+            let cache = Cache::default_for_repo(temp.path(), true);
+            let key = key();
+
+            let error = cache
+                .write_json_bytes_with_status(&key, b"{not-json")
+                .expect_err("invalid JSON should fail before the write");
+
+            assert!(
+                format!("{error:#}").contains("cache bytes must contain valid JSON"),
+                "unexpected error: {error:#}"
+            );
+            assert!(!cache.path_for(&key).exists());
+        }
+
+        #[test]
+        fn disabled_json_byte_write_bypasses_validation_and_io() {
+            let temp = tempfile::tempdir().unwrap();
+            let cache = Cache::default_for_repo(temp.path(), false);
+            let key = key();
+
+            let status = cache
+                .write_json_bytes_with_status(&key, b"{not-json")
+                .unwrap();
+
+            assert_eq!(status, CacheWriteStatus::Disabled);
+            assert!(!cache.root().exists());
+            assert!(!temp.path().join(".polint/cache").exists());
         }
 
         #[cfg(unix)]
