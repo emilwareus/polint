@@ -1341,3 +1341,159 @@ fn branch_fingerprints(db: &LocalFactDb) -> Vec<String> {
         .map(|branch| branch.stable_fingerprint.clone())
         .collect()
 }
+
+#[test]
+fn extracts_go_type_declaration_facts() {
+    let db = analyzed_go_file(
+        "payment.go",
+        r#"package payment
+
+import "time"
+
+type Plain struct {
+	ID   int
+	When time.Time `json:"when"`
+}
+
+type Handler interface {
+	Do() error
+}
+
+type Alias = Plain
+type Named time.Time
+
+type (
+	Grouped struct {
+		A int
+	}
+	Grouped2 struct {
+		B int
+	}
+)
+
+func NewPlain() (*Plain, error) {
+	type local struct {
+		inner int
+	}
+	var rows []struct {
+		Name string
+	}
+	_ = rows
+	return nil, nil
+}
+"#,
+    );
+
+    let named: Vec<&crate::analysis_api::GoTypeDeclFact> = db
+        .go_types()
+        .iter()
+        .filter(|fact| fact.name.is_some())
+        .collect();
+    let by_name = |name: &str| {
+        named
+            .iter()
+            .copied()
+            .find(|fact| fact.name.as_deref() == Some(name))
+            .unwrap_or_else(|| panic!("missing named fact {name}"))
+    };
+
+    let plain = by_name("Plain");
+    assert!(matches!(
+        plain.kind,
+        crate::analysis_api::GoTypeDeclKind::Struct
+    ));
+    assert!(plain.is_top_level && !plain.is_grouped && !plain.is_alias);
+    assert!(!plain.has_type_parameters);
+    assert_eq!(plain.direct_name, None);
+    let (body_start, body_end) = plain.body_range.expect("struct body range");
+    let source = db.file(plain.file).unwrap().source.as_ref();
+    assert!(source[body_start as usize..body_end as usize].contains("ID   int"));
+    assert_eq!(
+        &source[plain.declaration_start_byte as usize..plain.declaration_start_byte as usize + 4],
+        "type"
+    );
+    assert_eq!(plain.span.start_line, 5);
+    assert_eq!(plain.span.start_col, 6);
+
+    let handler = by_name("Handler");
+    assert!(matches!(
+        handler.kind,
+        crate::analysis_api::GoTypeDeclKind::Interface
+    ));
+    let (interface_start, interface_end) = handler.body_range.expect("interface body range");
+    assert!(source[interface_start as usize..interface_end as usize].contains("Do() error"));
+
+    let alias = by_name("Alias");
+    assert!(alias.is_alias);
+    assert!(matches!(
+        alias.kind,
+        crate::analysis_api::GoTypeDeclKind::Named
+    ));
+    assert_eq!(alias.direct_name.as_deref(), Some("Plain"));
+    assert_eq!(alias.body_range, None);
+
+    assert_eq!(by_name("Named").direct_name.as_deref(), Some("Time"));
+
+    let grouped = by_name("Grouped");
+    assert!(grouped.is_grouped && grouped.is_top_level);
+    let grouped2 = by_name("Grouped2");
+    assert!(grouped2.is_grouped && grouped2.is_top_level);
+    assert!(grouped2.body_range.is_some());
+
+    let local = by_name("local");
+    assert!(!local.is_top_level);
+    assert!(matches!(
+        local.kind,
+        crate::analysis_api::GoTypeDeclKind::Struct
+    ));
+
+    let anonymous: Vec<&crate::analysis_api::GoTypeDeclFact> = db
+        .go_types()
+        .iter()
+        .filter(|fact| fact.name.is_none())
+        .collect();
+    // Grouped specs, the function-local `local` spec, and the composite-literal
+    // element struct are all reached through the anonymous path (their lines do not
+    // start with `type NAME struct {`), matching the historical pack regex behavior.
+    assert_eq!(anonymous.len(), 4, "anonymous rows: {anonymous:?}");
+    for fact in &anonymous {
+        assert!(!fact.is_top_level);
+        assert_eq!(
+            &source[fact.declaration_start_byte as usize..fact.declaration_start_byte as usize + 6],
+            "struct"
+        );
+    }
+    let var_row = anonymous
+        .iter()
+        .copied()
+        .rev()
+        .find(|fact| {
+            let (start, end) = fact.body_range.expect("anonymous body");
+            source[start as usize..end as usize].contains("Name string")
+        })
+        .expect("var struct row");
+    assert!(var_row.span.start_byte > local.span.start_byte);
+}
+
+#[test]
+fn go_type_facts_round_trip_through_file_cache_facts() {
+    let db = analyzed_go_file(
+        "payment.go",
+        r#"package payment
+
+type Plain struct {
+	ID int
+}
+"#,
+    );
+    let file = db.files()[0].id;
+    let facts = db.facts_for_file(file);
+    assert_eq!(facts.go_types.len(), 1);
+    assert_eq!(facts.go_types[0].name.as_deref(), Some("Plain"));
+
+    let bytes = serde_json::to_vec(&facts).expect("serialize facts");
+    let parsed: crate::analysis_api::CachedFileFacts =
+        serde_json::from_slice(&bytes).expect("deserialize facts");
+    assert_eq!(parsed.go_types.len(), 1);
+    assert_eq!(parsed.go_types[0].body_range, facts.go_types[0].body_range);
+}

@@ -55,9 +55,10 @@ pub use symbol_facts::{
     SymbolResolutionStatus,
 };
 pub use syntax_facts::{
-    BranchObligation, CachedFileAnalysis, CachedFileFacts, CoverageFact, FunctionFact, ImportFact,
-    JsxAttributeFact, PackageFact, StringLiteralFact, TS_JS_MODULE_FUNCTION_NAME, TestFact,
-    TsClassFact, TsComponentFact, is_synthetic_ts_js_module_function,
+    BranchObligation, CachedFileAnalysis, CachedFileFacts, CoverageFact, FunctionFact,
+    GoTypeDeclFact, GoTypeDeclKind, ImportFact, JsxAttributeFact, PackageFact, StringLiteralFact,
+    TS_JS_MODULE_FUNCTION_NAME, TestFact, TsClassFact, TsComponentFact,
+    is_synthetic_ts_js_module_function,
 };
 
 /// MIR identifiers shared with analysis contracts.

@@ -3,7 +3,8 @@
 use std::any::Any;
 
 use crate::analysis_api::{
-    BranchObligation, FactFamily, FactStore, FunctionFact, ImportFact, PackageFact, TestFact,
+    BranchObligation, FactFamily, FactStore, FunctionFact, GoTypeDeclFact, ImportFact, PackageFact,
+    TestFact,
 };
 use crate::internal_core::{BranchId, FunctionId, ImportId, PackageId};
 
@@ -18,6 +19,7 @@ pub struct GoSyntaxStore {
     pub imports: Vec<ImportFact>,
     pub branches: Vec<BranchObligation>,
     pub tests: Vec<TestFact>,
+    pub go_types: Vec<GoTypeDeclFact>,
 }
 
 impl GoSyntaxStore {
@@ -74,6 +76,14 @@ impl GoSyntaxStore {
         self.tests.push(fact);
         run_id
     }
+
+    pub fn go_types(&self) -> &[GoTypeDeclFact] {
+        &self.go_types
+    }
+
+    pub fn push_go_type(&mut self, fact: GoTypeDeclFact) {
+        self.go_types.push(fact);
+    }
 }
 
 impl FactStore for GoSyntaxStore {
@@ -87,6 +97,7 @@ impl FactStore for GoSyntaxStore {
         self.imports.clear();
         self.branches.clear();
         self.tests.clear();
+        self.go_types.clear();
     }
 
     fn as_any(&self) -> &dyn Any {

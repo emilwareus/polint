@@ -24,6 +24,7 @@ for the current disposition table.
 - [Symbols and references](symbols-and-references.md)
 - [Branches](branches.md)
 - [Go tests](go-tests.md)
+- [Go structural types](go-types.md)
 - [Capability support](capability-plans.md)
 - [TypeScript / JavaScript](ts-js.md)
 - [Literals and JSX attributes](literals.md)

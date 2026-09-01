@@ -226,6 +226,10 @@ impl FactDatabase for AnalysisDb {
         AnalysisDb::push_jsx_attribute(self, fact)
     }
 
+    fn push_go_type(&mut self, fact: crate::analysis_api::GoTypeDeclFact) {
+        AnalysisDb::push_go_type(self, fact)
+    }
+
     fn packages(&self) -> &[PackageFact] {
         AnalysisDb::packages(self)
     }
@@ -260,6 +264,10 @@ impl FactDatabase for AnalysisDb {
 
     fn ts_classes(&self) -> &[TsClassFact] {
         AnalysisDb::ts_classes(self)
+    }
+
+    fn go_types(&self) -> &[crate::analysis_api::GoTypeDeclFact] {
+        AnalysisDb::go_types(self)
     }
 
     fn jsx_attributes(&self) -> &[JsxAttributeFact] {

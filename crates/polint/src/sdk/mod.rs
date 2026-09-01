@@ -30,13 +30,13 @@ pub mod prelude {
         BranchId, BranchObligation, CapabilitySupport, CapabilitySupportStatus,
         CapabilitySupportView, ChangeStatus, ComplexityMetricFact, CoverageFact, DefinitionFact,
         DefinitionId, DefinitionKind, FileId, FileMetricFact, FunctionFact, FunctionId,
-        FunctionMetricFact, ImportFact, ImportId, JsxAttributeFact, Language, ModuleEdge,
-        ModuleEdgeId, ModuleEdgeKind, ModuleNode, ModuleNodeId, ModuleNodeKind, NodeId,
-        PackageFact, PackageId, ReferenceFact, ReferenceId, ReferenceKind, ResolutionPrecision,
-        ResolutionStatus, ResolvedImportFact, ResolvedImportId, Rule, RuleConfigValue, RuleCtx,
-        RuleId, RuleOptions, SourceFile, Span, StringLiteralFact, SymbolFact, SymbolId, SymbolKind,
-        SymbolNamespace, SymbolPrecision, SymbolResolutionStatus, TestFact, TextRange, TsClassFact,
-        TsComponentFact, UnresolvedReason,
+        FunctionMetricFact, GoTypeDeclFact, GoTypeDeclKind, ImportFact, ImportId, JsxAttributeFact,
+        Language, ModuleEdge, ModuleEdgeId, ModuleEdgeKind, ModuleNode, ModuleNodeId,
+        ModuleNodeKind, NodeId, PackageFact, PackageId, ReferenceFact, ReferenceId, ReferenceKind,
+        ResolutionPrecision, ResolutionStatus, ResolvedImportFact, ResolvedImportId, Rule,
+        RuleConfigValue, RuleCtx, RuleId, RuleOptions, SourceFile, Span, StringLiteralFact,
+        SymbolFact, SymbolId, SymbolKind, SymbolNamespace, SymbolPrecision, SymbolResolutionStatus,
+        TestFact, TextRange, TsClassFact, TsComponentFact, UnresolvedReason,
     };
     pub use crate::diagnostics::{
         ColorChoice, Diagnostic, Evidence, Fix, JsonReportMeta, Label, OutputFormat,
@@ -48,9 +48,10 @@ pub mod prelude {
     pub use crate::sdk::collect_go_tests;
     pub use crate::sdk::facts::{
         BranchObligations, CallGraph, Calls, Cfg, ChangedFiles, ComplexityMetrics, ControlFlow,
-        CoverageFacts, DataFlow, Events, FileMetrics, FunctionMetrics, Functions, GoTests, Imports,
-        JsxAttributes, ModuleGraphFacts, Packages, References, ResolvedImports, SourceFiles,
-        StringLiterals, Symbols, TestSuiteMetrics, TsClasses, TsComponents,
+        CoverageFacts, DataFlow, Events, FileMetrics, FunctionMetrics, Functions, GoTests,
+        GoTypeDecls, Imports, JsxAttributes, ModuleGraphFacts, Packages, References,
+        ResolvedImports, SourceFiles, StringLiterals, Symbols, TestSuiteMetrics, TsClasses,
+        TsComponents,
     };
     pub use crate::sdk::policy::{
         BarrierPattern, EventPattern, FlowQuery, GuardPattern, GuardQuery, LifecycleQuery,

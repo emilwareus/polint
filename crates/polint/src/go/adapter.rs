@@ -1,9 +1,10 @@
 use crate::analysis_api::{
     AnalysisCache, BranchObligation, CacheStats, CachedFileAnalysis, CachedFileFacts, Digest,
     DigestKind, DisabledAnalysisCache, FactDatabase, FileCacheKeyParts, FileCacheReadStatus,
-    FunctionFact, GO_PARSER_BACKEND, GO_PARSER_GRAMMAR, ImportFact, LayerCacheEntryDigests,
-    LayerCacheKeyParts, LayerCacheKind, LayerCachePrecision, LayerCacheReadStatus,
-    LayerCacheWriteStatus, PackageFact, ProviderRunResult, SourceFile, StringLiteralFact, TestFact,
+    FunctionFact, GO_PARSER_BACKEND, GO_PARSER_GRAMMAR, GoTypeDeclFact, GoTypeDeclKind, ImportFact,
+    LayerCacheEntryDigests, LayerCacheKeyParts, LayerCacheKind, LayerCachePrecision,
+    LayerCacheReadStatus, LayerCacheWriteStatus, PackageFact, ProviderRunResult, SourceFile,
+    StringLiteralFact, TestFact,
 };
 use crate::internal_core::{
     BranchId, Diagnostic, DiagnosticRange as TextRange, FileId, FunctionId, Language, Span,
@@ -19,9 +20,9 @@ use tree_sitter::{Node, Parser};
 
 use crate::go::local_db::LocalFactDb;
 
-const GO_CACHE_SCHEMA: &str = "go-facts-v2";
+const GO_CACHE_SCHEMA: &str = "go-facts-v3";
 const GO_PROVIDER_ID: &str = "polint.go.syntax";
-const GO_SYNTAX_LAYER_SCHEMA: &str = "go-syntax-layer-v1";
+const GO_SYNTAX_LAYER_SCHEMA: &str = "go-syntax-layer-v2";
 
 thread_local! {
     static GO_PARSER: RefCell<Option<Parser>> = const { RefCell::new(None) };
@@ -646,6 +647,7 @@ fn parse_go_file(db: &mut dyn FactDatabase, file_id: FileId) -> Result<Vec<Diagn
     extract_imports(db, file_id, source, root);
     extract_string_literals(db, file_id, source, root);
     extract_functions(db, file_id, source, root);
+    extract_go_types(db, file_id, source, root);
     Ok(diagnostics)
 }
 
@@ -911,6 +913,157 @@ fn extract_functions(db: &mut dyn FactDatabase, file: FileId, source: &str, root
             db.push_test(go_test_fact(file, function_id, name, span, source, body));
         }
     });
+}
+
+/// Extracts typed Go structural facts: one row per named `type_spec`/`type_alias`
+/// plus one row per anonymous `struct_type` occurrence that is not the body of a
+/// top-level, non-grouped, non-alias declaration (those are fully described by their
+/// named row, mirroring the line-anchored `^type NAME struct {` shape consumers
+/// historically matched).
+fn extract_go_types(db: &mut dyn FactDatabase, file: FileId, source: &str, root: Node<'_>) {
+    visit_named_descendants(root, &mut |node| match node.kind() {
+        "type_spec" | "type_alias" => push_named_go_type(db, file, source, node),
+        "struct_type" if !is_suppressed_named_struct(node) => {
+            push_anonymous_go_struct(db, file, node);
+        }
+        _ => {}
+    });
+}
+
+fn push_named_go_type(db: &mut dyn FactDatabase, file: FileId, source: &str, spec: Node<'_>) {
+    let Some(name_node) = spec.child_by_field_name("name") else {
+        return;
+    };
+    let Some(type_node) = spec.child_by_field_name("type") else {
+        return;
+    };
+    let Some(declaration) = spec.parent() else {
+        return;
+    };
+    let Some(name) = node_text(source, name_node).map(str::to_string) else {
+        return;
+    };
+
+    let (kind, direct_name, body_range) = go_type_shape(source, type_node);
+    let fact = GoTypeDeclFact::new(
+        file,
+        node_span(db, file, name_node),
+        Some(name),
+        kind,
+        spec.kind() == "type_alias",
+        is_grouped_go_declaration(declaration),
+        declaration
+            .parent()
+            .is_some_and(|grand| grand.kind() == "source_file"),
+        spec.child_by_field_name("type_parameters").is_some(),
+        direct_name,
+        body_range,
+        declaration.start_byte() as u32,
+    );
+    db.push_go_type(fact);
+}
+
+fn push_anonymous_go_struct(db: &mut dyn FactDatabase, file: FileId, node: Node<'_>) {
+    let Some(open) = go_body_open_byte(node) else {
+        return;
+    };
+    let end = node.end_byte() as u32;
+    let fact = GoTypeDeclFact::new(
+        file,
+        node_span(db, file, node),
+        None,
+        GoTypeDeclKind::Struct,
+        false,
+        false,
+        false,
+        false,
+        None,
+        Some((open + 1, end.saturating_sub(1))),
+        node.start_byte() as u32,
+    );
+    db.push_go_type(fact);
+}
+
+/// A `struct_type` directly under a top-level, non-grouped, non-alias declaration is
+/// already represented by that declaration's named row, so it gets no anonymous row.
+fn is_suppressed_named_struct(node: Node<'_>) -> bool {
+    let Some(spec) = node.parent() else {
+        return false;
+    };
+    if !matches!(spec.kind(), "type_spec" | "type_alias") || spec.kind() == "type_alias" {
+        return false;
+    }
+    let Some(declaration) = spec.parent() else {
+        return false;
+    };
+    declaration
+        .parent()
+        .is_some_and(|grand| grand.kind() == "source_file")
+        && !is_grouped_go_declaration(declaration)
+}
+
+fn go_type_shape(
+    source: &str,
+    type_node: Node<'_>,
+) -> (GoTypeDeclKind, Option<String>, Option<(u32, u32)>) {
+    match type_node.kind() {
+        "struct_type" => (GoTypeDeclKind::Struct, None, go_body_range(type_node)),
+        "interface_type" => (GoTypeDeclKind::Interface, None, go_body_range(type_node)),
+        _ => (
+            GoTypeDeclKind::Named,
+            go_direct_type_name(source, type_node),
+            None,
+        ),
+    }
+}
+
+/// Final identifier of a named underlying type expression: `Y`, `Y.Z` -> `Z`,
+/// `Y[T]` -> `Y`. Pointer, map, slice, function, and channel heads yield `None`.
+fn go_direct_type_name(source: &str, type_node: Node<'_>) -> Option<String> {
+    match type_node.kind() {
+        "type_identifier" => node_text(source, type_node).map(str::to_string),
+        "qualified_type" => type_node
+            .child_by_field_name("name")
+            .and_then(|name| node_text(source, name))
+            .map(str::to_string),
+        "parameterized_type" | "generic_type" => type_node
+            .child_by_field_name("type")
+            .and_then(|inner| go_direct_type_name(source, inner)),
+        _ => None,
+    }
+}
+
+/// Byte position of the `{` that opens a struct or interface body.
+fn go_body_open_byte(node: Node<'_>) -> Option<u32> {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "{" || child.kind() == "field_declaration_list" {
+            return Some(child.start_byte() as u32);
+        }
+    }
+    None
+}
+
+fn go_body_range(node: Node<'_>) -> Option<(u32, u32)> {
+    let open = go_body_open_byte(node)?;
+    let end = node.end_byte() as u32;
+    Some((open + 1, end.saturating_sub(1)))
+}
+
+/// True when the `type_declaration` groups its specs: the first meaningful child
+/// after the `type` keyword is an opening parenthesis.
+fn is_grouped_go_declaration(declaration: Node<'_>) -> bool {
+    let mut cursor = declaration.walk();
+    let mut seen_type_keyword = false;
+    for child in declaration.children(&mut cursor) {
+        match child.kind() {
+            "type" if !seen_type_keyword => seen_type_keyword = true,
+            "comment" => {}
+            "(" => return true,
+            _ => return false,
+        }
+    }
+    false
 }
 
 fn declaration_name(source: &str, node: Node<'_>) -> Option<String> {

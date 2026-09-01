@@ -85,6 +85,7 @@ pub trait FactDatabase: Any + Send {
     fn push_ts_component(&mut self, fact: TsComponentFact);
     fn push_ts_class(&mut self, fact: TsClassFact);
     fn push_jsx_attribute(&mut self, fact: JsxAttributeFact);
+    fn push_go_type(&mut self, fact: crate::analysis_api::GoTypeDeclFact);
 
     fn packages(&self) -> &[PackageFact];
     fn functions(&self) -> &[FunctionFact];
@@ -95,6 +96,8 @@ pub trait FactDatabase: Any + Send {
     fn string_literals(&self) -> &[StringLiteralFact];
     fn ts_components(&self) -> &[TsComponentFact];
     fn ts_classes(&self) -> &[TsClassFact];
+    /// Go structural type facts (declarations and anonymous struct occurrences).
+    fn go_types(&self) -> &[crate::analysis_api::GoTypeDeclFact];
     fn jsx_attributes(&self) -> &[JsxAttributeFact];
 
     /// Module graph nodes when the composition root has installed them.

@@ -119,9 +119,9 @@ use super::fact_store::{
 };
 use super::facts::{
     BranchObligation, CachedFileFacts, ComplexityMetricFact, CoverageFact, DefinitionFact,
-    FileMetricFact, FunctionFact, FunctionMetricFact, ImportFact, JsxAttributeFact, ModuleEdge,
-    ModuleNode, PackageFact, ReferenceFact, ResolvedImportFact, SourceFile, StringLiteralFact,
-    SymbolFact, TestFact, TsClassFact, TsComponentFact,
+    FileMetricFact, FunctionFact, FunctionMetricFact, GoTypeDeclFact, ImportFact, JsxAttributeFact,
+    ModuleEdge, ModuleNode, PackageFact, ReferenceFact, ResolvedImportFact, SourceFile,
+    StringLiteralFact, SymbolFact, TestFact, TsClassFact, TsComponentFact,
 };
 use super::ids::{
     BranchId, FileId, FunctionId, ImportId, ModuleEdgeId, ModuleNodeId, PackageId,
@@ -159,6 +159,7 @@ struct FactViewIndexes {
     ts_classes_by_file: DenseFileIndex,
     string_literals_by_file: DenseFileIndex,
     jsx_attributes_by_file: DenseFileIndex,
+    go_types_by_file: DenseFileIndex,
 }
 
 impl FactViewIndexes {
@@ -237,6 +238,9 @@ impl FactViewIndexes {
                 db.jsx_attributes(),
                 |fact| Some(fact.file),
             ),
+            go_types_by_file: DenseFileIndex::build(file_count, db.go_types(), |fact| {
+                Some(fact.file)
+            }),
         }
     }
 }
@@ -877,6 +881,13 @@ impl AnalysisDb {
         let metadata = self.test_metadata(interner, &fact);
         let run_id = self.go_syntax_store_mut().push_test(fact);
         self.record_fact_meta(FactFamily::Test, run_id, metadata);
+    }
+
+    /// Stores one Go structural type fact. Go type rows are pure syntax facts and
+    /// carry no provider-attribution metadata of their own.
+    pub fn push_go_type(&mut self, fact: GoTypeDeclFact) {
+        self.invalidate_fact_view_indexes();
+        self.go_syntax_store_mut().push_go_type(fact);
     }
 
     pub fn push_coverage(&mut self, fact: CoverageFact) {
@@ -3490,6 +3501,19 @@ impl AnalysisDb {
             .facts(file, self.functions())
     }
 
+    pub fn go_types(&self) -> &[GoTypeDeclFact] {
+        self.go_syntax_store().go_types()
+    }
+
+    pub(crate) fn go_types_for_file(
+        &self,
+        file: FileId,
+    ) -> impl Iterator<Item = &GoTypeDeclFact> + '_ {
+        self.fact_view_indexes()
+            .go_types_by_file
+            .facts(file, self.go_types())
+    }
+
     pub fn imports(&self) -> &[ImportFact] {
         self.go_syntax_store().imports()
     }
@@ -3943,6 +3967,12 @@ impl AnalysisDb {
                 .filter(|fact| fact.file == file)
                 .cloned()
                 .collect(),
+            go_types: self
+                .go_types()
+                .iter()
+                .filter(|fact| fact.file == file)
+                .cloned()
+                .collect(),
         }
     }
 
@@ -4022,6 +4052,12 @@ impl AnalysisDb {
             attribute.file = file;
             attribute.span.file = file;
             self.push_jsx_attribute(attribute);
+        }
+
+        for mut go_type in facts.go_types {
+            go_type.file = file;
+            go_type.span.file = file;
+            self.push_go_type(go_type);
         }
     }
 

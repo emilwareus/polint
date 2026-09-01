@@ -7,10 +7,10 @@
 use crate::core::{
     AnalysisDb, BranchObligation, ChangeStatus, ChangedFile, ComplexityMetricFact, CoverageFact,
     DefinitionFact, FileId, FileMetricFact, FunctionFact, FunctionId, FunctionMetricFact,
-    ImportFact, ImportId, JsxAttributeFact, Language, ModuleEdge, ModuleNode, ModuleNodeId,
-    PackageFact, ReferenceFact, ResolutionStatus, ResolvedImportFact, ReviewChangeset, SourceFile,
-    StringLiteralFact, SymbolFact, SymbolId, SymbolKind, SymbolResolutionStatus, TestFact,
-    TsClassFact, TsComponentFact,
+    GoTypeDeclFact, ImportFact, ImportId, JsxAttributeFact, Language, ModuleEdge, ModuleNode,
+    ModuleNodeId, PackageFact, ReferenceFact, ResolutionStatus, ResolvedImportFact,
+    ReviewChangeset, SourceFile, StringLiteralFact, SymbolFact, SymbolId, SymbolKind,
+    SymbolResolutionStatus, TestFact, TsClassFact, TsComponentFact,
 };
 use crate::sdk::policy::{
     EventPattern, FlowQuery, GuardQuery, LifecycleQuery, PolicyViolation, ReachQuery,
@@ -724,6 +724,34 @@ impl<'a> GoTests<'a> {
     }
 }
 
+/// Go structural type fact view. Requesting this view maps to the `syntax` capability.
+///
+/// Exposes typed Go declarations (`type X struct|interface|...`, aliases, grouped and
+/// function-local specs) plus anonymous `struct { ... }` occurrences so rules can stop
+/// re-parsing Go source with regexes and brace matching. See `docs/facts/go-types.md`.
+#[derive(Clone, Copy)]
+#[non_exhaustive]
+pub struct GoTypeDecls<'a> {
+    db: &'a AnalysisDb,
+}
+
+impl<'a> GoTypeDecls<'a> {
+    /// Returns all Go structural type facts in deterministic database order.
+    pub fn all(self) -> &'a [GoTypeDeclFact] {
+        self.db.go_types()
+    }
+
+    /// Iterates all Go structural type facts in deterministic database order.
+    pub fn iter(self) -> std::slice::Iter<'a, GoTypeDeclFact> {
+        self.db.go_types().iter()
+    }
+
+    /// Returns Go structural type facts for a file without cloning facts.
+    pub fn for_file(self, file: FileId) -> impl Iterator<Item = &'a GoTypeDeclFact> {
+        self.db.go_types_for_file(file)
+    }
+}
+
 /// TS/JS component fact view. Requesting this view maps to the `ts_components` capability.
 #[derive(Clone, Copy)]
 #[non_exhaustive]
@@ -1084,6 +1112,7 @@ impl_fact_view!(Symbols);
 impl_fact_view!(References);
 impl_fact_view!(BranchObligations);
 impl_fact_view!(GoTests);
+impl_fact_view!(GoTypeDecls);
 impl_fact_view!(TsComponents);
 impl_fact_view!(TsClasses);
 impl_fact_view!(StringLiterals);
