@@ -1,4 +1,4 @@
-module github.com/emilwareus/polint/tools/polint-go-symbols
+module github.com/oaiz-io/polint/tools/polint-go-symbols
 
 go 1.24.0
 

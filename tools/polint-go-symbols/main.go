@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/emilwareus/polint/tools/polint-go-symbols/internal/symbols"
+	"github.com/oaiz-io/polint/tools/polint-go-symbols/internal/symbols"
 )
 
 func main() {

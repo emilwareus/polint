@@ -120,7 +120,7 @@ runs:
         esac
 
         asset="polint-${asset_os}-${asset_arch}.tar.gz"
-        base_url="https://github.com/emilwareus/polint/releases/${release_path}"
+        base_url="https://github.com/oaiz-io/polint/releases/${release_path}"
         tmp_dir="$(mktemp -d)"
         install_dir="${RUNNER_TEMP}/polint/bin"
         mkdir -p "${install_dir}"

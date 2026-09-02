@@ -1,4 +1,4 @@
-module github.com/emilwareus/polint/tools/polint-go-frontend
+module github.com/oaiz-io/polint/tools/polint-go-frontend
 
 go 1.25.0
 

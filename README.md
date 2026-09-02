@@ -41,7 +41,7 @@ the rules.
 Say your frontend must use design tokens instead of raw colors. A polint rule in
 your repo can catch the violation and tell the AI agent exactly how to fix it:
 
-![polint diagnostic for a raw-color literal in Button.tsx](https://raw.githubusercontent.com/emilwareus/polint/main/docs/img/example-no-raw-colors.svg)
+![polint diagnostic for a raw-color literal in Button.tsx](https://raw.githubusercontent.com/oaiz-io/polint/main/docs/img/example-no-raw-colors.svg)
 
 That is the point: the rule does not just fail the code. It injects the missing
 project context back into the agent at the moment it needs to repair the change.
@@ -69,20 +69,20 @@ diagnostic instead of running rules against placeholder facts. Rule packs scaffo
 Or from GitHub Releases:
 
 ```bash
-curl -sSfL https://raw.githubusercontent.com/emilwareus/polint/main/scripts/install.sh | bash
+curl -sSfL https://raw.githubusercontent.com/oaiz-io/polint/main/scripts/install.sh | bash
 ```
 
 Run a self-contained example:
 
 ```bash
-git clone https://github.com/emilwareus/polint.git
+git clone https://github.com/oaiz-io/polint.git
 cd polint/examples/config-denied-literal
 polint check --color always --fail-on none
 ```
 
 Expected output:
 
-![polint check on examples/config-denied-literal showing a denied literal diagnostic](https://raw.githubusercontent.com/emilwareus/polint/main/docs/img/example-config-denied-literal.svg)
+![polint check on examples/config-denied-literal showing a denied literal diagnostic](https://raw.githubusercontent.com/oaiz-io/polint/main/docs/img/example-config-denied-literal.svg)
 
 ## Use It In Your Repo
 
@@ -473,7 +473,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: emilwareus/polint@v1
+      - uses: oaiz-io/polint@v1
         with:
           version: latest
           args: check --format github
@@ -494,7 +494,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: emilwareus/polint@v1
+      - uses: oaiz-io/polint@v1
         with:
           args: review origin/main --format github
 ```

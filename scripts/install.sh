@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo="${POLINT_REPO:-emilwareus/polint}"
+repo="${POLINT_REPO:-oaiz-io/polint}"
 # Default: latest stable GitHub Release (semver tags from the Release workflow).
 # Override with e.g. POLINT_RELEASE_TAG=v0.2.0 for a specific tag.
 tag="${POLINT_RELEASE_TAG:-latest}"

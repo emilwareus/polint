@@ -11,7 +11,7 @@ polint ships from a single workflow on `main`.
 
 ## GitHub Action versioning
 
-The checked-in `action.yml` is published as `emilwareus/polint@v1`. Release tags
+The checked-in `action.yml` is published as `oaiz-io/polint@v1`. Release tags
 like `v0.1.12` identify the CLI release assets that the action installs; the
 action's major tag identifies the workflow contract and input/output
 compatibility.

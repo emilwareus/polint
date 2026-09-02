@@ -5,7 +5,7 @@ use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) const POLINT_IGNORES_JSON_SCHEMA_V1_URL: &str =
-    "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-ignores-v1.json";
+    "https://raw.githubusercontent.com/oaiz-io/polint/main/docs/schemas/polint-ignores-v1.json";
 
 const DIRECTIVE_PREFIX: &str = "polint-ignore-";
 const UNUSED_IGNORE_RULE_ID: &str = "polint/unused-ignore";

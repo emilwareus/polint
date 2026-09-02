@@ -11,7 +11,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
-pub(crate) const POLINT_TEST_REPORT_JSON_SCHEMA_V1_URL: &str = "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-test-report-v1.json";
+pub(crate) const POLINT_TEST_REPORT_JSON_SCHEMA_V1_URL: &str = "https://raw.githubusercontent.com/oaiz-io/polint/main/docs/schemas/polint-test-report-v1.json";
 
 #[derive(Debug, Clone)]
 pub(crate) struct RuleTestCase {
@@ -744,7 +744,7 @@ paths = ["src/**"]
         let json = serde_json::to_string(&report).unwrap();
 
         assert!(json.contains(r#""version":1"#));
-        assert!(json.contains(r#""schema":"https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-test-report-v1.json""#));
+        assert!(json.contains(r#""schema":"https://raw.githubusercontent.com/oaiz-io/polint/main/docs/schemas/polint-test-report-v1.json""#));
         assert!(json.contains(r#""summary":{"passed":1,"failed":0,"total":1}"#));
         assert!(json.contains(r#""cases":["#));
         assert!(!json.contains("/tmp/not-serialized"));

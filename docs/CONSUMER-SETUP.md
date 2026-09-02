@@ -182,7 +182,7 @@ In GitHub Actions, prefer the official action, which installs polint and
 restores/saves the cache by default:
 
 ```yaml
-- uses: emilwareus/polint@v1
+- uses: oaiz-io/polint@v1
   with:
     version: latest
     args: check --format github

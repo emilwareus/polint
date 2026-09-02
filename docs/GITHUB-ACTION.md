@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: emilwareus/polint@v1
+      - uses: oaiz-io/polint@v1
         with:
           version: latest
           args: check --format github
@@ -250,7 +250,7 @@ Use `polint cache status` locally or in CI to inspect the restored cache, and
 
 ## Versioning
 
-The action is published from this repository as `emilwareus/polint@v1`. The
+The action is published from this repository as `oaiz-io/polint@v1`. The
 release workflow moves the `v1` tag to the reviewed release commit when
 `publish_action` is enabled. Patch and minor polint releases can continue to use
 `version: latest`; pin `version: vX.Y.Z` when a workflow must run an exact CLI
