@@ -144,3 +144,9 @@ You will be able to:
 - Use the summary table when explaining the plan to someone with five minutes.
 - Use a stage section when deciding whether that stage's exit criteria are worth its cost; every bullet is a user-visible capability, so the answer is a product answer.
 - When a bullet's citation points at report 03, the exit criterion there is the proof that the capability exists; when it points at report 02, the gap table there is the evidence that the capability is missing today.
+
+## Where the numbers in this document come from
+
+- The 86,527-line excalidraw run that was killed at 12 GB is recorded in `research/evaluation-harness/baselines/scale-corpus-run.json`; the 187-second, 225-crate cold rule build is in `research/evaluation-harness/baselines/build-cost.json`; the fifteen hard-coded framework recognizers are counted from `crates/polint/src/analysis_neutral/entrypoints/`.
+- The precision and recall thresholds (90 percent, 70 percent, the 40 percent memory target) are exit criteria set in report 03, not measurements; they become measurements only when the corresponding stage's gate runs.
+- Every other figure is traced to a report section in the bullet that uses it; if a bullet has no citation, treat it as a summary of the cited bullets around it.
