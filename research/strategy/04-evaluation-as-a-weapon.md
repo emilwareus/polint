@@ -2,6 +2,7 @@
 
 Date: 2026-09-01
 Researcher: Claude Fable 5.1 (delegated via Hermes)
+Revised 2026-09-02: time estimates removed, capability roadmap added.
 Reads with: [01-capability-ladder.md](01-capability-ladder.md) section 7 (verification instruments), [03-build-plan.md](03-build-plan.md) (where each instrument lands).
 
 ## TL;DR
@@ -13,7 +14,7 @@ Reads with: [01-capability-ladder.md](01-capability-ladder.md) section 7 (verifi
 - Differential testing against CodeQL, Semgrep and Opengrep on public corpora, with adjudicated disagreements and both engines' outputs published, is the only way to produce numbers competitors cannot refute. Vendor-run comparisons on private corpora are exactly what polint should refuse to publish.
 - Soundness spot checks are mutation-based: inject a bug that a claimed level must catch, apply semantics-preserving transformations that must not change the finding set, and run the engine with tiers toggled to check that precision never depends on an accident.
 - Publication standard: pinned commits, public scripts, per-project breakdown, both oracle lanes, cost columns, confidence intervals from repeated runs, budget and timeout reporting, and a pre-registered analysis plan. Anything less is marketing.
-- First three actions, all in P0 of the build plan: a nightly job that clones the oracles and fails on skip, a 60-case L4 probe seed with must-not-report twins, and a real SecBench.js scoring adapter.
+- First three actions, all in Stage 0 of the build plan: a nightly job that clones the oracles and fails on skip, a 60-case L4 probe seed with must-not-report twins, and a real SecBench.js scoring adapter.
 
 ## 1. What exists today, honestly
 
@@ -50,7 +51,7 @@ The July review's summary still holds after the August refactor: "no test anywhe
 | L1 | banned call by literal name; argument shape | same name as a local identifier shadow (L2 twin) | 20 per language |
 | L2 | forbidden import through alias and re-export; deprecated symbol via rename | same-named unrelated symbol in another package | 30 |
 | L3 | nil after check on the other branch; use before init; missing cleanup on one exit; guard missing before sensitive call; `defer` and `finally` run on every exit | guard present on all paths; cleanup in every exit including panic and throw | 40 |
-| L4 | taint through two helpers and a framework route; secret to logger via wrapper; dangerous API reachable from an unauthenticated root across packages; sanitizer kills on the crossed path | unrealizable path (enter from call site A, exit toward B); sanitizer on the crossed path; distinct sanitizer names so name matching cannot pass | 60 seed, 150 to 200 by P1 |
+| L4 | taint through two helpers and a framework route; secret to logger via wrapper; dangerous API reachable from an unauthenticated root across packages; sanitizer kills on the crossed path | unrealizable path (enter from call site A, exit toward B); sanitizer on the crossed path; distinct sanitizer names so name matching cannot pass | 60 seed, 150 to 200 by Stage 1 |
 | L5 | callback stored in a map and invoked later; middleware chain dispatch; taint in `req.body.name` but not `req.body.id`; class and prototype dispatch | two fields of one object with only one tainted; two callers of one helper where only one passes taint | 40 |
 | L6 | defect only when two flags interact; double close on the error branch only | infeasible branch combination; guard-style sanitizer on the taken branch | 30 |
 
