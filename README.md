@@ -191,5 +191,4 @@ security problems as described in the [security policy](SECURITY.md).
 
 ## License
 
-polint is available under the [MIT License](LICENSE). Copyright is held by
-OAIZ AB and polint contributors.
+polint is available under the [MIT License](LICENSE).
