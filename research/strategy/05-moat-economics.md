@@ -2,6 +2,7 @@
 
 Date: 2026-09-01
 Researcher: Claude Fable 5.1 (delegated via Hermes)
+Revised 2026-09-02: time estimates removed, capability roadmap added.
 Reads with: [02-gap-analysis.md](02-gap-analysis.md) section 6 (moat table), [03-build-plan.md](03-build-plan.md) (where the strengthening feature lands).
 
 ## TL;DR
@@ -10,7 +11,7 @@ Reads with: [02-gap-analysis.md](02-gap-analysis.md) section 6 (moat table), [03
 - At feature parity a team chooses polint over CodeQL, Semgrep or SonarQube because the policy it wants to enforce is about *its* repository, an agent can write the rule and the compiler proves the rule is well-formed, the result runs offline in seconds, and every finding says how sure it is. None of those four properties is available together anywhere else.
 - The buying environment moved in polint's favor in 2025: GitHub unbundled Code Security at 30 dollars per active committer per month and Secret Protection at 19 dollars from 1 April 2025 ([GitHub changelog](https://github.blog/changelog/2025-04-01-github-secret-protection-and-github-code-security-for-github-enterprise/)); Semgrep moved community rules and engine features behind a proprietary license in December 2024 and more than ten vendors forked it as Opengrep on 23 January 2025 ([Socket](https://socket.dev/blog/opengrep-forks-semgrep), [Kodem press release](https://www.kodemsecurity.com/resources/press-release-security-rivals-unite-to-launch-opengrep-following-semgrep-clampdown)). Local-first typed rules with a permissive license are a buying criterion for teams burned twice.
 - The weakest moat today is the **performance budget**. The engine's deep tiers cannot run on an 86k-LOC TypeScript repository without exhausting 12 GB, warm runs re-derive everything below the parser cache, and a first `polint check` compiles 225 crates for 187 seconds. A moat you cannot demonstrate on a real repository is not a moat.
-- The single feature that strengthens it most is **summary-persisted, frontier-driven analysis under an enforced runtime envelope** (v2.0 Phase 67 plus the envelope from build-plan P0): memory proportional to the working set, warm review proportional to the change, and degradation that is reported instead of fatal. It converts the honesty moat from an apology into a guarantee and makes every deep rule usable where teams actually work.
+- The single feature that strengthens it most is **summary-persisted, frontier-driven analysis under an enforced runtime envelope** (v2.0 Phase 67 plus the envelope from build-plan Stage 0): memory proportional to the working set, warm review proportional to the change, and degradation that is reported instead of fatal. It converts the honesty moat from an apology into a guarantee and makes every deep rule usable where teams actually work.
 - Runner-up: the thin-SDK prebuilt rule host (0.3.0 code-preserving build), which takes time-to-first-rule from minutes to seconds and removes the strongest objection to rules-as-code. It strengthens the authoring moat, not the performance moat, and should follow rather than precede the keystone.
 - The moat that competitors are most likely to erode is agent extensibility: every incumbent is adding MCP servers and assistants. The defense is verifiability: an agent-written polint rule compiles or it does not, and a model pack lands with a measured default-versus-extended delta. Incumbents can add agents on top of DSLs; they cannot make YAML type-check.
 - Risks: a Rust toolchain requirement for rule authors, a Go toolchain for Go semantics and Node for TS types, and the small size of the current benchmark evidence. All three are addressed in the build plan; none is structural.
@@ -59,7 +60,7 @@ Syntactic and L2 rules are fast today (about 2 to 3 s warm on private benchmark 
 
 ## 5. The single feature: summary-persisted, frontier-driven analysis under an envelope
 
-Definition: persist per-function and per-SCC summaries with Merkle-shaped keys and dependency package summaries keyed by (package, version); on a warm run recompute only the invalidation frontier; run every provider under an enforced memory and wall-clock envelope that degrades with reported budget facts. This is v2.0 Phase 67 (SUM-01 to SUM-07, REV-01 to REV-03, PERF-04) plus the envelope scheduled in build-plan P0.
+Definition: persist per-function and per-SCC summaries with Merkle-shaped keys and dependency package summaries keyed by (package, version); on a warm run recompute only the invalidation frontier; run every provider under an enforced memory and wall-clock envelope that degrades with reported budget facts. This is v2.0 Phase 67 (SUM-01 to SUM-07, REV-01 to REV-03, PERF-04) plus the envelope scheduled in build-plan Stage 0.
 
 Why this feature and not another:
 
@@ -67,7 +68,7 @@ Why this feature and not another:
 |---|---|
 | Thin-SDK prebuilt rule host | fixes time-to-first-rule (187 s to under 20 s) but not analysis cost; a cheap build of an engine that OOMs on the target repository does not create a demonstrable moat |
 | Parallelism alone | wall-clock help, no memory help; the OOM is a working-set problem, and summaries are the only known way to make memory proportional to the working set (Infer's model, `research/static-analysis-2.0/03-summary-store.md`) |
-| TS type tier | the largest accuracy lever, but accuracy on a run that cannot finish is invisible; it is P1, right after the envelope |
+| TS type tier | the largest accuracy lever, but accuracy on a run that cannot finish is invisible; it is Stage 1, right after the envelope |
 | Demand-driven queries | depends on persisted summaries to be worth anything; it is the second customer of the keystone |
 
 What it changes for buyers: `polint review` becomes proportional to the pull request, `polint check` becomes proportional to what changed since the last generation, dependencies are summarized once per version, and a run that hits the envelope says so per finding instead of dying. The honesty moat then reads "bounded and reported" rather than "sometimes fatal".
@@ -85,7 +86,7 @@ What it changes for buyers: `polint review` becomes proportional to the pull req
 
 ## 7. Decision
 
-Weakest moat: performance budget. Strengthening feature: summary-persisted, frontier-driven analysis under an enforced envelope (Phase 67 plus envelope), delivered in build-plan P0 to P2, with the thin-SDK rule host following in P3. Measured proof: peak RSS on hugo and excalidraw proportional to the working set, warm review recomputing only the frontier, byte-identical warm and cold output, and a cold `polint check` under 20 s.
+Weakest moat: performance budget. Strengthening feature: summary-persisted, frontier-driven analysis under an enforced envelope (Phase 67 plus envelope), delivered in build-plan Stage 0 to Stage 2, with the thin-SDK rule host following in Stage 3. Measured proof: peak RSS on hugo and excalidraw proportional to the working set, warm review recomputing only the frontier, byte-identical warm and cold output, and a cold `polint check` under 20 s.
 
 ## Assumptions and open questions
 
