@@ -2,6 +2,7 @@
 
 Date: 2026-09-01
 Researcher: Claude Fable 5.1 (delegated via Hermes)
+Revised 2026-09-02: time estimates removed, capability roadmap added.
 Reads with: [01-capability-ladder.md](01-capability-ladder.md) (levels L0 to L7, axes A to G). Sequenced by: [03-build-plan.md](03-build-plan.md).
 
 ## TL;DR
@@ -15,7 +16,7 @@ Reads with: [01-capability-ladder.md](01-capability-ladder.md) (levels L0 to L7,
 - On the axes, polint leads on authoring, honesty and evidence and trails badly on scale, latency, framework modeling and measurement. The scale gap is the one that makes the level gaps invisible to users: deep tiers cannot run on a medium repository.
 - The moat is real and specific: rules as compiler-verified typed Rust, capability derivation from signatures, per-finding honesty and replayable evidence, local-first execution with no cloud, and an agent authoring loop. No incumbent can copy the first two without abandoning its query language, and the licensing turbulence around Semgrep and CodeQL's non-open-source restrictions make local-first typed rules a buying criterion, not a nicety.
 - Hygiene polint must match to be taken seriously: cross-file taint that composes through dependencies, models as data, a sound-modulo-declared-unknowns summary contract, measured precision on public corpora, and a memory envelope.
-- The prioritized gap list (section 7) has twelve items; the first five are the L4 certification set and are the build plan's first two phases.
+- The prioritized gap list (section 7) has twelve items; the first five are the L4 certification set and are the build plan's first two stages.
 
 ## 1. Method
 
