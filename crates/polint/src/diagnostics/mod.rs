@@ -20,7 +20,8 @@ const _: () = {
 pub const POLINT_REPORT_JSON_SCHEMA_V1_URL: &str =
     "https://raw.githubusercontent.com/oaiz-io/polint/main/docs/schemas/polint-report-v1.json";
 /// Public URL of [`crate::diagnostics::AiFriendlyReport`] JSON Schema (v1); embedded in `--format ai-friendly` files.
-pub(crate) const POLINT_AI_FRIENDLY_JSON_SCHEMA_V1_URL: &str = "https://raw.githubusercontent.com/oaiz-io/polint/main/docs/schemas/polint-ai-friendly-v1.json";
+pub(crate) const POLINT_AI_FRIENDLY_JSON_SCHEMA_V1_URL: &str =
+    "https://raw.githubusercontent.com/oaiz-io/polint/main/docs/schemas/polint-ai-friendly-v1.json";
 
 pub(crate) const AI_FRIENDLY_EXAMPLE_LIMIT: usize = 10;
 

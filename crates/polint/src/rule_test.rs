@@ -11,7 +11,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
-pub(crate) const POLINT_TEST_REPORT_JSON_SCHEMA_V1_URL: &str = "https://raw.githubusercontent.com/oaiz-io/polint/main/docs/schemas/polint-test-report-v1.json";
+pub(crate) const POLINT_TEST_REPORT_JSON_SCHEMA_V1_URL: &str =
+    "https://raw.githubusercontent.com/oaiz-io/polint/main/docs/schemas/polint-test-report-v1.json";
 
 #[derive(Debug, Clone)]
 pub(crate) struct RuleTestCase {
