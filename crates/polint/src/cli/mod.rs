@@ -39,7 +39,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 mod rules_host_error;
 mod skill;
 
-const POLINT_CACHE_STATUS_JSON_SCHEMA_V1_URL: &str = "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-cache-status-v1.json";
+const POLINT_CACHE_STATUS_JSON_SCHEMA_V1_URL: &str = "https://raw.githubusercontent.com/oaiz-io/polint/main/docs/schemas/polint-cache-status-v1.json";
 const POLINT_RULES_PROFILE_ENV: &str = "POLINT_RULES_PROFILE";
 const AI_FRIENDLY_OUTPUT_DIR: &str = ".polint/output";
 const AI_FRIENDLY_LATEST_OUTPUT: &str = ".polint/output/latest.json";
@@ -734,7 +734,7 @@ fn ensure_repo_rust_toolchain_shim(root: &Path) -> Result<()> {
         &path,
         format!(
             "# Polint rule packs compile the `polint` crate (MSRV Rust {msrv}).\n\
-             # https://github.com/emilwareus/polint#minimum-rust-version\n\
+             # https://github.com/oaiz-io/polint#minimum-rust-version\n\
              [toolchain]\n\
              channel = \"{msrv}\"\n"
         ),
@@ -2860,11 +2860,11 @@ struct CacheStatusWire<'a> {
 }
 
 const POLINT_FACTS_JSON_SCHEMA_V1_URL: &str =
-    "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-facts-v1.json";
+    "https://raw.githubusercontent.com/oaiz-io/polint/main/docs/schemas/polint-facts-v1.json";
 const POLINT_UNKNOWNS_JSON_SCHEMA_V1_URL: &str =
-    "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-unknowns-v1.json";
+    "https://raw.githubusercontent.com/oaiz-io/polint/main/docs/schemas/polint-unknowns-v1.json";
 const POLINT_EXPLAIN_JSON_SCHEMA_V1_URL: &str =
-    "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-explain-v1.json";
+    "https://raw.githubusercontent.com/oaiz-io/polint/main/docs/schemas/polint-explain-v1.json";
 
 #[derive(Debug, Clone, Serialize)]
 struct PublicFactView {

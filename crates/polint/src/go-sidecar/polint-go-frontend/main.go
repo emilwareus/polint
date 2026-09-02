@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/emilwareus/polint/tools/polint-go-frontend/internal/semantic"
+	"github.com/oaiz-io/polint/tools/polint-go-frontend/internal/semantic"
 )
 
 func main() {

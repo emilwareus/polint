@@ -18,9 +18,10 @@ const _: () = {
 
 /// Public URL of [`crate::diagnostics::PolintReport`] JSON Schema (v1); embedded in `--format json` when present.
 pub const POLINT_REPORT_JSON_SCHEMA_V1_URL: &str =
-    "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-report-v1.json";
+    "https://raw.githubusercontent.com/oaiz-io/polint/main/docs/schemas/polint-report-v1.json";
 /// Public URL of [`crate::diagnostics::AiFriendlyReport`] JSON Schema (v1); embedded in `--format ai-friendly` files.
-pub(crate) const POLINT_AI_FRIENDLY_JSON_SCHEMA_V1_URL: &str = "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-ai-friendly-v1.json";
+pub(crate) const POLINT_AI_FRIENDLY_JSON_SCHEMA_V1_URL: &str =
+    "https://raw.githubusercontent.com/oaiz-io/polint/main/docs/schemas/polint-ai-friendly-v1.json";
 
 pub(crate) const AI_FRIENDLY_EXAMPLE_LIMIT: usize = 10;
 
@@ -1469,7 +1470,7 @@ pub(crate) fn render_sarif(
             tool: SarifTool {
                 driver: SarifDriver {
                     name: "polint",
-                    information_uri: "https://github.com/emilwareus/polint",
+                    information_uri: "https://github.com/oaiz-io/polint",
                     rules,
                 },
             },
@@ -1971,7 +1972,7 @@ mod tests {
         insta::assert_snapshot!(normalized, @r###"
         {
           "version": 1,
-          "schema": "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-report-v1.json",
+          "schema": "https://raw.githubusercontent.com/oaiz-io/polint/main/docs/schemas/polint-report-v1.json",
           "tool": {
             "name": "polint",
             "version": "<PKG_VERSION>"
@@ -2491,7 +2492,7 @@ mod tests {
               "tool": {
                 "driver": {
                   "name": "polint",
-                  "informationUri": "https://github.com/emilwareus/polint",
+                  "informationUri": "https://github.com/oaiz-io/polint",
                   "rules": [
                     {
                       "id": "project/rule",

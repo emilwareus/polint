@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-test-report-v1.json",
+  "$id": "https://raw.githubusercontent.com/oaiz-io/polint/main/docs/schemas/polint-test-report-v1.json",
   "title": "polint test report v1",
   "type": "object",
   "additionalProperties": false,
@@ -12,7 +12,7 @@
     },
     "schema": {
       "type": "string",
-      "const": "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-test-report-v1.json"
+      "const": "https://raw.githubusercontent.com/oaiz-io/polint/main/docs/schemas/polint-test-report-v1.json"
     },
     "tool": {
       "type": "object",

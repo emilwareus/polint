@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-ai-friendly-v1.json",
+  "$id": "https://raw.githubusercontent.com/oaiz-io/polint/main/docs/schemas/polint-ai-friendly-v1.json",
   "title": "PolintAiFriendlyReport",
   "description": "Machine output saved by `polint check --format ai-friendly`. Stdout stays compact; this file contains the queryable full diagnostic payload.",
   "type": "object",

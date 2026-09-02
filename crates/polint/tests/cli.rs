@@ -712,7 +712,7 @@ fn inspect_rule_json_matches_schema_v1() {
     assert_eq!(value["tool"]["name"], "polint");
     assert_eq!(
         value["schema"],
-        "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-rule-inspect-v1.json"
+        "https://raw.githubusercontent.com/oaiz-io/polint/main/docs/schemas/polint-rule-inspect-v1.json"
     );
 }
 
@@ -732,7 +732,7 @@ fn polint_test_json_matches_schema_v1() {
     assert_eq!(value["tool"]["name"], "polint");
     assert_eq!(
         value["schema"],
-        "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-test-report-v1.json"
+        "https://raw.githubusercontent.com/oaiz-io/polint/main/docs/schemas/polint-test-report-v1.json"
     );
 }
 
@@ -1821,7 +1821,7 @@ fn evidence_public_no_leak() {
         .unwrap_or_else(|error| panic!("check JSON should parse: {error}\n{public_json}"));
     assert_eq!(
         public_json_value["schema"],
-        "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-report-v1.json"
+        "https://raw.githubusercontent.com/oaiz-io/polint/main/docs/schemas/polint-report-v1.json"
     );
     let probe = diagnostics_for_rule(&public_json_value, "local/evidence-leak-probe");
     assert_eq!(probe.len(), 1, "{public_json_value:#?}");
@@ -2040,7 +2040,7 @@ fn inspect_rule_manifest_json_is_stable_for_local_rules() {
     assert_eq!(value["version"], 1);
     assert_eq!(
         value["schema"],
-        "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-rule-inspect-v1.json"
+        "https://raw.githubusercontent.com/oaiz-io/polint/main/docs/schemas/polint-rule-inspect-v1.json"
     );
     assert_eq!(value["tool"]["name"], "polint");
 
@@ -7855,7 +7855,7 @@ pub(crate) fn no_todo_literals(
         .unwrap_or_else(|error| panic!("AI-friendly report should be JSON: {error}"));
     assert_eq!(
         report["schema"],
-        "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-ai-friendly-v1.json"
+        "https://raw.githubusercontent.com/oaiz-io/polint/main/docs/schemas/polint-ai-friendly-v1.json"
     );
     assert_eq!(report["summary"]["total_diagnostics"], 1);
     assert_eq!(report["summary"]["rules_triggered"], 1);
@@ -10877,7 +10877,7 @@ fn cache_status_reports_structured_cache_layout() {
 
     assert_eq!(
         json["schema"],
-        "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-cache-status-v1.json"
+        "https://raw.githubusercontent.com/oaiz-io/polint/main/docs/schemas/polint-cache-status-v1.json"
     );
     assert!(
         path_str_ends_with(json["root"].as_str().unwrap(), ".polint/cache"),
