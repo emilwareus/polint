@@ -2,6 +2,7 @@
 
 Date: 2026-09-01
 Researcher: Claude Fable 5.1 (delegated via Hermes)
+Revised 2026-09-02: time estimates removed, capability roadmap added.
 Status: strategy input for the milestone after v2.0. Companion reports: [02-gap-analysis.md](02-gap-analysis.md), [03-build-plan.md](03-build-plan.md), [04-evaluation-as-a-weapon.md](04-evaluation-as-a-weapon.md), [05-moat-economics.md](05-moat-economics.md).
 
 ## TL;DR
@@ -14,7 +15,7 @@ Status: strategy input for the milestone after v2.0. Companion reports: [02-gap-
 - The distance from "partial L4" to "certified L4" is the highest-value distance on the whole ladder: it is where CodeQL and Semgrep Pro earn their keep, where taint policies become trustworthy, and where the honesty axis becomes a moat instead of an apology.
 - L5 is worth buying selectively (object sensitivity for callback-heavy TS, access-path sensitivity in summaries), not uniformly. L6 is worth buying only after branch predicates exist in the IR; today they are lowered as `None`.
 - Placement is verified by four instruments defined in this report and detailed in report 04: per-level capability probes, recall against dynamic oracles, precision against curated required sets, and soundness mutation tests.
-- The bar polint should hold itself to: certified L4 on Go and TS/JS with published probe pass rates, selective L5, and top-of-class scores on all seven axes, by early 2028. That is a position no current engine holds for these two languages.
+- The bar polint should hold itself to: certified L4 on Go and TS/JS with published probe pass rates, selective L5, and top-of-class scores on all seven axes, at the end of the six-stage build plan. That is a position no current engine holds for these two languages.
 
 ## 1. Why a ladder, and why these rungs
 
@@ -189,12 +190,12 @@ A placement is a claim about machinery; it must be falsifiable by a third party.
 
 ## 8. Placement targets for the plan
 
-| Horizon | Level target | Axis targets (A to G) | Proof |
+| Milestone (dependency order) | Level target | Axis targets (A to G) | Proof |
 |---|---|---|---|
-| End of 2026 | L3 certified, L4 partial with measured probes | 3, 1, 1, 2, 2, 3, 2 | probes for L1 to L3 pass; accuracy gate runs nightly on cloned oracles |
-| Mid 2027 | L4 certified for Go and TS/JS | 3, 2, 2, 2, 2, 3, 3 | taint probe suite and real-app taint corpus published; TS type tier measured; summaries persisted |
-| End of 2027 | L4 certified plus selective L5 | 3, 3, 3, 3, 3, 3, 3 | object-sensitive probes pass; grafana-scale runs under a fixed envelope; differential results versus CodeQL and Semgrep published |
-| Early 2028 | selective L6 | hold | path-feasibility probes; under-approximate review mode |
+| After Stage 0 | L3 certified, L4 partial with measured probes | 3, 1, 1, 2, 2, 3, 2 | probes for L1 to L3 pass; accuracy gate runs nightly on cloned oracles |
+| After Stage 2 | L4 certified for Go and TS/JS | 3, 2, 2, 2, 2, 3, 3 | taint probe suite and real-app taint corpus published; TS type tier measured; summaries persisted |
+| After Stage 4 | L4 certified plus selective L5 | 3, 3, 3, 3, 3, 3, 3 | object-sensitive probes pass; grafana-scale runs under a fixed envelope |
+| After Stage 5 | selective L6 | hold | path-feasibility probes; under-approximate review mode; differential results versus CodeQL and Semgrep published |
 
 Report 03 sequences the work; report 04 defines the instruments; report 02 lists, per rung, exactly what the strongest engine does that polint does not.
 
