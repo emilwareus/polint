@@ -1,0 +1,44 @@
+name: Bug report
+description: Something does not work the way the docs say it does
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Include the version and a reproduction. A report without them usually
+        cannot be acted on.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of the version command.
+      placeholder: "0.3.4"
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      placeholder: macOS 15.1 arm64, or ubuntu-latest in CI
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: The smallest project or command sequence that shows the problem.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened instead
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: Full command output. Remove any tokens before pasting.
+      render: shell
