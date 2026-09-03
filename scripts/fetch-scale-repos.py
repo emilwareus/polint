@@ -8,6 +8,10 @@ Pins are read from the suite manifests listed in
 `research/evaluation-harness/repos/` paths declared in those manifests.
 Floating branch or tag tips are rejected: only an exact `source_commit` SHA
 is checked out.
+
+`--only` narrows a suite set to named suite ids without changing which list is
+read, so a hosted runner can take the two scale repositories it fits and leave
+the one it does not.
 """
 
 from __future__ import annotations
@@ -177,6 +181,14 @@ def main() -> int:
         default="scale",
         help="Which suite list to fetch (default: scale)",
     )
+    parser.add_argument(
+        "--only",
+        default="",
+        help=(
+            "Comma-separated suite ids to keep from the selected list; "
+            "an id that is not in the list is an error, never a silent no-op"
+        ),
+    )
     args = parser.parse_args()
     root = (args.repo_root or repo_root_from_script()).resolve()
     inputs = load_inputs(root)
@@ -184,6 +196,17 @@ def main() -> int:
         load_suite_pin(root, rel) for rel in select_manifests(root, inputs, args.suites)
     ]
     pins.sort(key=lambda pin: pin["id"])
+
+    wanted = [name for name in args.only.split(",") if name]
+    if wanted:
+        known = {pin["id"] for pin in pins}
+        unknown = [name for name in wanted if name not in known]
+        if unknown:
+            raise SystemExit(
+                f"--only names suite id(s) not in --suites {args.suites}: "
+                f"{', '.join(unknown)} (known: {', '.join(sorted(known))})"
+            )
+        pins = [pin for pin in pins if pin["id"] in wanted]
 
     if args.print_pins:
         print_pins_stable(pins)

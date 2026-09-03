@@ -20,10 +20,16 @@
 # A missing corpus checkout fails the job instead of skipping it:
 # POLINT_REQUIRE_BENCH_CORPUS=1 turns the gate test's default skip into a panic.
 #
-# Corpus caveat: the corpus here is the two pinned clones and nothing else. The
-# Jelly suite's `tests/helloworld` case (342 of its 1,479 expected edges) only
-# resolves once that case's npm tree is installed, which this job does not do.
-# See docs/architecture-review/08-evaluation-and-correctness.md, section b.10.
+# Corpus: the two pinned clones, plus the Jelly `tests/helloworld` npm tree. That
+# case carries 342 of the suite's 1,479 expected edges and cannot resolve without
+# its `node_modules`, so `npm ci` runs against the `package-lock.json` committed
+# upstream in cs-au-dk/jelly (the tree is pinned, so the case is reproducible).
+# A run whose npm step fails reports recall as a lower bound; see
+# docs/architecture-review/08-evaluation-and-correctness.md, section b.10.
+#
+# For speed, peak RSS, and cache-tier numbers over the same corpora, see
+# `.github/workflows/bench-run.yml` (`make bench-run`). This workflow gates on
+# accuracy; that one measures and never gates.
 
 name: eval-gate
 
@@ -65,27 +71,42 @@ jobs:
             crates/polint/src/go-sidecar/polint-go-frontend/go.sum
             crates/polint/src/go-sidecar/polint-go-symbols/go.sum
 
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
 
+      # Shared with bench-run.yml: one script, one key formula, one cache entry.
       - name: Resolve pinned corpus commits
         id: corpus
         run: |
-          python3 scripts/fetch-scale-repos.py --suites callgraph --print-pins \
-            > "$RUNNER_TEMP/corpus-pins.tsv"
-          cat "$RUNNER_TEMP/corpus-pins.tsv"
-          echo "key=$(sha256sum "$RUNNER_TEMP/corpus-pins.tsv" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          scripts/bench-runner/fetch-corpus.sh pins \
+            --suites callgraph --out "$RUNNER_TEMP/corpus-pins.tsv"
 
       # Keyed on the pinned SHAs, so a manifest bump never restores the old tree.
       - name: Cache pinned corpus checkouts
         uses: actions/cache@v6
         with:
-          path: research/evaluation-harness/repos/
+          path: |
+            research/evaluation-harness/repos/jelly
+            research/evaluation-harness/repos/golang-tools
           key: callgraph-corpus-${{ runner.os }}-${{ steps.corpus.outputs.key }}
 
       - name: Fetch pinned corpus checkouts
-        run: python3 scripts/fetch-scale-repos.py --suites callgraph
+        run: |
+          scripts/bench-runner/fetch-corpus.sh fetch \
+            --suites callgraph --npm-jelly --out "$RUNNER_TEMP/npm-tree.json"
+          cat "$RUNNER_TEMP/npm-tree.json"
+
+      # Numbers without the machine they came from cannot be compared later,
+      # and an oracle's limits travel with its numbers.
+      - name: Log the machine
+        run: |
+          scripts/bench-runner/log-environment.sh .context/graph-benchmarks
+          cp scripts/bench-runner/how-to-interpret.md .context/graph-benchmarks/
 
       - name: Run external graph-accuracy gate
         env:
@@ -106,10 +127,22 @@ jobs:
             exit 1
           fi
           {
+            echo '## Machine'
+            echo
+            cat "$reports/environment.md"
+            echo
+            echo '## Accuracy'
+            echo
             cat "$reports/summary.md"
             echo
             echo 'Release tier, all cases. F1 is gated against the committed'
             echo '`research/evaluation-harness/baselines/persisted-graph-accuracy.json`.'
+            echo
+            echo 'Jelly `tests/helloworld` npm tree (342 of 1,479 expected edges):'
+            echo
+            echo '```json'
+            cat "$RUNNER_TEMP/npm-tree.json"
+            echo '```'
             echo
             echo 'Corpus pins (id, commit, url, checkout, digest):'
             echo
