@@ -9,6 +9,7 @@ output, cost, and capability.
 | Example rule packs | `example_rule_packs` in [`inputs.toml`](inputs.toml) | Checked in under `examples/*/.polint/rules/` |
 | Eval fixture trees | `eval_fixture_trees` in [`inputs.toml`](inputs.toml) | Checked in under `tests/eval-fixtures/` |
 | Scale repositories | `scale_suite_manifests` in [`inputs.toml`](inputs.toml) | Cloned by `make fetch-scale-repos` into gitignored `research/evaluation-harness/repos/` at the **commit SHA** declared in each suite manifest |
+| Call-graph accuracy repositories | `callgraph_suite_manifests` in [`inputs.toml`](inputs.toml) | Cloned by `make eval-gate` (`fetch-scale-repos.py --suites callgraph`) into the same gitignored directory, at the pinned **commit SHA** |
 
 `inputs.toml` is the inventory. Adding an example pack or fixture tree without
 updating it fails `cargo test -p polint --test golden_corpus --locked`.

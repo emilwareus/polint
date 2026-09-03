@@ -3,7 +3,7 @@ PYTHON ?= python3
 BUILD_COST_LABEL ?= local
 BUILD_COST_RUNS ?= 1
 
-.PHONY: install test lint doc install-smoke deny check readme-assets fetch-scale-repos scale-corpus-run build-cost build-cost-baseline
+.PHONY: install test lint doc install-smoke deny check readme-assets fetch-scale-repos scale-corpus-run eval-gate build-cost build-cost-baseline
 
 install:
 	$(CARGO) install --locked --path crates/polint --force
@@ -40,6 +40,22 @@ fetch-scale-repos:
 # research/evaluation-harness/baselines/scale-corpus-run.json (opt-in; not CI).
 scale-corpus-run:
 	$(PYTHON) scripts/run-scale-corpus.py
+
+# External graph-accuracy gate: the Jelly JS/TS callgraph micro suite and the Go
+# x/tools RTA callgraph suite, scored against
+# research/evaluation-harness/baselines/persisted-graph-accuracy.json. Materializes
+# the pinned checkouts first, then runs the same test as
+# .github/workflows/eval-gate.yml. Missing checkouts fail instead of skipping.
+# Needs the Go toolchain.
+# Writing reports also refreshes that baseline file with the measured numbers, so
+# read `git diff` on it before keeping the change.
+eval-gate:
+	$(PYTHON) scripts/fetch-scale-repos.py --suites callgraph
+	POLINT_REQUIRE_BENCH_CORPUS=1 POLINT_WRITE_GRAPH_BENCH=1 POLINT_GRAPH_BENCH_TIER=release \
+		$(CARGO) test -p polint --lib --all-features --locked \
+		eval::external::tests::external_graph_baseline_reports_can_be_generated -- --nocapture
+	@echo "accuracy and speed summary: .context/graph-benchmarks/summary.md"
+	@echo "per-suite reports: .context/graph-benchmarks/*-baseline.{json,md}"
 
 # Measure what a repo-local rule host costs to build today - Cargo invocations,
 # compiled units, wall-clock, rule-host peak RSS, and bytes written/retained -

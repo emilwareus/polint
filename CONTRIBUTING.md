@@ -45,6 +45,12 @@ Golden outputs live in `tests/golden/`. Regenerate them with
 suite also enforces a wall-clock and memory budget, so it can fail on a loaded machine.
 Re-run it alone before assuming a regression.
 
+The external graph-accuracy gate is not part of `make check`. It scores polint's call
+graph against the Jelly JS/TS and Go x/tools RTA oracles and fails on an F1 regression
+against `research/evaluation-harness/baselines/persisted-graph-accuracy.json`. Run it on
+demand with `make eval-gate`, or on GitHub with `gh workflow run eval-gate.yml`. It clones
+the pinned benchmark repositories and writes reports to `.context/graph-benchmarks/`.
+
 ## Pull requests
 
 1. Make one focused change.

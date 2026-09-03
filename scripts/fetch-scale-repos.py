@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Clone the golden-corpus scale repositories at their pinned commits.
+"""Clone the golden-corpus benchmark repositories at their pinned commits.
 
 Pins are read from the suite manifests listed in
-`tests/golden-corpus/inputs.toml`. Checkouts land under the gitignored
+`tests/golden-corpus/inputs.toml`: `scale_suite_manifests` by default, and
+`callgraph_suite_manifests` (the external graph-accuracy corpus) under
+`--suites callgraph`. Checkouts land under the gitignored
 `research/evaluation-harness/repos/` paths declared in those manifests.
 Floating branch or tag tips are rejected: only an exact `source_commit` SHA
 is checked out.
@@ -19,6 +21,13 @@ from pathlib import Path
 
 
 FULL_SHA_LEN = 40
+INPUTS_REL = "tests/golden-corpus/inputs.toml"
+
+# Suite set name -> the inputs.toml key that lists its suite manifests.
+MANIFEST_LISTS = {
+    "scale": "scale_suite_manifests",
+    "callgraph": "callgraph_suite_manifests",
+}
 
 
 def repo_root_from_script() -> Path:
@@ -26,18 +35,27 @@ def repo_root_from_script() -> Path:
 
 
 def load_inputs(root: Path) -> dict:
-    path = root / "tests/golden-corpus/inputs.toml"
+    path = root / INPUTS_REL
     with path.open("rb") as handle:
         data = tomllib.load(handle)
     if data.get("schema_version") != "polint-golden-corpus-inputs-1":
         raise SystemExit(f"unsupported golden-corpus schema in {path}")
-    manifests = data.get("scale_suite_manifests")
-    if not isinstance(manifests, list) or not manifests:
-        raise SystemExit(f"{path} must declare a non-empty scale_suite_manifests list")
     return data
 
 
-def load_scale_pin(root: Path, relative_manifest: str) -> dict[str, str]:
+def select_manifests(root: Path, inputs: dict, suites: str) -> list[str]:
+    path = root / INPUTS_REL
+    keys = list(MANIFEST_LISTS.values()) if suites == "all" else [MANIFEST_LISTS[suites]]
+    manifests: list[str] = []
+    for key in keys:
+        listed = inputs.get(key)
+        if not isinstance(listed, list) or not listed:
+            raise SystemExit(f"{path} must declare a non-empty {key} list")
+        manifests.extend(listed)
+    return manifests
+
+
+def load_suite_pin(root: Path, relative_manifest: str) -> dict[str, str]:
     path = root / relative_manifest
     with path.open("rb") as handle:
         suite = tomllib.load(handle)
@@ -153,10 +171,18 @@ def main() -> int:
         action="store_true",
         help="Print stable pin rows (implies --dry-run)",
     )
+    parser.add_argument(
+        "--suites",
+        choices=[*MANIFEST_LISTS, "all"],
+        default="scale",
+        help="Which suite list to fetch (default: scale)",
+    )
     args = parser.parse_args()
     root = (args.repo_root or repo_root_from_script()).resolve()
     inputs = load_inputs(root)
-    pins = [load_scale_pin(root, rel) for rel in inputs["scale_suite_manifests"]]
+    pins = [
+        load_suite_pin(root, rel) for rel in select_manifests(root, inputs, args.suites)
+    ]
     pins.sort(key=lambda pin: pin["id"])
 
     if args.print_pins:

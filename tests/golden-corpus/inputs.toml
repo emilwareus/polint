@@ -61,3 +61,11 @@ scale_suite_manifests = [
   "research/evaluation-harness/suites/gohugoio-hugo-scale.toml",
   "research/evaluation-harness/suites/grafana-grafana-scale.toml",
 ]
+
+# External graph-accuracy repositories, fetched by `make eval-gate`. Same
+# pinning rule as the scale list: URL, commit SHA, and checkout path come from
+# the suite manifest, never from a branch or tag tip.
+callgraph_suite_manifests = [
+  "research/evaluation-harness/suites/go-x-tools-rta-callgraph.toml",
+  "research/evaluation-harness/suites/jelly-callgraph-micro.toml",
+]
