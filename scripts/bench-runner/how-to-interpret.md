@@ -62,6 +62,27 @@ glob over the suites directory.
   report them. An unreviewed license is not a benchmark result.
 - **`grafana`** is 1.5M LOC. It is available locally (`make bench-run GRAFANA=1`)
   and is never selected on a hosted runner, whose disk and memory it does not fit.
+- **`excalidraw` and `hugo`** are fetched only under `--scale` / `make bench-run
+  SCALE=1`, and neither is in the CI default. Measured on 2026-09-03 on an 8-core
+  container with 15.25 GiB RAM and 8.03 GiB free:
+
+  | corpus | workload | outcome |
+  | --- | --- | --- |
+  | `excalidraw` (86,527 LOC) | `syntactic` | completes: 1.19 s warm, 1.19 s cold, 1.00 s no-cache, 44-48 MiB peak RSS |
+  | `excalidraw` | `deep` | **killed by SIGKILL** with 8 GiB free. Still OOMs, so a 7 GiB hosted runner has no chance. |
+  | `hugo` (198,514 LOC) | `syntactic` and `deep` | **exit 2 before measuring anything** (see below) |
+
+  The Hugo failure is not a budget problem and must not be reported as one.
+  polint aborts the whole run with
+
+      polint: failed to read .../media/testdata/fake.js: invalid utf-8
+
+  That file is a PNG carrying a `.js` extension - a Hugo fixture for media-type
+  sniffing, magic bytes `\x89PNG`. One mislabelled binary file in a repository
+  stops the entire analysis, so no number for Hugo can be produced at any tier
+  until polint skips unreadable files instead of failing on them. The benchmark
+  runner reports this as a failed cell with the stderr tail attached rather than
+  omitting Hugo from the table.
 
 ## Accuracy: what the oracles establish
 
