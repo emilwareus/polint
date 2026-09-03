@@ -51,6 +51,43 @@ against `research/evaluation-harness/baselines/persisted-graph-accuracy.json`. R
 demand with `make eval-gate`, or on GitHub with `gh workflow run eval-gate.yml`. It clones
 the pinned benchmark repositories and writes reports to `.context/graph-benchmarks/`.
 
+## Benchmarks
+
+`make bench-run` is the benchmark runner. It is the same script
+`.github/workflows/bench-run.yml` executes, so a laptop number and a CI number come from
+one code path. It logs the machine, fetches the pinned public corpora, measures wall
+clock, peak RSS, on-disk cache size and output md5 across warm, cold and no-cache tiers,
+scores the two call-graph oracles, and writes a readable `summary.md` plus every raw
+sample into `.context/bench-run/`.
+
+```sh
+make bench-run                    # the CI default selection
+make bench-run SCALE=1            # adds the excalidraw and hugo scale corpora
+make bench-run SCALE=1 GRAFANA=1 DEEP_TARGETS=all   # everything; local only, takes hours
+make bench-run ACCURACY=0         # speed only, no oracle scoring
+make bench-run BUILD_COST=1       # also measures the repo-local rule-host build cost
+```
+
+It needs Go and Node in addition to the Rust toolchain. On GitHub, run it with
+`gh workflow run bench-run.yml --ref <branch>`; the same report lands in the job summary
+and in the `bench-run-reports` artifact.
+
+Two rules the runner exists to keep:
+
+- **Public corpora only.** Every measured repository is public open source at the commit
+  SHA its suite manifest pins, and the target list in
+  `scripts/bench-runner/bench_matrix.py` is an explicit allowlist. A manifest whose
+  license is `proprietary` or still `license-review-needed` is rejected rather than
+  measured.
+- **Never blend measurements.** Accuracy and performance are separate sections, the two
+  performance workloads are separate tables, and every partial oracle carries the
+  sentence that says so. `scripts/bench-runner/how-to-interpret.md` ships in the artifact
+  and explains what each benchmark can and cannot establish; keep it current when you add
+  a benchmark.
+
+`bench-run.yml` never fails a job on a benchmark number. `eval-gate.yml` is the workflow
+that gates; `bench-run.yml` is the one that measures.
+
 ## Pull requests
 
 1. Make one focused change.

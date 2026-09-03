@@ -3,7 +3,18 @@ PYTHON ?= python3
 BUILD_COST_LABEL ?= local
 BUILD_COST_RUNS ?= 1
 
-.PHONY: install test lint doc install-smoke deny check readme-assets fetch-scale-repos scale-corpus-run eval-gate build-cost build-cost-baseline
+# `make bench-run` knobs. The defaults are exactly what
+# .github/workflows/bench-run.yml runs, so a local run and a CI run compare.
+BENCH_OUT ?= .context/bench-run
+BENCH_RUNS ?= 3
+BENCH_TIMEOUT_SECONDS ?= 1200
+SCALE ?= 0
+GRAFANA ?= 0
+DEEP_TARGETS ?= jelly
+ACCURACY ?= 1
+BUILD_COST ?= 0
+
+.PHONY: install test lint doc install-smoke deny check readme-assets fetch-scale-repos scale-corpus-run eval-gate bench-run build-cost build-cost-baseline
 
 install:
 	$(CARGO) install --locked --path crates/polint --force
@@ -56,6 +67,31 @@ eval-gate:
 		eval::external::tests::external_graph_baseline_reports_can_be_generated -- --nocapture
 	@echo "accuracy and speed summary: .context/graph-benchmarks/summary.md"
 	@echo "per-suite reports: .context/graph-benchmarks/*-baseline.{json,md}"
+
+# Benchmark runner: the same script .github/workflows/bench-run.yml runs, so a
+# local number and a CI number come from one code path. Logs the machine, fetches
+# the pinned public corpora (public OSS only), measures wall clock / peak RSS /
+# cache size / output md5 across warm, cold, and no-cache tiers, scores the two
+# call-graph oracles, and writes a readable report plus every raw sample.
+#
+#   make bench-run                       CI default selection
+#   make bench-run SCALE=1               adds excalidraw and hugo
+#   make bench-run SCALE=1 GRAFANA=1 DEEP_TARGETS=all
+#                                        everything, local only (1.5M LOC, hours)
+#   make bench-run ACCURACY=0            speed only, no oracle scoring
+#   make bench-run BUILD_COST=1          also measures the rule-host build cost
+#
+# Report: $(BENCH_OUT)/summary.md, also printed to stdout. Needs Go and Node.
+bench-run:
+	BENCH_OUT=$(BENCH_OUT) \
+	BENCH_RUNS=$(BENCH_RUNS) \
+	BENCH_TIMEOUT_SECONDS=$(BENCH_TIMEOUT_SECONDS) \
+	BENCH_SCALE=$(SCALE) \
+	BENCH_GRAFANA=$(GRAFANA) \
+	BENCH_DEEP_TARGETS=$(DEEP_TARGETS) \
+	BENCH_ACCURACY=$(ACCURACY) \
+	BENCH_BUILD_COST=$(BUILD_COST) \
+		scripts/bench-runner/bench-run.sh
 
 # Measure what a repo-local rule host costs to build today - Cargo invocations,
 # compiled units, wall-clock, rule-host peak RSS, and bytes written/retained -
