@@ -8,13 +8,13 @@ Reads with: [01-capability-ladder.md](01-capability-ladder.md) section 7 (verifi
 ## TL;DR
 
 - polint already has better measurement *machinery* than most engines: pinned suite manifests, a matcher and metrics module with F0.5 to F3, an F1 regression gate with cost columns, a determinism gate, a golden corpus, a capability matrix, and a policy that public claims cite measured reports only. It has almost no measurement *enforcement*: the accuracy gate never runs in CI because oracle clones are never fetched, there is one data-flow fixture, and no taint corpus exists.
-- The weapon is a four-instrument program, all reproducible from a fresh clone by one command: capability probes per ladder level, two real-application oracle lanes that are never blended, cost curves versus size, and soundness mutation tests. Each instrument has a CI tier (pull request, nightly, release).
+- The weapon is a four-instrument program, all reproducible from a fresh clone by one command: capability probes per ladder level, two real-application oracle lanes that are never blended, cost curves versus size, and soundness mutation tests. Each instrument has a CI tier (pull request, manual on-demand run, release). There are no scheduled jobs; the founder's standing rule is that heavy measurement runs only when someone asks for it.
 - Ground truth for Go and TS/JS is available without inventing it: the Jelly PLDI 2024 dynamic call-graph artifact for Node projects, `golang.org/x/tools` call-graph references plus curated required edges for real Go repositories, SecBench.js executable exploits, and CVE-backed Go vulnerabilities with reachability ground truth. Curated required-finding sets on grafana, hugo and excalidraw close the gap for policy-style findings.
 - False-positive and false-negative budgets are set per policy family, not per engine: review-time rules get a stricter false-positive budget (diff-time findings are acted on or ignored within minutes), whole-repository rules get a stricter recall budget. Google's Tricorder discipline of an effective false-positive rate under 10 percent is the reference point.
 - Differential testing against CodeQL, Semgrep and Opengrep on public corpora, with adjudicated disagreements and both engines' outputs published, is the only way to produce numbers competitors cannot refute. Vendor-run comparisons on private corpora are exactly what polint should refuse to publish.
 - Soundness spot checks are mutation-based: inject a bug that a claimed level must catch, apply semantics-preserving transformations that must not change the finding set, and run the engine with tiers toggled to check that precision never depends on an accident.
 - Publication standard: pinned commits, public scripts, per-project breakdown, both oracle lanes, cost columns, confidence intervals from repeated runs, budget and timeout reporting, and a pre-registered analysis plan. Anything less is marketing.
-- First three actions, all in Stage 0 of the build plan: a nightly job that clones the oracles and fails on skip, a 60-case L4 probe seed with must-not-report twins, and a real SecBench.js scoring adapter.
+- First three actions, all in Stage 0 of the build plan: a manual-trigger workflow that clones the oracles, prints accuracy and speed metrics, uploads them as artifacts, and fails on skip; a 60-case L4 probe seed with must-not-report twins; and a real SecBench.js scoring adapter.
 
 ## 1. What exists today, honestly
 
@@ -97,7 +97,7 @@ The purpose is not a scoreboard. It is to locate polint's true gaps with an exte
 
 ## 6. Soundness spot checks
 
-Three mutation families, all automated, run nightly on the probe suite and a sample of the real lanes:
+Three mutation families, all automated, run on demand (the same manual workflow) on the probe suite and a sample of the real lanes:
 
 | Family | Method | What a failure means |
 |---|---|---|
@@ -127,10 +127,10 @@ This is the standard the SV-COMP community and the artifact-evaluation culture a
 | Tier | Runs | Fails on |
 |---|---|---|
 | Pull request (under 10 minutes) | golden corpus, capability matrix, determinism N=10, leak gate, probe suite for L1 to L4, store boundary | any probe regression, any golden diff, any leak |
-| Nightly | clones oracles at pinned commits; F1 gate on both call-graph suites; taint corpus; mutation families; cost curves on hugo and excalidraw | F1 drop beyond tolerance, budget breach, mutation failure, silent skip |
+| Manual (on-demand) | clones oracles at pinned commits; F1 gate on both call-graph suites; taint corpus; mutation families; cost curves on hugo and excalidraw; prints an accuracy-and-speed table to the run summary and uploads per-case JSON, comparison rows and the environment manifest as downloadable artifacts | F1 drop beyond tolerance, budget breach, mutation failure, silent skip |
 | Release | full lanes including grafana; differential runs; published report regenerated | any regression versus the last published report |
 
-A skipped gate is a failed gate. The current early `return` when clones are absent (`harness/external/mod.rs`) becomes a loud failure in the nightly tier and a loud "skipped" annotation in the pull-request tier.
+A skipped gate is a failed gate. The current early `return` when clones are absent (`harness/external/mod.rs`) becomes a loud failure in the manual tier and a loud "skipped" annotation in the pull-request tier.
 
 ## 9. Open questions
 

@@ -65,7 +65,7 @@ The one-to-one mapping is PR n to v1.2 Phase n plus 19 (`.planning/milestones/v1
 
 | Phase | Status | Placement in this plan |
 |---|---|---|
-| 63 ground truth and baselines | complete, but baselines are fixture-sized and the graph gate is not in CI | Stage 0 completes it: nightly clones, real scale numbers |
+| 63 ground truth and baselines | complete, but baselines are fixture-sized and the graph gate is not in CI | Stage 0 completes it: on-demand clones, real scale numbers |
 | 64 store foundation | complete | none |
 | 65 generation manifest and mirroring | restart R1 to R4 accepted; first R5 increment (Go syntax) landed; TS syntax mirror and R6 open | Stage 0 closes R5 and R6 under the restart budgets |
 | 66 validated fact and graph ingest | pending | Stage 1, restricted to the families L4 certification needs |
@@ -101,7 +101,7 @@ Goal: make every later claim falsifiable and remove the two blockers that hide t
 
 | Item | Track | Source | Detail |
 |---|---|---|---|
-| Nightly oracle job | C | PR 21 residue; `docs/architecture-review/08` | a scheduled workflow clones Jelly and `golang/tools` at pinned commits and runs the existing F1 gate (`crates/polint-eval/src/harness/external/mod.rs`); skipping becomes a failure, not a silent return |
+| On-demand oracle gate | C | PR 21 residue; `docs/architecture-review/08` | a manual-trigger GitHub Actions workflow (no schedule) clones Jelly and `golang/tools` at pinned commits and runs the existing F1 gate (`crates/polint-eval/src/harness/external/mod.rs`); it prints accuracy and speed metrics to the run summary, uploads them as downloadable artifacts, and a skip is a failure, not a silent return |
 | Capability probe suite v1 | C | report 04 | L1 to L3 probes for Go and TS/JS plus a 60-case L4 seed; each positive has a must-not-report twin |
 | Taint corpus v0 | C | report 04 | make the SecBench.js adapter score real findings; add 40 curated Go and TS cases with CVE or exploit backing |
 | Scale root cause | E | `scale-corpus-run.json` | profile the excalidraw full pipeline; add a runtime memory ceiling and a wall-clock budget that degrade with reported reasons; parallelize the per-file stages (symbol graph, MIR lowering, CFG, metrics) with the existing sort-by-path determinism pattern |
@@ -111,7 +111,7 @@ Goal: make every later claim falsifiable and remove the two blockers that hide t
 
 Exit criteria:
 - L3 certified: at least 95 percent of L3 probes pass, 100 percent of must-not-report twins hold, for both languages.
-- The nightly gate fails on a 2-point F1 drop on either oracle suite; the committed baselines carry runtime and peak RSS.
+- The on-demand gate fails on a 2-point F1 drop on either oracle suite; the committed baselines and the run artifacts carry runtime and peak RSS for every case.
 - excalidraw full pipeline completes under 6 GB and 300 s on the reference host, with any degradation listed as budget facts.
 - Phase 65 requirements marked complete under the restart budgets.
 
@@ -218,7 +218,7 @@ Exit criteria:
 
 | Stage | Track A accuracy | Track B persistence and latency | Track C evaluation | Track D authoring and product | Track E scale |
 |---|---|---|---|---|---|
-| Stage 0 | completeness accessor; predicates bound | Phase 65 close | nightly oracle gate; probes v1; taint v0 | | excalidraw root cause; envelope; per-file parallelism |
+| Stage 0 | completeness accessor; predicates bound | Phase 65 close | on-demand oracle gate; probes v1; taint v0 | | excalidraw root cause; envelope; per-file parallelism |
 | Stage 1 | TS type tier; tabulation; access paths | Phase 66 restricted ingest | taint v1; L4 probes | models as data v1 | |
 | Stage 2 | | Phase 67 keystone; Phase 68 | frontier and parity fixtures | | envelope enforced; hugo and excalidraw inside envelope |
 | Stage 3 | | Phase 71 gates | scale curves published | `polint graph`; thin-SDK build | grafana inside envelope; parallel SCC closure |

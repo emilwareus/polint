@@ -82,7 +82,7 @@ What it changes for buyers: `polint review` becomes proportional to the pull req
 | AI reviewers commoditize natural-language policy | medium | provenance-bearing findings the reviewer consumes; the agent becomes polint's user, not its competitor |
 | Rust requirement deters authors | medium | thin-SDK build, templates, agent authoring; the compile step is the verifier and should be defended, not apologized for |
 | Toolchain dependencies (Go, Node) undermine local-first | low | embedded sidecars, version-pinned, digested into cache keys; capability diagnostics instead of silent degradation |
-| Small evidence base undermines credibility | high today | report 04's program; nightly gates before any public claim |
+| Small evidence base undermines credibility | high today | report 04's program; on-demand gates run and archived before any public claim |
 
 ## 7. Decision
 

@@ -106,7 +106,7 @@ Net: the engine's L3 and L4 machinery is principled now. The remaining gaps are 
 | D. Framework modeling | CodeQL models-as-data plus threat models; Semgrep propagators; Pysa models | hard-coded recognizers; private TOML | models as data with validation and provenance, then agent-authored models measured by default-versus-extended deltas |
 | E. Evidence | CodeQL path queries; Snyk CodeReduce slices for LLM fixes (cited in `09-competitive-landscape.md`) | replayable `evidence_v1` with paths, unknowns, omitted regions, replay keys | slices and counter-evidence for agents; summary-segment expansion on demand (Q35) |
 | F. Authoring | polint leads; Clippy and `go/analysis` prove typed-code lints scale; CodeQL and Semgrep are DSLs | typed Rust rules, capability derivation, `polint test`, `inspect`, `explain`, templates | cold rule-host compile of 187 s and 582.7 MB (`build-cost.json`); extension author-side surface unbuilt; models private |
-| G. Measurement | Jelly's dynamic oracles; SV-COMP culture; CodeQL and Semgrep rule tests | F1 gate exists but is skipped in CI; 53 fixtures; no taint corpus; scale run recorded one OOM | nightly cloned-oracle gate, probe suite, taint corpus, differential runs, soundness mutations (report 04) |
+| G. Measurement | Jelly's dynamic oracles; SV-COMP culture; CodeQL and Semgrep rule tests | F1 gate exists but is skipped in CI; 53 fixtures; no taint corpus; scale run recorded one OOM | on-demand cloned-oracle gate (manual workflow trigger), probe suite, taint corpus, differential runs, soundness mutations (report 04) |
 
 ## 5. Hygiene: what polint must match
 
@@ -141,7 +141,7 @@ Ordered by leverage divided by cost; the first five are the L4 certification set
 
 | # | Gap | Rung or axis | Leverage | Cost | Depends on |
 |---|---|---|---|---|---|
-| 1 | Taint probe suite and real-app taint corpus with CI gate | G | makes every other item measurable | small to medium | oracle clones in nightly CI |
+| 1 | Taint probe suite and real-app taint corpus with CI gate | G | makes every other item measurable | small to medium | oracle clones fetched by the on-demand workflow |
 | 2 | TS type sidecar (TypeScript 6 API in Node) as a typed call-graph tier before the heap | L4 | largest real-world recall lever for TS (repo's own critique 1) | medium | none |
 | 3 | IFDS tabulation with summary edges; enumeration only for witnesses | L4 | removes depth-8 defaults; enables IDE lifting | medium | none |
 | 4 | k-limited access paths in TITO summaries | L4 | request-object taint precision | medium | 3 |

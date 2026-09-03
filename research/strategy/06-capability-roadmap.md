@@ -43,7 +43,7 @@ Headline: you stop guessing. Accuracy and memory are measured every night, deep 
 
 You will be able to:
 
-- See a nightly CI job fail when call-graph accuracy drops on the Jelly and Go oracle suites, instead of the current silent skip because the oracle repositories were never cloned (03 §Stage 0, nightly oracle job; 04 §8).
+- Run a one-click benchmark (a manual GitHub Actions trigger, no schedule) that prints call-graph accuracy and speed on the Jelly and Go oracle suites to the run summary and leaves the numbers downloadable as artifacts — and that fails loudly instead of the current silent skip when the oracle repositories are missing (03 §Stage 0, on-demand oracle gate; 04 §8).
 - Run the full deep pipeline on excalidraw, an 86,527-line TypeScript repository, and have it finish under 6 GB and 300 seconds instead of being killed at 12 GB (03 §Stage 0, scale root cause; 02 §7 item 7).
 - Point at a probe suite that proves polint's L1 to L3 claims for both languages, with "must-not-report" twins that catch over-reporting (03 §Stage 0, probe suite v1; 04 §3.1).
 - Write a rule that asks "was this run complete for what I requested, or did a budget cut the search short?" so that "no findings" is never silently mistaken for "clean" (03 §Stage 0, completeness accessor; 02 §7 item 8).
@@ -129,7 +129,7 @@ You will be able to:
 - Stop seeing findings that require two branch outcomes that cannot both happen, because the engine checks feasibility over nullness, constants and intervals using the branch predicates bound in Stage 0 (03 §Stage 5, path feasibility; 02 §3.5).
 - Use a review mode that reports only findings with a feasibility-checked witness path, the right bias for diff-time review where a false alarm costs more than a miss (03 §Stage 5, under-approximate review mode; 02 §3.5).
 - Hand a skeptic a published head-to-head against CodeQL, Semgrep and Opengrep on public repositories at pinned commits, with adjudicated disagreements, both oracle lanes, cost columns and every engine's raw output (03 §Stage 5; 04 §5 and §7).
-- Rely on a nightly mutation suite that injects bugs each rung must catch and applies rewrites that must not change the findings, so a regression in soundness is caught before users see it (03 §Stage 5; 04 §6).
+- Run the mutation suite whenever you choose: it injects bugs each rung must catch and applies rewrites that must not change the findings, so a soundness regression is caught before users see it (03 §Stage 5; 04 §6).
 - Read a written go-or-no-go on cross-language flow, a TypeScript client calling a Go handler over an HTTP route, the one problem no incumbent solves well (03 §Stage 5, boundary spike).
 
 ## What this plan deliberately does not give you
