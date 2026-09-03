@@ -88,8 +88,25 @@ What it cannot establish:
   - `installed` - `npm ci` ran against the upstream `tests/helloworld/package-lock.json`
     (which is committed in `cs-au-dk/jelly`, so the tree is pinned and
     reproducible), and the numbers include the case.
-  - `absent` or `failed` - the case's edges cannot resolve, so **recall is a lower
-    bound** and must be labelled as such wherever it is quoted.
+  - `not-installed`, `absent` or `failed` - the case's edges cannot resolve, so
+    **recall is a lower bound** and must be labelled as such wherever it is quoted.
+
+  Installing it is off by default because it is expensive and because it makes the
+  oracle's partiality dominate the score. Both arms, measured on 2026-09-03 on an
+  8-core AMD EPYC-Rome container (release tier, all 76 cases):
+
+  | npm tree | TP | FP | FN | precision | recall | F1 | `helloworld` edges observed | suite runtime |
+  | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+  | not installed | 249 | 8 | 1230 | 96.89% | 16.84% | 28.69% | 10 (of 342 expected) | 131 s |
+  | installed | 376 | 449 | 1103 | 45.58% | 25.42% | 32.64% | 2,748 (of 342 expected) | 2,624 s |
+
+  Read that table carefully, because the naive reading is wrong. Installing the
+  tree did not make polint less precise: it made polint able to see Express, so it
+  reports 2,748 edges in a case whose *dynamic* oracle recorded 342. Precision
+  falls from 97% to 46% because the oracle does not enumerate what a real
+  execution did not reach, not because 449 new findings are wrong. Recall rises
+  because 127 genuinely expected edges became resolvable. Quote whichever arm you
+  ran, name it, and never mix rows from the two.
 
 ### `go-x-tools-rta-callgraph`
 
@@ -111,6 +128,17 @@ What it cannot establish:
 the committed `research/evaluation-harness/baselines/persisted-graph-accuracy.json`.
 The benchmark runner reports the same numbers but never fails the job on them:
 one workflow gates, the other measures.
+
+**A baseline is only a comparison when the same scoring code produced it.** The
+committed baseline was last written on 2026-08-07 (`c3f6a040`). Call-graph scoring
+changed the following day in `477ac54a` ("retire reachability precision theater"),
+and the baseline was not regenerated, so today's measurement is scored differently
+from the numbers it is compared against. The clearest symptom is the Go suite:
+the baseline records 10,233 observed edges and 100% recall against 37 expected
+edges, which is what "observe everything" produces, while the current scoring
+reports tens of edges per case. Check `git log` on the baseline file against the
+harness before reading a gap in the summary's comparison table as an engine
+regression.
 
 ## Performance: what the workloads measure
 
@@ -146,8 +174,16 @@ Measured reasons for the current default (`--deep-targets jelly`), taken on
 
 | target | `deep` outcome | consequence |
 | --- | --- | --- |
-| `jelly` | completes; ~110 s cold, ~78 s warm, ~0.3 GiB peak RSS | in the default set |
-| `golang-tools` | **did not finish in 25 minutes**, ~3.1 GiB peak RSS and still climbing | opt-in only; a hosted runner cannot afford it |
+| `jelly` (29,787 LOC) | completes; median 115 s warm / 89 s cold / 78 s no-cache, **5.4 GiB peak RSS** | in the default set |
+| `golang-tools` (398,228 LOC) | **did not finish in 25 minutes**, 3.1 GiB peak RSS and still climbing | opt-in only; a hosted runner cannot afford it |
+
+**Memory headroom warning.** 5.4 GiB peak RSS on the smallest corpus is close to
+a standard hosted runner's total memory (about 7 GiB / 16 GiB depending on the
+tier). A `deep` cell that gets OOM-killed on CI is reported as `killed` with
+`signal: SIGKILL` and the job still finishes green: the runner records what
+happened rather than hiding it or turning the workflow red. Read the runner's
+`mem_total_gib` in `environment.json` before treating a killed cell as a
+regression.
 
 Re-measure before changing the default, and update this table with what you saw.
 

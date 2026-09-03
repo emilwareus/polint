@@ -17,7 +17,14 @@
 #   BENCH_SCALE=0                  1 adds the excalidraw and hugo scale corpora
 #   BENCH_GRAFANA=0                1 adds grafana as well (local only; 1.5M LOC)
 #   BENCH_DEEP_TARGETS=jelly       targets that run the deep workload, or `all`
+#   BENCH_ONLY=                    restrict the run to these target ids (comma
+#                                  separated); empty means every selected target
 #   BENCH_ACCURACY=1               1 also scores the two call-graph oracles
+#   BENCH_NPM_JELLY=0              1 installs the Jelly tests/helloworld npm tree,
+#                                  which resolves 342 of the 1,479 expected edges
+#                                  but costs about 42 minutes for that one case;
+#                                  0 leaves it unresolved and the report labels
+#                                  recall as a lower bound
 #   BENCH_BUILD_COST=0             1 also measures the rule-host build cost
 #   BENCH_BUILD=1                  1 builds the release binaries first
 #   BENCH_ACCURACY_TIER=release    suite tier for the accuracy run
@@ -40,7 +47,9 @@ timeout_seconds=${BENCH_TIMEOUT_SECONDS:-1200}
 scale=${BENCH_SCALE:-0}
 grafana=${BENCH_GRAFANA:-0}
 deep_targets=${BENCH_DEEP_TARGETS:-jelly}
+only=${BENCH_ONLY:-}
 accuracy=${BENCH_ACCURACY:-1}
+npm_jelly=${BENCH_NPM_JELLY:-0}
 build_cost=${BENCH_BUILD_COST:-0}
 do_build=${BENCH_BUILD:-1}
 accuracy_tier=${BENCH_ACCURACY_TIER:-release}
@@ -52,6 +61,7 @@ mkdir -p "$out_dir"
 
 command_line="BENCH_RUNS=$runs BENCH_SCALE=$scale BENCH_GRAFANA=$grafana"
 command_line="$command_line BENCH_DEEP_TARGETS=$deep_targets BENCH_ACCURACY=$accuracy"
+command_line="$command_line BENCH_NPM_JELLY=$npm_jelly"
 command_line="$command_line BENCH_BUILD_COST=$build_cost scripts/bench-runner/bench-run.sh"
 
 step() { printf '\n=== %s ===\n' "$1" >&2; }
@@ -75,8 +85,12 @@ POLINT_BIN="$polint_bin" "$repo_root/scripts/bench-runner/log-environment.sh" "$
 step "resolve and fetch the pinned public corpora"
 "$repo_root/scripts/bench-runner/fetch-corpus.sh" pins \
   --suites callgraph --out "$out_dir/corpus-pins.tsv"
+npm_args=()
+if [ "$npm_jelly" = 1 ]; then
+  npm_args+=(--npm-jelly)
+fi
 "$repo_root/scripts/bench-runner/fetch-corpus.sh" fetch \
-  --suites callgraph --npm-jelly --out "$out_dir/npm-tree.json"
+  --suites callgraph "${npm_args[@]}" --out "$out_dir/npm-tree.json"
 
 scale_args=()
 if [ "$scale" = 1 ] || [ "$grafana" = 1 ]; then
@@ -161,6 +175,7 @@ python3 "$repo_root/scripts/bench-runner/bench_matrix.py" \
   --runs "$runs" \
   --timeout-seconds "$timeout_seconds" \
   --deep-targets "$deep_targets" \
+  --only "$only" \
   "${scale_args[@]}"
 
 # ---- 6. rule-host build cost --------------------------------------------

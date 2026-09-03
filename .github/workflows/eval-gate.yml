@@ -35,6 +35,15 @@ name: eval-gate
 
 on:
   workflow_dispatch:
+    inputs:
+      install_npm_tree:
+        description: >-
+          Install the Jelly tests/helloworld npm tree. On resolves the case that
+          carries 342 of the 1,479 expected edges, at a measured cost of about
+          42 minutes for that one case. Off leaves it unresolved, so recall is a
+          lower bound and the summary says so.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -96,9 +105,12 @@ jobs:
           key: callgraph-corpus-${{ runner.os }}-${{ steps.corpus.outputs.key }}
 
       - name: Fetch pinned corpus checkouts
+        env:
+          NPM_JELLY: ${{ inputs.install_npm_tree && '--npm-jelly' || '' }}
         run: |
+          # shellcheck disable=SC2086 # NPM_JELLY is a single flag or empty.
           scripts/bench-runner/fetch-corpus.sh fetch \
-            --suites callgraph --npm-jelly --out "$RUNNER_TEMP/npm-tree.json"
+            --suites callgraph $NPM_JELLY --out "$RUNNER_TEMP/npm-tree.json"
           cat "$RUNNER_TEMP/npm-tree.json"
 
       # Numbers without the machine they came from cannot be compared later,

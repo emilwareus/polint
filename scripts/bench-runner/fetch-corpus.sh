@@ -15,9 +15,12 @@
 # `--npm-jelly` installs the Jelly `tests/helloworld` npm tree from the
 # `package-lock.json` committed upstream. That case carries 342 of the suite's
 # 1,479 expected edges and cannot resolve without it, so a run that skips this
-# must label its recall as a lower bound. The install writes
-# `<out>/npm-tree.json` describing what happened, and never fails the caller:
-# a benchmark reports what it could measure.
+# must label its recall as a lower bound. Without the flag the tree is *removed*
+# rather than merely not installed: a restored corpus cache can carry a
+# `node_modules` from an earlier run, and a report that says `not-installed`
+# while the analysis saw Express would be a lie. Either way the resulting state
+# is written to the `--out` path, and the install never fails the caller: a
+# benchmark reports what it could measure.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -59,11 +62,11 @@ case $mode in
     python3 "$repo_root/scripts/fetch-scale-repos.py" \
       --repo-root "$repo_root" --suites "$suites" "${only_args[@]}"
 
-    if [ "$npm_jelly" = 1 ]; then
-      helloworld="$repo_root/research/evaluation-harness/repos/jelly/tests/helloworld"
-      status=absent
-      detail="the Jelly checkout is not present, so the case was not installed"
-      if [ -d "$helloworld" ]; then
+    helloworld="$repo_root/research/evaluation-harness/repos/jelly/tests/helloworld"
+    status=absent
+    detail="the Jelly checkout is not present, so the case was not resolved"
+    if [ -d "$helloworld" ]; then
+      if [ "$npm_jelly" = 1 ]; then
         if ! command -v npm >/dev/null 2>&1; then
           status=failed
           detail="npm is not installed on this machine"
@@ -76,16 +79,20 @@ case $mode in
           status=failed
           detail="npm ci failed in tests/helloworld; the 342-edge case cannot resolve"
         fi
+      else
+        rm -rf "$helloworld/node_modules"
+        status=not-installed
+        detail="npm tree removed on request; tests/helloworld cannot resolve, so the suite recall is a lower bound over 342 of 1,479 expected edges"
       fi
-      echo "jelly helloworld npm tree: $status ($detail)" >&2
-      if [ -n "$out" ]; then
-        mkdir -p "$(dirname "$out")"
-        STATUS="$status" DETAIL="$detail" python3 -c '
+    fi
+    echo "jelly helloworld npm tree: $status ($detail)" >&2
+    if [ -n "$out" ]; then
+      mkdir -p "$(dirname "$out")"
+      STATUS="$status" DETAIL="$detail" python3 -c '
 import json, os, sys
 json.dump({"status": os.environ["STATUS"], "detail": os.environ["DETAIL"]},
           open(sys.argv[1], "w"), indent=2)
 ' "$out"
-      fi
     fi
     ;;
 

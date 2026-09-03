@@ -11,7 +11,9 @@ BENCH_TIMEOUT_SECONDS ?= 1200
 SCALE ?= 0
 GRAFANA ?= 0
 DEEP_TARGETS ?= jelly
+ONLY ?=
 ACCURACY ?= 1
+NPM_JELLY ?= 0
 BUILD_COST ?= 0
 
 .PHONY: install test lint doc install-smoke deny check readme-assets fetch-scale-repos scale-corpus-run eval-gate bench-run build-cost build-cost-baseline
@@ -79,6 +81,10 @@ eval-gate:
 #   make bench-run SCALE=1 GRAFANA=1 DEEP_TARGETS=all
 #                                        everything, local only (1.5M LOC, hours)
 #   make bench-run ACCURACY=0            speed only, no oracle scoring
+#   make bench-run NPM_JELLY=1           install the Jelly npm tree: resolves the
+#                                        342-edge helloworld case, costs ~42 min
+#                                        for that one case. Off by default, and
+#                                        the report calls recall a lower bound.
 #   make bench-run BUILD_COST=1          also measures the rule-host build cost
 #
 # Report: $(BENCH_OUT)/summary.md, also printed to stdout. Needs Go and Node.
@@ -89,7 +95,9 @@ bench-run:
 	BENCH_SCALE=$(SCALE) \
 	BENCH_GRAFANA=$(GRAFANA) \
 	BENCH_DEEP_TARGETS=$(DEEP_TARGETS) \
+	BENCH_ONLY=$(ONLY) \
 	BENCH_ACCURACY=$(ACCURACY) \
+	BENCH_NPM_JELLY=$(NPM_JELLY) \
 	BENCH_BUILD_COST=$(BUILD_COST) \
 		scripts/bench-runner/bench-run.sh
 

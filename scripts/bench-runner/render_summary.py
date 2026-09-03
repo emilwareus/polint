@@ -183,8 +183,12 @@ def render_accuracy(out: list[str], accuracy_dir: Path, status: dict | None) -> 
     )
     out.append("")
 
+    # `committed-baseline.json` sits in the same directory and matches the same
+    # glob; it is the gate's reference, not a measured run.
     runs = []
     for path in sorted(accuracy_dir.glob("*-baseline.json")):
+        if path.name == "committed-baseline.json":
+            continue
         run = read_json(path)
         if run and run.get("suite_id"):
             runs.append(run)

@@ -47,6 +47,14 @@ on:
         description: "Also score the Jelly and Go x/tools call-graph oracles"
         type: boolean
         default: true
+      install_npm_tree:
+        description: >-
+          Install the Jelly tests/helloworld npm tree before scoring accuracy.
+          On resolves the case that carries 342 of the 1,479 expected edges, at
+          a measured cost of about 42 minutes for that one case. Off leaves it
+          unresolved, so recall is a lower bound and the summary says so.
+        type: boolean
+        default: false
       build_cost:
         description: "Also measure the repo-local rule-host build cost"
         type: boolean
@@ -124,6 +132,7 @@ jobs:
           BENCH_GRAFANA: "0"
           BENCH_DEEP_TARGETS: ${{ inputs.deep_targets }}
           BENCH_ACCURACY: ${{ inputs.accuracy && '1' || '0' }}
+          BENCH_NPM_JELLY: ${{ inputs.install_npm_tree && '1' || '0' }}
           BENCH_BUILD_COST: ${{ inputs.build_cost && '1' || '0' }}
         run: scripts/bench-runner/bench-run.sh
 
