@@ -1,0 +1,190 @@
+# External graph-accuracy gate for the call-graph engine.
+#
+# What it measures: precision, recall, and F1 of polint's call graph against two
+# pinned external oracles, the Jelly JS/TS callgraph micro suite and the Go
+# x/tools RTA callgraph suite, plus the cost columns each suite records (summed
+# runtime ms and peak RSS). F1 is compared against the committed
+# research/evaluation-harness/baselines/persisted-graph-accuracy.json and the job
+# fails on a regression past the tolerance the gate test owns. Both suites always
+# run: they are scored together against that one baseline.
+#
+# Trigger: manual only (workflow_dispatch). This gate has no schedule by design.
+#
+# Artifacts: `eval-gate-reports` carries .context/graph-benchmarks/ (per-suite
+# JSON and markdown reports plus summary.md) for 7 days. The same numbers are
+# written to the run's job summary.
+#
+# Run it: `gh workflow run eval-gate.yml` then `gh run watch`, or `make eval-gate`
+# locally.
+#
+# A missing corpus checkout fails the job instead of skipping it:
+# POLINT_REQUIRE_BENCH_CORPUS=1 turns the gate test's default skip into a panic.
+#
+# Corpus: the two pinned clones, plus the Jelly `tests/helloworld` npm tree. That
+# case carries 342 of the suite's 1,479 expected edges and cannot resolve without
+# its `node_modules`, so `npm ci` runs against the `package-lock.json` committed
+# upstream in cs-au-dk/jelly (the tree is pinned, so the case is reproducible).
+# A run whose npm step fails reports recall as a lower bound; see
+# docs/architecture-review/08-evaluation-and-correctness.md, section b.10.
+#
+# For speed, peak RSS, and cache-tier numbers over the same corpora, see
+# `.github/workflows/bench-run.yml` (`make bench-run`). This workflow gates on
+# accuracy; that one measures and never gates.
+
+name: eval-gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      install_npm_tree:
+        description: >-
+          Install the Jelly tests/helloworld npm tree. On resolves the case that
+          carries 342 of the 1,479 expected edges, at a measured cost of about
+          42 minutes for that one case. Off leaves it unresolved, so recall is a
+          lower bound and the summary says so.
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eval-gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_BUILD_JOBS: "4"
+
+jobs:
+  external-graph-accuracy:
+    name: external graph accuracy (Jelly + Go x/tools)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Free hosted runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /usr/local/share/boost /opt/ghc
+          df -h
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.x"
+          cache-dependency-path: |
+            crates/polint/src/go-sidecar/polint-go-frontend/go.sum
+            crates/polint/src/go-sidecar/polint-go-symbols/go.sum
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Shared with bench-run.yml: one script, one key formula, one cache entry.
+      - name: Resolve pinned corpus commits
+        id: corpus
+        run: |
+          scripts/bench-runner/fetch-corpus.sh pins \
+            --suites callgraph --out "$RUNNER_TEMP/corpus-pins.tsv"
+
+      # Keyed on the pinned SHAs, so a manifest bump never restores the old tree.
+      - name: Cache pinned corpus checkouts
+        uses: actions/cache@v6
+        with:
+          path: |
+            research/evaluation-harness/repos/jelly
+            research/evaluation-harness/repos/golang-tools
+          key: callgraph-corpus-${{ runner.os }}-${{ steps.corpus.outputs.key }}
+
+      - name: Fetch pinned corpus checkouts
+        env:
+          NPM_JELLY: ${{ inputs.install_npm_tree && '--npm-jelly' || '' }}
+        run: |
+          # shellcheck disable=SC2086 # NPM_JELLY is a single flag or empty.
+          scripts/bench-runner/fetch-corpus.sh fetch \
+            --suites callgraph $NPM_JELLY --out "$RUNNER_TEMP/npm-tree.json"
+          cat "$RUNNER_TEMP/npm-tree.json"
+
+      # Numbers without the machine they came from cannot be compared later,
+      # and an oracle's limits travel with its numbers.
+      - name: Log the machine
+        run: |
+          scripts/bench-runner/log-environment.sh .context/graph-benchmarks
+          cp scripts/bench-runner/how-to-interpret.md .context/graph-benchmarks/
+
+      - name: Run external graph-accuracy gate
+        env:
+          POLINT_REQUIRE_BENCH_CORPUS: "1"
+          POLINT_WRITE_GRAPH_BENCH: "1"
+          POLINT_GRAPH_BENCH_TIER: release
+        run: >-
+          cargo test -p polint --lib --all-features --locked
+          eval::external::tests::external_graph_baseline_reports_can_be_generated
+          -- --nocapture
+
+      # A pass that wrote no summary means the gate never measured anything.
+      - name: Publish accuracy and speed report
+        run: |
+          reports=.context/graph-benchmarks
+          if [ ! -f "$reports/summary.md" ]; then
+            echo "::error::$reports/summary.md is missing; the gate measured nothing"
+            exit 1
+          fi
+          {
+            echo '## Machine'
+            echo
+            cat "$reports/environment.md"
+            echo
+            echo '## Accuracy'
+            echo
+            cat "$reports/summary.md"
+            echo
+            echo 'Release tier, all cases. F1 is gated against the committed'
+            echo '`research/evaluation-harness/baselines/persisted-graph-accuracy.json`.'
+            echo
+            echo 'Jelly `tests/helloworld` npm tree (342 of 1,479 expected edges):'
+            echo
+            echo '```json'
+            cat "$RUNNER_TEMP/npm-tree.json"
+            echo '```'
+            echo
+            echo 'Corpus pins (id, commit, url, checkout, digest):'
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/corpus-pins.tsv"
+            echo '```'
+            for report in "$reports"/*-baseline.md; do
+              [ -f "$report" ] || continue
+              echo
+              echo "<details><summary>$(basename "$report")</summary>"
+              echo
+              cat "$report"
+              echo
+              echo '</details>'
+            done
+            echo
+            echo '<details><summary>Measured minus committed baseline</summary>'
+            echo
+            echo '```diff'
+            git diff -- research/evaluation-harness/baselines/persisted-graph-accuracy.json
+            echo '```'
+            echo
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload accuracy and speed reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: eval-gate-reports
+          path: .context/graph-benchmarks/
+          retention-days: 7
+          if-no-files-found: error

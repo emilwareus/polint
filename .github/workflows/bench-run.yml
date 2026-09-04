@@ -1,0 +1,158 @@
+# Benchmark runner: measure polint on pinned public corpora and publish a
+# readable report plus every raw sample.
+#
+# What it measures, and what it deliberately does not:
+#
+#   * Performance - wall clock, peak RSS, on-disk cache size, and output md5 for
+#     two workloads (`syntactic`, `deep`) across three cache tiers (warm, cold,
+#     no-cache), three sequential runs each, medians published beside every
+#     sample. The two workloads are never combined into one number.
+#   * Accuracy - the same Jelly and Go x/tools call-graph oracle scores that
+#     `eval-gate.yml` gates on, reported here for context. This workflow never
+#     fails the job on an accuracy regression: eval-gate is the gate, bench-run
+#     is the measurement.
+#
+# Corpora are public open source only, cloned at the commit SHA each suite
+# manifest pins, with the license printed beside every number.
+#
+# Trigger: manual only (workflow_dispatch). This runner has no schedule by
+# design and must not be given one.
+#
+# Artifacts: `bench-run-reports` carries environment.json/txt/md, perf.json with
+# every raw sample, the accuracy reports, corpus-pins.tsv, how-to-interpret.md,
+# and the rendered summary.md, for 7 days. summary.md is also the job summary.
+#
+# Run it: `gh workflow run bench-run.yml --ref <branch>` then `gh run watch`.
+# Locally: `make bench-run` (same script, same options), or
+# `make bench-run SCALE=1` to add the scale corpora.
+
+name: bench-run
+
+on:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: "Measured runs per cell"
+        type: string
+        default: "3"
+      scale:
+        description: "Add the excalidraw and hugo scale corpora"
+        type: boolean
+        default: false
+      deep_targets:
+        description: "Targets running the deep workload (comma separated, or `all`)"
+        type: string
+        default: "jelly"
+      accuracy:
+        description: "Also score the Jelly and Go x/tools call-graph oracles"
+        type: boolean
+        default: true
+      install_npm_tree:
+        description: >-
+          Install the Jelly tests/helloworld npm tree before scoring accuracy.
+          On resolves the case that carries 342 of the 1,479 expected edges, at
+          a measured cost of about 42 minutes for that one case. Off leaves it
+          unresolved, so recall is a lower bound and the summary says so.
+        type: boolean
+        default: false
+      build_cost:
+        description: "Also measure the repo-local rule-host build cost"
+        type: boolean
+        default: false
+      timeout_seconds:
+        description: "Per-run wall-clock budget in seconds"
+        type: string
+        default: "1200"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bench-run-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_BUILD_JOBS: "4"
+
+jobs:
+  bench:
+    name: benchmark runner (public corpora)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Free hosted runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /usr/local/share/boost /opt/ghc
+          df -h
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.x"
+          cache-dependency-path: |
+            crates/polint/src/go-sidecar/polint-go-frontend/go.sum
+            crates/polint/src/go-sidecar/polint-go-symbols/go.sum
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Same script and same key formula as eval-gate.yml, so the two workflows
+      # share one corpus cache entry instead of each cloning its own.
+      - name: Resolve pinned corpus commits
+        id: corpus
+        run: |
+          scripts/bench-runner/fetch-corpus.sh pins \
+            --suites callgraph --out "$RUNNER_TEMP/corpus-pins.tsv"
+
+      - name: Cache pinned corpus checkouts
+        uses: actions/cache@v6
+        with:
+          path: |
+            research/evaluation-harness/repos/jelly
+            research/evaluation-harness/repos/golang-tools
+          key: callgraph-corpus-${{ runner.os }}-${{ steps.corpus.outputs.key }}
+
+      - name: Run the benchmark
+        env:
+          BENCH_OUT: .context/bench-run
+          BENCH_RUNS: ${{ inputs.runs }}
+          BENCH_TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
+          BENCH_SCALE: ${{ inputs.scale && '1' || '0' }}
+          BENCH_GRAFANA: "0"
+          BENCH_DEEP_TARGETS: ${{ inputs.deep_targets }}
+          BENCH_ACCURACY: ${{ inputs.accuracy && '1' || '0' }}
+          BENCH_NPM_JELLY: ${{ inputs.install_npm_tree && '1' || '0' }}
+          BENCH_BUILD_COST: ${{ inputs.build_cost && '1' || '0' }}
+        run: scripts/bench-runner/bench-run.sh
+
+      # A run that wrote no summary measured nothing, which is a failure even
+      # though every individual step exited zero.
+      - name: Publish the report to the job summary
+        if: always()
+        run: |
+          summary=.context/bench-run/summary.md
+          if [ ! -f "$summary" ]; then
+            echo "::error::$summary is missing; the benchmark run measured nothing"
+            exit 1
+          fi
+          cat "$summary" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload benchmark reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: bench-run-reports
+          path: .context/bench-run/
+          retention-days: 7
+          if-no-files-found: error
