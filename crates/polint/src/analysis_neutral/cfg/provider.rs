@@ -7,8 +7,10 @@ use crate::analysis_api::{
     InputSnapshot, ProviderExecution, ProviderFailureReason, ProviderFailureStage,
 };
 use crate::analysis_neutral::AnalysisHost;
+use crate::analysis_neutral::cfg::budget::{max_dominance_pairs, worst_case_dominance_pairs};
 use crate::analysis_neutral::cfg::derived::{
-    derive_control_dependence, derive_dominators, derive_postdominators, derive_reachability,
+    DominanceMaterialization, derive_control_dependence, derive_dominators, derive_postdominators,
+    derive_reachability,
 };
 use crate::analysis_neutral::cfg::facts::CfgView;
 use crate::analysis_neutral::cfg::ids::{BasicBlockId, CfgEdgeId, CfgFunctionId, CfgNodeId};
@@ -34,7 +36,7 @@ pub fn derive_cfg_with_cache_stats(
     let interner_handle = db.stable_key_interner();
     let interner = &interner_handle;
     let mut output = derive_cfg_output(db).normalized(interner);
-    append_derived_rows(interner, &mut output, CfgView::NormalControl);
+    let bounded = append_derived_rows(interner, &mut output, CfgView::NormalControl);
     let output = output.normalized(interner);
     let output_digest = cfg_output_digest(
         manifest,
@@ -49,7 +51,10 @@ pub fn derive_cfg_with_cache_stats(
 
     match db.replace_cfg_facts(output) {
         Ok(()) => CfgProviderOutput {
-            diagnostics: Vec::new(),
+            diagnostics: bounded
+                .map(dominance_budget_diagnostic)
+                .into_iter()
+                .collect(),
             cache_stats,
             output_digest: Some(output_digest),
             execution: Default::default(),
@@ -70,18 +75,54 @@ fn derive_cfg_output(db: &impl AnalysisHost) -> CfgOutput {
     lower_cfg(db)
 }
 
+/// The dominance relation a run declined to materialise in full.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DominanceBudgetTrip {
+    estimated_pairs: usize,
+    limit: usize,
+}
+
 fn append_derived_rows(
     interner: &crate::internal_core::StableKeyInterner,
     output: &mut CfgOutput,
     view: CfgView,
-) {
+) -> Option<DominanceBudgetTrip> {
     if output.functions.is_empty() {
-        return;
+        return None;
     }
+    let limit = max_dominance_pairs();
+    let estimated_pairs = worst_case_dominance_pairs(output);
+    let bounded = estimated_pairs > limit;
+    let materialization = if bounded {
+        DominanceMaterialization::ImmediateOnly
+    } else {
+        DominanceMaterialization::Full
+    };
     output.reachability = derive_reachability(interner, output, view);
-    output.dominators = derive_dominators(interner, output, view);
-    output.postdominators = derive_postdominators(interner, output, view);
+    output.dominators = derive_dominators(interner, output, view, materialization);
+    output.postdominators = derive_postdominators(interner, output, view, materialization);
     output.control_dependence = derive_control_dependence(interner, output, view);
+    bounded.then_some(DominanceBudgetTrip {
+        estimated_pairs,
+        limit,
+    })
+}
+
+/// Reports a bounded dominance relation on the same rule id the kernel's
+/// resource envelope uses, so `polint unknowns` shows one `budget_exceeded`
+/// vocabulary for "polint bounded itself to fit a resource envelope".
+fn dominance_budget_diagnostic(trip: DominanceBudgetTrip) -> Diagnostic {
+    Diagnostic::warning(
+        crate::analysis_kernel::resource::RESOURCE_BUDGET_RULE_ID,
+        "<workspace>",
+        DiagnosticRange::point(1, 1),
+        format!(
+            "control-flow dominance materialisation bounded: worst-case {} pairs against a \
+             {} pair ceiling. `cfg_dominators` and `cfg_postdominators` carry the immediate \
+             (tree) edges only; the full relation is their reflexive transitive closure.",
+            trip.estimated_pairs, trip.limit,
+        ),
+    )
 }
 
 fn cfg_output_digest(

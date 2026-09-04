@@ -12,6 +12,20 @@ use crate::analysis_neutral::cfg::ids::{
 use crate::analysis_neutral::cfg::store::CfgOutput;
 use crate::analysis_neutral::stable_key::semantic_stable_key;
 
+/// How much of a dominance relation a run materialises as facts.
+///
+/// Dominance is the reflexive transitive closure of the immediate-dominator
+/// tree, so [`Self::ImmediateOnly`] loses no information — only the
+/// materialisation. See [`super::budget`] for why that matters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DominanceMaterialization {
+    /// Every *(dominated, dominator)* pair.
+    Full,
+    /// The dominator tree: rows whose `immediate` flag is set.
+    ImmediateOnly,
+}
+
+
 pub fn derive_reachability(
     interner: &crate::internal_core::StableKeyInterner,
     output: &CfgOutput,
@@ -54,6 +68,7 @@ pub fn derive_dominators(
     interner: &crate::internal_core::StableKeyInterner,
     output: &CfgOutput,
     view: CfgView,
+    materialization: DominanceMaterialization,
 ) -> Vec<DominatorFact> {
     let mut facts = Vec::new();
     let mut next_id = 1;
@@ -70,6 +85,11 @@ pub fn derive_dominators(
         let immediate = immediate_relation(&relation);
         for (dominated, dominators) in &relation {
             for dominator in dominators {
+                if materialization == DominanceMaterialization::ImmediateOnly
+                    && immediate.get(dominated) != Some(dominator)
+                {
+                    continue;
+                }
                 facts.push(DominatorFact {
                     id: DominatorId(next_id),
                     cfg_function: function,
@@ -102,6 +122,7 @@ pub fn derive_postdominators(
     interner: &crate::internal_core::StableKeyInterner,
     output: &CfgOutput,
     view: CfgView,
+    materialization: DominanceMaterialization,
 ) -> Vec<PostDominatorFact> {
     let mut facts = Vec::new();
     let mut next_id = 1;
@@ -139,6 +160,11 @@ pub fn derive_postdominators(
             }
             for postdominator in postdominators {
                 if *postdominator == virtual_exit {
+                    continue;
+                }
+                if materialization == DominanceMaterialization::ImmediateOnly
+                    && immediate.get(postdominated) != Some(postdominator)
+                {
                     continue;
                 }
                 facts.push(PostDominatorFact {
@@ -492,7 +518,7 @@ fn stable_key(
     family: FactFamily,
     parts: &[(&str, String)],
 ) -> crate::internal_core::StableKeyId {
-    interner.intern(semantic_stable_key(interner, family, parts).into_string())
+    interner.intern(semantic_stable_key(family, parts).into_string())
 }
 
 #[cfg(test)]
@@ -624,7 +650,12 @@ mod tests {
                 .any(|fact| fact.block == unreachable && !fact.reachable)
         );
 
-        let dominators = derive_dominators(&interner, &output, CfgView::NormalControl);
+        let dominators = derive_dominators(
+            &interner,
+            &output,
+            CfgView::NormalControl,
+            DominanceMaterialization::Full,
+        );
         assert!(
             !dominators
                 .iter()
@@ -636,8 +667,18 @@ mod tests {
     fn dominators_are_deterministic_for_branch_join_graphs() {
         let interner = crate::internal_core::StableKeyInterner::default();
         let output = if_else_graph(&interner);
-        let first = derive_dominators(&interner, &output, CfgView::NormalControl);
-        let second = derive_dominators(&interner, &output, CfgView::NormalControl);
+        let first = derive_dominators(
+            &interner,
+            &output,
+            CfgView::NormalControl,
+            DominanceMaterialization::Full,
+        );
+        let second = derive_dominators(
+            &interner,
+            &output,
+            CfgView::NormalControl,
+            DominanceMaterialization::Full,
+        );
         assert_eq!(first, second);
         assert!(first.iter().any(|fact| fact.immediate));
     }
@@ -670,7 +711,12 @@ mod tests {
         builder.finish_function();
         let output = builder.finish(&interner);
 
-        let postdominators = derive_postdominators(&interner, &output, CfgView::NormalControl);
+        let postdominators = derive_postdominators(
+            &interner,
+            &output,
+            CfgView::NormalControl,
+            DominanceMaterialization::Full,
+        );
         assert!(postdominators.iter().any(|fact| fact.immediate));
         assert_eq!(
             postdominators
@@ -769,21 +815,41 @@ mod tests {
         assert_eq!(
             stable_keys(
                 &interner,
-                derive_dominators(&interner, &output, CfgView::NormalControl)
+                derive_dominators(
+                    &interner,
+                    &output,
+                    CfgView::NormalControl,
+                    DominanceMaterialization::Full
+                )
             ),
             stable_keys(
                 &interner,
-                derive_dominators(&interner, &shifted, CfgView::NormalControl)
+                derive_dominators(
+                    &interner,
+                    &shifted,
+                    CfgView::NormalControl,
+                    DominanceMaterialization::Full
+                )
             )
         );
         assert_eq!(
             stable_keys(
                 &interner,
-                derive_postdominators(&interner, &output, CfgView::NormalControl)
+                derive_postdominators(
+                    &interner,
+                    &output,
+                    CfgView::NormalControl,
+                    DominanceMaterialization::Full
+                )
             ),
             stable_keys(
                 &interner,
-                derive_postdominators(&interner, &shifted, CfgView::NormalControl)
+                derive_postdominators(
+                    &interner,
+                    &shifted,
+                    CfgView::NormalControl,
+                    DominanceMaterialization::Full
+                )
             )
         );
         assert_eq!(
