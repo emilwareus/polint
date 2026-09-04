@@ -237,3 +237,61 @@ Confirmed unchanged from doc 06: **4 rayon sites**, none in `analysis_neutral`
 Everything from `polint.module_graph` onward — **251 s of the 251.5 s total** —
 runs on one core. `symbol_graph`, `semantic_mir`, the CFG derivations and
 `metrics` are structurally per-file or per-function and are serial today.
+
+---
+
+## Addendum: what the sub-stage probes found (measured after the first fixes)
+
+Two owners the provider-level table could not separate, found with temporary
+`polint::probe` instrumentation inside the two heaviest stages:
+
+**1. Provider output digests are a peak, not a rounding error.**
+`evidence_output_digest` (`analysis_neutral/evidence/provider.rs`) builds one
+`format!("{fact:?}")`-derived payload per evidence fact — ~4 KB each once
+`StableKeyId`s are expanded into key text — into a single `Vec<String>`, because
+the parts must be sorted before they are hashed. Measured cost of that one call:
+
+| point in `polint.evidence` | live RSS | peak |
+|---|---:|---:|
+| start | 4,685 MB | 5,064 MB |
+| after `derive_data_flow_evidence` | 4,854 MB | 5,064 MB |
+| after `derive_control_dependence_evidence` | 5,183 MB | 5,182 MB |
+| after `normalized` | 5,190 MB | 5,196 MB |
+| **after `evidence_output_digest`** | **6,538 MB** | **7,502 MB** |
+| after `replace_evidence_facts` | 5,197 MB | 7,502 MB |
+
+**+2,306 MB of peak for the digest alone** — more than the facts it describes.
+Every provider's `*_output_digest` has this shape; evidence is the largest.
+
+**2. The dominance relation is 71 % of the CFG stage and is derivable.**
+
+| | |
+|---|---:|
+| functions | 4,193 |
+| basic blocks | 56,999 (13.6 per function) |
+| `cfg_reachability` facts | 56,999 |
+| **`cfg_dominators` facts** | **412,465** |
+| **`cfg_postdominators` facts** | **334,784** |
+| `cfg_control_dependence` facts | 28,294 |
+
+747,249 dominance facts, each with a ~1.4 KB stable key that embeds the function
+key **and both block keys**. The immediate-dominator tree covering the same
+information is 52,806 edges — a 7× reduction — and dominance is exactly its
+reflexive transitive closure.
+
+---
+
+## Where the peak went (measured, same host, cold cache)
+
+| run | what it is | peak RSS | cold wall |
+|---|---|---:|---:|
+| `b2-ref` | pre-change engine | 9,551,003,648 B (**8.895 GB**) | 251.0 s |
+| `x2` | + `Arc<str>` on data-flow / evidence key references | 8,025,931,776 B (7.474 GB) | 250.1 s |
+| `x3` | + non-interning stable-key text builder | 7,758,098,432 B (7.225 GB) | 241.5 s |
+| `x5-fullrelation` | + streamed provider-output digest (dominance bound **off**) | 6,710,300,672 B (6.250 GB) | 242.5 s |
+| `x5` | + dominance bound on (default) | 5,861,257,216 B (5.459 GB) | 235.4 s |
+| `x6` | + data-flow projection key indexes | 5,844,377,600 B (**5.443 GB**) | **222.8 s** |
+
+`x5-fullrelation` is the same binary as `x5` with `POLINT_CFG_MAX_DOMINANCE_PAIRS=0`.
+Its 23 provider output digests are **byte-identical to `b2-ref`**, which is the
+proof that everything except the dominance bound preserves fact identity exactly.

@@ -9,7 +9,14 @@ REPO=research/evaluation-harness/repos/excalidraw-excalidraw
 OUT=.scale-envelope/runs
 mkdir -p "$OUT"
 
-BIN=$(ls -t target/release/deps/polint-* 2>/dev/null | grep -vE '\.(d|so|rlib)$' | head -1)
+# The libtest binary, not the CLI's dep artifact: only the former answers --list.
+BIN="${POLINT_TEST_BIN:-}"
+if [ -z "$BIN" ]; then
+  for candidate in $(ls -t target/release/deps/polint-* 2>/dev/null | grep -vE '\.(d|so|rlib)$'); do
+    if "$candidate" --list >/dev/null 2>&1; then BIN="$candidate"; break; fi
+  done
+fi
+[ -n "$BIN" ] || { echo "no libtest binary found" >&2; exit 2; }
 echo "binary: $BIN ($(stat -c %y "$BIN"))"
 
 # Never time on a busy box, and never time a run that inherits a poisoned cache.
@@ -17,7 +24,8 @@ LOAD=$(awk '{print $1}' /proc/loadavg)
 echo "loadavg: $LOAD"
 rm -rf "$REPO/.polint/cache"
 
-ENVS=(POLINT_PERF_CHILD_REPO="$REPO" RUST_LOG=polint::kernel::stage=info)
+ENVS=(POLINT_PERF_CHILD_REPO="$REPO" RUST_LOG="${RUST_LOG:-polint::kernel::stage=info}")
+if [ -n "${EXTRA_ENV:-}" ]; then for kv in $EXTRA_ENV; do ENVS+=("$kv"); done; fi
 if [ -n "$CAPS" ]; then ENVS+=(POLINT_PERF_CHILD_CAPABILITIES="$CAPS"); fi
 if [ -n "${COLD_ONLY:-}" ]; then ENVS+=(POLINT_PERF_CHILD_COLD_ONLY=1); fi
 
