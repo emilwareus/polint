@@ -5,6 +5,8 @@ use super::facts::{
 };
 use super::local::budget_fact;
 use super::store::{DataFlowOutput, next_data_flow_edge_id, next_data_flow_node_id};
+use std::sync::Arc;
+
 use crate::analysis_api::{FactFamily, stable_key_from_parts};
 use crate::analysis_neutral::AnalysisHost;
 use crate::analysis_neutral::ids::DataFlowNodeId;
@@ -76,8 +78,8 @@ fn project_present_tito(
                     flow_evidence(flow),
                 ],
                 input_stable_keys: vec![
-                    interner.resolve(fact.stable_key).to_string(),
-                    interner.resolve(fact.callable_stable_key).to_string(),
+                    interner.resolve(fact.stable_key),
+                    interner.resolve(fact.callable_stable_key),
                 ],
                 stable_anchor: format!(
                     "{}:{}->{}:{:?}",
@@ -146,7 +148,7 @@ fn project_summary_status(
                 format!("domain={}", fact.domain.as_str()),
                 format!("status={}", fact.status.as_str()),
             ],
-            input_stable_keys: vec![interner.resolve(fact.stable_key).to_string()],
+            input_stable_keys: vec![interner.resolve(fact.stable_key)],
             stable_anchor: interner.resolve(fact.stable_key).to_string(),
         },
     );
@@ -210,7 +212,7 @@ fn project_summary_event(
                 format!("event_kind={}", event.event_kind),
                 format!("reason={}", event.reason),
             ],
-            input_stable_keys: vec![interner.resolve(event.stable_key).to_string()],
+            input_stable_keys: vec![interner.resolve(event.stable_key)],
             stable_anchor: interner.resolve(event.stable_key).to_string(),
         },
     );
@@ -226,7 +228,7 @@ struct SummaryEdgeDraft {
     confidence: DataFlowConfidence,
     budget: Option<crate::analysis_neutral::ids::DataFlowBudgetId>,
     evidence: Vec<String>,
-    input_stable_keys: Vec<String>,
+    input_stable_keys: Vec<Arc<str>>,
     stable_anchor: String,
 }
 
@@ -434,7 +436,7 @@ mod tests {
             output.edges[0]
                 .input_stable_keys
                 .iter()
-                .any(|key| key == "summary:tito")
+                .any(|key| key.as_ref() == "summary:tito")
         );
     }
 

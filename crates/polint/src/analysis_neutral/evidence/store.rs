@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use super::facts::{
     EvidenceBundleFact, EvidenceEdgeFact, EvidenceEdgeKind, EvidenceNodeFact, EvidenceNodeKind,
@@ -219,7 +220,7 @@ pub struct EvidenceStore {
     by_edge_kind: BTreeMap<EvidenceEdgeKind, Vec<usize>>,
     by_bundle: BTreeMap<EvidenceBundleId, Vec<usize>>,
     by_diagnostic_stable_key: BTreeMap<StableKeyId, Vec<usize>>,
-    by_source_fact_stable_key: BTreeMap<String, Vec<usize>>,
+    by_source_fact_stable_key: BTreeMap<Arc<str>, Vec<usize>>,
     by_query_mode: BTreeMap<EvidenceQueryMode, Vec<usize>>,
     by_status: BTreeMap<EvidenceStatus, Vec<usize>>,
     by_provenance: BTreeMap<EvidenceProvenance, Vec<usize>>,

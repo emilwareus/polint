@@ -1,4 +1,5 @@
 use std::fmt::Debug;
+use std::sync::Arc;
 
 use super::cache_key::{
     evidence_provider_parameter_digest, evidence_provider_parameter_digest_for_snapshot,
@@ -9,6 +10,7 @@ use super::facts::{
     EvidenceValidation,
 };
 use super::store::EvidenceOutput;
+
 use crate::analysis_api::ProviderManifest;
 use crate::analysis_api::{
     CacheStats, Digest, DigestKind, InputComponent, InputSnapshot, ProviderExecution,
@@ -143,7 +145,7 @@ fn evidence_node_from_data_flow(
         validation: EvidenceValidation::ReferentiallyValidated,
         confidence: EvidenceConfidence::High,
         compact_label: Some(format!("{:?}", node.kind)),
-        source_fact_stable_keys: vec![interner.resolve(node.stable_key).to_string()],
+        source_fact_stable_keys: vec![interner.resolve(node.stable_key)],
         stable_key: stable_key_from_parts(
             interner,
             FactFamily::EvidenceNode,
@@ -178,7 +180,7 @@ fn evidence_edge_from_data_flow(
         summary_stable_key: summary_stable_key.clone(),
         expansion: evidence_expansion(edge, summary_stable_key.as_deref()),
         compact_label: Some(format!("{:?}", edge.kind)),
-        source_fact_stable_keys: std::iter::once(interner.resolve(edge.stable_key).to_string())
+        source_fact_stable_keys: std::iter::once(interner.resolve(edge.stable_key))
             .chain(edge.input_stable_keys.iter().cloned())
             .collect(),
         stable_key: stable_key_from_parts(
@@ -243,8 +245,8 @@ fn derive_control_dependence_evidence(db: &impl AnalysisHost, output: &mut Evide
             confidence: EvidenceConfidence::High,
             compact_label: Some(format!("control:{:?}", dependence.controlling_edge_kind)),
             source_fact_stable_keys: vec![
-                interner.resolve(dependence.stable_key).to_string(),
-                interner.resolve(controlling_edge.stable_key).to_string(),
+                interner.resolve(dependence.stable_key),
+                interner.resolve(controlling_edge.stable_key),
             ],
             stable_key: stable_key_from_parts(
                 interner,
@@ -279,7 +281,7 @@ fn derive_control_dependence_evidence(db: &impl AnalysisHost, output: &mut Evide
             validation: EvidenceValidation::ReferentiallyValidated,
             confidence: EvidenceConfidence::High,
             compact_label: Some("controlled_block".to_string()),
-            source_fact_stable_keys: vec![interner.resolve(dependence.stable_key).to_string()],
+            source_fact_stable_keys: vec![interner.resolve(dependence.stable_key)],
             stable_key: stable_key_from_parts(
                 interner,
                 FactFamily::EvidenceNode,
@@ -308,8 +310,8 @@ fn derive_control_dependence_evidence(db: &impl AnalysisHost, output: &mut Evide
             expansion: EvidenceExpansion::None,
             compact_label: Some(format!("{:?}", dependence.controlling_edge_kind)),
             source_fact_stable_keys: vec![
-                interner.resolve(dependence.stable_key).to_string(),
-                interner.resolve(controlling_edge.stable_key).to_string(),
+                interner.resolve(dependence.stable_key),
+                interner.resolve(controlling_edge.stable_key),
             ],
             stable_key: stable_key_from_parts(
                 interner,
@@ -375,7 +377,7 @@ fn data_flow_edge_kind(kind: DataFlowEdgeKind) -> EvidenceEdgeKind {
     }
 }
 
-fn summary_source_key(edge: &DataFlowEdgeFact) -> Option<String> {
+fn summary_source_key(edge: &DataFlowEdgeFact) -> Option<Arc<str>> {
     edge.input_stable_keys
         .iter()
         .find(|key| is_summary_key(key))

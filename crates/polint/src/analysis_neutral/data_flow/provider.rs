@@ -286,8 +286,8 @@ fn push_source_introduction_edge(
                 .unwrap_or_else(|| "target_parameter_index=unknown".to_string()),
         ],
         input_stable_keys: vec![
-            interner.resolve(boundary.stable_key).to_string(),
-            interner.resolve(place.stable_key).to_string(),
+            interner.resolve(boundary.stable_key),
+            interner.resolve(place.stable_key),
         ],
         stable_key,
     });

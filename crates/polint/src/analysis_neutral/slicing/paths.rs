@@ -317,8 +317,8 @@ pub mod summary {
                 .source_fact_stable_keys
                 .iter()
                 .find(|key| is_callable_key(key))
-                .cloned(),
-            summary_stable_key_text: summary_stable_key,
+                .map(|key| key.to_string()),
+            summary_stable_key_text: summary_stable_key.to_string(),
             input_endpoint: edge.from,
             output_endpoint: edge.to,
             status: edge.status,
@@ -430,12 +430,12 @@ pub mod summary {
                         validation: EvidenceValidation::ReferentiallyValidated,
                         confidence: EvidenceConfidence::Medium,
                         call_site: None,
-                        summary_stable_key: Some("summary:tito".to_string()),
+                        summary_stable_key: Some("summary:tito".into()),
                         expansion,
                         compact_label: Some("data_flow_tito".to_string()),
                         source_fact_stable_keys: vec![
-                            "summary:tito".to_string(),
-                            "callable:fn".to_string(),
+                            "summary:tito".into(),
+                            "callable:fn".into(),
                         ],
                         stable_key: crate::internal_core::stable_key_for_test("edge:summary"),
                     }],

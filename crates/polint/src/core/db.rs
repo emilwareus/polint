@@ -5213,7 +5213,9 @@ impl AnalysisDb {
                 ),
                 (
                     "summary_key",
-                    fact.summary_stable_key.clone().unwrap_or_else(none_value),
+                    fact.summary_stable_key
+                        .as_ref()
+                        .map_or_else(none_value, |key| key.to_string()),
                 ),
                 ("sources", fact.source_fact_stable_keys.join("\n")),
             ]),

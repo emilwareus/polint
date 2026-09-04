@@ -8,6 +8,8 @@ use super::facts::{
 use super::store::{
     DataFlowOutput, next_data_flow_budget_id, next_data_flow_edge_id, next_data_flow_node_id,
 };
+use std::sync::Arc;
+
 use crate::analysis_api::{FactFamily, stable_key_from_parts};
 use crate::analysis_neutral::AnalysisHost;
 use crate::analysis_neutral::ids::{DataFlowBudgetId, DataFlowNodeId, MirBodyId, PlaceId};
@@ -422,7 +424,7 @@ impl<'a, 'b, H: AnalysisHost + ?Sized> LocalFlowBuilder<'a, 'b, H> {
             interner,
             FactFamily::DataFlowNode,
             &[
-                ("operation", self.operation_key(operation)),
+                ("operation", self.operation_key(operation).to_string()),
                 ("node", suffix),
             ],
         );
@@ -476,7 +478,7 @@ impl<'a, 'b, H: AnalysisHost + ?Sized> LocalFlowBuilder<'a, 'b, H> {
             FactFamily::DataFlowEdge,
             &[
                 ("kind", format!("{:?}", draft.kind)),
-                ("operation", self.operation_key(draft.operation)),
+                ("operation", self.operation_key(draft.operation).to_string()),
                 ("from", self.node_key(draft.from)),
                 ("to", self.node_key(draft.to)),
                 ("status", format!("{:?}", draft.status)),
@@ -533,17 +535,17 @@ impl<'a, 'b, H: AnalysisHost + ?Sized> LocalFlowBuilder<'a, 'b, H> {
             .unwrap_or((Language::Unknown, None, None))
     }
 
-    fn place_key(&self, place: PlaceId) -> String {
+    fn place_key(&self, place: PlaceId) -> Arc<str> {
         self.db
             .mir_places()
             .iter()
             .find(|fact| fact.id == place)
-            .map(|place| self.db.resolve_stable_key(place.stable_key).to_string())
-            .unwrap_or_else(|| format!("place:{}", place.0))
+            .map(|place| self.db.resolve_stable_key(place.stable_key))
+            .unwrap_or_else(|| Arc::from(format!("place:{}", place.0)))
     }
 
-    fn operation_key(&self, operation: &MirOperation) -> String {
-        self.db.resolve_stable_key(operation.stable_key).to_string()
+    fn operation_key(&self, operation: &MirOperation) -> Arc<str> {
+        self.db.resolve_stable_key(operation.stable_key)
     }
 
     fn node_key(&self, node: DataFlowNodeId) -> String {
@@ -567,7 +569,7 @@ struct EdgeDraft<'a> {
     provenance: DataFlowProvenance,
     budget: Option<DataFlowBudgetId>,
     evidence: Vec<String>,
-    input_stable_keys: Vec<String>,
+    input_stable_keys: Vec<Arc<str>>,
 }
 
 pub fn budget_fact(
