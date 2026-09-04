@@ -25,7 +25,6 @@ pub enum DominanceMaterialization {
     ImmediateOnly,
 }
 
-
 pub fn derive_reachability(
     interner: &crate::internal_core::StableKeyInterner,
     output: &CfgOutput,

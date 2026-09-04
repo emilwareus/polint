@@ -433,10 +433,7 @@ pub mod summary {
                         summary_stable_key: Some("summary:tito".into()),
                         expansion,
                         compact_label: Some("data_flow_tito".to_string()),
-                        source_fact_stable_keys: vec![
-                            "summary:tito".into(),
-                            "callable:fn".into(),
-                        ],
+                        source_fact_stable_keys: vec!["summary:tito".into(), "callable:fn".into()],
                         stable_key: crate::internal_core::stable_key_for_test("edge:summary"),
                     }],
                     bundles: Vec::new(),

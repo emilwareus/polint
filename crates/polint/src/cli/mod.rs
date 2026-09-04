@@ -2549,9 +2549,7 @@ fn unknowns(root: PathBuf, args: &UnknownsArgs) -> Result<u8> {
         &args.capability,
     );
     taxonomy_rows.extend(
-        crate::analysis::unknown_taxonomy::collect::resource_budget_unknowns(
-            &analysis.diagnostics,
-        ),
+        crate::analysis::unknown_taxonomy::collect::resource_budget_unknowns(&analysis.diagnostics),
     );
     let rows = crate::analysis::unknown_taxonomy::facts::normalize_rows(taxonomy_rows)
         .into_iter()
@@ -2610,9 +2608,11 @@ fn inspect_unknowns(root: PathBuf, args: &InspectUnknownsArgs) -> Result<u8> {
             &analysis.db,
             capability,
         );
-        rows.extend(crate::analysis::unknown_taxonomy::collect::resource_budget_unknowns(
-            &analysis.diagnostics,
-        ));
+        rows.extend(
+            crate::analysis::unknown_taxonomy::collect::resource_budget_unknowns(
+                &analysis.diagnostics,
+            ),
+        );
         crate::analysis::unknown_taxonomy::facts::normalize_rows(rows)
     } else {
         crate::analysis::unknown_taxonomy::collect::all_unknowns_with_diagnostics(

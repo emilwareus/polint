@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use crate::analysis_neutral::cfg::ids::CfgNodeId;
 use crate::analysis_neutral::ids::{

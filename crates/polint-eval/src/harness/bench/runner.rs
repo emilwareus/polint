@@ -147,6 +147,16 @@ fn run_repo_perf_point_with_store_mode(
         },
     };
 
+    // Diagnostics identity: the number the goal actually protects. Printed at
+    // `info` so a measurement run can diff `polint check` output between two
+    // engine revisions without a second harness.
+    tracing::info!(
+        target: "polint::kernel::stage",
+        diagnostics = output.diagnostics.len(),
+        diagnostics_digest = digest_diagnostics(&output.diagnostics),
+        "run diagnostics"
+    );
+
     let budget = budget_counters(&output.db);
 
     Ok(CurvePoint {
@@ -330,7 +340,11 @@ fn run_check_kernel_with_store_mode(
     };
     let plan = match std::env::var(CHILD_CAPABILITIES_ENV) {
         Ok(names) if !names.trim().is_empty() => {
-            let names: Vec<&str> = names.split(',').map(str::trim).filter(|n| !n.is_empty()).collect();
+            let names: Vec<&str> = names
+                .split(',')
+                .map(str::trim)
+                .filter(|n| !n.is_empty())
+                .collect();
             crate::analysis_plan::AnalysisPlan::from_capability_names_for_test(&names)
         }
         _ => crate::analysis_plan::AnalysisPlan::full_pipeline_for_test(),
