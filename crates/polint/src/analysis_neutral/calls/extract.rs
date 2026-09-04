@@ -449,7 +449,6 @@ fn call_site_stable_key(
     let interner = &interner_handle;
     interner.intern(
         semantic_stable_key(
-            interner,
             FactFamily::CallSite,
             &[
                 ("language", format!("{:?}", body.language)),

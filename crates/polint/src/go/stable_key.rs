@@ -12,10 +12,6 @@ impl StableFactKey {
     }
 }
 
-pub(crate) fn semantic_stable_key(
-    interner: &StableKeyInterner,
-    family: FactFamily,
-    parts: &[(&str, String)],
-) -> StableFactKey {
-    StableFactKey(stable_key_text_from_parts(interner, family, parts))
+pub(crate) fn semantic_stable_key(family: FactFamily, parts: &[(&str, String)]) -> StableFactKey {
+    StableFactKey(stable_key_text_from_parts(family, parts))
 }

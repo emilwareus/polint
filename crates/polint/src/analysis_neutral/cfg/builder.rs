@@ -614,7 +614,7 @@ fn stable_key(
     family: FactFamily,
     parts: &[(&str, String)],
 ) -> StableKeyId {
-    interner.intern(semantic_stable_key(interner, family, parts).into_string())
+    interner.intern(semantic_stable_key(family, parts).into_string())
 }
 
 #[cfg(test)]

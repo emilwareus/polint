@@ -5781,7 +5781,6 @@ impl AnalysisDb {
             .map(|metadata| interner.resolve(metadata.stable_key).to_string())
             .unwrap_or_else(|| {
                 stable_key_text_from_parts(
-                    interner,
                     FactFamily::Function,
                     &[
                         ("path", self.path_for(span.file)),
@@ -6019,7 +6018,6 @@ impl AnalysisDb {
         }));
         stable_keys.sort();
         let aggregate_text = stable_key_text_from_parts(
-            &interner,
             FactFamily::SemanticGraph,
             &[("rows", stable_keys.join("\n"))],
         );

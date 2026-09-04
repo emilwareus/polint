@@ -293,7 +293,6 @@ fn stable_function_text(
                 .map(|metadata| db.resolve_stable_key(metadata.stable_key).to_string())
                 .unwrap_or_else(|| {
                     stable_key_text_from_parts(
-                        &db.stable_key_interner(),
                         FactFamily::Function,
                         &[
                             ("path", db.path_for(function.file)),

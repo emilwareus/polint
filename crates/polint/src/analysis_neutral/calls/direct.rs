@@ -428,7 +428,6 @@ fn target_stable_key(
 ) -> crate::internal_core::StableKeyId {
     interner.intern(
         semantic_stable_key(
-            interner,
             FactFamily::CallTarget,
             &[
                 ("site", interner.resolve(site.stable_key).to_string()),
@@ -450,7 +449,6 @@ fn lexical_target_stable_key(
 ) -> crate::internal_core::StableKeyId {
     interner.intern(
         semantic_stable_key(
-            interner,
             FactFamily::CallTarget,
             &[
                 ("site", interner.resolve(site.stable_key).to_string()),

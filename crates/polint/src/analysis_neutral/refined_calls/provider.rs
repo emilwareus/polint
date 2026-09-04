@@ -763,7 +763,6 @@ fn relation_stable_key(
             .find(|function| function.id.0 == run_id)
             .map(|function| {
                 stable_key_text_from_parts(
-                    interner,
                     FactFamily::Function,
                     &[
                         ("path", db.path_for(function.file)),

@@ -6,7 +6,7 @@ use super::facts::{
 };
 use super::store::PointsToOutput;
 use super::vars;
-use crate::analysis_api::{FactFamily, stable_key_from_parts};
+use crate::analysis_api::{FactFamily, stable_key_from_parts, stable_key_text_from_parts};
 use crate::analysis_neutral::ids::{ObjectTokenId, PointsToSetId, PtVarId};
 use crate::analysis_neutral::solver::budget::BudgetReason;
 
@@ -253,15 +253,14 @@ impl<'a> Solver<'a> {
         }
         let var = vars::dynamic_var(self.object_slots.len());
         let object_identity = self.semantic_object_identity(object);
-        let slot_identity = stable_key_from_parts(
-            self.interner,
+        let slot_identity = stable_key_text_from_parts(
             FactFamily::PointsToSet,
             &[("object", object_identity), ("slot", slot.to_string())],
         );
         self.variable_identities
             .entry(var)
             .or_default()
-            .insert(self.interner.resolve(slot_identity).to_string());
+            .insert(slot_identity);
         self.object_slots.insert(key, var);
         self.dynamic_vars.insert(var);
         if self.dynamic_vars.len() > self.budget.max_dynamic_vars {
@@ -316,27 +315,25 @@ impl<'a> Solver<'a> {
     }
 
     fn record_variable_identity(&mut self, variable: PtVarId, key: &str, role: &str) {
-        let fragment = stable_key_from_parts(
-            self.interner,
+        let fragment = stable_key_text_from_parts(
             FactFamily::PointsToSet,
             &[("relation", key.to_string()), ("role", role.to_string())],
         );
         self.variable_identities
             .entry(variable)
             .or_default()
-            .insert(self.interner.resolve(fragment).to_string());
+            .insert(fragment);
     }
 
     fn record_object_identity(&mut self, object: ObjectTokenId, key: &str, role: &str) {
-        let fragment = stable_key_from_parts(
-            self.interner,
+        let fragment = stable_key_text_from_parts(
             FactFamily::PointsToSet,
             &[("relation", key.to_string()), ("role", role.to_string())],
         );
         self.object_identities
             .entry(object)
             .or_default()
-            .insert(self.interner.resolve(fragment).to_string());
+            .insert(fragment);
     }
 
     fn semantic_variable_identity(&self, variable: PtVarId) -> String {

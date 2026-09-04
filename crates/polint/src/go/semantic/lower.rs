@@ -320,7 +320,6 @@ fn row_stable_key(
     }
     interner.intern(
         semantic_stable_key(
-            interner,
             FactFamily::SemanticImport,
             &[
                 ("go_kind", kind.to_string()),

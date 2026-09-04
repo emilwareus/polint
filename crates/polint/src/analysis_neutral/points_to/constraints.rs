@@ -1,7 +1,7 @@
 use super::facts::{
     PointsToConstraintFact, PointsToConstraintKind, PointsToPrecision, PointsToStatus,
 };
-use crate::analysis_api::{FactFamily, stable_key_from_parts};
+use crate::analysis_api::{FactFamily, stable_key_from_parts, stable_key_text_from_parts};
 use crate::analysis_neutral::access_paths::facts::{AccessPathFact, AccessPathProjection};
 use crate::analysis_neutral::ids::{PointsToConstraintId, PtVarId};
 use crate::analysis_neutral::points_to::vars;
@@ -139,7 +139,7 @@ impl ConstraintBuilder {
             for (index, projection) in path.projections.iter().enumerate() {
                 projection_prefix.push(projection_identity(projection));
                 let source_identity =
-                    projection_source_identity(interner, &path_identity, &projection_prefix);
+                    projection_source_identity(&path_identity, &projection_prefix);
                 let dst = if index + 1 == path.projections.len() {
                     access_path_var(path)
                 } else {
@@ -296,25 +296,18 @@ fn access_path_var(path: &AccessPathFact) -> PtVarId {
     vars::access_path_var(path.id)
 }
 
-fn projection_source_identity(
-    interner: &crate::internal_core::StableKeyInterner,
-    path_identity: &str,
-    projection_prefix: &[String],
-) -> String {
+fn projection_source_identity(path_identity: &str, projection_prefix: &[String]) -> String {
     let encoded_prefix = projection_prefix
         .iter()
         .map(|projection| format!("{}:{projection}", projection.len()))
         .collect::<String>();
-    interner
-        .resolve(stable_key_from_parts(
-            interner,
-            FactFamily::AccessPath,
-            &[
-                ("path", path_identity.to_string()),
-                ("projection_prefix", encoded_prefix),
-            ],
-        ))
-        .to_string()
+    stable_key_text_from_parts(
+        FactFamily::AccessPath,
+        &[
+            ("path", path_identity.to_string()),
+            ("projection_prefix", encoded_prefix),
+        ],
+    )
 }
 
 fn projection_identity(projection: &AccessPathProjection) -> String {

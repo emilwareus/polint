@@ -1500,10 +1500,7 @@ fn call_site_metadata(
             ("kind", call_syntax_kind_label(fact.kind).to_string()),
             ("language", language_label(fact.language).to_string()),
             ("file_key", source_file_key(db, fact.file)),
-            (
-                "caller_key",
-                function_key(db, interner, fact.caller, "", &fact.span),
-            ),
+            ("caller_key", function_key(db, fact.caller, "", &fact.span)),
             (
                 "owner_symbol_key",
                 fact.owner_symbol
@@ -1669,7 +1666,6 @@ fn source_file_key(
 
 fn function_key(
     db: &(impl AnalysisHost + ?Sized),
-    interner: &StableKeyInterner,
     function: crate::internal_core::FunctionId,
     name: &str,
     span: &crate::internal_core::Span,
@@ -1678,7 +1674,6 @@ fn function_key(
         .map(|metadata| db.resolve_stable_key(metadata.stable_key).to_string())
         .unwrap_or_else(|| {
             stable_key_text_from_parts(
-                interner,
                 FactFamily::Function,
                 &[
                     ("path", db.path_for(span.file)),

@@ -476,7 +476,7 @@ impl TsMirLowering {
                 closure_bodies.clone(),
                 closure_capture_names.clone(),
             );
-            function_lowering.lower_parameters(interner, &function.parameters, &mut self.places);
+            function_lowering.lower_parameters(&function.parameters, &mut self.places);
             match function.body {
                 CandidateBody::Statements(statements) => function_lowering.lower_statements(
                     interner,
@@ -524,9 +524,8 @@ impl TsMirLowering {
         span: Span,
     ) -> MirBody {
         let id = MirBodyId(self.bodies.len() as u64);
-        let owner_stable_key_text = owner_stable_key(interner, file, function);
+        let owner_stable_key_text = owner_stable_key(file, function);
         let stable_key_text = semantic_stable_key(
-            interner,
             FactFamily::MirBody,
             &[
                 ("language", language_label(file.language).to_string()),
@@ -1371,12 +1370,7 @@ impl<'source> FunctionLowering<'source> {
         }
     }
 
-    fn lower_parameters(
-        &mut self,
-        interner: &crate::internal_core::StableKeyInterner,
-        names: &[String],
-        places: &mut PlaceTableBuilder,
-    ) {
+    fn lower_parameters(&mut self, names: &[String], places: &mut PlaceTableBuilder) {
         for (index, name) in names.iter().enumerate() {
             let root = PlaceRoot::Parameter {
                 function: self.function,
@@ -1384,7 +1378,7 @@ impl<'source> FunctionLowering<'source> {
                 name: Some(name.clone()),
             };
             self.parameters.insert(name.clone(), root.clone());
-            self.insert_place(interner, places, root, Vec::new(), PlaceStatus::Resolved);
+            self.insert_place(places, root, Vec::new(), PlaceStatus::Resolved);
         }
     }
 
@@ -1642,7 +1636,7 @@ impl<'source> FunctionLowering<'source> {
                 if let Some(handler) = &statement.handler {
                     if let Some(param) = &handler.param {
                         if let Some(name) = binding_identifier_name(&param.pattern) {
-                            self.insert_local(interner, places, &name);
+                            self.insert_local(places, &name);
                         } else {
                             self.push_unsupported(
                                 interner,
@@ -1768,7 +1762,6 @@ impl<'source> FunctionLowering<'source> {
             return;
         };
         let key = self.insert_local_typed(
-            interner,
             places,
             &name,
             declarator
@@ -2039,11 +2032,9 @@ impl<'source> FunctionLowering<'source> {
                     .collect(),
             }),
             Expression::ArrowFunctionExpression(function) => {
-                self.closure_value(interner, function.span, places)
+                self.closure_value(function.span, places)
             }
-            Expression::FunctionExpression(function) => {
-                self.closure_value(interner, function.span, places)
-            }
+            Expression::FunctionExpression(function) => self.closure_value(function.span, places),
             Expression::CallExpression(call) => self
                 .lower_call(interner, call, places, operations, unsupported)
                 .map(ValueDraft::PlaceKey),
@@ -2055,7 +2046,6 @@ impl<'source> FunctionLowering<'source> {
 
     fn closure_value(
         &self,
-        interner: &crate::internal_core::StableKeyInterner,
         span: oxc_span::Span,
         places: &mut PlaceTableBuilder,
     ) -> Option<ValueDraft> {
@@ -2071,13 +2061,7 @@ impl<'source> FunctionLowering<'source> {
                     .get(name)
                     .or_else(|| self.parameters.get(name))
                     .map(|root| {
-                        self.insert_place(
-                            interner,
-                            places,
-                            root.clone(),
-                            Vec::new(),
-                            PlaceStatus::Resolved,
-                        )
+                        self.insert_place(places, root.clone(), Vec::new(), PlaceStatus::Resolved)
                     })
             })
             .collect();
@@ -2094,12 +2078,9 @@ impl<'source> FunctionLowering<'source> {
         assignment_destination: bool,
     ) -> Option<PlaceShape> {
         match expression {
-            Expression::Identifier(identifier) => self.lower_identifier(
-                interner,
-                identifier.name.as_str(),
-                places,
-                assignment_destination,
-            ),
+            Expression::Identifier(identifier) => {
+                self.lower_identifier(identifier.name.as_str(), places, assignment_destination)
+            }
             Expression::StaticMemberExpression(member) => self.lower_static_member(
                 interner,
                 member,
@@ -2217,7 +2198,6 @@ impl<'source> FunctionLowering<'source> {
                     }
                 }
                 Some(self.temporary_shape_typed(
-                    interner,
                     places,
                     expression.span(),
                     TypeShape::Object { shape_id: None },
@@ -2258,7 +2238,6 @@ impl<'source> FunctionLowering<'source> {
                     }
                 }
                 Some(self.temporary_shape_typed(
-                    interner,
                     places,
                     expression.span(),
                     TypeShape::Structural {
@@ -2337,7 +2316,6 @@ impl<'source> FunctionLowering<'source> {
                     false,
                 );
                 Some(self.temporary_shape_typed(
-                    interner,
                     places,
                     binary.span,
                     TypeShape::Unknown {
@@ -2354,7 +2332,7 @@ impl<'source> FunctionLowering<'source> {
                     unsupported,
                     false,
                 );
-                Some(self.temporary_shape(interner, places, unary.span))
+                Some(self.temporary_shape(places, unary.span))
             }
             Expression::ConditionalExpression(conditional) => {
                 self.push_branch(
@@ -2428,7 +2406,7 @@ impl<'source> FunctionLowering<'source> {
                         false,
                     );
                 }
-                Some(self.temporary_shape(interner, places, template.span))
+                Some(self.temporary_shape(places, template.span))
             }
             Expression::TaggedTemplateExpression(tagged) => self.lower_tagged_template_expression(
                 interner,
@@ -2449,7 +2427,7 @@ impl<'source> FunctionLowering<'source> {
                         false,
                     );
                 }
-                last.or_else(|| Some(self.temporary_shape(interner, places, sequence.span)))
+                last.or_else(|| Some(self.temporary_shape(places, sequence.span)))
             }
             Expression::ChainExpression(chain) => self.lower_chain_element(
                 interner,
@@ -2508,7 +2486,7 @@ impl<'source> FunctionLowering<'source> {
                         false,
                     );
                 }
-                Some(self.temporary_shape(interner, places, import_expression.span))
+                Some(self.temporary_shape(places, import_expression.span))
             }
             Expression::YieldExpression(yield_expression) => {
                 let shape = yield_expression.argument.as_ref().and_then(|argument| {
@@ -2573,12 +2551,11 @@ impl<'source> FunctionLowering<'source> {
                     unsupported,
                     false,
                 );
-                Some(self.temporary_shape(interner, places, private_in.span))
+                Some(self.temporary_shape(places, private_in.span))
             }
             Expression::ArrowFunctionExpression(function) => {
-                let value = self.closure_value(interner, function.span, places)?;
+                let value = self.closure_value(function.span, places)?;
                 let shape = self.temporary_shape_typed(
-                    interner,
                     places,
                     function.span,
                     TypeShape::Callable {
@@ -2596,9 +2573,8 @@ impl<'source> FunctionLowering<'source> {
                 Some(shape)
             }
             Expression::FunctionExpression(function) => {
-                let value = self.closure_value(interner, function.span, places)?;
+                let value = self.closure_value(function.span, places)?;
                 let shape = self.temporary_shape_typed(
-                    interner,
                     places,
                     function.span,
                     TypeShape::Callable {
@@ -2624,24 +2600,21 @@ impl<'source> FunctionLowering<'source> {
                     "class expression",
                     (Vec::new(), ConservativeAction::HavocAffectedPlaces),
                 );
-                Some(self.temporary_shape(interner, places, class.span))
+                Some(self.temporary_shape(places, class.span))
             }
             Expression::ThisExpression(this_expression) => Some(self.keyword_shape(
-                interner,
                 places,
                 "this",
                 this_expression.span,
                 assignment_destination,
             )),
             Expression::Super(super_expression) => Some(self.keyword_shape(
-                interner,
                 places,
                 "super",
                 super_expression.span,
                 assignment_destination,
             )),
             Expression::MetaProperty(meta) => Some(self.keyword_shape(
-                interner,
                 places,
                 &format!("{}.{}", meta.meta.name, meta.property.name),
                 meta.span,
@@ -2667,7 +2640,7 @@ impl<'source> FunctionLowering<'source> {
                     );
                 }
                 self.lower_jsx_element(interner, element, places, operations, unsupported);
-                Some(self.temporary_shape(interner, places, element.span))
+                Some(self.temporary_shape(places, element.span))
             }
             Expression::JSXFragment(fragment) => {
                 self.lower_jsx_children(
@@ -2677,7 +2650,7 @@ impl<'source> FunctionLowering<'source> {
                     operations,
                     unsupported,
                 );
-                Some(self.temporary_shape(interner, places, fragment.span))
+                Some(self.temporary_shape(places, fragment.span))
             }
             Expression::V8IntrinsicExpression(intrinsic) => {
                 self.push_unsupported(
@@ -2688,20 +2661,14 @@ impl<'source> FunctionLowering<'source> {
                     "v8 intrinsic",
                     (Vec::new(), ConservativeAction::HavocAffectedPlaces),
                 );
-                Some(self.temporary_shape(interner, places, intrinsic.span))
+                Some(self.temporary_shape(places, intrinsic.span))
             }
-            Expression::BigIntLiteral(literal) => {
-                Some(self.temporary_shape(interner, places, literal.span))
-            }
-            Expression::RegExpLiteral(literal) => {
-                Some(self.temporary_shape(interner, places, literal.span))
-            }
+            Expression::BigIntLiteral(literal) => Some(self.temporary_shape(places, literal.span)),
+            Expression::RegExpLiteral(literal) => Some(self.temporary_shape(places, literal.span)),
             Expression::BooleanLiteral(_)
             | Expression::NullLiteral(_)
             | Expression::NumericLiteral(_)
-            | Expression::StringLiteral(_) => {
-                Some(self.temporary_shape(interner, places, expression.span()))
-            }
+            | Expression::StringLiteral(_) => Some(self.temporary_shape(places, expression.span())),
         }
     }
 
@@ -2785,14 +2752,13 @@ impl<'source> FunctionLowering<'source> {
         shape.projections.push(PlaceProjection::Unknown {
             evidence: format!("#{}", private.field.name),
         });
-        shape.key = self.insert_shape(interner, places, &shape);
-        self.insert_temporary(interner, places, private.span, PlaceStatus::Partial);
+        shape.key = self.insert_shape(places, &shape);
+        self.insert_temporary(places, private.span, PlaceStatus::Partial);
         Some(shape)
     }
 
     fn keyword_shape(
         &self,
-        interner: &crate::internal_core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         evidence: &str,
         span: oxc_span::Span,
@@ -2801,14 +2767,8 @@ impl<'source> FunctionLowering<'source> {
         let root = PlaceRoot::Unknown {
             evidence: evidence.to_string(),
         };
-        let key = self.insert_place(
-            interner,
-            places,
-            root.clone(),
-            Vec::new(),
-            PlaceStatus::Unknown,
-        );
-        self.insert_temporary(interner, places, span, PlaceStatus::Partial);
+        let key = self.insert_place(places, root.clone(), Vec::new(), PlaceStatus::Unknown);
+        self.insert_temporary(places, span, PlaceStatus::Partial);
         PlaceShape {
             root,
             projections: Vec::new(),
@@ -3002,8 +2962,8 @@ impl<'source> FunctionLowering<'source> {
         shape
             .projections
             .push(PlaceProjection::Property(member.property.name.to_string()));
-        shape.key = self.insert_shape(interner, places, &shape);
-        self.insert_temporary(interner, places, member.span, PlaceStatus::Partial);
+        shape.key = self.insert_shape(places, &shape);
+        self.insert_temporary(places, member.span, PlaceStatus::Partial);
         Some(shape)
     }
 
@@ -3035,7 +2995,7 @@ impl<'source> FunctionLowering<'source> {
             false,
         )?;
         shape.projections.push(index_projection(&member.expression));
-        shape.key = self.insert_shape(interner, places, &shape);
+        shape.key = self.insert_shape(places, &shape);
         if matches!(
             shape.projections.last(),
             Some(PlaceProjection::IndexUnknown { .. })
@@ -3060,13 +3020,12 @@ impl<'source> FunctionLowering<'source> {
             unsupported,
             false,
         );
-        self.insert_temporary(interner, places, member.span, PlaceStatus::Partial);
+        self.insert_temporary(places, member.span, PlaceStatus::Partial);
         Some(shape)
     }
 
     fn lower_identifier(
         &self,
-        interner: &crate::internal_core::StableKeyInterner,
         name: &str,
         places: &mut PlaceTableBuilder,
         assignment_destination: bool,
@@ -3097,7 +3056,7 @@ impl<'source> FunctionLowering<'source> {
             status,
             key: String::new(),
         };
-        shape.key = self.insert_shape(interner, places, &shape);
+        shape.key = self.insert_shape(places, &shape);
         Some(shape)
     }
 
@@ -3111,7 +3070,7 @@ impl<'source> FunctionLowering<'source> {
     ) -> Option<PlaceShape> {
         match target {
             oxc_ast::ast::AssignmentTarget::AssignmentTargetIdentifier(identifier) => {
-                self.lower_identifier(interner, identifier.name.as_str(), places, true)
+                self.lower_identifier(identifier.name.as_str(), places, true)
             }
             oxc_ast::ast::AssignmentTarget::StaticMemberExpression(member) => {
                 self.lower_static_member(interner, member, places, operations, unsupported, true)
@@ -3181,7 +3140,7 @@ impl<'source> FunctionLowering<'source> {
     ) -> Option<PlaceShape> {
         match target {
             oxc_ast::ast::SimpleAssignmentTarget::AssignmentTargetIdentifier(identifier) => {
-                self.lower_identifier(interner, identifier.name.as_str(), places, true)
+                self.lower_identifier(identifier.name.as_str(), places, true)
             }
             oxc_ast::ast::SimpleAssignmentTarget::StaticMemberExpression(member) => {
                 self.lower_static_member(interner, member, places, operations, unsupported, true)
@@ -3231,18 +3190,12 @@ impl<'source> FunctionLowering<'source> {
         }
     }
 
-    fn insert_local(
-        &mut self,
-        interner: &crate::internal_core::StableKeyInterner,
-        places: &mut PlaceTableBuilder,
-        name: &str,
-    ) -> String {
-        self.insert_local_typed(interner, places, name, None)
+    fn insert_local(&mut self, places: &mut PlaceTableBuilder, name: &str) -> String {
+        self.insert_local_typed(places, name, None)
     }
 
     fn insert_local_typed(
         &mut self,
-        interner: &crate::internal_core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         name: &str,
         ty: Option<TypeShape>,
@@ -3252,24 +3205,11 @@ impl<'source> FunctionLowering<'source> {
             name: name.to_string(),
         };
         self.locals.insert(name.to_string(), root.clone());
-        self.insert_typed_place(
-            interner,
-            places,
-            root,
-            Vec::new(),
-            ty,
-            PlaceStatus::Resolved,
-        )
+        self.insert_typed_place(places, root, Vec::new(), ty, PlaceStatus::Resolved)
     }
 
-    fn temporary_shape(
-        &self,
-        interner: &crate::internal_core::StableKeyInterner,
-        places: &mut PlaceTableBuilder,
-        span: oxc_span::Span,
-    ) -> PlaceShape {
+    fn temporary_shape(&self, places: &mut PlaceTableBuilder, span: oxc_span::Span) -> PlaceShape {
         self.temporary_shape_typed(
-            interner,
             places,
             span,
             TypeShape::Unknown {
@@ -3280,7 +3220,6 @@ impl<'source> FunctionLowering<'source> {
 
     fn temporary_shape_typed(
         &self,
-        interner: &crate::internal_core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         span: oxc_span::Span,
         ty: TypeShape,
@@ -3290,7 +3229,6 @@ impl<'source> FunctionLowering<'source> {
             ordinal: span.start,
         };
         let key = self.insert_typed_place(
-            interner,
             places,
             root.clone(),
             Vec::new(),
@@ -3307,13 +3245,11 @@ impl<'source> FunctionLowering<'source> {
 
     fn insert_temporary(
         &self,
-        interner: &crate::internal_core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         span: oxc_span::Span,
         status: PlaceStatus,
     ) -> String {
         self.insert_place(
-            interner,
             places,
             PlaceRoot::Temporary {
                 body: self.body,
@@ -3324,14 +3260,8 @@ impl<'source> FunctionLowering<'source> {
         )
     }
 
-    fn insert_shape(
-        &self,
-        interner: &crate::internal_core::StableKeyInterner,
-        places: &mut PlaceTableBuilder,
-        shape: &PlaceShape,
-    ) -> String {
+    fn insert_shape(&self, places: &mut PlaceTableBuilder, shape: &PlaceShape) -> String {
         self.insert_place(
-            interner,
             places,
             shape.root.clone(),
             shape.projections.clone(),
@@ -3341,18 +3271,16 @@ impl<'source> FunctionLowering<'source> {
 
     fn insert_place(
         &self,
-        interner: &crate::internal_core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         root: PlaceRoot,
         projections: Vec<PlaceProjection>,
         status: PlaceStatus,
     ) -> String {
-        self.insert_typed_place(interner, places, root, projections, None, status)
+        self.insert_typed_place(places, root, projections, None, status)
     }
 
     fn insert_typed_place(
         &self,
-        interner: &crate::internal_core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         root: PlaceRoot,
         projections: Vec<PlaceProjection>,
@@ -3360,7 +3288,6 @@ impl<'source> FunctionLowering<'source> {
         status: PlaceStatus,
     ) -> String {
         places.insert_typed_with_context(
-            interner,
             &self.stable_context,
             PlaceInsert {
                 language: self.language,
@@ -3439,7 +3366,6 @@ impl<'source> FunctionLowering<'source> {
         let span = normalized_call_expression_span(self.source, call);
         let site = call_site_for_span(span);
         let return_key = self.insert_place(
-            interner,
             places,
             PlaceRoot::CallReturn { call: site },
             Vec::new(),
@@ -3499,7 +3425,6 @@ impl<'source> FunctionLowering<'source> {
         let span = normalized_tagged_template_span(tagged);
         let site = call_site_for_span(span);
         let return_key = self.insert_place(
-            interner,
             places,
             PlaceRoot::CallReturn { call: site },
             Vec::new(),
@@ -3520,7 +3445,7 @@ impl<'source> FunctionLowering<'source> {
             |evidence| ValueDraft::Unknown { evidence },
         );
         // The strings array occupies argument slot 0; interpolations follow.
-        let mut arguments = vec![self.temporary_shape(interner, places, span).key];
+        let mut arguments = vec![self.temporary_shape(places, span).key];
         for expression in &tagged.quasi.expressions {
             if let Some(shape) =
                 self.lower_expression(interner, expression, places, operations, unsupported, false)
@@ -3570,7 +3495,6 @@ impl<'source> FunctionLowering<'source> {
         let span = normalized_new_expression_span(self.source, expression);
         let site = call_site_for_span(span);
         let return_key = self.insert_place(
-            interner,
             places,
             PlaceRoot::CallReturn { call: site },
             Vec::new(),
@@ -3769,13 +3693,8 @@ impl OperationDraft {
         pair: (OperationKindDraft, MirStatus),
     ) -> Self {
         let (kind, status) = pair;
-        let stable_key = interner.intern(operation_stable_key(
-            interner,
-            body_stable_key,
-            ordinal,
-            &span,
-            &kind,
-        ));
+        let stable_key =
+            interner.intern(operation_stable_key(body_stable_key, ordinal, &span, &kind));
         Self {
             id,
             body,
@@ -4128,7 +4047,7 @@ impl UnsupportedDraft {
             conservative_action: self.conservative_action,
             precision: UnsupportedPrecision::Unsupported,
             status: MirStatus::Unsupported,
-            stable_key: interner.intern(unsupported_stable_key(interner, self)),
+            stable_key: interner.intern(unsupported_stable_key(self)),
         }
     }
 }
@@ -4188,7 +4107,6 @@ fn unsupported_domains_for(construct: &str) -> Vec<UnsupportedDomain> {
 }
 
 fn operation_stable_key(
-    interner: &crate::internal_core::StableKeyInterner,
     body_stable_key: &str,
     ordinal: u32,
     span: &Span,
@@ -4209,7 +4127,7 @@ fn operation_stable_key(
         .iter()
         .map(|(label, value)| (*label, value.clone()))
         .collect::<Vec<_>>();
-    semantic_stable_key(interner, FactFamily::MirOperation, &borrowed).into_string()
+    semantic_stable_key(FactFamily::MirOperation, &borrowed).into_string()
 }
 
 fn operation_place_label(index: usize) -> &'static str {
@@ -4222,12 +4140,8 @@ fn operation_place_label(index: usize) -> &'static str {
     }
 }
 
-fn unsupported_stable_key(
-    interner: &crate::internal_core::StableKeyInterner,
-    draft: &UnsupportedDraft,
-) -> String {
+fn unsupported_stable_key(draft: &UnsupportedDraft) -> String {
     semantic_stable_key(
-        interner,
         FactFamily::UnsupportedSemantic,
         &[
             ("language", language_label(draft.language).to_string()),
@@ -4348,13 +4262,8 @@ fn span_contains(outer: &Span, inner: &Span) -> bool {
     outer.start_byte <= inner.start_byte && outer.end_byte >= inner.end_byte
 }
 
-fn owner_stable_key(
-    interner: &crate::internal_core::StableKeyInterner,
-    file: &SourceFile,
-    function: &FunctionFact,
-) -> String {
+fn owner_stable_key(file: &SourceFile, function: &FunctionFact) -> String {
     semantic_stable_key(
-        interner,
         FactFamily::Function,
         &[
             ("language", language_label(file.language).to_string()),

@@ -74,7 +74,6 @@ impl SemanticGraphBuilder {
         let target_key = self.node_key_for(target);
         let stable_key = interner.intern(
             semantic_stable_key(
-                interner,
                 FactFamily::Reference,
                 &[
                     ("edge_kind", kind.as_str().to_string()),
@@ -102,7 +101,6 @@ impl SemanticGraphBuilder {
     ) {
         let stable_key = interner.intern(
             semantic_stable_key(
-                interner,
                 FactFamily::PointsToConstraint,
                 &[
                     ("constraint_kind", kind.as_str().to_string()),
@@ -148,7 +146,7 @@ impl SemanticGraphBuilder {
         let interner_handle = db.stable_key_interner();
         let interner = &interner_handle;
         for function in db.functions() {
-            let key = function_node_key(interner, db, function);
+            let key = function_node_key(db, function);
             self.intern_node(interner, NodeKind::Function(function.id), key);
         }
         for package in db.packages() {
@@ -156,13 +154,11 @@ impl SemanticGraphBuilder {
             self.intern_node(interner, NodeKind::Package(package.id), key);
         }
         for site in db.call_sites() {
-            let key =
-                node_key_from_identity(interner, "callsite", &interner.resolve(site.stable_key));
+            let key = node_key_from_identity("callsite", &interner.resolve(site.stable_key));
             self.intern_node(interner, NodeKind::Callsite(site.id), key);
         }
         for scope in db.semantic_scopes() {
-            let key =
-                node_key_from_identity(interner, "scope", &interner.resolve(scope.stable_key));
+            let key = node_key_from_identity("scope", &interner.resolve(scope.stable_key));
             self.intern_node(interner, NodeKind::Scope(ScopeId(scope.id.0)), key);
         }
     }
@@ -173,7 +169,7 @@ impl SemanticGraphBuilder {
         db: &impl AnalysisHost,
         function: &FunctionFact,
     ) -> Option<SemanticNodeId> {
-        let key = function_node_key(interner, db, function);
+        let key = function_node_key(db, function);
         self.node_by_key.get(&interner.intern(key)).copied()
     }
 
@@ -194,8 +190,7 @@ impl SemanticGraphBuilder {
             .collect();
 
         for site in db.call_sites() {
-            let site_key =
-                node_key_from_identity(interner, "callsite", &interner.resolve(site.stable_key));
+            let site_key = node_key_from_identity("callsite", &interner.resolve(site.stable_key));
             let Some(&callsite_node) = self.node_by_key.get(&interner.intern(site_key)) else {
                 continue;
             };
@@ -262,8 +257,7 @@ impl SemanticGraphBuilder {
             let Some(package) = scope.package else {
                 continue;
             };
-            let scope_key =
-                node_key_from_identity(&interner, "scope", &interner.resolve(scope.stable_key));
+            let scope_key = node_key_from_identity("scope", &interner.resolve(scope.stable_key));
             let Some(scope_node) = self.node_for_key(&interner, &scope_key) else {
                 continue;
             };
@@ -322,12 +316,12 @@ impl SemanticGraphBuilder {
             let dst_node = self.intern_node(
                 interner,
                 NodeKind::Place(dst_place),
-                place_node_key(interner, dst_stable),
+                place_node_key(dst_stable),
             );
             let src_node = self.intern_node(
                 interner,
                 NodeKind::Place(*src_place),
-                place_node_key(interner, src_stable),
+                place_node_key(src_stable),
             );
             self.push_constraint(
                 interner,
@@ -350,14 +344,9 @@ impl SemanticGraphBuilder {
 }
 
 /// Compose a function node key from its stable source identity.
-pub fn function_node_key(
-    interner: &StableKeyInterner,
-    db: &impl AnalysisHost,
-    function: &FunctionFact,
-) -> String {
+pub fn function_node_key(db: &impl AnalysisHost, function: &FunctionFact) -> String {
     let path = db.path_for(function.file);
     semantic_stable_key(
-        interner,
         FactFamily::Function,
         &[
             ("node_kind", "function".to_string()),
@@ -370,10 +359,8 @@ pub fn function_node_key(
 }
 
 pub fn package_node_key(db: &impl AnalysisHost, package: &PackageFact) -> String {
-    let interner = db.stable_key_interner();
     let path = db.path_for(package.file);
     semantic_stable_key(
-        &interner,
         FactFamily::Package,
         &[
             ("node_kind", "package".to_string()),
@@ -384,13 +371,8 @@ pub fn package_node_key(db: &impl AnalysisHost, package: &PackageFact) -> String
     .into_string()
 }
 
-pub fn node_key_from_identity(
-    interner: &StableKeyInterner,
-    node_kind: &str,
-    identity: &str,
-) -> String {
+pub fn node_key_from_identity(node_kind: &str, identity: &str) -> String {
     semantic_stable_key(
-        interner,
         FactFamily::Scope,
         &[
             ("node_kind", node_kind.to_string()),
@@ -400,9 +382,8 @@ pub fn node_key_from_identity(
     .into_string()
 }
 
-pub fn place_node_key(interner: &StableKeyInterner, place_stable_key: &str) -> String {
+pub fn place_node_key(place_stable_key: &str) -> String {
     semantic_stable_key(
-        interner,
         FactFamily::Place,
         &[
             ("node_kind", "place".to_string()),

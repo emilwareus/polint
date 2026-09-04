@@ -479,14 +479,24 @@ pub fn stable_key_from_parts<V: AsRef<str>>(
     interner.intern(text)
 }
 
+/// Canonical stable-key text for `family` and `parts`, **without interning it**.
+///
+/// Most callers want the text: to embed in a larger composed key, to feed a
+/// payload digest, or to key a local map. Routing them through the interner
+/// retained one key per call for the whole run, because interning is permanent
+/// and these keys are never a fact's identity. The text produced here is
+/// byte-identical to what [`stable_key_from_parts`] interns.
 pub fn stable_key_text_from_parts<V: AsRef<str>>(
-    interner: &StableKeyInterner,
     family: FactFamily,
     parts: &[(&str, V)],
 ) -> String {
-    interner
-        .resolve(stable_key_from_parts(interner, family, parts))
-        .to_string()
+    let mut borrowed = parts
+        .iter()
+        .map(|(label, value)| (*label, value.as_ref()))
+        .collect::<Vec<_>>();
+    let mut text = String::new();
+    write_stable_key_text(&mut text, family, &mut borrowed);
+    text
 }
 
 /// Writes the canonical stable-key text for `family` and `parts` into `buffer`,
