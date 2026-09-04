@@ -5,7 +5,7 @@ set -uo pipefail
 cd /workspace/polint-scale-envelope
 LABEL="${1:?label}"
 CAPS="${2:-}"
-REPO=research/evaluation-harness/repos/excalidraw-excalidraw
+REPO=research/evaluation-harness/repos/gohugoio-hugo
 OUT=.scale-envelope/runs
 mkdir -p "$OUT"
 

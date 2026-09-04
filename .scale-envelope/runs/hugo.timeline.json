@@ -1,0 +1,1 @@
+{"summary": {"label": "hugo", "cmd": ["target/release/deps/polint-208291dcece90b5d", "--exact", "eval::bench::runner::tests::perf_child_measure_entry", "--nocapture", "--test-threads=1"], "exit_code": 101, "wall_s": 0.2, "peak_rss_bytes": 438272, "peak_rss_gb": 0.0, "samples": 1}, "timeline": [[0.002, 438272]]}

@@ -342,8 +342,8 @@ performance number.
 
 | | before (`b2-ref`) | after (`x6`) | |
 |---|---:|---:|---|
-| **peak RSS** | 9,551,003,648 B (**8.895 GB**) | 5,844,377,600 B (**5.443 GB**) | **−38.8 %** — under the 6 GB ceiling |
-| **cold wall** | 251.0 s | **222.8 s** | **−11.2 %** — under the 300 s budget |
+| **peak RSS** | 9,551,003,648 B (**8.895 GB**) | 5,869,457,408 B (**5.466 GB**) | **−38.5 %** — under the 6 GB ceiling |
+| **cold wall** | 251.0 s | **234.8 s** | **−6.5 %** — under the 300 s budget |
 | interned key text | 4,026 MB | 3,096 MB | −930 MB |
 | interned keys | 3,509,568 | 2,554,247 | −955,321 |
 | fact-metadata rows | 2,393,266 | 1,735,237 | −658,029 (the dominance closure) |
@@ -361,3 +361,13 @@ That is worth knowing independently of this change: anyone who runs
 `make fetch-scale-repos` and then `cargo test` locally will find the suite
 apparently hanging.
 
+
+## Final verification (clean rebuild of the branch tip)
+
+| run | peak RSS | cold wall | identity |
+|---|---:|---:|---|
+| `x6` | 5,844,377,600 B (5.443 GB) | 222.8 s | 23/23 vs `x5` |
+| `final` | 5,869,457,408 B (**5.466 GB**) | **234.8 s** | 23/23 vs `x6`, diagnostics digest `dfd881fcfd3bd80f` unchanged |
+
+Run-to-run spread on this host is ~0.4 % on peak and ~5 % on wall. Both runs are
+inside the envelope; the reported figure is the worse one.
