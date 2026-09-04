@@ -16,6 +16,7 @@ mod metadata;
 pub(crate) mod metrics_projection;
 mod outcome;
 mod provider;
+pub(crate) mod resource;
 mod store;
 pub(crate) mod validation;
 
@@ -172,6 +173,7 @@ fn run_scheduled_providers<'a>(
     )
     .map_err(|error| anyhow::anyhow!(error.to_string()))?;
     let mut provider_telemetry = Vec::with_capacity(AnalysisKernel::provider_manifests().len());
+    let mut envelope = resource::ResourceEnvelope::from_env();
     // Emit a provider_outputs row for every manifest entry (historical identity),
     // but only execute providers selected by capability closure.
     for provider_id in scheduled_order() {
@@ -183,8 +185,22 @@ fn run_scheduled_providers<'a>(
         } else {
             Vec::new()
         };
-        let ready = selected && blockers.is_empty();
-        if selected && !ready {
+        let ready = selected && blockers.is_empty() && !envelope.exhausted();
+        if selected && !ready && envelope.exhausted() {
+            // The envelope is a *safety net*: the run stops adding facts rather
+            // than being killed by the OOM reaper with nothing to report. The
+            // capabilities this provider backs degrade through the normal
+            // outcome path, and the run emits one `polint/resource-budget`
+            // diagnostic (below) that `polint unknowns` surfaces.
+            tracker
+                .record_failure(
+                    provider_id,
+                    ProviderOutcomeStatus::BudgetExceeded,
+                    ProviderFailureStage::Execution,
+                    ProviderFailureReason::MemoryCeiling,
+                )
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        } else if selected && !ready {
             tracker
                 .record_dependency_blocked(provider_id, blockers)
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
@@ -223,6 +239,7 @@ fn run_scheduled_providers<'a>(
                 None
             };
         if ready {
+            envelope.observe(provider_id);
             let stage_rss_after = crate::measure::current_rss_bytes();
             let interner = db.stable_key_interner();
             tracing::info!(
@@ -299,6 +316,10 @@ fn run_scheduled_providers<'a>(
                 upstream_digests.insert(provider_id, digest);
             }
         }
+    }
+
+    if let Some(trip) = envelope.trip() {
+        diagnostics.push(resource::budget_diagnostic(&trip));
     }
 
     let session = host_scope.take();

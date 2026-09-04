@@ -89,15 +89,6 @@ impl ResourceEnvelope {
         }
     }
 
-    /// An envelope with no ceiling — used where a run must never degrade.
-    pub(crate) const fn unbounded() -> Self {
-        Self {
-            ceiling_bytes: None,
-            source: CeilingSource::Configured,
-            trip: None,
-        }
-    }
-
     /// Samples live RSS after `provider_id` and latches a trip if it is over.
     ///
     /// Latching (rather than re-testing) keeps the schedule deterministic for a
@@ -132,6 +123,30 @@ impl ResourceEnvelope {
     }
 }
 
+/// Rule id for the single diagnostic a resource-budget stop emits.
+///
+/// `polint unknowns` translates it into a `budget_exceeded` row, the same way
+/// `polint/go-semantic` diagnostics become `go_*` rows.
+pub(crate) const RESOURCE_BUDGET_RULE_ID: &str = "polint/resource-budget";
+
+/// The one diagnostic a resource-budget stop emits.
+pub(crate) fn budget_diagnostic(trip: &ResourceTrip) -> crate::diagnostics::Diagnostic {
+    crate::diagnostics::Diagnostic::warning(
+        RESOURCE_BUDGET_RULE_ID,
+        "<workspace>",
+        crate::internal_core::DiagnosticRange::point(1, 1),
+        format!(
+            "memory ceiling reached after `{}`: {} MiB resident against a {} MiB ceiling ({}). \
+             Providers scheduled after it were skipped and their capabilities degraded; \
+             set POLINT_MEMORY_CEILING_MB to raise or disable the ceiling.",
+            trip.after_provider,
+            trip.observed_bytes / (1024 * 1024),
+            trip.ceiling_bytes / (1024 * 1024),
+            trip.source.label(),
+        ),
+    )
+}
+
 /// Total host memory in bytes, read from `/proc/meminfo` on Linux.
 ///
 /// Returns `None` on every other target and whenever the reading is not
@@ -161,8 +176,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn unbounded_never_trips() {
-        let mut envelope = ResourceEnvelope::unbounded();
+    fn an_absent_ceiling_never_trips() {
+        let mut envelope = ResourceEnvelope {
+            ceiling_bytes: None,
+            source: CeilingSource::Configured,
+            trip: None,
+        };
         envelope.observe("polint.source");
         assert!(!envelope.exhausted());
         assert_eq!(envelope.trip(), None);
@@ -189,8 +208,13 @@ mod tests {
         if let Some(total) = host_memory_bytes() {
             let envelope = ResourceEnvelope::from_env();
             if envelope.source == CeilingSource::HostFraction {
-                let ceiling = envelope.ceiling_bytes.expect("host reading yields a ceiling");
-                assert!(ceiling < total, "ceiling {ceiling} must be under host {total}");
+                let ceiling = envelope
+                    .ceiling_bytes
+                    .expect("host reading yields a ceiling");
+                assert!(
+                    ceiling < total,
+                    "ceiling {ceiling} must be under host {total}"
+                );
                 assert!(ceiling > 0);
             }
         }

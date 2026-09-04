@@ -10,6 +10,8 @@ pub(crate) enum ProviderOutcomeStatus {
     Unsupported,
     SetupMissing,
     PlannedAbsent,
+    /// The run's resource envelope was exhausted before this provider ran.
+    BudgetExceeded,
 }
 impl ProviderOutcomeStatus {
     pub(crate) const fn label(self) -> &'static str {
@@ -20,6 +22,7 @@ impl ProviderOutcomeStatus {
             Self::Unsupported => "unsupported",
             Self::SetupMissing => "setup_missing",
             Self::PlannedAbsent => "planned_absent",
+            Self::BudgetExceeded => "budget_exceeded",
         }
     }
     pub(crate) fn decode(label: &str) -> Option<Self> {
@@ -30,6 +33,7 @@ impl ProviderOutcomeStatus {
             "unsupported" => Some(Self::Unsupported),
             "setup_missing" => Some(Self::SetupMissing),
             "planned_absent" => Some(Self::PlannedAbsent),
+            "budget_exceeded" => Some(Self::BudgetExceeded),
             _ => None,
         }
     }
@@ -72,6 +76,8 @@ pub(crate) enum ProviderFailureReason {
     SetupMissing,
     ExecutionFailed,
     ValidationRejected,
+    /// Live RSS crossed the run's memory ceiling (see `analysis_kernel::resource`).
+    MemoryCeiling,
 }
 impl ProviderFailureReason {
     pub(crate) const fn label(self) -> &'static str {
@@ -82,6 +88,7 @@ impl ProviderFailureReason {
             Self::SetupMissing => "setup_missing",
             Self::ExecutionFailed => "execution_failed",
             Self::ValidationRejected => "validation_rejected",
+            Self::MemoryCeiling => "memory_ceiling",
         }
     }
     pub(crate) fn decode(label: &str) -> Option<Self> {
@@ -92,6 +99,7 @@ impl ProviderFailureReason {
             "setup_missing" => Some(Self::SetupMissing),
             "execution_failed" => Some(Self::ExecutionFailed),
             "validation_rejected" => Some(Self::ValidationRejected),
+            "memory_ceiling" => Some(Self::MemoryCeiling),
             _ => None,
         }
     }
@@ -150,6 +158,13 @@ impl ProviderOutcome {
         let blockers = sorted_unique(blockers);
         let valid = match status {
             ProviderOutcomeStatus::Succeeded => false,
+            // A resource stop is recorded before the provider runs, so it never
+            // carries dependency blockers.
+            ProviderOutcomeStatus::BudgetExceeded => {
+                failure_stage == ProviderFailureStage::Execution
+                    && failure_reason == ProviderFailureReason::MemoryCeiling
+                    && blockers.is_empty()
+            }
             ProviderOutcomeStatus::Failed => {
                 matches!(
                     (failure_stage, failure_reason),
@@ -896,5 +911,57 @@ mod tests {
                 .iter()
                 .all(|outcome| outcome.failure_stage == Some(ProviderFailureStage::Validation))
         );
+    }
+
+    #[cfg(test)]
+    mod resource_outcome_tests {
+        use super::*;
+
+        #[test]
+        fn budget_exceeded_round_trips_through_its_label() {
+            assert_eq!(
+                ProviderOutcomeStatus::BudgetExceeded.label(),
+                "budget_exceeded"
+            );
+            assert_eq!(
+                ProviderOutcomeStatus::decode("budget_exceeded"),
+                Some(ProviderOutcomeStatus::BudgetExceeded)
+            );
+            assert_eq!(
+                ProviderFailureReason::MemoryCeiling.label(),
+                "memory_ceiling"
+            );
+            assert_eq!(
+                ProviderFailureReason::decode("memory_ceiling"),
+                Some(ProviderFailureReason::MemoryCeiling)
+            );
+        }
+
+        #[test]
+        fn a_memory_ceiling_stop_is_a_valid_non_success_outcome() {
+            let outcome = ProviderOutcome::non_success(
+                "polint.data_flow".to_string(),
+                ProviderOutcomeStatus::BudgetExceeded,
+                ProviderFailureStage::Execution,
+                ProviderFailureReason::MemoryCeiling,
+                Vec::new(),
+            )
+            .expect("a resource stop is a recordable outcome");
+            assert_eq!(outcome.status, ProviderOutcomeStatus::BudgetExceeded);
+        }
+
+        #[test]
+        fn a_memory_ceiling_stop_rejects_a_mismatched_stage() {
+            assert!(
+                ProviderOutcome::non_success(
+                    "polint.data_flow".to_string(),
+                    ProviderOutcomeStatus::BudgetExceeded,
+                    ProviderFailureStage::Validation,
+                    ProviderFailureReason::MemoryCeiling,
+                    Vec::new(),
+                )
+                .is_err()
+            );
+        }
     }
 }
