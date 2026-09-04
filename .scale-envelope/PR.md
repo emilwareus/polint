@@ -175,8 +175,18 @@ that is the commit to drop**; it costs ~270 MB and the run still lands at
   `failed to read .../media/testdata/fake.js: invalid utf-8`. Doc 05 §B2 flagged
   that this read is unbounded; it is also non-lossy-decoding. A repository does
   not get to be un-analysable because it contains one deliberately corrupt
-  fixture. Numbers with that one file moved aside are below; note this host has
-  no Go toolchain, so hugo's Go semantic layer is unavailable regardless.
+  fixture.
+
+  With that one file moved aside, hugo (871 files, 5.87 MB source) measures
+  **6,765 MB peak / 714.5 s** — over both budgets. Read that as a **lower
+  bound**, not a result: this host has no Go toolchain, so hugo's Go semantic
+  layer is unavailable and **only 16 of the 23 providers ran** —
+  `identity`, `reachability`, `semantic_graph`, `solver`, `refined_calls`,
+  `data_flow` and `evidence` were all dependency-blocked. On excalidraw those
+  seven account for a further ~1.7 GB. `polint.type_value_alias` alone is
+  **499.6 s (70 % of hugo's wall) and +3,103 MB**, which is the same stage that
+  now dominates excalidraw — it is the next thing to attack, and hugo says so
+  more loudly than excalidraw does.
 - **`polint.type_value_alias` is now 45 % of wall** (99 s). Its four
   `normalized()` passes and the points-to fixpoint are the next lever; I measured
   the obvious sort fix and it did nothing, so this needs its own attribution pass

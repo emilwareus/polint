@@ -371,3 +371,45 @@ apparently hanging.
 
 Run-to-run spread on this host is ~0.4 % on peak and ~5 % on wall. Both runs are
 inside the envelope; the reported figure is the worse one.
+
+## hugo (stretch, honest reporting)
+
+`gohugoio/hugo` @ `3f35721f`, same host, same command, cold cache.
+
+**It does not run at all, before or after.** `fs::load_analysis_files_scoped`
+reads sources with `fs::read_to_string`, so one non-UTF-8 file aborts the whole
+run before any provider executes:
+
+```
+isolated perf child measurement: failed to read
+  research/evaluation-harness/repos/gohugoio-hugo/media/testdata/fake.js: invalid utf-8
+```
+
+Exactly one file in hugo's tree is non-UTF-8 (`media/testdata/fake.js`, a
+deliberate fixture). With it moved aside:
+
+| | |
+|---|---:|
+| files loaded | 871 |
+| source bytes | 5,866,703 |
+| **peak RSS** | 7,263,526,912 B (**6.765 GB**) |
+| **cold wall** | **714.5 s** |
+| providers that ran | **16 of 23** |
+| `budget.iteration_capped` | 20,829 |
+
+Both budgets are exceeded, and the number is a **lower bound**: this host has no
+Go toolchain, so hugo's Go semantic layer is unavailable and `identity`,
+`reachability`, `semantic_graph`, `solver`, `refined_calls`, `data_flow` and
+`evidence` were dependency-blocked. On excalidraw those seven providers account
+for a further ~1.7 GB.
+
+The shape is still informative:
+
+| provider | ms | wall % | retained | peak |
+|---|---:|---:|---:|---:|
+| polint.cfg | 160,066 | 22.4 % | +1,800 MB | 2,692 MB |
+| **polint.type_value_alias** | **499,604** | **70.0 %** | **+3,103 MB** | 6,927 MB |
+
+`type_value_alias` is 70 % of hugo's wall and the largest memory owner — the same
+stage that is now 45 % of excalidraw's wall. It is the clear next target, and
+nothing in this change touched it.
