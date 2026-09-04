@@ -30,6 +30,14 @@ struct LocalFlowBuilder<'a, 'b, H: AnalysisHost + ?Sized> {
     db: &'a H,
     output: &'b mut DataFlowOutput,
     place_nodes: BTreeMap<PlaceId, DataFlowNodeId>,
+    /// node stable key -> node id. `operation_node` is called once per MIR
+    /// operation and used to scan `output.nodes` linearly, which is quadratic in
+    /// a corpus where `derive_local_place_nodes` has already pushed one node per
+    /// MIR place.
+    nodes_by_key: BTreeMap<crate::internal_core::StableKeyId, DataFlowNodeId>,
+    /// `PlaceId` -> index into `db.mir_places()`, so `projection_edge_kind` does
+    /// not scan the whole place table per projection edge.
+    place_index: BTreeMap<PlaceId, usize>,
     emitted_edges: BTreeSet<crate::internal_core::StableKeyId>,
     branchy_bodies: BTreeSet<MirBodyId>,
 }
@@ -48,10 +56,23 @@ impl<'a, 'b, H: AnalysisHost + ?Sized> LocalFlowBuilder<'a, 'b, H> {
                 matches!(operation.kind, MirOperationKind::Branch { .. }).then_some(operation.body)
             })
             .collect();
+        let nodes_by_key = output
+            .nodes
+            .iter()
+            .map(|node| (node.stable_key, node.id))
+            .collect();
+        let place_index = db
+            .mir_places()
+            .iter()
+            .enumerate()
+            .map(|(index, place)| (place.id, index))
+            .collect();
         Self {
             db,
             output,
             place_nodes,
+            nodes_by_key,
+            place_index,
             emitted_edges: BTreeSet::new(),
             branchy_bodies,
         }
@@ -346,7 +367,11 @@ impl<'a, 'b, H: AnalysisHost + ?Sized> LocalFlowBuilder<'a, 'b, H> {
     }
 
     fn projection_edge_kind(&self, place: PlaceId) -> DataFlowEdgeKind {
-        let Some(place) = self.db.mir_places().iter().find(|fact| fact.id == place) else {
+        let Some(place) = self
+            .place_index
+            .get(&place)
+            .and_then(|index| self.db.mir_places().get(*index))
+        else {
             return DataFlowEdgeKind::FieldProjection;
         };
         if place.projections.iter().any(|projection| {
@@ -428,14 +453,8 @@ impl<'a, 'b, H: AnalysisHost + ?Sized> LocalFlowBuilder<'a, 'b, H> {
                 ("node", suffix),
             ],
         );
-        if let Some(node) = self
-            .output
-            .nodes
-            .iter()
-            .find(|node| node.stable_key == stable_key)
-            .map(|node| node.id)
-        {
-            return node;
+        if let Some(node) = self.nodes_by_key.get(&stable_key) {
+            return *node;
         }
 
         let (language, file, function) = self.body_context(operation.body);
@@ -457,6 +476,7 @@ impl<'a, 'b, H: AnalysisHost + ?Sized> LocalFlowBuilder<'a, 'b, H> {
             span: Some(operation.span.clone()),
             stable_key,
         });
+        self.nodes_by_key.insert(stable_key, id);
         id
     }
 
@@ -484,13 +504,7 @@ impl<'a, 'b, H: AnalysisHost + ?Sized> LocalFlowBuilder<'a, 'b, H> {
                 ("status", format!("{:?}", draft.status)),
             ],
         );
-        if !self.emitted_edges.insert(stable_key)
-            || self
-                .output
-                .edges
-                .iter()
-                .any(|edge| edge.stable_key == stable_key)
-        {
+        if !self.emitted_edges.insert(stable_key) {
             return;
         }
         self.output.edges.push(DataFlowEdgeFact {
