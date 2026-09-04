@@ -1,4 +1,4 @@
-# Scale envelope: the excalidraw full pipeline now fits in 5.4 GB / 223 s
+# Scale envelope: the excalidraw full pipeline now fits in 5.5 GB / 235 s
 
 @emilwareus — every number below is a measurement on this host (8 cores / 15 GB /
 no swap, Linux 6.8), release profile, excalidraw v0.17.6 (385 files, 2.45 MiB
