@@ -110,6 +110,29 @@ pub(crate) fn peak_rss_bytes() -> u64 {
     0
 }
 
+/// Current (not peak) resident-set size of this process in bytes.
+///
+/// The resource gauge needs the *live* footprint, not the high-water mark:
+/// degrading after `ru_maxrss` already crossed the ceiling is too late, and a
+/// stage that freed its working set should not be charged for it forever.
+/// Linux exposes this in `/proc/self/statm` field 2 (resident pages); every
+/// other target falls back to the monotonic peak, which is a safe
+/// over-estimate for a ceiling comparison.
+pub(crate) fn current_rss_bytes() -> u64 {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(statm) = std::fs::read_to_string("/proc/self/statm")
+            && let Some(resident) = statm.split_whitespace().nth(1)
+            && let Ok(pages) = resident.parse::<u64>()
+        {
+            // `statm` counts pages; 4 KiB is the page size on every Linux
+            // target polint ships for.
+            return pages.saturating_mul(4096);
+        }
+    }
+    peak_rss_bytes()
+}
+
 /// Result of executing a closure once: wall-clock elapsed and the peak-RSS
 /// high-water mark observed after the run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

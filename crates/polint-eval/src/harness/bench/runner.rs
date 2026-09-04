@@ -97,17 +97,33 @@ fn run_repo_perf_point_with_store_mode(
     // `cold_wall_clock_ms` would then describe a run that actually errored).
     let mut cold_result: Option<anyhow::Result<KernelOutput>> = None;
     let mut warm_result: Option<anyhow::Result<KernelOutput>> = None;
-    let timing = measure::cold_then_warm(|| {
-        if cold_result.is_none() {
+    let cold_only = std::env::var_os(CHILD_COLD_ONLY_ENV).is_some();
+    let timing = if cold_only {
+        let single = measure::TimedRun::measure(|| {
             cold_result = Some(run_check_kernel_with_store_mode(repo_root, store_mode));
-        } else {
-            warm_result = Some(run_check_kernel_with_store_mode(repo_root, store_mode));
+        });
+        measure::ColdWarm {
+            cold_ms: single.elapsed_ms,
+            warm_ms: single.elapsed_ms,
+            peak_rss_bytes: single.peak_rss_bytes,
+            peak_rss_delta_bytes: single.peak_rss_delta_bytes,
         }
-    });
+    } else {
+        measure::cold_then_warm(|| {
+            if cold_result.is_none() {
+                cold_result = Some(run_check_kernel_with_store_mode(repo_root, store_mode));
+            } else {
+                warm_result = Some(run_check_kernel_with_store_mode(repo_root, store_mode));
+            }
+        })
+    };
     // Propagate a cold-run failure before trusting any timing; on success keep
     // the warm run's output for the fact walk.
-    cold_result.expect("cold_then_warm runs the closure at least once")?;
-    let output = warm_result.expect("cold_then_warm runs the closure twice")?;
+    let cold_output = cold_result.expect("cold_then_warm runs the closure at least once")?;
+    let output = match warm_result {
+        Some(warm) => warm?,
+        None => cold_output,
+    };
 
     // Repo size from the source set the pipeline loaded — not a separate eager
     // whole-repo read (PERF-01 discipline).
@@ -155,6 +171,13 @@ const CHILD_REPO_ENV: &str = "POLINT_PERF_CHILD_REPO";
 const CHILD_REVIEW_ENV: &str = "POLINT_PERF_CHILD_REVIEW_REF";
 /// Internal libtest-only mode selector, not a supported CLI/config contract.
 const CHILD_SEMANTIC_STORE_ENV: &str = "POLINT_PERF_CHILD_SEMANTIC_STORE";
+/// Comma-separated capability override for attribution runs (libtest-only).
+/// Absent == the default `full_pipeline_for_test` capability set. Lets a
+/// measurement bisect which capability owns the cost without rebuilding.
+const CHILD_CAPABILITIES_ENV: &str = "POLINT_PERF_CHILD_CAPABILITIES";
+/// When set, measure the cold run only and report it as both cold and warm
+/// (libtest-only). Halves the cost of an attribution sweep.
+const CHILD_COLD_ONLY_ENV: &str = "POLINT_PERF_CHILD_COLD_ONLY";
 /// Stdout markers the child prints the serialized [`CurvePoint`] JSON between, so
 /// the parent can extract it from libtest's own `--nocapture` output.
 const CHILD_POINT_BEGIN: &str = "<<<POLINT_PERF_POINT_BEGIN>>>";
@@ -300,7 +323,13 @@ fn run_check_kernel_with_store_mode(
     } else {
         cache
     };
-    let plan = crate::analysis_plan::AnalysisPlan::full_pipeline_for_test();
+    let plan = match std::env::var(CHILD_CAPABILITIES_ENV) {
+        Ok(names) if !names.trim().is_empty() => {
+            let names: Vec<&str> = names.split(',').map(str::trim).filter(|n| !n.is_empty()).collect();
+            crate::analysis_plan::AnalysisPlan::from_capability_names_for_test(&names)
+        }
+        _ => crate::analysis_plan::AnalysisPlan::full_pipeline_for_test(),
+    };
     AnalysisKernel::run(KernelInput {
         loaded: &loaded,
         cache: &cache,
@@ -453,6 +482,13 @@ mod tests {
         let Some(repo) = std::env::var_os(super::CHILD_REPO_ENV) else {
             return;
         };
+        // Stage attribution: `RUST_LOG=polint::kernel::stage=info` prints one
+        // row per provider (elapsed, live RSS, peak RSS) to stderr.
+        tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .with_writer(std::io::stderr)
+            .try_init()
+            .ok();
         let review = std::env::var(super::CHILD_REVIEW_ENV).ok();
         let store_mode = if std::env::var_os(super::CHILD_SEMANTIC_STORE_ENV).is_some() {
             super::SemanticStoreBenchMode::Enabled

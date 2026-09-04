@@ -438,6 +438,17 @@ impl FactMetaStore {
             .and_then(|owners| owners.get(&stable_key))
     }
 
+    /// Number of metadata rows retained across every family.
+    ///
+    /// Counted from the per-family row vectors (O(families)), so the resource
+    /// gauge can report fact volume at a stage boundary without walking rows.
+    pub fn row_count(&self) -> usize {
+        self.rows
+            .values()
+            .map(|rows| rows.dense.iter().filter(|row| row.is_some()).count() + rows.sparse.len())
+            .sum()
+    }
+
     pub fn rows(&self) -> impl Iterator<Item = (FactRef, &FactMeta)> {
         self.rows.iter().flat_map(|(family, rows)| {
             rows.rows()

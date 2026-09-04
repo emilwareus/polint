@@ -189,6 +189,8 @@ fn run_scheduled_providers<'a>(
                 .record_dependency_blocked(provider_id, blockers)
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
         }
+        let stage_started = std::time::Instant::now();
+        let stage_rss_before = crate::measure::current_rss_bytes();
         let result = if ready {
             let mut ctx = ProviderCtx {
                 facts: &mut *db,
@@ -220,6 +222,23 @@ fn run_scheduled_providers<'a>(
             } else {
                 None
             };
+        if ready {
+            let stage_rss_after = crate::measure::current_rss_bytes();
+            let interner = db.stable_key_interner();
+            tracing::info!(
+                target: "polint::kernel::stage",
+                provider = provider_id,
+                elapsed_ms = stage_started.elapsed().as_millis() as u64,
+                rss_mb = stage_rss_after / (1024 * 1024),
+                rss_delta_mb = stage_rss_after.saturating_sub(stage_rss_before) / (1024 * 1024),
+                peak_rss_mb = crate::measure::peak_rss_bytes() / (1024 * 1024),
+                facts = db.fact_meta().row_count(),
+                keys = interner.len(),
+                key_mb = interner.text_bytes() / (1024 * 1024),
+                digest = output_digest.as_ref().map_or("-", |digest| digest.value.as_str()),
+                "stage done"
+            );
+        }
         if provider_id == "polint.go.syntax" {
             tracing::info!(target: "polint::kernel", "phase: go.syntax done");
         } else if provider_id == "polint.ts.syntax" {
