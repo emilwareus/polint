@@ -92,16 +92,22 @@ fn run_repo_perf_point_with_store_mode(
     // Drive the check-equivalent kernel run twice (cold then warm) and keep the
     // warm run's output for the fact walk. Caching is enabled so the warm run
     // exercises the persistent layer cache and populates `.polint/cache`.
-    // Keep BOTH runs' results: the closure runs twice, so overwriting a single
+    // Keep BOTH runs' outcomes: the closure runs twice, so overwriting a single
     // slot would let a warm-run success mask a cold-run failure (and
     // `cold_wall_clock_ms` would then describe a run that actually errored).
-    let mut cold_result: Option<anyhow::Result<KernelOutput>> = None;
+    // The cold run keeps only its `Result<(), _>`: retaining its `KernelOutput`
+    // pins a whole `AnalysisDb` (~8 GB on a repo the size of excalidraw) while
+    // the warm run builds a second one, which doubles the measured peak and is
+    // what turned an 8.9 GB engine into a 12 GB SIGKILL in the committed
+    // scale-corpus artifact.
+    let mut cold_result: Option<anyhow::Result<()>> = None;
     let mut warm_result: Option<anyhow::Result<KernelOutput>> = None;
     let cold_only = std::env::var_os(CHILD_COLD_ONLY_ENV).is_some();
     let timing = if cold_only {
         let single = measure::TimedRun::measure(|| {
-            cold_result = Some(run_check_kernel_with_store_mode(repo_root, store_mode));
+            warm_result = Some(run_check_kernel_with_store_mode(repo_root, store_mode));
         });
+        cold_result = Some(Ok(()));
         measure::ColdWarm {
             cold_ms: single.elapsed_ms,
             warm_ms: single.elapsed_ms,
@@ -111,7 +117,9 @@ fn run_repo_perf_point_with_store_mode(
     } else {
         measure::cold_then_warm(|| {
             if cold_result.is_none() {
-                cold_result = Some(run_check_kernel_with_store_mode(repo_root, store_mode));
+                // Drop the cold `AnalysisDb` here; only the outcome is needed.
+                cold_result =
+                    Some(run_check_kernel_with_store_mode(repo_root, store_mode).map(|_| ()));
             } else {
                 warm_result = Some(run_check_kernel_with_store_mode(repo_root, store_mode));
             }
@@ -119,11 +127,8 @@ fn run_repo_perf_point_with_store_mode(
     };
     // Propagate a cold-run failure before trusting any timing; on success keep
     // the warm run's output for the fact walk.
-    let cold_output = cold_result.expect("cold_then_warm runs the closure at least once")?;
-    let output = match warm_result {
-        Some(warm) => warm?,
-        None => cold_output,
-    };
+    cold_result.expect("cold_then_warm runs the closure at least once")?;
+    let output = warm_result.expect("cold_then_warm runs the closure twice")?;
 
     // Repo size from the source set the pipeline loaded — not a separate eager
     // whole-repo read (PERF-01 discipline).
