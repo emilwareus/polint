@@ -259,7 +259,8 @@ fn operation_kind_fragment(kind: &MirOperationKind) -> String {
         MirOperationKind::Branch {
             predicate,
             predicate_place,
-        } => format!("branch:{predicate:?}:{predicate_place:?}"),
+            nil_test,
+        } => format!("branch:{predicate:?}:{predicate_place:?}:{nil_test:?}"),
         MirOperationKind::Call {
             site,
             callee,
@@ -452,6 +453,7 @@ mod semantic_mir_provider {
             kind: MirOperationKind::Branch {
                 predicate: MirPredicateId(1),
                 predicate_place: Some(predicate_place),
+                nil_test: None,
             },
             stable_key: interner.intern(stable_key.to_string()),
             status: MirStatus::Resolved,

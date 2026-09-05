@@ -1,4 +1,5 @@
 use crate::analysis::calls::facts::{CallCallee, CallPrecision, CallSiteFact, CallTargetStatus};
+use crate::analysis::cfg::ids::BasicBlockId;
 use crate::analysis::data_flow::facts::{
     DataFlowConfidence, DataFlowEdgeFact, DataFlowEdgeKind, DataFlowNodeFact, DataFlowNodeKind,
     DataFlowPrecision,
@@ -328,6 +329,7 @@ fn missing_guard_calls(
 
     let events = ordered_control_call_events(db, query.minimum_precision);
     let by_function = control_events_by_function(&events);
+    let dominators = BlockRelation::dominators(db);
     let mut results = Vec::new();
     let mut truncated = false;
 
@@ -336,9 +338,9 @@ fn missing_guard_calls(
             if !event_matches_pattern(event, &query.event) {
                 continue;
             }
-            let has_guard = function_events[..index]
-                .iter()
-                .any(|candidate| guard_matches_event(candidate, &query.guard));
+            let has_guard = function_events[..index].iter().any(|candidate| {
+                guard_matches_event(candidate, &query.guard) && dominators.holds(candidate, event)
+            });
             if has_guard {
                 continue;
             }
@@ -389,6 +391,7 @@ fn missing_cleanup_calls(
 
     let events = ordered_control_call_events(db, query.minimum_precision);
     let by_function = control_events_by_function(&events);
+    let postdominators = BlockRelation::postdominators(db);
     let mut results = Vec::new();
     let mut truncated = false;
 
@@ -397,9 +400,10 @@ fn missing_cleanup_calls(
             if !event_matches_pattern(event, &query.start) {
                 continue;
             }
-            let has_cleanup = function_events[index + 1..]
-                .iter()
-                .any(|candidate| event_matches_pattern(candidate, &query.cleanup));
+            let has_cleanup = function_events[index + 1..].iter().any(|candidate| {
+                event_matches_pattern(candidate, &query.cleanup)
+                    && postdominators.holds(candidate, event)
+            });
             if has_cleanup {
                 continue;
             }
@@ -437,6 +441,67 @@ fn missing_cleanup_calls(
     }
 
     results
+}
+
+/// Adjacency over one CFG block relation, built once per query.
+///
+/// A relation with no rows means the analysis could not establish it, and every
+/// lookup answers `true` so a query keeps the ordering-only behavior it has
+/// without CFG relation facts rather than silently reporting more.
+struct BlockRelation {
+    by_source: BTreeMap<BasicBlockId, Vec<BasicBlockId>>,
+}
+
+impl BlockRelation {
+    fn new(edges: impl IntoIterator<Item = (BasicBlockId, BasicBlockId)>) -> Self {
+        let mut by_source = BTreeMap::<BasicBlockId, Vec<BasicBlockId>>::new();
+        for (source, destination) in edges {
+            by_source.entry(source).or_default().push(destination);
+        }
+        Self { by_source }
+    }
+
+    fn dominators(db: &AnalysisDb) -> Self {
+        Self::new(
+            db.cfg_dominators()
+                .iter()
+                .map(|fact| (fact.dominated, fact.dominator)),
+        )
+    }
+
+    fn postdominators(db: &AnalysisDb) -> Self {
+        Self::new(
+            db.cfg_postdominators()
+                .iter()
+                .map(|fact| (fact.postdominated, fact.postdominator)),
+        )
+    }
+
+    fn holds(&self, candidate: &ControlCallEvent, event: &ControlCallEvent) -> bool {
+        match (candidate.block, event.block) {
+            (Some(candidate), Some(event)) if candidate == event => true,
+            (Some(candidate), Some(event)) => {
+                self.by_source.is_empty() || self.reaches(event, candidate)
+            }
+            _ => true,
+        }
+    }
+
+    fn reaches(&self, start: BasicBlockId, target: BasicBlockId) -> bool {
+        let mut seen = BTreeSet::from([start]);
+        let mut queue = VecDeque::from([start]);
+        while let Some(current) = queue.pop_front() {
+            for destination in self.by_source.get(&current).into_iter().flatten().copied() {
+                if destination == target {
+                    return true;
+                }
+                if seen.insert(destination) {
+                    queue.push_back(destination);
+                }
+            }
+        }
+        false
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1125,6 +1190,7 @@ struct SearchState {
 #[derive(Debug, Clone)]
 struct ControlCallEvent {
     function: FunctionId,
+    block: Option<BasicBlockId>,
     file: String,
     range: crate::diagnostics::TextRange,
     target_label: String,
@@ -1165,6 +1231,7 @@ fn ordered_control_call_events(
 ) -> Vec<ControlCallEvent> {
     let site_by_id = call_sites_by_id(db);
     let operation_orders = control_orders_by_operation(db);
+    let blocks = cfg_blocks_by_operation(db);
     let mut events = Vec::new();
 
     if !db.refined_call_edges().is_empty() {
@@ -1172,7 +1239,9 @@ fn ordered_control_call_events(
             if !precision_meets(edge.precision, minimum_precision) {
                 continue;
             }
-            if let Some(event) = control_event_for_edge(db, edge, &site_by_id, &operation_orders) {
+            if let Some(event) =
+                control_event_for_edge(db, edge, &site_by_id, &operation_orders, &blocks)
+            {
                 events.push(event);
             }
         }
@@ -1183,7 +1252,7 @@ fn ordered_control_call_events(
             {
                 continue;
             }
-            events.push(control_event_for_site(db, site, &operation_orders));
+            events.push(control_event_for_site(db, site, &operation_orders, &blocks));
         }
     }
 
@@ -1256,6 +1325,7 @@ fn control_event_for_edge(
     edge: &RefinedCallEdgeFact,
     site_by_id: &BTreeMap<CallSiteId, &CallSiteFact>,
     operation_orders: &BTreeMap<(MirBodyId, MirOpId), OperationOrder>,
+    blocks: &BTreeMap<(MirBodyId, MirOpId), BasicBlockId>,
 ) -> Option<ControlCallEvent> {
     let site = site_by_id.get(&edge.site)?;
     let match_candidates = call_edge_match_candidates(db, edge, site_by_id);
@@ -1267,6 +1337,7 @@ fn control_event_for_edge(
     let target_label = best_call_target_label(db, edge, site_by_id);
     Some(ControlCallEvent {
         function: edge.caller,
+        block: blocks.get(&(site.body, site.operation)).copied(),
         file: db.path_for(site.file),
         range: site.span.diagnostic_range(),
         target_label,
@@ -1283,10 +1354,12 @@ fn control_event_for_site(
     db: &AnalysisDb,
     site: &CallSiteFact,
     operation_orders: &BTreeMap<(MirBodyId, MirOpId), OperationOrder>,
+    blocks: &BTreeMap<(MirBodyId, MirOpId), BasicBlockId>,
 ) -> ControlCallEvent {
     let label = call_site_label(site);
     ControlCallEvent {
         function: site.caller,
+        block: blocks.get(&(site.body, site.operation)).copied(),
         file: db.path_for(site.file),
         range: site.span.diagnostic_range(),
         target_label: label.clone(),
@@ -1297,6 +1370,17 @@ fn control_event_for_site(
         precision: site.precision,
         confidence: None,
     }
+}
+
+/// Block of every CFG-placed MIR operation, built once per control-event pass.
+fn cfg_blocks_by_operation(db: &AnalysisDb) -> BTreeMap<(MirBodyId, MirOpId), BasicBlockId> {
+    db.cfg_nodes()
+        .iter()
+        .filter_map(|node| {
+            node.operation
+                .map(|operation| ((node.body, operation), node.block))
+        })
+        .collect()
 }
 
 fn control_order(
@@ -3430,6 +3514,7 @@ mod tests {
             kind: MirOperationKind::Branch {
                 predicate: MirPredicateId(operation.0),
                 predicate_place: None,
+                nil_test: None,
             },
             stable_key: interner.intern(format!("mir:op:{:05}", operation.0)),
             status: MirStatus::Resolved,

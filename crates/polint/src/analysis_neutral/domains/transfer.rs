@@ -10,7 +10,7 @@ use crate::analysis_neutral::calls::facts::{UnresolvedCallFact, UnresolvedCallRe
 use crate::analysis_neutral::host::AnalysisHost;
 use crate::analysis_neutral::ids::{CallSiteId, PlaceId, UnsupportedId};
 use crate::analysis_neutral::mir_op::{
-    AssignMode, ConservativeAction, MirOperation, MirOperationKind, MirValue,
+    AssignMode, BranchNilTest, ConservativeAction, MirOperation, MirOperationKind, MirValue,
     UnsupportedSemanticFact,
 };
 
@@ -186,12 +186,33 @@ impl EdgeTransfer {
     pub fn apply_branch_assumption(
         _cx: &TransferCx<'_>,
         predicate_place: Option<PlaceId>,
+        nil_test: Option<BranchNilTest>,
         sense: BranchSense,
         state: &mut ProductState,
     ) {
         let Some(place) = predicate_place else {
             return;
         };
+        if let Some(nil_test) = nil_test {
+            let on_nil_edge = nil_test.nil_on_true() == matches!(sense, BranchSense::True);
+            // The opposite edge only proves non-nil when the comparison covers
+            // every nil value. TypeScript `x === null` leaves `undefined`
+            // possible, so its non-null edge carries no nilness conclusion.
+            let desired = if on_nil_edge {
+                Some(NilnessDomain::Nil)
+            } else if nil_test.proves_non_nil() {
+                Some(NilnessDomain::NonNil)
+            } else {
+                None
+            };
+            if let Some(desired) = desired
+                && !refine_nilness(state, place, desired)
+            {
+                state.core.reachability = ReachabilityDomain::Unreachable;
+            }
+            state.reduce_value_only(4);
+            return;
+        }
         match sense {
             BranchSense::True => {
                 if !refine_truthiness(state, place, TruthinessDomain::Truthy)
@@ -213,6 +234,23 @@ impl EdgeTransfer {
         }
         state.reduce_value_only(4);
     }
+}
+
+fn refine_nilness(state: &mut ProductState, place: PlaceId, desired: NilnessDomain) -> bool {
+    let current = state
+        .core
+        .nilness
+        .get(&place)
+        .copied()
+        .unwrap_or_else(NilnessDomain::bottom);
+    if matches!(
+        (current, desired),
+        (NilnessDomain::Nil, NilnessDomain::NonNil) | (NilnessDomain::NonNil, NilnessDomain::Nil)
+    ) {
+        return false;
+    }
+    state.core.nilness.insert(place, desired);
+    true
 }
 
 fn refine_truthiness(state: &mut ProductState, place: PlaceId, desired: TruthinessDomain) -> bool {
@@ -585,6 +623,7 @@ mod tests {
         EdgeTransfer::apply_branch_assumption(
             &TransferCx::empty_for_test(),
             Some(place),
+            None,
             BranchSense::True,
             &mut state,
         );
@@ -601,11 +640,65 @@ mod tests {
         EdgeTransfer::apply_branch_assumption(
             &TransferCx::empty_for_test(),
             None,
+            None,
             BranchSense::True,
             &mut state,
         );
 
         assert!(!state.core.truthiness.contains_key(&unrelated));
+    }
+
+    #[test]
+    fn relational_nil_constraint_refines_opposite_edges() {
+        let place = PlaceId(7);
+        let mut true_edge = ProductState::entry();
+        let mut false_edge = ProductState::entry();
+
+        EdgeTransfer::apply_branch_assumption(
+            &TransferCx::empty_for_test(),
+            Some(place),
+            Some(BranchNilTest::Exhaustive { nil_on_true: false }),
+            BranchSense::True,
+            &mut true_edge,
+        );
+        EdgeTransfer::apply_branch_assumption(
+            &TransferCx::empty_for_test(),
+            Some(place),
+            Some(BranchNilTest::Exhaustive { nil_on_true: false }),
+            BranchSense::False,
+            &mut false_edge,
+        );
+
+        assert_eq!(true_edge.core.nilness[&place], NilnessDomain::NonNil);
+        assert_eq!(false_edge.core.nilness[&place], NilnessDomain::Nil);
+    }
+
+    #[test]
+    fn partial_nil_constraint_refines_only_the_nil_edge() {
+        let place = PlaceId(7);
+        let mut nil_edge = ProductState::entry();
+        let mut other_edge = ProductState::entry();
+
+        EdgeTransfer::apply_branch_assumption(
+            &TransferCx::empty_for_test(),
+            Some(place),
+            Some(BranchNilTest::NilEdgeOnly { nil_on_true: true }),
+            BranchSense::True,
+            &mut nil_edge,
+        );
+        EdgeTransfer::apply_branch_assumption(
+            &TransferCx::empty_for_test(),
+            Some(place),
+            Some(BranchNilTest::NilEdgeOnly { nil_on_true: true }),
+            BranchSense::False,
+            &mut other_edge,
+        );
+
+        assert_eq!(nil_edge.core.nilness[&place], NilnessDomain::Nil);
+        assert!(
+            !other_edge.core.nilness.contains_key(&place),
+            "a `=== null` false edge must not claim non-nil: the place may be `undefined`"
+        );
     }
 
     #[test]
@@ -706,6 +799,7 @@ mod tests {
         EdgeTransfer::apply_branch_assumption(
             &TransferCx::empty_for_test(),
             Some(place),
+            None,
             BranchSense::True,
             &mut state,
         );
@@ -726,6 +820,7 @@ mod tests {
         EdgeTransfer::apply_branch_assumption(
             &TransferCx::empty_for_test(),
             Some(place),
+            None,
             BranchSense::True,
             &mut state,
         );

@@ -22,8 +22,9 @@ use crate::analysis_neutral::mir_body::{
     MirTerminatorKind, SuspendKind,
 };
 use crate::analysis_neutral::mir_op::{
-    AssignMode, ConservativeAction, MirAggregateField, MirAggregateKind, MirOperation,
-    MirOperationKind, MirValue, UnsupportedDomain, UnsupportedPrecision, UnsupportedSemanticFact,
+    AssignMode, BranchNilTest, ConservativeAction, MirAggregateField, MirAggregateKind,
+    MirOperation, MirOperationKind, MirValue, UnsupportedDomain, UnsupportedPrecision,
+    UnsupportedSemanticFact,
 };
 use crate::analysis_neutral::places::{
     PlaceInsert, PlaceProjection, PlaceRoot, PlaceStableContext, PlaceStatus, PlaceTableBuilder,
@@ -83,11 +84,20 @@ pub fn lower_ts_mir(db: &impl AnalysisHost) -> MirOutput {
             _ => None,
         })
         .collect::<BTreeMap<_, _>>();
+    let branch_regions = lowering
+        .operations
+        .iter()
+        .filter_map(|operation| match operation.kind {
+            OperationKindDraft::Branch { region, .. } => Some((operation.id, region)),
+            _ => None,
+        })
+        .collect::<BTreeMap<_, _>>();
     let (blocks, statements, terminators) = lower_control_flow(
         interner,
         &lowering.bodies,
         &operations,
         &control_shapes,
+        &branch_regions,
         &control_effects,
         &call_unwinds,
     );
@@ -110,6 +120,7 @@ fn lower_control_flow(
     bodies: &[MirBody],
     operations: &[MirOperation],
     control_shapes: &BTreeMap<MirOpId, ControlShape>,
+    branch_regions: &BTreeMap<MirOpId, BranchRegion>,
     control_effects: &[ControlEffect],
     call_unwinds: &BTreeSet<MirOpId>,
 ) -> (Vec<MirBlock>, Vec<MirStatement>, Vec<MirTerminator>) {
@@ -142,6 +153,7 @@ fn lower_control_flow(
             target: drafts[current].id,
         });
         let step_count = step_ids.len();
+        let mut transitions = BTreeMap::<MirOpId, Vec<RegionTransition>>::new();
 
         for (step_index, step_id) in step_ids.into_iter().enumerate() {
             if let Some(operation) = body_operations.get(&step_id).copied() {
@@ -161,6 +173,7 @@ fn lower_control_flow(
                     MirOperationKind::Branch {
                         predicate,
                         predicate_place,
+                        ..
                     } => {
                         let shape = control_shapes
                             .get(&operation.id)
@@ -205,7 +218,43 @@ fn lower_control_flow(
                         drafts[second].terminator = Some(MirTerminatorKind::Goto {
                             target: drafts[join].id,
                         });
-                        current = join;
+                        if shape == ControlShape::Conditional {
+                            let region = branch_regions
+                                .get(&operation.id)
+                                .copied()
+                                .unwrap_or_default();
+                            match region.then_end {
+                                Some(then_end) => {
+                                    drafts[first].terminator = None;
+                                    current = first;
+                                    transitions.entry(then_end).or_default().push(
+                                        RegionTransition::FinishThen {
+                                            second,
+                                            join,
+                                            has_else: region.else_end.is_some(),
+                                        },
+                                    );
+                                    if let Some(else_end) = region.else_end {
+                                        drafts[second].terminator = None;
+                                        transitions
+                                            .entry(else_end)
+                                            .or_default()
+                                            .push(RegionTransition::FinishElse { join });
+                                    }
+                                }
+                                None if region.else_end.is_some() => {
+                                    drafts[second].terminator = None;
+                                    current = second;
+                                    transitions
+                                        .entry(region.else_end.expect("else end"))
+                                        .or_default()
+                                        .push(RegionTransition::FinishElse { join });
+                                }
+                                None => current = join,
+                            }
+                        } else {
+                            current = join;
+                        }
                     }
                     MirOperationKind::Return { value } => {
                         drafts[current].terminator = Some(MirTerminatorKind::Return {
@@ -272,6 +321,51 @@ fn lower_control_flow(
                     }
                 }
             }
+            if let Some(region_transitions) = transitions.remove(&step_id) {
+                for transition in region_transitions.into_iter().rev() {
+                    match transition {
+                        RegionTransition::FinishThen {
+                            second,
+                            join,
+                            has_else,
+                        } => {
+                            set_goto_if_open(&mut drafts, current, join);
+                            if has_else {
+                                current = second;
+                            } else {
+                                current = join;
+                            }
+                        }
+                        RegionTransition::FinishElse { join } => {
+                            set_goto_if_open(&mut drafts, current, join);
+                            current = join;
+                        }
+                    }
+                }
+            }
+        }
+
+        // A region closes on the last operation its arm lowered. That operation
+        // is dropped when its place never made the place table, which would
+        // otherwise leave `current` inside the arm and parent the rest of the
+        // body to it. Close whatever is still open, innermost region first.
+        for (_, region_transitions) in std::mem::take(&mut transitions) {
+            for transition in region_transitions.into_iter().rev() {
+                match transition {
+                    RegionTransition::FinishThen {
+                        second,
+                        join,
+                        has_else,
+                    } => {
+                        set_goto_if_open(&mut drafts, current, join);
+                        current = if has_else { second } else { join };
+                    }
+                    RegionTransition::FinishElse { join } => {
+                        set_goto_if_open(&mut drafts, current, join);
+                        current = join;
+                    }
+                }
+            }
         }
 
         if drafts[current].terminator.is_none() {
@@ -322,6 +416,25 @@ enum ControlEffectKind {
     },
 }
 
+enum RegionTransition {
+    FinishThen {
+        second: usize,
+        join: usize,
+        has_else: bool,
+    },
+    FinishElse {
+        join: usize,
+    },
+}
+
+fn set_goto_if_open(drafts: &mut [BlockDraft], from: usize, to: usize) {
+    if drafts[from].terminator.is_none() {
+        drafts[from].terminator = Some(MirTerminatorKind::Goto {
+            target: drafts[to].id,
+        });
+    }
+}
+
 struct BlockDraft {
     id: MirBlockId,
     body: MirBodyId,
@@ -357,6 +470,23 @@ enum ControlShape {
     Conditional,
     Loop,
     Switch,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct BranchRegion {
+    then_end: Option<MirOpId>,
+    else_end: Option<MirOpId>,
+}
+
+fn set_branch_region(operations: &mut [OperationDraft], branch: MirOpId, region: BranchRegion) {
+    let operation = operations
+        .iter_mut()
+        .find(|operation| operation.id == branch)
+        .expect("branch operation should exist");
+    let OperationKindDraft::Branch { region: stored, .. } = &mut operation.kind else {
+        panic!("branch operation id should identify a branch");
+    };
+    *stored = region;
 }
 
 #[derive(Debug, Default)]
@@ -1280,6 +1410,40 @@ fn binary_operator_text(source: &str, binary: &oxc_ast::ast::BinaryExpression<'_
         .to_string()
 }
 
+fn ts_nil_test(expression: &Expression<'_>) -> Option<BranchNilTest> {
+    let Expression::BinaryExpression(binary) = expression else {
+        return None;
+    };
+    let compares_null = matches!(&binary.left, Expression::NullLiteral(_))
+        || matches!(&binary.right, Expression::NullLiteral(_));
+    if !compares_null {
+        return None;
+    }
+    // `== null` also matches `undefined`, so its non-null edge proves non-nil.
+    // `=== null` does not: a value that is `undefined` takes the same edge, so
+    // only the null edge carries a conclusion.
+    match binary.operator {
+        BinaryOperator::Equality => Some(BranchNilTest::Exhaustive { nil_on_true: true }),
+        BinaryOperator::Inequality => Some(BranchNilTest::Exhaustive { nil_on_true: false }),
+        BinaryOperator::StrictEquality => Some(BranchNilTest::NilEdgeOnly { nil_on_true: true }),
+        BinaryOperator::StrictInequality => Some(BranchNilTest::NilEdgeOnly { nil_on_true: false }),
+        _ => None,
+    }
+}
+
+fn ts_null_operand<'a, 'ast>(expression: &'a Expression<'ast>) -> Option<&'a Expression<'ast>> {
+    let Expression::BinaryExpression(binary) = expression else {
+        return None;
+    };
+    if matches!(&binary.left, Expression::NullLiteral(_)) {
+        Some(&binary.right)
+    } else if matches!(&binary.right, Expression::NullLiteral(_)) {
+        Some(&binary.left)
+    } else {
+        None
+    }
+}
+
 fn type_shape_for_ts_expression(expression: &Expression<'_>) -> TypeShape {
     match expression {
         Expression::StringLiteral(_) => TypeShape::Primitive("string".to_string()),
@@ -1453,20 +1617,28 @@ impl<'source> FunctionLowering<'source> {
                 );
             }
             Statement::IfStatement(statement) => {
-                self.push_branch(
+                let nil_test = ts_nil_test(&statement.test);
+                let predicate_expression =
+                    ts_null_operand(&statement.test).unwrap_or(&statement.test);
+                let predicate_place_key = self
+                    .lower_expression(
+                        interner,
+                        predicate_expression,
+                        places,
+                        operations,
+                        unsupported,
+                        false,
+                    )
+                    .map(|source| source.key);
+                let branch = self.push_branch_with_predicate(
                     interner,
                     operations,
-                    statement.span,
+                    statement.test.span(),
                     ControlShape::Conditional,
+                    predicate_place_key,
+                    nil_test,
                 );
-                self.lower_expression(
-                    interner,
-                    &statement.test,
-                    places,
-                    operations,
-                    unsupported,
-                    false,
-                );
+                let then_start = operations.len();
                 self.lower_statement(
                     interner,
                     &statement.consequent,
@@ -1474,9 +1646,15 @@ impl<'source> FunctionLowering<'source> {
                     operations,
                     unsupported,
                 );
+                let then_end = (operations.len() > then_start)
+                    .then(|| operations.last().expect("then operation").id);
+                let else_start = operations.len();
                 if let Some(alternate) = &statement.alternate {
                     self.lower_statement(interner, alternate, places, operations, unsupported);
                 }
+                let else_end = (operations.len() > else_start)
+                    .then(|| operations.last().expect("else operation").id);
+                set_branch_region(operations, branch, BranchRegion { then_end, else_end });
             }
             Statement::WhileStatement(statement) => {
                 self.push_branch(interner, operations, statement.span, ControlShape::Loop);
@@ -1769,21 +1947,29 @@ impl<'source> FunctionLowering<'source> {
                 .as_ref()
                 .map(|init| type_shape_for_ts_expression(init)),
         );
-        let value = declarator
-            .init
-            .as_ref()
-            .and_then(|init| self.lower_value(interner, init, places, operations, unsupported))
-            .unwrap_or_else(|| ValueDraft::Unknown {
-                evidence: "declaration initializer".to_string(),
-            });
-        self.push_assign(
-            interner,
-            operations,
-            declarator.span,
-            key,
-            value,
-            AssignMode::DeclarationBinding,
-        );
+        if let Some(init) = &declarator.init {
+            let value = self
+                .lower_value(interner, init, places, operations, unsupported)
+                .unwrap_or_else(|| ValueDraft::Unknown {
+                    evidence: "declaration initializer".to_string(),
+                });
+            self.push_assign(
+                interner,
+                operations,
+                declarator.span,
+                key,
+                value,
+                AssignMode::DeclarationBinding,
+            );
+        } else {
+            self.push_operation(
+                interner,
+                operations,
+                declarator.span,
+                OperationKindDraft::StorageLive { place_key: key },
+                MirStatus::Partial,
+            );
+        }
     }
 
     fn lower_for_statement_init(
@@ -3584,18 +3770,34 @@ impl<'source> FunctionLowering<'source> {
         operations: &mut Vec<OperationDraft>,
         span: oxc_span::Span,
         shape: ControlShape,
-    ) {
+    ) -> MirOpId {
+        self.push_branch_with_predicate(interner, operations, span, shape, None, None)
+    }
+
+    fn push_branch_with_predicate(
+        &self,
+        interner: &crate::internal_core::StableKeyInterner,
+        operations: &mut Vec<OperationDraft>,
+        span: oxc_span::Span,
+        shape: ControlShape,
+        predicate_place_key: Option<String>,
+        nil_test: Option<BranchNilTest>,
+    ) -> MirOpId {
+        let id = MirOpId(operations.len() as u64);
         self.push_operation(
             interner,
             operations,
             span,
             OperationKindDraft::Branch {
                 predicate: MirPredicateId(span.start as u64),
-                predicate_place_key: None,
+                predicate_place_key,
+                nil_test,
                 shape,
+                region: BranchRegion::default(),
             },
             MirStatus::Partial,
         );
+        id
     }
 
     fn push_unsupported(
@@ -3740,6 +3942,9 @@ impl OperationDraft {
 
 #[derive(Debug, Clone)]
 enum OperationKindDraft {
+    StorageLive {
+        place_key: String,
+    },
     Assign {
         place_key: String,
         value: ValueDraft,
@@ -3751,7 +3956,9 @@ enum OperationKindDraft {
     Branch {
         predicate: MirPredicateId,
         predicate_place_key: Option<String>,
+        nil_test: Option<BranchNilTest>,
         shape: ControlShape,
+        region: BranchRegion,
     },
     Call {
         site: CallSiteId,
@@ -3778,6 +3985,9 @@ enum OperationKindDraft {
 impl OperationKindDraft {
     fn to_kind(&self, place_ids: &BTreeMap<String, PlaceId>) -> Option<MirOperationKind> {
         match self {
+            Self::StorageLive { place_key } => Some(MirOperationKind::StorageLive {
+                place: *place_ids.get(place_key)?,
+            }),
             Self::Assign {
                 place_key,
                 value,
@@ -3793,6 +4003,7 @@ impl OperationKindDraft {
             Self::Branch {
                 predicate,
                 predicate_place_key,
+                nil_test,
                 ..
             } => Some(MirOperationKind::Branch {
                 predicate: *predicate,
@@ -3800,6 +4011,7 @@ impl OperationKindDraft {
                     .as_ref()
                     .and_then(|key| place_ids.get(key))
                     .copied(),
+                nil_test: *nil_test,
             }),
             Self::Call {
                 site,
@@ -3834,6 +4046,7 @@ impl OperationKindDraft {
 
     fn label(&self) -> &'static str {
         match self {
+            Self::StorageLive { .. } => "storage-live",
             Self::Assign { .. } => "assign",
             Self::Read { .. } => "read",
             Self::Branch { .. } => "branch",
@@ -3852,6 +4065,7 @@ impl OperationKindDraft {
 
     fn place_keys(&self) -> Vec<String> {
         match self {
+            Self::StorageLive { place_key } => vec![place_key.clone()],
             Self::Assign {
                 place_key, value, ..
             } => {

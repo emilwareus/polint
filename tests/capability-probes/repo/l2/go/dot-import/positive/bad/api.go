@@ -1,0 +1,3 @@
+package bad
+
+func ForbiddenDot() {}

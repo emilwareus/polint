@@ -1336,6 +1336,7 @@ export function narrow(user, value, dynamicKey) {
                 MirOperationKind::Branch {
                     predicate: crate::analysis_neutral::ids::MirPredicateId(operations.len() as u64),
                     predicate_place: None,
+                    nil_test: None,
                 },
             ));
         }

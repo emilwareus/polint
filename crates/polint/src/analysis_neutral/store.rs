@@ -490,7 +490,13 @@ fn remap_operation_kind(
             *place = remap_place_id(*place, place_ids, "dangling MIR operation place")?;
             remap_value(value, body_ids, place_ids)?;
         }
-        MirOperationKind::Branch { .. } => {}
+        MirOperationKind::Branch {
+            predicate_place, ..
+        } => {
+            if let Some(place) = predicate_place {
+                *place = remap_place_id(*place, place_ids, "dangling MIR predicate place")?;
+            }
+        }
         MirOperationKind::Call {
             callee,
             arguments,
@@ -614,7 +620,9 @@ fn invalid_fact(reason: impl Into<String>) -> AnalysisError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis_neutral::ids::{MirBodyId, MirOpId, PlaceId, UnsupportedId};
+    use crate::analysis_neutral::ids::{
+        MirBodyId, MirOpId, MirPredicateId, PlaceId, UnsupportedId,
+    };
     use crate::analysis_neutral::mir_body::{MirBody, MirOutput, MirStatus};
     use crate::analysis_neutral::mir_op::{
         ConservativeAction, MirOperation, MirOperationKind, UnsupportedDomain,
@@ -721,5 +729,42 @@ mod tests {
             .expect("remapped unsupported row exists")
             .stable_key;
         assert_eq!(interner.resolve(stable_key).as_ref(), "unsupported:z");
+    }
+
+    #[test]
+    fn semantic_store_remaps_branch_predicate_places_after_place_sorting() {
+        let interner = crate::internal_core::StableKeyInterner::default();
+        let mut predicate = place(&interner);
+        predicate.stable_key = interner.intern("place:z".to_string());
+        let mut sorts_first = place(&interner);
+        sorts_first.id = PlaceId(1);
+        sorts_first.stable_key = interner.intern("place:a".to_string());
+        let output = MirOutput {
+            bodies: vec![body(&interner)],
+            places: vec![predicate, sorts_first],
+            operations: vec![MirOperation {
+                id: MirOpId(0),
+                body: MirBodyId(0),
+                ordinal: 0,
+                span: span(),
+                kind: MirOperationKind::Branch {
+                    predicate: MirPredicateId(0),
+                    predicate_place: Some(PlaceId(0)),
+                    nil_test: None,
+                },
+                stable_key: interner.intern("operation:branch".to_string()),
+                status: MirStatus::Partial,
+            }],
+            ..MirOutput::default()
+        };
+
+        let store = SemanticStore::from_output(output, &interner).expect("store normalizes");
+        assert!(matches!(
+            store.mir_operations()[0].kind,
+            MirOperationKind::Branch {
+                predicate_place: Some(PlaceId(1)),
+                ..
+            }
+        ));
     }
 }
