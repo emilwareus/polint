@@ -63,7 +63,7 @@ impl GoRtaInputs {
             };
             caller_function_id.insert(semantic_function.qualified.clone(), core_function.id);
 
-            let key = function_node_key(interner, db, core_function);
+            let key = function_node_key(db, core_function);
             let Some(node) = function_node_by_stable_key.get(key.as_str()).copied() else {
                 continue;
             };
@@ -546,14 +546,9 @@ fn matching_core_function_for_indexed<'a>(
 /// looked up in the already-built `polint.semantic_graph` function nodes by stable
 /// key. Keep in lockstep with the builder recipe (node-kind label + path + name +
 /// span identity, `FactFamily::Function`).
-fn function_node_key(
-    interner: &crate::core::StableKeyInterner,
-    db: &AnalysisDb,
-    function: &FunctionFact,
-) -> String {
+fn function_node_key(db: &AnalysisDb, function: &FunctionFact) -> String {
     let path = db.path_for(function.file);
     semantic_stable_key(
-        interner,
         FactFamily::Function,
         &[
             ("node_kind", "function".to_string()),
@@ -595,11 +590,7 @@ fn callsite_constraint_node_indexed(
     let span = callsite.span.as_ref()?;
     let candidates = index.call_sites_at(file, span);
     let core_callsite = select_constraint_callsite(interner, candidates, caller)?;
-    let node_key = node_key_from_identity(
-        interner,
-        "callsite",
-        &interner.resolve(core_callsite.stable_key),
-    );
+    let node_key = node_key_from_identity("callsite", &interner.resolve(core_callsite.stable_key));
     index.callsite_node(&node_key)
 }
 
@@ -667,13 +658,8 @@ fn select_constraint_callsite<'a>(
 
 /// Reproduces `semantic_graph::build::node_key_from_identity` (node-kind label +
 /// identity, `FactFamily::Scope`). Keep in lockstep with the builder recipe.
-fn node_key_from_identity(
-    interner: &crate::core::StableKeyInterner,
-    node_kind: &str,
-    identity: &str,
-) -> String {
+fn node_key_from_identity(node_kind: &str, identity: &str) -> String {
     semantic_stable_key(
-        interner,
         FactFamily::Scope,
         &[
             ("node_kind", node_kind.to_string()),
@@ -734,7 +720,6 @@ mod tests {
 
         // The semantic-graph function node, keyed exactly like the builder would key it.
         let node_stable_key = function_node_key(
-            &db.stable_key_interner(),
             &db,
             db.functions().iter().find(|f| f.id == function_id).unwrap(),
         );
@@ -871,7 +856,6 @@ mod tests {
             Vec::new(),
         ));
         let node_stable_key = function_node_key(
-            &db.stable_key_interner(),
             &db,
             db.functions().iter().find(|f| f.id == function_id).unwrap(),
         );
@@ -1365,16 +1349,8 @@ mod tests {
             1,
             Vec::new(),
         ));
-        let key_a = function_node_key(
-            &db.stable_key_interner(),
-            &db,
-            db.functions().iter().find(|f| f.id == fn_a).unwrap(),
-        );
-        let key_b = function_node_key(
-            &db.stable_key_interner(),
-            &db,
-            db.functions().iter().find(|f| f.id == fn_b).unwrap(),
-        );
+        let key_a = function_node_key(&db, db.functions().iter().find(|f| f.id == fn_a).unwrap());
+        let key_b = function_node_key(&db, db.functions().iter().find(|f| f.id == fn_b).unwrap());
         db.replace_semantic_graph_facts(SemanticGraphOutput {
             nodes: vec![
                 SemanticNodeFact {
@@ -1487,12 +1463,10 @@ mod tests {
             Vec::new(),
         ));
         let method_key = function_node_key(
-            &db.stable_key_interner(),
             &db,
             db.functions().iter().find(|f| f.id == method_id).unwrap(),
         );
         let free_key = function_node_key(
-            &db.stable_key_interner(),
             &db,
             db.functions().iter().find(|f| f.id == free_id).unwrap(),
         );

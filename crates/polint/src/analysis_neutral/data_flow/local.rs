@@ -8,6 +8,8 @@ use super::facts::{
 use super::store::{
     DataFlowOutput, next_data_flow_budget_id, next_data_flow_edge_id, next_data_flow_node_id,
 };
+use std::sync::Arc;
+
 use crate::analysis_api::{FactFamily, stable_key_from_parts};
 use crate::analysis_neutral::AnalysisHost;
 use crate::analysis_neutral::ids::{DataFlowBudgetId, DataFlowNodeId, MirBodyId, PlaceId};
@@ -28,6 +30,14 @@ struct LocalFlowBuilder<'a, 'b, H: AnalysisHost + ?Sized> {
     db: &'a H,
     output: &'b mut DataFlowOutput,
     place_nodes: BTreeMap<PlaceId, DataFlowNodeId>,
+    /// node stable key -> node id. `operation_node` is called once per MIR
+    /// operation and used to scan `output.nodes` linearly, which is quadratic in
+    /// a corpus where `derive_local_place_nodes` has already pushed one node per
+    /// MIR place.
+    nodes_by_key: BTreeMap<crate::internal_core::StableKeyId, DataFlowNodeId>,
+    /// `PlaceId` -> index into `db.mir_places()`, so `projection_edge_kind` does
+    /// not scan the whole place table per projection edge.
+    place_index: BTreeMap<PlaceId, usize>,
     emitted_edges: BTreeSet<crate::internal_core::StableKeyId>,
     branchy_bodies: BTreeSet<MirBodyId>,
 }
@@ -46,10 +56,23 @@ impl<'a, 'b, H: AnalysisHost + ?Sized> LocalFlowBuilder<'a, 'b, H> {
                 matches!(operation.kind, MirOperationKind::Branch { .. }).then_some(operation.body)
             })
             .collect();
+        let nodes_by_key = output
+            .nodes
+            .iter()
+            .map(|node| (node.stable_key, node.id))
+            .collect();
+        let place_index = db
+            .mir_places()
+            .iter()
+            .enumerate()
+            .map(|(index, place)| (place.id, index))
+            .collect();
         Self {
             db,
             output,
             place_nodes,
+            nodes_by_key,
+            place_index,
             emitted_edges: BTreeSet::new(),
             branchy_bodies,
         }
@@ -344,7 +367,11 @@ impl<'a, 'b, H: AnalysisHost + ?Sized> LocalFlowBuilder<'a, 'b, H> {
     }
 
     fn projection_edge_kind(&self, place: PlaceId) -> DataFlowEdgeKind {
-        let Some(place) = self.db.mir_places().iter().find(|fact| fact.id == place) else {
+        let Some(place) = self
+            .place_index
+            .get(&place)
+            .and_then(|index| self.db.mir_places().get(*index))
+        else {
             return DataFlowEdgeKind::FieldProjection;
         };
         if place.projections.iter().any(|projection| {
@@ -422,18 +449,12 @@ impl<'a, 'b, H: AnalysisHost + ?Sized> LocalFlowBuilder<'a, 'b, H> {
             interner,
             FactFamily::DataFlowNode,
             &[
-                ("operation", self.operation_key(operation)),
+                ("operation", self.operation_key(operation).to_string()),
                 ("node", suffix),
             ],
         );
-        if let Some(node) = self
-            .output
-            .nodes
-            .iter()
-            .find(|node| node.stable_key == stable_key)
-            .map(|node| node.id)
-        {
-            return node;
+        if let Some(node) = self.nodes_by_key.get(&stable_key) {
+            return *node;
         }
 
         let (language, file, function) = self.body_context(operation.body);
@@ -455,6 +476,7 @@ impl<'a, 'b, H: AnalysisHost + ?Sized> LocalFlowBuilder<'a, 'b, H> {
             span: Some(operation.span.clone()),
             stable_key,
         });
+        self.nodes_by_key.insert(stable_key, id);
         id
     }
 
@@ -476,19 +498,13 @@ impl<'a, 'b, H: AnalysisHost + ?Sized> LocalFlowBuilder<'a, 'b, H> {
             FactFamily::DataFlowEdge,
             &[
                 ("kind", format!("{:?}", draft.kind)),
-                ("operation", self.operation_key(draft.operation)),
+                ("operation", self.operation_key(draft.operation).to_string()),
                 ("from", self.node_key(draft.from)),
                 ("to", self.node_key(draft.to)),
                 ("status", format!("{:?}", draft.status)),
             ],
         );
-        if !self.emitted_edges.insert(stable_key)
-            || self
-                .output
-                .edges
-                .iter()
-                .any(|edge| edge.stable_key == stable_key)
-        {
+        if !self.emitted_edges.insert(stable_key) {
             return;
         }
         self.output.edges.push(DataFlowEdgeFact {
@@ -533,17 +549,17 @@ impl<'a, 'b, H: AnalysisHost + ?Sized> LocalFlowBuilder<'a, 'b, H> {
             .unwrap_or((Language::Unknown, None, None))
     }
 
-    fn place_key(&self, place: PlaceId) -> String {
+    fn place_key(&self, place: PlaceId) -> Arc<str> {
         self.db
             .mir_places()
             .iter()
             .find(|fact| fact.id == place)
-            .map(|place| self.db.resolve_stable_key(place.stable_key).to_string())
-            .unwrap_or_else(|| format!("place:{}", place.0))
+            .map(|place| self.db.resolve_stable_key(place.stable_key))
+            .unwrap_or_else(|| Arc::from(format!("place:{}", place.0)))
     }
 
-    fn operation_key(&self, operation: &MirOperation) -> String {
-        self.db.resolve_stable_key(operation.stable_key).to_string()
+    fn operation_key(&self, operation: &MirOperation) -> Arc<str> {
+        self.db.resolve_stable_key(operation.stable_key)
     }
 
     fn node_key(&self, node: DataFlowNodeId) -> String {
@@ -567,7 +583,7 @@ struct EdgeDraft<'a> {
     provenance: DataFlowProvenance,
     budget: Option<DataFlowBudgetId>,
     evidence: Vec<String>,
-    input_stable_keys: Vec<String>,
+    input_stable_keys: Vec<Arc<str>>,
 }
 
 pub fn budget_fact(

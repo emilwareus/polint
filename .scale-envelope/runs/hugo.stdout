@@ -1,0 +1,3 @@
+
+running 1 test
+test eval::bench::runner::tests::perf_child_measure_entry ... <<<POLINT_PERF_POINT_BEGIN>>>{"repo_id":"gohugoio-hugo","repo_file_count":871,"repo_source_bytes":5866703,"diff_files":0,"diff_hunk_lines":0,"cold_wall_clock_ms":714524,"warm_wall_clock_ms":714524,"peak_rss_bytes":7263526912,"peak_rss_delta_bytes":7254155264,"size":{"cache_bytes":176887829,"store_bytes":0},"budget":{"budget_exceeded":0,"tokens_exhausted":0,"iteration_capped":20829}}<<<POLINT_PERF_POINT_END>>>

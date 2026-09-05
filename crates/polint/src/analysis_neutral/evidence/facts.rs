@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use crate::analysis_neutral::cfg::ids::CfgNodeId;
 use crate::analysis_neutral::ids::{
@@ -30,7 +31,7 @@ pub struct EvidenceNodeFact {
     pub validation: EvidenceValidation,
     pub confidence: EvidenceConfidence,
     pub compact_label: Option<String>,
-    pub source_fact_stable_keys: Vec<String>,
+    pub source_fact_stable_keys: Vec<Arc<str>>,
     pub stable_key: StableKeyId,
 }
 
@@ -47,10 +48,10 @@ pub struct EvidenceEdgeFact {
     pub validation: EvidenceValidation,
     pub confidence: EvidenceConfidence,
     pub call_site: Option<CallSiteId>,
-    pub summary_stable_key: Option<String>,
+    pub summary_stable_key: Option<Arc<str>>,
     pub expansion: EvidenceExpansion,
     pub compact_label: Option<String>,
-    pub source_fact_stable_keys: Vec<String>,
+    pub source_fact_stable_keys: Vec<Arc<str>>,
     pub stable_key: StableKeyId,
 }
 
@@ -107,7 +108,7 @@ pub struct EvidenceUnknownFact {
     pub edge: Option<EvidenceEdgeId>,
     pub reason: EvidenceUnknownReason,
     pub message: String,
-    pub source_fact_stable_keys: Vec<String>,
+    pub source_fact_stable_keys: Vec<Arc<str>>,
     pub stable_key: StableKeyId,
 }
 
@@ -149,7 +150,7 @@ pub struct ExtensionEvidenceCandidateFact {
     pub confidence: EvidenceConfidence,
     pub source_path: Option<String>,
     pub source_span: Option<Span>,
-    pub summary_stable_key: Option<String>,
+    pub summary_stable_key: Option<Arc<str>>,
     pub expansion: EvidenceExpansion,
     pub replay_key: Option<String>,
     pub native_anchor_stable_keys: Vec<String>,

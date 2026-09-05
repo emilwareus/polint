@@ -438,6 +438,17 @@ impl FactMetaStore {
             .and_then(|owners| owners.get(&stable_key))
     }
 
+    /// Number of metadata rows retained across every family.
+    ///
+    /// Counted from the per-family row vectors (O(families)), so the resource
+    /// gauge can report fact volume at a stage boundary without walking rows.
+    pub fn row_count(&self) -> usize {
+        self.rows
+            .values()
+            .map(|rows| rows.dense.iter().filter(|row| row.is_some()).count() + rows.sparse.len())
+            .sum()
+    }
+
     pub fn rows(&self) -> impl Iterator<Item = (FactRef, &FactMeta)> {
         self.rows.iter().flat_map(|(family, rows)| {
             rows.rows()
@@ -468,14 +479,24 @@ pub fn stable_key_from_parts<V: AsRef<str>>(
     interner.intern(text)
 }
 
+/// Canonical stable-key text for `family` and `parts`, **without interning it**.
+///
+/// Most callers want the text: to embed in a larger composed key, to feed a
+/// payload digest, or to key a local map. Routing them through the interner
+/// retained one key per call for the whole run, because interning is permanent
+/// and these keys are never a fact's identity. The text produced here is
+/// byte-identical to what [`stable_key_from_parts`] interns.
 pub fn stable_key_text_from_parts<V: AsRef<str>>(
-    interner: &StableKeyInterner,
     family: FactFamily,
     parts: &[(&str, V)],
 ) -> String {
-    interner
-        .resolve(stable_key_from_parts(interner, family, parts))
-        .to_string()
+    let mut borrowed = parts
+        .iter()
+        .map(|(label, value)| (*label, value.as_ref()))
+        .collect::<Vec<_>>();
+    let mut text = String::new();
+    write_stable_key_text(&mut text, family, &mut borrowed);
+    text
 }
 
 /// Writes the canonical stable-key text for `family` and `parts` into `buffer`,

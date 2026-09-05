@@ -171,7 +171,6 @@ fn unresolved_stable_key(
 ) -> crate::internal_core::StableKeyId {
     interner.intern(
         semantic_stable_key(
-            interner,
             FactFamily::UnresolvedCall,
             &[
                 ("site", interner.resolve(site.stable_key).to_string()),

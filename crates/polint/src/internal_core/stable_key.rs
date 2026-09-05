@@ -87,6 +87,20 @@ impl StableKeyInterner {
         (id, text)
     }
 
+    /// Number of distinct keys interned so far.
+    ///
+    /// The resource gauge reports this at every stage boundary: interned key
+    /// text is retained for the whole run, so its count is the single best
+    /// proxy for how much of peak RSS is identity strings rather than facts.
+    pub(crate) fn len(&self) -> usize {
+        self.read().keys.len()
+    }
+
+    /// Total bytes of interned key text (excludes per-`Arc` and map overhead).
+    pub(crate) fn text_bytes(&self) -> usize {
+        self.read().keys.iter().map(|key| key.len()).sum()
+    }
+
     pub fn resolve(&self, id: StableKeyId) -> Arc<str> {
         let state = self.read();
         Arc::clone(

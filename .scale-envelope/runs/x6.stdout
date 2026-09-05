@@ -1,0 +1,3 @@
+
+running 1 test
+test eval::bench::runner::tests::perf_child_measure_entry ... <<<POLINT_PERF_POINT_BEGIN>>>{"repo_id":"excalidraw-excalidraw","repo_file_count":385,"repo_source_bytes":2566051,"diff_files":0,"diff_hunk_lines":0,"cold_wall_clock_ms":222818,"warm_wall_clock_ms":222818,"peak_rss_bytes":5844377600,"peak_rss_delta_bytes":5834878976,"size":{"cache_bytes":201969882,"store_bytes":0},"budget":{"budget_exceeded":0,"tokens_exhausted":0,"iteration_capped":8387}}<<<POLINT_PERF_POINT_END>>>

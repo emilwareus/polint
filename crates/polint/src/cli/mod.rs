@@ -2520,10 +2520,7 @@ fn unknowns(root: PathBuf, args: &UnknownsArgs) -> Result<u8> {
         .as_ref()
         .is_none_or(|view| !view_supports_unknowns(view))
     {
-        let db = AnalysisDb::new();
-        let interner = db.stable_key_interner();
         let row = crate::analysis::unknown_taxonomy::collect::unsupported_capability_row(
-            &interner,
             &args.capability,
             support.map(|view| view.docs_path),
         );
@@ -2544,13 +2541,20 @@ fn unknowns(root: PathBuf, args: &UnknownsArgs) -> Result<u8> {
         args.no_cache,
         &[args.capability.as_str()],
     )?;
-    let rows = crate::analysis::unknown_taxonomy::collect::public_capability_unknowns(
+    // A resource-budget stop is run-level: it is why the run could not finish,
+    // so it belongs in every capability's answer, not only the
+    // all-capabilities view.
+    let mut taxonomy_rows = crate::analysis::unknown_taxonomy::collect::public_capability_unknowns(
         &analysis.db,
         &args.capability,
-    )
-    .into_iter()
-    .map(UnknownsRow::from_taxonomy_compat)
-    .collect();
+    );
+    taxonomy_rows.extend(
+        crate::analysis::unknown_taxonomy::collect::resource_budget_unknowns(&analysis.diagnostics),
+    );
+    let rows = crate::analysis::unknown_taxonomy::facts::normalize_rows(taxonomy_rows)
+        .into_iter()
+        .map(UnknownsRow::from_taxonomy_compat)
+        .collect();
     let report = UnknownsReport {
         version: 1,
         schema: POLINT_UNKNOWNS_JSON_SCHEMA_V1_URL.to_string(),
@@ -2572,10 +2576,7 @@ fn inspect_unknowns(root: PathBuf, args: &InspectUnknownsArgs) -> Result<u8> {
             .as_ref()
             .is_none_or(|view| !view_supports_unknowns(view))
         {
-            let db = AnalysisDb::new();
-            let interner = db.stable_key_interner();
             let row = crate::analysis::unknown_taxonomy::collect::unsupported_capability_row(
-                &interner,
                 capability,
                 support.map(|view| view.docs_path),
             );
@@ -2600,10 +2601,19 @@ fn inspect_unknowns(root: PathBuf, args: &InspectUnknownsArgs) -> Result<u8> {
         });
     let analysis = analyze_for_agent_json(&root, &args.paths, args.no_cache, &requested_caps)?;
     let rows = if let Some(capability) = &args.capability {
-        crate::analysis::unknown_taxonomy::collect::public_capability_unknowns(
+        // A resource-budget stop is run-level: it is why the run could not
+        // finish, so it belongs in every capability's answer, not only the
+        // all-capabilities view.
+        let mut rows = crate::analysis::unknown_taxonomy::collect::public_capability_unknowns(
             &analysis.db,
             capability,
-        )
+        );
+        rows.extend(
+            crate::analysis::unknown_taxonomy::collect::resource_budget_unknowns(
+                &analysis.diagnostics,
+            ),
+        );
+        crate::analysis::unknown_taxonomy::facts::normalize_rows(rows)
     } else {
         crate::analysis::unknown_taxonomy::collect::all_unknowns_with_diagnostics(
             &analysis.db,

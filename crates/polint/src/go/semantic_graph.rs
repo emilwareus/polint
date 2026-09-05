@@ -39,11 +39,8 @@ pub fn project_go_semantic(
         let Some(core_callsite) = matching_core_callsite(db, callsite) else {
             continue;
         };
-        let site_key = node_key_from_identity(
-            interner,
-            "callsite",
-            &interner.resolve(core_callsite.stable_key),
-        );
+        let site_key =
+            node_key_from_identity("callsite", &interner.resolve(core_callsite.stable_key));
         let Some(callsite_node) = builder.node_for_key(interner, &site_key) else {
             continue;
         };

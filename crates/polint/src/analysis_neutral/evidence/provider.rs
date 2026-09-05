@@ -1,4 +1,5 @@
 use std::fmt::Debug;
+use std::sync::Arc;
 
 use super::cache_key::{
     evidence_provider_parameter_digest, evidence_provider_parameter_digest_for_snapshot,
@@ -9,10 +10,11 @@ use super::facts::{
     EvidenceValidation,
 };
 use super::store::EvidenceOutput;
+
 use crate::analysis_api::ProviderManifest;
 use crate::analysis_api::{
-    CacheStats, Digest, DigestKind, InputComponent, InputSnapshot, ProviderExecution,
-    ProviderFailureReason, ProviderFailureStage,
+    CacheStats, Digest, DigestBuilder, DigestKind, InputComponent, InputSnapshot,
+    ProviderExecution, ProviderFailureReason, ProviderFailureStage,
 };
 use crate::analysis_api::{FactFamily, stable_key_from_parts};
 use crate::analysis_neutral::AnalysisHost;
@@ -143,7 +145,7 @@ fn evidence_node_from_data_flow(
         validation: EvidenceValidation::ReferentiallyValidated,
         confidence: EvidenceConfidence::High,
         compact_label: Some(format!("{:?}", node.kind)),
-        source_fact_stable_keys: vec![interner.resolve(node.stable_key).to_string()],
+        source_fact_stable_keys: vec![interner.resolve(node.stable_key)],
         stable_key: stable_key_from_parts(
             interner,
             FactFamily::EvidenceNode,
@@ -178,7 +180,7 @@ fn evidence_edge_from_data_flow(
         summary_stable_key: summary_stable_key.clone(),
         expansion: evidence_expansion(edge, summary_stable_key.as_deref()),
         compact_label: Some(format!("{:?}", edge.kind)),
-        source_fact_stable_keys: std::iter::once(interner.resolve(edge.stable_key).to_string())
+        source_fact_stable_keys: std::iter::once(interner.resolve(edge.stable_key))
             .chain(edge.input_stable_keys.iter().cloned())
             .collect(),
         stable_key: stable_key_from_parts(
@@ -243,8 +245,8 @@ fn derive_control_dependence_evidence(db: &impl AnalysisHost, output: &mut Evide
             confidence: EvidenceConfidence::High,
             compact_label: Some(format!("control:{:?}", dependence.controlling_edge_kind)),
             source_fact_stable_keys: vec![
-                interner.resolve(dependence.stable_key).to_string(),
-                interner.resolve(controlling_edge.stable_key).to_string(),
+                interner.resolve(dependence.stable_key),
+                interner.resolve(controlling_edge.stable_key),
             ],
             stable_key: stable_key_from_parts(
                 interner,
@@ -279,7 +281,7 @@ fn derive_control_dependence_evidence(db: &impl AnalysisHost, output: &mut Evide
             validation: EvidenceValidation::ReferentiallyValidated,
             confidence: EvidenceConfidence::High,
             compact_label: Some("controlled_block".to_string()),
-            source_fact_stable_keys: vec![interner.resolve(dependence.stable_key).to_string()],
+            source_fact_stable_keys: vec![interner.resolve(dependence.stable_key)],
             stable_key: stable_key_from_parts(
                 interner,
                 FactFamily::EvidenceNode,
@@ -308,8 +310,8 @@ fn derive_control_dependence_evidence(db: &impl AnalysisHost, output: &mut Evide
             expansion: EvidenceExpansion::None,
             compact_label: Some(format!("{:?}", dependence.controlling_edge_kind)),
             source_fact_stable_keys: vec![
-                interner.resolve(dependence.stable_key).to_string(),
-                interner.resolve(controlling_edge.stable_key).to_string(),
+                interner.resolve(dependence.stable_key),
+                interner.resolve(controlling_edge.stable_key),
             ],
             stable_key: stable_key_from_parts(
                 interner,
@@ -375,7 +377,7 @@ fn data_flow_edge_kind(kind: DataFlowEdgeKind) -> EvidenceEdgeKind {
     }
 }
 
-fn summary_source_key(edge: &DataFlowEdgeFact) -> Option<String> {
+fn summary_source_key(edge: &DataFlowEdgeFact) -> Option<Arc<str>> {
     edge.input_stable_keys
         .iter()
         .find(|key| is_summary_key(key))
@@ -499,6 +501,66 @@ fn cfg_precision(precision: CfgPrecision) -> EvidencePrecision {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Fact-family part prefixes, in the order a sorted part list puts them.
+///
+/// The streaming digest below relies on three properties of this list, all
+/// asserted by `family_prefixes_partition_the_sorted_order`: it is strictly
+/// ascending, no entry is a prefix of another, and no header label starts with
+/// any entry.
+const EVIDENCE_FAMILY_PREFIXES: [&str; 8] = [
+    "evidence_bundle=",
+    "evidence_edge=",
+    "evidence_node=",
+    "evidence_omitted_region=",
+    "evidence_path=",
+    "evidence_replay_key=",
+    "evidence_slice=",
+    "evidence_unknown=",
+];
+
+/// Every label a header part can carry (the `<label>=` or `<label>:` stem).
+const EVIDENCE_HEADER_LABELS: [&str; 20] = [
+    "provider_id",
+    "provider_version",
+    "schema",
+    "parameters",
+    "input_parameters",
+    "semantic_mir",
+    "cfg",
+    "calls",
+    "refined_calls",
+    "direct_summaries",
+    "type_value_alias",
+    "entrypoints",
+    "extensions",
+    "data_flow",
+    "go_lifecycle",
+    "ts_js_lifecycle",
+    "model",
+    "extension",
+    "tool",
+    "evidence_output",
+];
+
+/// Provider-output digest for the evidence layer, hashed one fact family at a
+/// time.
+///
+/// The digest is the FNV fold over the run's parts **in sorted order**. Building
+/// that order the obvious way — collect every part into one `Vec<String>`, sort,
+/// hash — materialises one ~4 KB payload per evidence fact simultaneously. On
+/// excalidraw that is the single largest allocation in the whole pipeline:
+/// measured at **+2.3 GB of peak RSS** for this one call, more than the facts it
+/// describes.
+///
+/// It is avoidable without changing a byte of the digest. Every fact family's
+/// parts share a `<family>=` prefix, and no family name is a prefix of another,
+/// so in sorted order the families form contiguous blocks ordered by prefix.
+/// A header part (`provider_id=…`, `cfg=…`, `extensions=…`, …) never starts with
+/// a family prefix, so it sorts before *every* part of a family exactly when it
+/// sorts before that family's prefix. Emitting the (few, small) header parts and
+/// the family blocks in that merged order therefore reproduces `parts.sort()`
+/// exactly, while only one family's payloads are live at a time.
+#[allow(clippy::too_many_arguments)]
 fn evidence_output_digest(
     manifest: &ProviderManifest,
     input_snapshot: &InputSnapshot,
@@ -525,7 +587,7 @@ fn evidence_output_digest(
         extensions_output_digest.clone(),
         data_flow_output_digest.clone(),
     ];
-    let mut parts = vec![
+    let mut header = vec![
         format!("provider_id={}", manifest.id),
         format!("provider_version={}", manifest.provider_version()),
         format!("schema={}", manifest.primary_schema_label()),
@@ -545,66 +607,18 @@ fn evidence_output_digest(
         format!("data_flow={data_flow_output_digest}"),
     ];
     extend_component_parts(
-        &mut parts,
+        &mut header,
         "go_lifecycle",
         &input_snapshot.go_lifecycle.components,
     );
     extend_component_parts(
-        &mut parts,
+        &mut header,
         "ts_js_lifecycle",
         &input_snapshot.ts_js_lifecycle.components,
     );
-    extend_component_parts(&mut parts, "model", &input_snapshot.models);
-    extend_component_parts(&mut parts, "extension", &input_snapshot.extensions);
-    extend_component_parts(&mut parts, "tool", &input_snapshot.tool_invocations);
-    parts.extend(
-        output
-            .nodes
-            .iter()
-            .map(|node| format!("evidence_node={}", stable_fact_payload(interner, node))),
-    );
-    parts.extend(
-        output
-            .edges
-            .iter()
-            .map(|edge| format!("evidence_edge={}", stable_fact_payload(interner, edge))),
-    );
-    parts.extend(
-        output
-            .bundles
-            .iter()
-            .map(|bundle| format!("evidence_bundle={}", stable_fact_payload(interner, bundle))),
-    );
-    parts.extend(
-        output
-            .paths
-            .iter()
-            .map(|path| format!("evidence_path={}", stable_fact_payload(interner, path))),
-    );
-    parts.extend(
-        output
-            .slices
-            .iter()
-            .map(|slice| format!("evidence_slice={}", stable_fact_payload(interner, slice))),
-    );
-    parts.extend(output.unknowns.iter().map(|unknown| {
-        format!(
-            "evidence_unknown={}",
-            stable_fact_payload(interner, unknown)
-        )
-    }));
-    parts.extend(output.omitted_regions.iter().map(|omitted| {
-        format!(
-            "evidence_omitted_region={}",
-            stable_fact_payload(interner, omitted)
-        )
-    }));
-    parts.extend(output.replay_keys.iter().map(|replay| {
-        format!(
-            "evidence_replay_key={}",
-            stable_fact_payload(interner, replay)
-        )
-    }));
+    extend_component_parts(&mut header, "model", &input_snapshot.models);
+    extend_component_parts(&mut header, "extension", &input_snapshot.extensions);
+    extend_component_parts(&mut header, "tool", &input_snapshot.tool_invocations);
     if output.nodes.is_empty()
         && output.edges.is_empty()
         && output.bundles.is_empty()
@@ -614,11 +628,87 @@ fn evidence_output_digest(
         && output.omitted_regions.is_empty()
         && output.replay_keys.is_empty()
     {
-        parts.push("evidence_output=empty".to_string());
+        header.push("evidence_output=empty".to_string());
     }
-    parts.sort();
-    let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
-    Digest::from_parts(DigestKind::ProviderOutput, "evidence_output", &refs)
+    header.sort();
+
+    let mut digest = Digest::builder(DigestKind::ProviderOutput, "evidence_output");
+    let mut header = header.into_iter().peekable();
+    let mut emit_family = |digest: &mut DigestBuilder, prefix: &str, mut block: Vec<String>| {
+        while header.peek().is_some_and(|part| part.as_str() < prefix) {
+            digest.part(&header.next().expect("peeked part is present"));
+        }
+        block.sort();
+        for part in &block {
+            digest.part(part);
+        }
+    };
+
+    // Families in ascending prefix order — the order `parts.sort()` produced.
+    emit_family(
+        &mut digest,
+        EVIDENCE_FAMILY_PREFIXES[0],
+        family_parts(interner, EVIDENCE_FAMILY_PREFIXES[0], &output.bundles),
+    );
+    emit_family(
+        &mut digest,
+        EVIDENCE_FAMILY_PREFIXES[1],
+        family_parts(interner, EVIDENCE_FAMILY_PREFIXES[1], &output.edges),
+    );
+    emit_family(
+        &mut digest,
+        EVIDENCE_FAMILY_PREFIXES[2],
+        family_parts(interner, EVIDENCE_FAMILY_PREFIXES[2], &output.nodes),
+    );
+    emit_family(
+        &mut digest,
+        EVIDENCE_FAMILY_PREFIXES[3],
+        family_parts(
+            interner,
+            EVIDENCE_FAMILY_PREFIXES[3],
+            &output.omitted_regions,
+        ),
+    );
+    emit_family(
+        &mut digest,
+        EVIDENCE_FAMILY_PREFIXES[4],
+        family_parts(interner, EVIDENCE_FAMILY_PREFIXES[4], &output.paths),
+    );
+    emit_family(
+        &mut digest,
+        EVIDENCE_FAMILY_PREFIXES[5],
+        family_parts(interner, EVIDENCE_FAMILY_PREFIXES[5], &output.replay_keys),
+    );
+    emit_family(
+        &mut digest,
+        EVIDENCE_FAMILY_PREFIXES[6],
+        family_parts(interner, EVIDENCE_FAMILY_PREFIXES[6], &output.slices),
+    );
+    emit_family(
+        &mut digest,
+        EVIDENCE_FAMILY_PREFIXES[7],
+        family_parts(interner, EVIDENCE_FAMILY_PREFIXES[7], &output.unknowns),
+    );
+    for part in header {
+        digest.part(&part);
+    }
+    digest.finish()
+}
+
+/// `<prefix><payload>` for one fact family, materialised on its own.
+///
+/// Taking the same `prefix` the emission order is keyed on keeps the two in
+/// lockstep: a family cannot be hashed under one label and ordered under
+/// another.
+fn family_parts<T: Debug>(
+    interner: &crate::internal_core::StableKeyInterner,
+    prefix: &str,
+    facts: &[T],
+) -> Vec<String> {
+    facts
+        .iter()
+        .map(|fact| format!("{prefix}{}", stable_fact_payload(interner, fact)))
+        .collect()
 }
 
 fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[InputComponent]) {
@@ -677,4 +767,47 @@ fn provider_error_diagnostic(message: String) -> Diagnostic {
         crate::internal_core::DiagnosticRange::point(1, 1),
         format!("Evidence provider failed: {message}"),
     )
+}
+
+#[cfg(test)]
+mod digest_order_tests {
+    use super::{EVIDENCE_FAMILY_PREFIXES, EVIDENCE_HEADER_LABELS};
+
+    /// The streaming digest emits header parts and family blocks in a merged
+    /// order and claims it equals sorting every part together. That holds only
+    /// while the three properties below do, so assert them rather than trust
+    /// them: a new fact family or a new header label must not silently change
+    /// the digest of every evidence layer ever produced.
+    #[test]
+    fn family_prefixes_partition_the_sorted_order() {
+        for window in EVIDENCE_FAMILY_PREFIXES.windows(2) {
+            assert!(window[0] < window[1], "prefixes must ascend: {window:?}");
+            assert!(
+                !window[1].starts_with(window[0]),
+                "no family prefix may prefix another: {window:?}"
+            );
+        }
+
+        for label in EVIDENCE_HEADER_LABELS {
+            for separator in ['=', ':'] {
+                let header = format!("{label}{separator}value");
+                for prefix in EVIDENCE_FAMILY_PREFIXES {
+                    assert!(
+                        !header.starts_with(prefix),
+                        "header `{header}` must not fall inside family `{prefix}`"
+                    );
+                    // A header sorts before every part of a family exactly when
+                    // it sorts before that family's prefix — the merge rule.
+                    for payload in ["", "\u{0}", "zzz", "~"] {
+                        let part = format!("{prefix}{payload}");
+                        assert_eq!(
+                            header.as_str() < prefix,
+                            header < part,
+                            "header `{header}` straddles family part `{part}`"
+                        );
+                    }
+                }
+            }
+        }
+    }
 }

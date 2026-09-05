@@ -282,30 +282,23 @@ pub fn unresolved_call_reason_label(reason: UnresolvedCallReason) -> &'static st
     }
 }
 
-pub fn unsupported_capability_row(
-    interner: &crate::internal_core::StableKeyInterner,
-    capability: &str,
-    docs_path: Option<&str>,
-) -> UnknownRow {
-    UnknownRow::new(
-        interner,
-        UnknownRowInput {
-            category: UnknownCategory::UnsupportedSemantic,
-            capability: Some(capability.to_string()),
-            family: None,
-            provider: "polint.capabilities".to_string(),
-            file: "<workspace>".to_string(),
-            span: None,
-            status: "unsupported".to_string(),
-            reason: Some("Capability does not support public unknown inspection.".to_string()),
-            precision: None,
-            docs_path: docs_path
-                .or(Some("docs/facts/capability-plans.md"))
-                .map(str::to_string),
-            suggested_artifact: Some("provider".to_string()),
-            source_stable_key: Some(format!("capability:{capability}")),
-        },
-    )
+pub fn unsupported_capability_row(capability: &str, docs_path: Option<&str>) -> UnknownRow {
+    UnknownRow::new(UnknownRowInput {
+        category: UnknownCategory::UnsupportedSemantic,
+        capability: Some(capability.to_string()),
+        family: None,
+        provider: "polint.capabilities".to_string(),
+        file: "<workspace>".to_string(),
+        span: None,
+        status: "unsupported".to_string(),
+        reason: Some("Capability does not support public unknown inspection.".to_string()),
+        precision: None,
+        docs_path: docs_path
+            .or(Some("docs/facts/capability-plans.md"))
+            .map(str::to_string),
+        suggested_artifact: Some("provider".to_string()),
+        source_stable_key: Some(format!("capability:{capability}")),
+    })
 }
 
 pub fn stable_key_for(db: &impl AnalysisHost, family: FactFamily, run_id: u64) -> Option<String> {

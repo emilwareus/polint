@@ -13,12 +13,8 @@ impl StableFactKey {
     }
 }
 
-pub fn semantic_stable_key(
-    interner: &crate::internal_core::StableKeyInterner,
-    family: FactFamily,
-    parts: &[(&str, String)],
-) -> StableFactKey {
-    StableFactKey(stable_key_text_from_parts(interner, family, parts))
+pub fn semantic_stable_key(family: FactFamily, parts: &[(&str, String)]) -> StableFactKey {
+    StableFactKey(stable_key_text_from_parts(family, parts))
 }
 
 #[cfg(test)]
@@ -30,7 +26,6 @@ mod tests {
     #[test]
     fn semantic_stable_key_sorts_parts_normalizes_backslashes_and_includes_family() {
         let first = semantic_stable_key(
-            &crate::internal_core::test_stable_key_interner(),
             FactFamily::Function,
             &[
                 ("path", "src\\main.go".to_string()),
@@ -38,7 +33,6 @@ mod tests {
             ],
         );
         let second = semantic_stable_key(
-            &crate::internal_core::test_stable_key_interner(),
             FactFamily::Function,
             &[
                 ("name", "handler".to_string()),
@@ -54,7 +48,6 @@ mod tests {
     #[test]
     fn semantic_stable_key_does_not_require_dense_run_local_ids() {
         let key = semantic_stable_key(
-            &crate::internal_core::test_stable_key_interner(),
             FactFamily::Function,
             &[("place", "local:handler:value".to_string())],
         );
@@ -63,9 +56,8 @@ mod tests {
         assert_eq!(
             key.into_string(),
             semantic_stable_key(
-                &crate::internal_core::test_stable_key_interner(),
                 FactFamily::Function,
-                &[("place", "local:handler:value".to_string())]
+                &[("place", "local:handler:value".to_string())],
             )
             .into_string()
         );

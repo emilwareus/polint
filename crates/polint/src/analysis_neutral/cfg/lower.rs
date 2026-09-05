@@ -522,7 +522,6 @@ fn unsupported_control_flow_fact(
         conservative_action: control_flow_action(row.conservative_action),
         stable_key: interner.intern(
             semantic_stable_key(
-                interner,
                 FactFamily::UnsupportedControlFlow,
                 &[
                     ("language", language_label(row.language).to_string()),

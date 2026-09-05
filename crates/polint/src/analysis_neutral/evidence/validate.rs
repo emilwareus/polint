@@ -142,7 +142,10 @@ fn has_native_anchor(
                 && edge.to == candidate.to
                 && candidate.native_anchor_stable_keys.iter().any(|key| {
                     interner.resolve(edge.stable_key).as_ref() == key
-                        || edge.source_fact_stable_keys.contains(key)
+                        || edge
+                            .source_fact_stable_keys
+                            .iter()
+                            .any(|source| source.as_ref() == key.as_str())
                 })
         })
 }
@@ -359,7 +362,7 @@ mod tests {
                     summary_stable_key: None,
                     expansion: EvidenceExpansion::None,
                     compact_label: None,
-                    source_fact_stable_keys: vec!["df:native".to_string()],
+                    source_fact_stable_keys: vec!["df:native".into()],
                     stable_key: crate::internal_core::stable_key_for_test("edge:native"),
                 }],
                 bundles: Vec::new(),

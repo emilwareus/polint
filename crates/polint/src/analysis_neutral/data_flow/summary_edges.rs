@@ -5,6 +5,8 @@ use super::facts::{
 };
 use super::local::budget_fact;
 use super::store::{DataFlowOutput, next_data_flow_edge_id, next_data_flow_node_id};
+use std::sync::Arc;
+
 use crate::analysis_api::{FactFamily, stable_key_from_parts};
 use crate::analysis_neutral::AnalysisHost;
 use crate::analysis_neutral::ids::DataFlowNodeId;
@@ -14,23 +16,42 @@ use crate::analysis_neutral::summaries::facts::{
 };
 use crate::internal_core::Language;
 
+/// Key -> id indexes for the summary projection.
+///
+/// `summary_node` and `push_edge` used to scan the whole node/edge vectors on
+/// every insert. `output.nodes` already holds one node per MIR place by the time
+/// this runs, so that is quadratic in corpus size.
+#[derive(Default)]
+struct ProjectionIndex {
+    nodes: std::collections::BTreeMap<crate::internal_core::StableKeyId, DataFlowNodeId>,
+    edges: std::collections::BTreeSet<crate::internal_core::StableKeyId>,
+}
+
 pub fn derive_summary_projected_edges(db: &impl AnalysisHost, output: &mut DataFlowOutput) {
     let interner_handle = db.stable_key_interner();
     let interner = &interner_handle;
+    let mut index = ProjectionIndex {
+        nodes: output
+            .nodes
+            .iter()
+            .map(|node| (node.stable_key, node.id))
+            .collect(),
+        edges: output.edges.iter().map(|edge| edge.stable_key).collect(),
+    };
     for fact in db.summary_facts() {
         if fact.domain != SummaryDomainKind::DataFlowTito {
             continue;
         }
         if fact.status == SummaryStatus::Present {
-            project_present_tito(interner, output, fact);
+            project_present_tito(interner, output, &mut index, fact);
         } else {
-            project_summary_status(interner, output, fact);
+            project_summary_status(interner, output, &mut index, fact);
         }
     }
     for event in db.summary_events() {
         if event.domain == SummaryDomainKind::DataFlowTito && event.status != SummaryStatus::Present
         {
-            project_summary_event(interner, output, event);
+            project_summary_event(interner, output, &mut index, event);
         }
     }
 }
@@ -38,6 +59,7 @@ pub fn derive_summary_projected_edges(db: &impl AnalysisHost, output: &mut DataF
 fn project_present_tito(
     interner: &crate::internal_core::StableKeyInterner,
     output: &mut DataFlowOutput,
+    index: &mut ProjectionIndex,
     fact: &SummaryFact,
 ) {
     for flow in &fact.tito_flows {
@@ -47,6 +69,7 @@ fn project_present_tito(
         let input = summary_node(
             interner,
             output,
+            index,
             fact,
             DataFlowNodeKind::SummaryInput,
             &root_role(flow.from),
@@ -54,6 +77,7 @@ fn project_present_tito(
         let output_node = summary_node(
             interner,
             output,
+            index,
             fact,
             DataFlowNodeKind::SummaryOutput,
             &root_role(flow.to),
@@ -61,6 +85,7 @@ fn project_present_tito(
         push_edge(
             interner,
             output,
+            index,
             SummaryEdgeDraft {
                 from: input,
                 to: output_node,
@@ -76,8 +101,8 @@ fn project_present_tito(
                     flow_evidence(flow),
                 ],
                 input_stable_keys: vec![
-                    interner.resolve(fact.stable_key).to_string(),
-                    interner.resolve(fact.callable_stable_key).to_string(),
+                    interner.resolve(fact.stable_key),
+                    interner.resolve(fact.callable_stable_key),
                 ],
                 stable_anchor: format!(
                     "{}:{}->{}:{:?}",
@@ -94,11 +119,13 @@ fn project_present_tito(
 fn project_summary_status(
     interner: &crate::internal_core::StableKeyInterner,
     output: &mut DataFlowOutput,
+    index: &mut ProjectionIndex,
     fact: &SummaryFact,
 ) {
     let source = summary_node(
         interner,
         output,
+        index,
         fact,
         DataFlowNodeKind::SummaryInput,
         "uncertain-input",
@@ -106,6 +133,7 @@ fn project_summary_status(
     let sink = summary_node(
         interner,
         output,
+        index,
         fact,
         DataFlowNodeKind::Synthetic,
         "uncertain-output",
@@ -124,6 +152,7 @@ fn project_summary_status(
     push_edge(
         interner,
         output,
+        index,
         SummaryEdgeDraft {
             from: source,
             to: sink,
@@ -146,7 +175,7 @@ fn project_summary_status(
                 format!("domain={}", fact.domain.as_str()),
                 format!("status={}", fact.status.as_str()),
             ],
-            input_stable_keys: vec![interner.resolve(fact.stable_key).to_string()],
+            input_stable_keys: vec![interner.resolve(fact.stable_key)],
             stable_anchor: interner.resolve(fact.stable_key).to_string(),
         },
     );
@@ -155,11 +184,13 @@ fn project_summary_status(
 fn project_summary_event(
     interner: &crate::internal_core::StableKeyInterner,
     output: &mut DataFlowOutput,
+    index: &mut ProjectionIndex,
     event: &SummaryEventFact,
 ) {
     let source = event_node(
         interner,
         output,
+        index,
         event,
         DataFlowNodeKind::SummaryInput,
         "event-input",
@@ -167,6 +198,7 @@ fn project_summary_event(
     let sink = event_node(
         interner,
         output,
+        index,
         event,
         DataFlowNodeKind::Synthetic,
         "event-output",
@@ -185,6 +217,7 @@ fn project_summary_event(
     push_edge(
         interner,
         output,
+        index,
         SummaryEdgeDraft {
             from: source,
             to: sink,
@@ -210,7 +243,7 @@ fn project_summary_event(
                 format!("event_kind={}", event.event_kind),
                 format!("reason={}", event.reason),
             ],
-            input_stable_keys: vec![interner.resolve(event.stable_key).to_string()],
+            input_stable_keys: vec![interner.resolve(event.stable_key)],
             stable_anchor: interner.resolve(event.stable_key).to_string(),
         },
     );
@@ -226,13 +259,14 @@ struct SummaryEdgeDraft {
     confidence: DataFlowConfidence,
     budget: Option<crate::analysis_neutral::ids::DataFlowBudgetId>,
     evidence: Vec<String>,
-    input_stable_keys: Vec<String>,
+    input_stable_keys: Vec<Arc<str>>,
     stable_anchor: String,
 }
 
 fn push_edge(
     interner: &crate::internal_core::StableKeyInterner,
     output: &mut DataFlowOutput,
+    index: &mut ProjectionIndex,
     draft: SummaryEdgeDraft,
 ) {
     let stable_key = stable_key_from_parts(
@@ -244,11 +278,7 @@ fn push_edge(
             ("status", format!("{:?}", draft.status)),
         ],
     );
-    if output
-        .edges
-        .iter()
-        .any(|edge| edge.stable_key == stable_key)
-    {
+    if !index.edges.insert(stable_key) {
         return;
     }
     output.edges.push(DataFlowEdgeFact {
@@ -276,6 +306,7 @@ fn push_edge(
 fn summary_node(
     interner: &crate::internal_core::StableKeyInterner,
     output: &mut DataFlowOutput,
+    index: &mut ProjectionIndex,
     fact: &SummaryFact,
     kind: DataFlowNodeKind,
     role: &str,
@@ -289,13 +320,8 @@ fn summary_node(
             ("role", role.to_string()),
         ],
     );
-    if let Some(existing) = output
-        .nodes
-        .iter()
-        .find(|node| node.stable_key == stable_key)
-        .map(|node| node.id)
-    {
-        return existing;
+    if let Some(existing) = index.nodes.get(&stable_key) {
+        return *existing;
     }
     let id = next_data_flow_node_id(&output.nodes);
     output.nodes.push(DataFlowNodeFact {
@@ -315,12 +341,14 @@ fn summary_node(
         span: None,
         stable_key,
     });
+    index.nodes.insert(stable_key, id);
     id
 }
 
 fn event_node(
     interner: &crate::internal_core::StableKeyInterner,
     output: &mut DataFlowOutput,
+    index: &mut ProjectionIndex,
     event: &SummaryEventFact,
     kind: DataFlowNodeKind,
     role: &str,
@@ -337,13 +365,8 @@ fn event_node(
             ("role", role.to_string()),
         ],
     );
-    if let Some(existing) = output
-        .nodes
-        .iter()
-        .find(|node| node.stable_key == stable_key)
-        .map(|node| node.id)
-    {
-        return existing;
+    if let Some(existing) = index.nodes.get(&stable_key) {
+        return *existing;
     }
     let id = next_data_flow_node_id(&output.nodes);
     output.nodes.push(DataFlowNodeFact {
@@ -363,6 +386,7 @@ fn event_node(
         span: None,
         stable_key,
     });
+    index.nodes.insert(stable_key, id);
     id
 }
 
@@ -421,6 +445,7 @@ mod tests {
         project_present_tito(
             &crate::analysis_neutral::LocalAnalysisDb::new().stable_key_interner(),
             &mut output,
+            &mut ProjectionIndex::default(),
             &summary(SummaryStatus::Present),
         );
 
@@ -434,7 +459,7 @@ mod tests {
             output.edges[0]
                 .input_stable_keys
                 .iter()
-                .any(|key| key == "summary:tito")
+                .any(|key| key.as_ref() == "summary:tito")
         );
     }
 
@@ -447,6 +472,7 @@ mod tests {
         project_present_tito(
             &crate::analysis_neutral::LocalAnalysisDb::new().stable_key_interner(),
             &mut output,
+            &mut ProjectionIndex::default(),
             &fact,
         );
 
@@ -468,6 +494,7 @@ mod tests {
             project_present_tito(
                 &crate::analysis_neutral::LocalAnalysisDb::new().stable_key_interner(),
                 &mut output,
+                &mut ProjectionIndex::default(),
                 &fact,
             );
 
@@ -494,6 +521,7 @@ mod tests {
             project_summary_status(
                 &crate::analysis_neutral::LocalAnalysisDb::new().stable_key_interner(),
                 &mut output,
+                &mut ProjectionIndex::default(),
                 &summary(summary_status),
             );
             assert_eq!(output.edges.len(), 1);

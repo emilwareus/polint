@@ -602,7 +602,6 @@ pub(crate) fn derive_import_to_package_edges(db: &AnalysisDb) -> Vec<ImportToPac
             let to_package_stable_key = to_package.map(|package| package.stable_key);
             let source_set_stable_key = source_set.map(|set| set.stable_key);
             let stable_key = interner.intern(stable_key_text_from_parts(
-                interner,
                 FactFamily::ImportToPackage,
                 &[
                     ("import_id", import.id.0.to_string()),

@@ -3,6 +3,8 @@ use super::facts::{
     DataFlowNodeKind, DataFlowPrecision, DataFlowProvenance, DataFlowStatus, DataFlowValidation,
 };
 use super::store::{DataFlowOutput, next_data_flow_edge_id, next_data_flow_node_id};
+use std::sync::Arc;
+
 use crate::analysis_api::{FactFamily, stable_key_from_parts};
 use crate::analysis_neutral::AnalysisHost;
 use crate::analysis_neutral::calls::facts::{CallSiteFact, CallSyntaxKind, CallTargetStatus};
@@ -160,8 +162,8 @@ fn bridge_target_summaries(
                 call_site,
             );
             let summary_inputs = vec![
-                interner.resolve(summary.stable_key).to_string(),
-                interner.resolve(summary.callable_stable_key).to_string(),
+                interner.resolve(summary.stable_key),
+                interner.resolve(summary.callable_stable_key),
             ];
             push_edge(
                 interner,
@@ -348,7 +350,7 @@ struct CallEdgeDraft<'a> {
     validation: DataFlowValidation,
     budget: Option<DataFlowBudgetId>,
     evidence: Vec<String>,
-    extra_input_stable_keys: Vec<String>,
+    extra_input_stable_keys: Vec<Arc<str>>,
     call_site: Option<CallSiteId>,
     edge: &'a RefinedCallEdgeFact,
 }
@@ -397,8 +399,13 @@ fn push_edge(
         budget: draft.budget,
         evidence: draft.evidence,
         input_stable_keys: {
-            let mut keys = draft.edge.input_stable_keys.clone();
-            keys.push(interner.resolve(draft.edge.stable_key).to_string());
+            let mut keys: Vec<Arc<str>> = draft
+                .edge
+                .input_stable_keys
+                .iter()
+                .map(|key| Arc::from(key.as_str()))
+                .collect();
+            keys.push(interner.resolve(draft.edge.stable_key));
             keys.extend(draft.extra_input_stable_keys);
             keys
         },
@@ -519,9 +526,9 @@ fn push_call_summary_tito_edge(
             ),
         ],
         input_stable_keys: vec![
-            interner.resolve(edge.stable_key).to_string(),
-            interner.resolve(summary.stable_key).to_string(),
-            interner.resolve(summary.callable_stable_key).to_string(),
+            interner.resolve(edge.stable_key),
+            interner.resolve(summary.stable_key),
+            interner.resolve(summary.callable_stable_key),
         ],
         stable_key,
     });
@@ -1266,7 +1273,7 @@ mod tests {
             validation: RefinedCallValidation::ReferentiallyValidated,
             confidence: RefinedCallConfidence::High,
             evidence: vec!["test".to_string()],
-            input_stable_keys: vec!["call-site".to_string()],
+            input_stable_keys: vec!["call-site".into()],
             stable_key: crate::internal_core::stable_key_for_test("refined:edge"),
         }
     }

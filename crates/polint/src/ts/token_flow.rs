@@ -97,7 +97,7 @@ pub fn collect_ts_token_source_flows_from_nodes(
     index.collect_local_alias_assignments(nodes);
     index.collect_returned_functions(nodes);
     index.collect_local_return_assignments(nodes);
-    index.collect_flows(interner, source, nodes)
+    index.collect_flows(source, nodes)
 }
 
 impl TsTokenSourceFlowIndex {
@@ -267,12 +267,7 @@ impl TsTokenSourceFlowIndex {
         }
     }
 
-    fn collect_flows(
-        &self,
-        interner: &crate::internal_core::StableKeyInterner,
-        source: &str,
-        nodes: &AstNodes<'_>,
-    ) -> Vec<TsTokenSourceFlow> {
+    fn collect_flows(&self, source: &str, nodes: &AstNodes<'_>) -> Vec<TsTokenSourceFlow> {
         let mut flows = Vec::new();
         for (node_id, node) in nodes.iter_enumerated() {
             let AstKind::CallExpression(call) = node.kind() else {
@@ -285,21 +280,8 @@ impl TsTokenSourceFlowIndex {
                 continue;
             };
 
-            self.collect_parameter_argument_flows(
-                interner,
-                &mut flows,
-                &callee_name,
-                call,
-                &callsite_key,
-            );
-            self.collect_return_value_flow(
-                interner,
-                &mut flows,
-                nodes,
-                node_id,
-                &callee_name,
-                &callsite_key,
-            );
+            self.collect_parameter_argument_flows(&mut flows, &callee_name, call, &callsite_key);
+            self.collect_return_value_flow(&mut flows, nodes, node_id, &callee_name, &callsite_key);
         }
         flows.sort();
         flows.dedup();
@@ -308,7 +290,6 @@ impl TsTokenSourceFlowIndex {
 
     fn collect_parameter_argument_flows(
         &self,
-        interner: &crate::internal_core::StableKeyInterner,
         flows: &mut Vec<TsTokenSourceFlow>,
         callee_name: &str,
         call: &oxc_ast::ast::CallExpression<'_>,
@@ -336,7 +317,6 @@ impl TsTokenSourceFlowIndex {
             };
             for destination_callsite_key in destination_callsites {
                 flows.push(ts_token_source_flow(
-                    interner,
                     TsTokenSourceFlowKind::ParameterArgument,
                     argument_function_key,
                     destination_callsite_key,
@@ -348,7 +328,6 @@ impl TsTokenSourceFlowIndex {
 
     fn collect_return_value_flow(
         &self,
-        interner: &crate::internal_core::StableKeyInterner,
         flows: &mut Vec<TsTokenSourceFlow>,
         nodes: &AstNodes<'_>,
         node_id: NodeId,
@@ -365,7 +344,6 @@ impl TsTokenSourceFlowIndex {
             return;
         };
         flows.push(ts_token_source_flow(
-            interner,
             TsTokenSourceFlowKind::ReturnValue,
             returned_function_key,
             callsite_key,
@@ -472,7 +450,6 @@ impl TsTokenSourceFlowIndex {
 }
 
 fn ts_token_source_flow(
-    interner: &crate::internal_core::StableKeyInterner,
     kind: TsTokenSourceFlowKind,
     source_function_stable_key: &str,
     callsite_stable_key: &str,
@@ -482,7 +459,6 @@ fn ts_token_source_flow(
         source_function_stable_key_text: source_function_stable_key.to_string(),
         callsite_stable_key_text: callsite_stable_key.to_string(),
         stable_key_text: semantic_stable_key(
-            interner,
             FactFamily::PointsToConstraint,
             &[
                 ("source", source_function_stable_key.to_string()),

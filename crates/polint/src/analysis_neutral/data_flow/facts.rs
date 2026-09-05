@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use crate::analysis_neutral::cfg::ids::CfgNodeId;
 use crate::analysis_neutral::ids::{
@@ -46,7 +47,7 @@ pub struct DataFlowEdgeFact {
     pub model: Option<DataFlowModelId>,
     pub budget: Option<DataFlowBudgetId>,
     pub evidence: Vec<String>,
-    pub input_stable_keys: Vec<String>,
+    pub input_stable_keys: Vec<Arc<str>>,
     pub stable_key: StableKeyId,
 }
 

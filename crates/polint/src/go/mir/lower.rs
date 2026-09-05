@@ -424,7 +424,7 @@ impl GoMirLowering {
                 closure_body_ids.clone(),
                 closure_capture_names.clone(),
             );
-            function_lowering.lower_parameters(interner, node, &mut self.places);
+            function_lowering.lower_parameters(node, &mut self.places);
             function_lowering.lower_body(
                 interner,
                 body_node,
@@ -450,7 +450,7 @@ impl GoMirLowering {
                     closure_body_ids.clone(),
                     closure_capture_names.clone(),
                 );
-                closure_lowering.lower_parameters(interner, literal, &mut self.places);
+                closure_lowering.lower_parameters(literal, &mut self.places);
                 closure_lowering.lower_body(
                     interner,
                     closure_block,
@@ -473,9 +473,8 @@ impl GoMirLowering {
         span: Span,
     ) -> MirBody {
         let id = MirBodyId(self.bodies.len() as u64);
-        let owner_stable_key_text = owner_stable_key(interner, file, function);
+        let owner_stable_key_text = owner_stable_key(file, function);
         let stable_key_text = semantic_stable_key(
-            interner,
             FactFamily::MirBody,
             &[
                 ("language", "go".to_string()),
@@ -665,12 +664,7 @@ impl<'source> FunctionLowering<'source> {
         }
     }
 
-    fn lower_parameters(
-        &mut self,
-        interner: &crate::internal_core::StableKeyInterner,
-        node: Node<'_>,
-        places: &mut PlaceTableBuilder,
-    ) {
+    fn lower_parameters(&mut self, node: Node<'_>, places: &mut PlaceTableBuilder) {
         let mut index = 0_u32;
         if let Some(receiver) = node.child_by_field_name("receiver") {
             let name = parameter_names(self.source, receiver).into_iter().next();
@@ -682,7 +676,7 @@ impl<'source> FunctionLowering<'source> {
             if let Some(name) = name {
                 self.parameters.insert(name, root.clone());
             }
-            self.insert_place(interner, places, root, Vec::new(), PlaceStatus::Resolved);
+            self.insert_place(places, root, Vec::new(), PlaceStatus::Resolved);
             index += 1;
         }
 
@@ -694,7 +688,7 @@ impl<'source> FunctionLowering<'source> {
                     name: Some(name.clone()),
                 };
                 self.parameters.insert(name, root.clone());
-                self.insert_place(interner, places, root, Vec::new(), PlaceStatus::Resolved);
+                self.insert_place(places, root, Vec::new(), PlaceStatus::Resolved);
                 index += 1;
             }
         }
@@ -737,7 +731,6 @@ impl<'source> FunctionLowering<'source> {
                     });
                 for name in assignment_left_names(self.source, statement) {
                     let key = self.insert_local_typed(
-                        interner,
                         places,
                         &name,
                         right.map(type_shape_for_go_expression),
@@ -760,7 +753,7 @@ impl<'source> FunctionLowering<'source> {
                     }
                 });
                 for name in names {
-                    let key = self.insert_local(interner, places, &name);
+                    let key = self.insert_local(places, &name);
                     self.push_assign(
                         interner,
                         operations,
@@ -931,7 +924,6 @@ impl<'source> FunctionLowering<'source> {
                         projections: Vec::new(),
                         status: PlaceStatus::Resolved,
                         key: self.insert_place(
-                            interner,
                             places,
                             root.clone(),
                             Vec::new(),
@@ -940,13 +932,8 @@ impl<'source> FunctionLowering<'source> {
                     }
                 } else {
                     let root = PlaceRoot::Global { symbol: None, name };
-                    let key = self.insert_place(
-                        interner,
-                        places,
-                        root.clone(),
-                        Vec::new(),
-                        PlaceStatus::Partial,
-                    );
+                    let key =
+                        self.insert_place(places, root.clone(), Vec::new(), PlaceStatus::Partial);
                     PlaceShape {
                         root,
                         projections: Vec::new(),
@@ -958,18 +945,12 @@ impl<'source> FunctionLowering<'source> {
             .collect()
     }
 
-    fn insert_local(
-        &mut self,
-        interner: &crate::internal_core::StableKeyInterner,
-        places: &mut PlaceTableBuilder,
-        name: &str,
-    ) -> String {
-        self.insert_local_typed(interner, places, name, None)
+    fn insert_local(&mut self, places: &mut PlaceTableBuilder, name: &str) -> String {
+        self.insert_local_typed(places, name, None)
     }
 
     fn insert_local_typed(
         &mut self,
-        interner: &crate::internal_core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         name: &str,
         ty: Option<TypeShape>,
@@ -979,14 +960,7 @@ impl<'source> FunctionLowering<'source> {
             name: name.to_string(),
         };
         self.locals.insert(name.to_string(), root.clone());
-        self.insert_typed_place(
-            interner,
-            places,
-            root,
-            Vec::new(),
-            ty,
-            PlaceStatus::Resolved,
-        )
+        self.insert_typed_place(places, root, Vec::new(), ty, PlaceStatus::Resolved)
     }
 
     fn lower_value(
@@ -1078,7 +1052,7 @@ impl<'source> FunctionLowering<'source> {
                     fields,
                 })
             }
-            "func_literal" => self.closure_value(interner, node, places),
+            "func_literal" => self.closure_value(node, places),
             "call_expression" => self
                 .lower_call(interner, node, places, operations, unsupported)
                 .map(ValueDraft::PlaceKey),
@@ -1088,12 +1062,7 @@ impl<'source> FunctionLowering<'source> {
         }
     }
 
-    fn closure_value(
-        &self,
-        interner: &crate::internal_core::StableKeyInterner,
-        node: Node<'_>,
-        places: &mut PlaceTableBuilder,
-    ) -> Option<ValueDraft> {
+    fn closure_value(&self, node: Node<'_>, places: &mut PlaceTableBuilder) -> Option<ValueDraft> {
         let span = (node.start_byte() as u32, node.end_byte() as u32);
         let body = *self.closure_bodies.get(&span)?;
         let capture_keys = self
@@ -1106,13 +1075,7 @@ impl<'source> FunctionLowering<'source> {
                     .get(name)
                     .or_else(|| self.parameters.get(name))
                     .map(|root| {
-                        self.insert_place(
-                            interner,
-                            places,
-                            root.clone(),
-                            Vec::new(),
-                            PlaceStatus::Resolved,
-                        )
+                        self.insert_place(places, root.clone(), Vec::new(), PlaceStatus::Resolved)
                     })
             })
             .collect();
@@ -1158,7 +1121,7 @@ impl<'source> FunctionLowering<'source> {
         }
         self.lower_unsupported(interner, node, operations, unsupported);
         match node.kind() {
-            "identifier" => self.lower_identifier(interner, node, places, assignment_destination),
+            "identifier" => self.lower_identifier(node, places, assignment_destination),
             "selector_expression" => self.lower_selector(
                 interner,
                 node,
@@ -1186,9 +1149,8 @@ impl<'source> FunctionLowering<'source> {
                     key,
                 }),
             "func_literal" => {
-                let value = self.closure_value(interner, node, places)?;
+                let value = self.closure_value(node, places)?;
                 let key = self.insert_temporary_typed(
-                    interner,
                     places,
                     node,
                     PlaceStatus::Partial,
@@ -1260,7 +1222,6 @@ impl<'source> FunctionLowering<'source> {
 
     fn lower_identifier(
         &mut self,
-        interner: &crate::internal_core::StableKeyInterner,
         node: Node<'_>,
         places: &mut PlaceTableBuilder,
         assignment_destination: bool,
@@ -1287,7 +1248,7 @@ impl<'source> FunctionLowering<'source> {
             status,
             key: String::new(),
         };
-        let key = self.insert_shape(interner, places, &shape);
+        let key = self.insert_shape(places, &shape);
         let shape = PlaceShape { key, ..shape };
         Some(shape)
     }
@@ -1319,8 +1280,8 @@ impl<'source> FunctionLowering<'source> {
         shape
             .projections
             .push(PlaceProjection::Field(field.to_string()));
-        shape.key = self.insert_shape(interner, places, &shape);
-        self.insert_temporary(interner, places, node, PlaceStatus::Partial);
+        shape.key = self.insert_shape(places, &shape);
+        self.insert_temporary(places, node, PlaceStatus::Partial);
         Some(shape)
     }
 
@@ -1348,8 +1309,8 @@ impl<'source> FunctionLowering<'source> {
             assignment_destination,
         )?;
         shape.projections.push(index_projection(self.source, index));
-        shape.key = self.insert_shape(interner, places, &shape);
-        self.insert_temporary(interner, places, node, PlaceStatus::Partial);
+        shape.key = self.insert_shape(places, &shape);
+        self.insert_temporary(places, node, PlaceStatus::Partial);
         Some(shape)
     }
 
@@ -1364,7 +1325,6 @@ impl<'source> FunctionLowering<'source> {
         self.lower_unsupported_call(node, unsupported);
         let site = self.call_site_for(node);
         let return_key = self.insert_place(
-            interner,
             places,
             PlaceRoot::CallReturn { call: site },
             Vec::new(),
@@ -1598,13 +1558,11 @@ impl<'source> FunctionLowering<'source> {
 
     fn insert_temporary(
         &self,
-        interner: &crate::internal_core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         node: Node<'_>,
         status: PlaceStatus,
     ) -> String {
         self.insert_temporary_typed(
-            interner,
             places,
             node,
             status,
@@ -1616,14 +1574,12 @@ impl<'source> FunctionLowering<'source> {
 
     fn insert_temporary_typed(
         &self,
-        interner: &crate::internal_core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         node: Node<'_>,
         status: PlaceStatus,
         ty: TypeShape,
     ) -> String {
         self.insert_typed_place(
-            interner,
             places,
             PlaceRoot::Temporary {
                 body: self.body,
@@ -1635,14 +1591,8 @@ impl<'source> FunctionLowering<'source> {
         )
     }
 
-    fn insert_shape(
-        &self,
-        interner: &crate::internal_core::StableKeyInterner,
-        places: &mut PlaceTableBuilder,
-        shape: &PlaceShape,
-    ) -> String {
+    fn insert_shape(&self, places: &mut PlaceTableBuilder, shape: &PlaceShape) -> String {
         self.insert_place(
-            interner,
             places,
             shape.root.clone(),
             shape.projections.clone(),
@@ -1652,18 +1602,16 @@ impl<'source> FunctionLowering<'source> {
 
     fn insert_place(
         &self,
-        interner: &crate::internal_core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         root: PlaceRoot,
         projections: Vec<PlaceProjection>,
         status: PlaceStatus,
     ) -> String {
-        self.insert_typed_place(interner, places, root, projections, None, status)
+        self.insert_typed_place(places, root, projections, None, status)
     }
 
     fn insert_typed_place(
         &self,
-        interner: &crate::internal_core::StableKeyInterner,
         places: &mut PlaceTableBuilder,
         root: PlaceRoot,
         projections: Vec<PlaceProjection>,
@@ -1671,7 +1619,6 @@ impl<'source> FunctionLowering<'source> {
         status: PlaceStatus,
     ) -> String {
         places.insert_typed_with_context(
-            interner,
             &self.stable_context,
             PlaceInsert {
                 language: Language::Go,
@@ -1716,13 +1663,8 @@ impl OperationDraft {
         pair: (OperationKindDraft, MirStatus),
     ) -> Self {
         let (kind, status) = pair;
-        let stable_key = interner.intern(operation_stable_key(
-            interner,
-            body_stable_key,
-            ordinal,
-            &span,
-            &kind,
-        ));
+        let stable_key =
+            interner.intern(operation_stable_key(body_stable_key, ordinal, &span, &kind));
         Self {
             id,
             body,
@@ -2064,13 +2006,12 @@ impl UnsupportedDraft {
             conservative_action: self.conservative_action,
             precision: UnsupportedPrecision::Unsupported,
             status: MirStatus::Unsupported,
-            stable_key: interner.intern(unsupported_stable_key(interner, self)),
+            stable_key: interner.intern(unsupported_stable_key(self)),
         }
     }
 }
 
 fn operation_stable_key(
-    interner: &crate::internal_core::StableKeyInterner,
     body_stable_key: &str,
     ordinal: u32,
     span: &Span,
@@ -2091,7 +2032,7 @@ fn operation_stable_key(
         .iter()
         .map(|(label, value)| (*label, value.clone()))
         .collect::<Vec<_>>();
-    semantic_stable_key(interner, FactFamily::MirOperation, &borrowed).into_string()
+    semantic_stable_key(FactFamily::MirOperation, &borrowed).into_string()
 }
 
 fn operation_place_label(index: usize) -> &'static str {
@@ -2104,12 +2045,8 @@ fn operation_place_label(index: usize) -> &'static str {
     }
 }
 
-fn unsupported_stable_key(
-    interner: &crate::internal_core::StableKeyInterner,
-    draft: &UnsupportedDraft,
-) -> String {
+fn unsupported_stable_key(draft: &UnsupportedDraft) -> String {
     semantic_stable_key(
-        interner,
         FactFamily::UnsupportedSemantic,
         &[
             ("language", "go".to_string()),
@@ -2171,13 +2108,8 @@ fn span_contains(outer: &Span, inner: &Span) -> bool {
     outer.start_byte <= inner.start_byte && outer.end_byte >= inner.end_byte
 }
 
-fn owner_stable_key(
-    interner: &crate::internal_core::StableKeyInterner,
-    file: &SourceFile,
-    function: &FunctionFact,
-) -> String {
+fn owner_stable_key(file: &SourceFile, function: &FunctionFact) -> String {
     semantic_stable_key(
-        interner,
         FactFamily::Function,
         &[
             ("language", "go".to_string()),

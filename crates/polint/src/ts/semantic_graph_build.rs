@@ -742,11 +742,7 @@ impl<'a> TsDirectBindingNodeContext<'a> {
             .call_sites()
             .iter()
             .filter_map(|site| {
-                let key = node_key_from_identity(
-                    interner,
-                    "callsite",
-                    &interner.resolve(site.stable_key),
-                );
+                let key = node_key_from_identity("callsite", &interner.resolve(site.stable_key));
                 let node = builder.node_for_key(interner, &key)?;
                 Some(((site.file, site.span.start_byte, site.span.end_byte), node))
             })
@@ -755,7 +751,7 @@ impl<'a> TsDirectBindingNodeContext<'a> {
         let mut function_nodes_by_location =
             BTreeMap::<(FileId, u32, u32), Vec<(String, SemanticNodeId)>>::new();
         for function in db.functions() {
-            let key = function_node_key(interner, db, function);
+            let key = function_node_key(db, function);
             let Some(node) = builder.node_for_key(interner, &key) else {
                 continue;
             };
@@ -844,10 +840,7 @@ impl<'a> TsObjectModelNodeContext<'a> {
             insert_synthetic_place_key(
                 &place_by_stable_key,
                 &mut synthetic_place_keys,
-                allocation_result_place_identity(
-                    interner,
-                    &interner.resolve(allocation.stable_key),
-                ),
+                allocation_result_place_identity(&interner.resolve(allocation.stable_key)),
             );
         }
         for write in &object_model.property_writes {
@@ -862,10 +855,7 @@ impl<'a> TsObjectModelNodeContext<'a> {
                 .destination_stable_key
                 .map(|key| interner.resolve(key).to_string())
                 .unwrap_or_else(|| {
-                    property_read_destination_place_identity(
-                        interner,
-                        &interner.resolve(read.stable_key),
-                    )
+                    property_read_destination_place_identity(&interner.resolve(read.stable_key))
                 });
             insert_synthetic_place_key(&place_by_stable_key, &mut synthetic_place_keys, key);
         }
@@ -874,10 +864,7 @@ impl<'a> TsObjectModelNodeContext<'a> {
                 .receiver_place_stable_key
                 .map(|key| interner.resolve(key).to_string())
                 .unwrap_or_else(|| {
-                    receiver_destination_place_identity(
-                        interner,
-                        &interner.resolve(binding.stable_key),
-                    )
+                    receiver_destination_place_identity(&interner.resolve(binding.stable_key))
                 });
             insert_synthetic_place_key(&place_by_stable_key, &mut synthetic_place_keys, key);
         }
@@ -912,7 +899,7 @@ impl<'a> TsObjectModelNodeContext<'a> {
         Some(builder.intern_node(
             interner,
             NodeKind::AbstractObject(token),
-            object_node_key(interner, object_stable_key),
+            object_node_key(object_stable_key),
         ))
     }
 
@@ -925,7 +912,7 @@ impl<'a> TsObjectModelNodeContext<'a> {
         self.place_node(
             interner,
             builder,
-            &allocation_result_place_identity(interner, allocation_stable_key),
+            &allocation_result_place_identity(allocation_stable_key),
         )
     }
 
@@ -966,10 +953,7 @@ impl<'a> TsObjectModelNodeContext<'a> {
             .destination_stable_key
             .map(|key| interner.resolve(key).to_string())
             .unwrap_or_else(|| {
-                property_read_destination_place_identity(
-                    interner,
-                    &interner.resolve(read.stable_key),
-                )
+                property_read_destination_place_identity(&interner.resolve(read.stable_key))
             });
         self.place_node(interner, builder, &destination)
     }
@@ -984,7 +968,7 @@ impl<'a> TsObjectModelNodeContext<'a> {
             .receiver_place_stable_key
             .map(|key| interner.resolve(key).to_string())
             .unwrap_or_else(|| {
-                receiver_destination_place_identity(interner, &interner.resolve(binding.stable_key))
+                receiver_destination_place_identity(&interner.resolve(binding.stable_key))
             });
         self.place_node(interner, builder, &destination)
     }
@@ -1021,14 +1005,14 @@ impl<'a> TsObjectModelNodeContext<'a> {
             return Some(builder.intern_node(
                 interner,
                 NodeKind::Place(*place),
-                place_node_key(interner, place_stable_key),
+                place_node_key(place_stable_key),
             ));
         }
         let place = *self.synthetic_place_by_key.get(place_stable_key)?;
         Some(builder.intern_node(
             interner,
             NodeKind::Place(place),
-            place_node_key(interner, place_stable_key),
+            place_node_key(place_stable_key),
         ))
     }
 }
@@ -1104,9 +1088,8 @@ fn parse_length_prefixed_token(input: &str, start: usize) -> Option<(&str, usize
 // Stable-key composition helpers composed from referenced identities
 // ---------------------------------------------------------------------------
 
-fn object_node_key(interner: &StableKeyInterner, object_stable_key: &str) -> String {
+fn object_node_key(object_stable_key: &str) -> String {
     semantic_stable_key(
-        interner,
         FactFamily::AllocationToken,
         &[
             ("node_kind", "abstract_object".to_string()),
@@ -1116,11 +1099,8 @@ fn object_node_key(interner: &StableKeyInterner, object_stable_key: &str) -> Str
     .into_string()
 }
 
-fn allocation_result_place_identity(
-    interner: &StableKeyInterner,
-    allocation_stable_key: &str,
-) -> String {
-    object_model_place_identity(interner, "allocation_result", allocation_stable_key)
+fn allocation_result_place_identity(allocation_stable_key: &str) -> String {
+    object_model_place_identity("allocation_result", allocation_stable_key)
 }
 
 fn property_write_source_place_identity(
@@ -1131,30 +1111,19 @@ fn property_write_source_place_identity(
         .value_function_stable_key
         .or(write.value_object_stable_key)
         .unwrap_or(write.stable_key);
-    object_model_place_identity(
-        interner,
-        "property_write_source",
-        &interner.resolve(source_identity),
-    )
+    object_model_place_identity("property_write_source", &interner.resolve(source_identity))
 }
 
-fn property_read_destination_place_identity(
-    interner: &StableKeyInterner,
-    read_stable_key: &str,
-) -> String {
-    object_model_place_identity(interner, "property_read_destination", read_stable_key)
+fn property_read_destination_place_identity(read_stable_key: &str) -> String {
+    object_model_place_identity("property_read_destination", read_stable_key)
 }
 
-fn receiver_destination_place_identity(
-    interner: &StableKeyInterner,
-    receiver_stable_key: &str,
-) -> String {
-    object_model_place_identity(interner, "receiver_destination", receiver_stable_key)
+fn receiver_destination_place_identity(receiver_stable_key: &str) -> String {
+    object_model_place_identity("receiver_destination", receiver_stable_key)
 }
 
-fn object_model_place_identity(interner: &StableKeyInterner, kind: &str, identity: &str) -> String {
+fn object_model_place_identity(kind: &str, identity: &str) -> String {
     semantic_stable_key(
-        interner,
         FactFamily::Place,
         &[
             ("place_kind", kind.to_string()),

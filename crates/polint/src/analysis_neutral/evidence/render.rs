@@ -480,7 +480,7 @@ mod tests {
                     validation: EvidenceValidation::ReferentiallyValidated,
                     confidence: EvidenceConfidence::Medium,
                     call_site: None,
-                    summary_stable_key: Some("summary:tito".to_string()),
+                    summary_stable_key: Some(std::sync::Arc::from("summary:tito")),
                     expansion: EvidenceExpansion::Expandable {
                         key: "expand:summary".to_string(),
                     },
