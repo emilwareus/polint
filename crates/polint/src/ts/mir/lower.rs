@@ -345,6 +345,29 @@ fn lower_control_flow(
             }
         }
 
+        // A region closes on the last operation its arm lowered. That operation
+        // is dropped when its place never made the place table, which would
+        // otherwise leave `current` inside the arm and parent the rest of the
+        // body to it. Close whatever is still open, innermost region first.
+        for (_, region_transitions) in std::mem::take(&mut transitions) {
+            for transition in region_transitions.into_iter().rev() {
+                match transition {
+                    RegionTransition::FinishThen {
+                        second,
+                        join,
+                        has_else,
+                    } => {
+                        set_goto_if_open(&mut drafts, current, join);
+                        current = if has_else { second } else { join };
+                    }
+                    RegionTransition::FinishElse { join } => {
+                        set_goto_if_open(&mut drafts, current, join);
+                        current = join;
+                    }
+                }
+            }
+        }
+
         if drafts[current].terminator.is_none() {
             drafts[current].terminator = Some(MirTerminatorKind::Return { value: None });
         }
