@@ -12,7 +12,7 @@ use crate::analysis_neutral::cfg::ids::{BasicBlockId, CfgFunctionId, CfgNodeId};
 use crate::analysis_neutral::ids::{CallSiteId, MirBodyId, MirOpId, PlaceId};
 use crate::analysis_neutral::ifds::{Icfg, IcfgEdgeKind};
 use crate::analysis_neutral::mir_body::MirBody;
-use crate::analysis_neutral::mir_op::{MirOperation, MirOperationKind, MirValue};
+use crate::analysis_neutral::mir_op::{BranchNilTest, MirOperation, MirOperationKind, MirValue};
 use crate::analysis_neutral::places::PlaceRoot;
 use crate::internal_core::{FunctionId, StableKeyId, StableKeyInterner};
 
@@ -582,7 +582,7 @@ impl SolverResult {
 fn branch_assumption(
     edge: CfgEdgeKind,
     operation: Option<&MirOperation>,
-) -> Option<(Option<PlaceId>, Option<bool>, BranchSense)> {
+) -> Option<(Option<PlaceId>, Option<BranchNilTest>, BranchSense)> {
     let sense = match edge {
         CfgEdgeKind::True => BranchSense::True,
         CfgEdgeKind::False => BranchSense::False,
@@ -591,11 +591,11 @@ fn branch_assumption(
     operation.and_then(|operation| {
         if let MirOperationKind::Branch {
             predicate_place,
-            nil_on_true,
+            nil_test,
             ..
         } = operation.kind
         {
-            Some((predicate_place, nil_on_true, sense))
+            Some((predicate_place, nil_test, sense))
         } else {
             None
         }
@@ -608,8 +608,8 @@ fn apply_branch(
     operation: Option<&MirOperation>,
     state: &mut ProductState,
 ) {
-    if let Some((predicate, nil_on_true, sense)) = branch_assumption(kind, operation) {
-        EdgeTransfer::apply_branch_assumption(transfer_cx, predicate, nil_on_true, sense, state);
+    if let Some((predicate, nil_test, sense)) = branch_assumption(kind, operation) {
+        EdgeTransfer::apply_branch_assumption(transfer_cx, predicate, nil_test, sense, state);
     }
 }
 

@@ -22,8 +22,9 @@ use crate::analysis_neutral::mir_body::{
     MirTerminatorKind, SuspendKind,
 };
 use crate::analysis_neutral::mir_op::{
-    AssignMode, ConservativeAction, MirAggregateField, MirAggregateKind, MirOperation,
-    MirOperationKind, MirValue, UnsupportedDomain, UnsupportedPrecision, UnsupportedSemanticFact,
+    AssignMode, BranchNilTest, ConservativeAction, MirAggregateField, MirAggregateKind,
+    MirOperation, MirOperationKind, MirValue, UnsupportedDomain, UnsupportedPrecision,
+    UnsupportedSemanticFact,
 };
 use crate::analysis_neutral::places::{
     PlaceInsert, PlaceProjection, PlaceRoot, PlaceStableContext, PlaceStatus, PlaceTableBuilder,
@@ -1386,7 +1387,7 @@ fn binary_operator_text(source: &str, binary: &oxc_ast::ast::BinaryExpression<'_
         .to_string()
 }
 
-fn ts_nil_on_true(expression: &Expression<'_>) -> Option<bool> {
+fn ts_nil_test(expression: &Expression<'_>) -> Option<BranchNilTest> {
     let Expression::BinaryExpression(binary) = expression else {
         return None;
     };
@@ -1395,9 +1396,14 @@ fn ts_nil_on_true(expression: &Expression<'_>) -> Option<bool> {
     if !compares_null {
         return None;
     }
+    // `== null` also matches `undefined`, so its non-null edge proves non-nil.
+    // `=== null` does not: a value that is `undefined` takes the same edge, so
+    // only the null edge carries a conclusion.
     match binary.operator {
-        BinaryOperator::Equality | BinaryOperator::StrictEquality => Some(true),
-        BinaryOperator::Inequality | BinaryOperator::StrictInequality => Some(false),
+        BinaryOperator::Equality => Some(BranchNilTest::Exhaustive { nil_on_true: true }),
+        BinaryOperator::Inequality => Some(BranchNilTest::Exhaustive { nil_on_true: false }),
+        BinaryOperator::StrictEquality => Some(BranchNilTest::NilEdgeOnly { nil_on_true: true }),
+        BinaryOperator::StrictInequality => Some(BranchNilTest::NilEdgeOnly { nil_on_true: false }),
         _ => None,
     }
 }
@@ -1588,7 +1594,7 @@ impl<'source> FunctionLowering<'source> {
                 );
             }
             Statement::IfStatement(statement) => {
-                let nil_on_true = ts_nil_on_true(&statement.test);
+                let nil_test = ts_nil_test(&statement.test);
                 let predicate_expression =
                     ts_null_operand(&statement.test).unwrap_or(&statement.test);
                 let predicate_place_key = self
@@ -1607,7 +1613,7 @@ impl<'source> FunctionLowering<'source> {
                     statement.test.span(),
                     ControlShape::Conditional,
                     predicate_place_key,
-                    nil_on_true,
+                    nil_test,
                 );
                 let then_start = operations.len();
                 self.lower_statement(
@@ -3752,7 +3758,7 @@ impl<'source> FunctionLowering<'source> {
         span: oxc_span::Span,
         shape: ControlShape,
         predicate_place_key: Option<String>,
-        nil_on_true: Option<bool>,
+        nil_test: Option<BranchNilTest>,
     ) -> MirOpId {
         let id = MirOpId(operations.len() as u64);
         self.push_operation(
@@ -3762,7 +3768,7 @@ impl<'source> FunctionLowering<'source> {
             OperationKindDraft::Branch {
                 predicate: MirPredicateId(span.start as u64),
                 predicate_place_key,
-                nil_on_true,
+                nil_test,
                 shape,
                 region: BranchRegion::default(),
             },
@@ -3927,7 +3933,7 @@ enum OperationKindDraft {
     Branch {
         predicate: MirPredicateId,
         predicate_place_key: Option<String>,
-        nil_on_true: Option<bool>,
+        nil_test: Option<BranchNilTest>,
         shape: ControlShape,
         region: BranchRegion,
     },
@@ -3974,7 +3980,7 @@ impl OperationKindDraft {
             Self::Branch {
                 predicate,
                 predicate_place_key,
-                nil_on_true,
+                nil_test,
                 ..
             } => Some(MirOperationKind::Branch {
                 predicate: *predicate,
@@ -3982,7 +3988,7 @@ impl OperationKindDraft {
                     .as_ref()
                     .and_then(|key| place_ids.get(key))
                     .copied(),
-                nil_on_true: *nil_on_true,
+                nil_test: *nil_test,
             }),
             Self::Call {
                 site,

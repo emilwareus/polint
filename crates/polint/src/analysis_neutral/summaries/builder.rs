@@ -1689,7 +1689,7 @@ mod tests {
                     kind: MirOperationKind::Branch {
                         predicate: MirPredicateId(1),
                         predicate_place: Some(PlaceId(0)),
-                        nil_on_true: None,
+                        nil_test: None,
                     },
                     stable_key: interner.intern("op:branch".to_string()),
                     status: MirStatus::Resolved,

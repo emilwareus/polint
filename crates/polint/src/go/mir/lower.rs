@@ -13,8 +13,9 @@ use crate::analysis_neutral::mir_body::{
     MirTerminatorKind, SuspendKind,
 };
 use crate::analysis_neutral::mir_op::{
-    AssignMode, ConservativeAction, MirAggregateField, MirAggregateKind, MirOperation,
-    MirOperationKind, MirValue, UnsupportedDomain, UnsupportedPrecision, UnsupportedSemanticFact,
+    AssignMode, BranchNilTest, ConservativeAction, MirAggregateField, MirAggregateKind,
+    MirOperation, MirOperationKind, MirValue, UnsupportedDomain, UnsupportedPrecision,
+    UnsupportedSemanticFact,
 };
 use crate::analysis_neutral::places::{
     PlaceInsert, PlaceProjection, PlaceRoot, PlaceStableContext, PlaceStatus, PlaceTableBuilder,
@@ -933,7 +934,7 @@ impl<'source> FunctionLowering<'source> {
                     predicate_place_key,
                     statement
                         .child_by_field_name("condition")
-                        .and_then(|condition| go_nil_on_true(self.source, condition)),
+                        .and_then(|condition| go_nil_test(self.source, condition)),
                 );
                 let then_start = operations.len();
                 if let Some(consequence) = statement.child_by_field_name("consequence") {
@@ -1657,7 +1658,7 @@ impl<'source> FunctionLowering<'source> {
         operations: &mut Vec<OperationDraft>,
         node: Node<'_>,
         predicate_place_key: Option<String>,
-        nil_on_true: Option<bool>,
+        nil_test: Option<BranchNilTest>,
     ) -> MirOpId {
         let id = MirOpId(operations.len() as u64);
         let shape = match node.kind() {
@@ -1674,7 +1675,7 @@ impl<'source> FunctionLowering<'source> {
             OperationKindDraft::Branch {
                 predicate: MirPredicateId(self.ordinal_for(node) as u64),
                 predicate_place_key,
-                nil_on_true,
+                nil_test,
                 shape,
                 region: BranchRegion::default(),
             },
@@ -1873,7 +1874,7 @@ enum OperationKindDraft {
     Branch {
         predicate: MirPredicateId,
         predicate_place_key: Option<String>,
-        nil_on_true: Option<bool>,
+        nil_test: Option<BranchNilTest>,
         shape: ControlShape,
         region: BranchRegion,
     },
@@ -1914,7 +1915,7 @@ impl OperationKindDraft {
             Self::Branch {
                 predicate,
                 predicate_place_key,
-                nil_on_true,
+                nil_test,
                 ..
             } => Some(MirOperationKind::Branch {
                 predicate: *predicate,
@@ -1922,7 +1923,7 @@ impl OperationKindDraft {
                     .as_ref()
                     .and_then(|key| place_ids.get(key))
                     .copied(),
-                nil_on_true: *nil_on_true,
+                nil_test: *nil_test,
             }),
             Self::Call {
                 site,
@@ -2289,7 +2290,7 @@ fn node_text<'source>(source: &'source str, node: Node<'_>) -> Option<&'source s
     source.get(node.start_byte()..node.end_byte())
 }
 
-fn go_nil_on_true(source: &str, condition: Node<'_>) -> Option<bool> {
+fn go_nil_test(source: &str, condition: Node<'_>) -> Option<BranchNilTest> {
     if condition.kind() != "binary_expression" {
         return None;
     }
@@ -2304,11 +2305,13 @@ fn go_nil_on_true(source: &str, condition: Node<'_>) -> Option<bool> {
     {
         return None;
     }
+    // Go has a single nil value, so both edges of `== nil` / `!= nil` carry a
+    // conclusion.
     let operator = go_binary_operator_text(source, left, right);
     if operator == "!=" {
-        Some(false)
+        Some(BranchNilTest::Exhaustive { nil_on_true: false })
     } else if operator == "==" {
-        Some(true)
+        Some(BranchNilTest::Exhaustive { nil_on_true: true })
     } else {
         None
     }

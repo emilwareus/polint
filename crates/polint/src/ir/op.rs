@@ -41,7 +41,7 @@ pub enum MirOperationKind {
     Branch {
         predicate: MirPredicateId,
         predicate_place: Option<PlaceId>,
-        nil_on_true: Option<bool>,
+        nil_test: Option<BranchNilTest>,
     },
     Call {
         site: CallSiteId,
@@ -55,6 +55,37 @@ pub enum MirOperationKind {
     Unsupported {
         unsupported: UnsupportedId,
     },
+}
+
+/// A branch whose predicate compares a place against the language's nil value.
+///
+/// `nil_on_true` names the outgoing edge on which the place is nil. Whether the
+/// opposite edge proves non-nil depends on how exhaustively the comparison
+/// covers the nil values of the language.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum BranchNilTest {
+    /// The comparison covers every nil value, so the opposite edge proves
+    /// non-nil: Go `== nil` / `!= nil`, and TypeScript `== null` / `!= null`,
+    /// which match `undefined` as well as `null`.
+    Exhaustive { nil_on_true: bool },
+    /// The comparison covers only part of the nil space, so only the nil edge
+    /// carries a conclusion: TypeScript `=== null` leaves `undefined` possible
+    /// on the opposite edge.
+    NilEdgeOnly { nil_on_true: bool },
+}
+
+impl BranchNilTest {
+    /// The edge on which the compared place is nil.
+    pub fn nil_on_true(self) -> bool {
+        match self {
+            Self::Exhaustive { nil_on_true } | Self::NilEdgeOnly { nil_on_true } => nil_on_true,
+        }
+    }
+
+    /// Whether the edge that is not the nil edge proves the place is non-nil.
+    pub fn proves_non_nil(self) -> bool {
+        matches!(self, Self::Exhaustive { .. })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
