@@ -1,9 +1,10 @@
-package twindeferred
+package twinallexits
 
 func beginProbe() {}
 func cleanupProbe() {}
+func logProbe() {}
 func Probe(fail bool) {
 	beginProbe()
-	defer cleanupProbe()
-	if fail { return }
+	if fail { logProbe() }
+	cleanupProbe()
 }

@@ -2,6 +2,7 @@ package twinreachable
 
 func impossibleSink() {}
 func Probe() {
-	enabled := true
+	enabled := false
+	enabled = true
 	if enabled { impossibleSink() }
 }

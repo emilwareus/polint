@@ -1,5 +1,6 @@
 function impossibleSink(): void {}
 export function probe(): void {
-  const enabled = true;
+  let enabled = false;
+  enabled = true;
   if (enabled) impossibleSink();
 }

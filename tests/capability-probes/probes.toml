@@ -162,15 +162,15 @@ twins = ["l3/typescript/null-other-branch/twin-guarded"]
 id = "l3-go-constant-join"
 level = "l3"
 language = "go"
-detector = "call_domain:useMaybeInit:constants:unsafe"
+detector = "call_domain:useMaybeInit:constants:unsafe:0"
 positive = "l3/go/maybe-init/positive"
-twins = ["l3/go/maybe-init/twin-initialized"]
+twins = ["l3/go/maybe-init/twin-overwritten"]
 
 [[probe]]
 id = "l3-typescript-use-before-init"
 level = "l3"
 language = "typescript"
-detector = "call_domain:useBeforeInit:initializedness:maybe_uninitialized"
+detector = "call_domain:useBeforeInit:initializedness:maybe_uninitialized:0"
 positive = "l3/typescript/use-before-init/positive"
 twins = ["l3/typescript/use-before-init/twin-initialized"]
 
@@ -180,7 +180,7 @@ level = "l3"
 language = "go"
 detector = "cleanup:beginProbe:cleanupProbe"
 positive = "l3/go/missing-cleanup/positive"
-twins = ["l3/go/missing-cleanup/twin-all-exits"]
+twins = ["l3/go/missing-cleanup/twin-all-exits", "l3/go/missing-cleanup/twin-deferred"]
 
 [[probe]]
 id = "l3-typescript-missing-cleanup-return"
@@ -188,7 +188,7 @@ level = "l3"
 language = "typescript"
 detector = "cleanup:beginProbe:cleanupProbe"
 positive = "l3/typescript/missing-cleanup/positive"
-twins = ["l3/typescript/missing-cleanup/twin-finally"]
+twins = ["l3/typescript/missing-cleanup/twin-all-exits", "l3/typescript/missing-cleanup/twin-early-cleanup"]
 
 [[probe]]
 id = "l3-go-guard-on-other-branch"
