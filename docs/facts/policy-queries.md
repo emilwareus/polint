@@ -71,9 +71,9 @@ pub(crate) fn no_secret_logs(ctx: &mut RuleCtx<'_>, flow: DataFlow<'_>) -> RuleR
   Options include `barriers`, `max_depth`, `max_paths`, and
   `minimum_precision`.
 
-`ControlFlow<'_>` queries are backed by refined call facts and CFG operation
-order when CFG rows exist. MIR operation order and source spans are fallback
-ordering sources; raw CFG traversal remains private.
+`ControlFlow<'_>` queries are backed by refined call facts and CFG dominance or
+post-dominance when relation rows exist. MIR operation order and source spans
+are fallback ordering sources; raw CFG traversal remains private.
 
 ## Realistic Examples
 
