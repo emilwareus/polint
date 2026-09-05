@@ -235,6 +235,12 @@ jobs:
           eval::go_rta::polyglot_go_ts_canary_resolves_go_edges_without_ts_interference
           -- --exact --test-threads=1 --nocapture
 
+      - name: capability probe certification (L1-L3 gated, L4 reported)
+        run: >-
+          cargo test -p polint --lib --all-features --locked
+          eval::capability_probes::capability_probe_certification_rollup
+          -- --exact --test-threads=1 --nocapture
+
       - name: public-surface leak gate
         run: cargo test --package polint --test public_surface_leak --locked
 
