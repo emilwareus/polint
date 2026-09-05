@@ -590,13 +590,21 @@ mod tests {
             r#"Start-Process -FilePath cmd.exe -ArgumentList '/C', 'ping -n 3 127.0.0.1 > nul & echo done > background-child-finished'; Write-Output parent"#,
         ]);
 
-        let started = Instant::now();
-        let output = run_bounded(command, Duration::from_secs(15), "early-exit Go test")
+        // The descendant needs its full ping before it writes the sentinel, and
+        // it only starts once PowerShell reaches `Start-Process`. Checking the
+        // sentinel the moment the call returns therefore proves the run did not
+        // block on the descendant, without pinning that proof to a wall-clock
+        // bound: PowerShell startup on a shared runner varies by seconds, and a
+        // slow start says nothing about whether the descendant was waited on.
+        let output = run_bounded(command, Duration::from_secs(60), "early-exit Go test")
             .expect("parent should exit successfully");
 
         assert!(output.status.success());
         assert!(String::from_utf8_lossy(&output.stdout).contains("parent"));
-        assert!(started.elapsed() < Duration::from_secs(10));
+        assert!(
+            !sentinel.exists(),
+            "run returned only after the descendant finished"
+        );
         thread::sleep(Duration::from_millis(2_300));
         assert!(!sentinel.exists(), "background child survived parent exit");
     }
