@@ -489,6 +489,28 @@ fn set_branch_region(operations: &mut [OperationDraft], branch: MirOpId, region:
     *stored = region;
 }
 
+fn set_branch_predicate(
+    operations: &mut [OperationDraft],
+    branch: MirOpId,
+    predicate_place_key: Option<String>,
+    nil_test: Option<BranchNilTest>,
+) {
+    let operation = operations
+        .iter_mut()
+        .find(|operation| operation.id == branch)
+        .expect("branch operation should exist");
+    let OperationKindDraft::Branch {
+        predicate_place_key: stored_place,
+        nil_test: stored_nil_test,
+        ..
+    } = &mut operation.kind
+    else {
+        panic!("branch operation id should identify a branch");
+    };
+    *stored_place = predicate_place_key;
+    *stored_nil_test = nil_test;
+}
+
 #[derive(Debug, Default)]
 struct TsMirLowering {
     bodies: Vec<MirBody>,
@@ -1657,14 +1679,23 @@ impl<'source> FunctionLowering<'source> {
                 set_branch_region(operations, branch, BranchRegion { then_end, else_end });
             }
             Statement::WhileStatement(statement) => {
-                self.push_branch(interner, operations, statement.span, ControlShape::Loop);
-                self.lower_expression(
+                let branch =
+                    self.push_branch(interner, operations, statement.span, ControlShape::Loop);
+                let lowered = self.lower_expression(
                     interner,
                     &statement.test,
                     places,
                     operations,
                     unsupported,
                     false,
+                );
+                self.bind_branch_predicate(
+                    interner,
+                    places,
+                    operations,
+                    branch,
+                    &statement.test,
+                    lowered,
                 );
                 self.lower_statement(interner, &statement.body, places, operations, unsupported);
             }
@@ -1677,9 +1708,10 @@ impl<'source> FunctionLowering<'source> {
                     "do while",
                     (Vec::new(), ConservativeAction::HavocAffectedPlaces),
                 );
-                self.push_branch(interner, operations, statement.span, ControlShape::Loop);
+                let branch =
+                    self.push_branch(interner, operations, statement.span, ControlShape::Loop);
                 self.lower_statement(interner, &statement.body, places, operations, unsupported);
-                self.lower_expression(
+                let lowered = self.lower_expression(
                     interner,
                     &statement.test,
                     places,
@@ -1687,14 +1719,31 @@ impl<'source> FunctionLowering<'source> {
                     unsupported,
                     false,
                 );
+                self.bind_branch_predicate(
+                    interner,
+                    places,
+                    operations,
+                    branch,
+                    &statement.test,
+                    lowered,
+                );
             }
             Statement::ForStatement(statement) => {
                 if let Some(init) = &statement.init {
                     self.lower_for_statement_init(interner, init, places, operations, unsupported);
                 }
                 if let Some(test) = &statement.test {
-                    self.push_branch(interner, operations, test.span(), ControlShape::Loop);
-                    self.lower_expression(interner, test, places, operations, unsupported, false);
+                    let branch =
+                        self.push_branch(interner, operations, test.span(), ControlShape::Loop);
+                    let lowered = self.lower_expression(
+                        interner,
+                        test,
+                        places,
+                        operations,
+                        unsupported,
+                        false,
+                    );
+                    self.bind_branch_predicate(interner, places, operations, branch, test, lowered);
                 }
                 if let Some(update) = &statement.update {
                     self.lower_expression(interner, update, places, operations, unsupported, false);
@@ -1768,8 +1817,9 @@ impl<'source> FunctionLowering<'source> {
                     "switch",
                     (Vec::new(), ConservativeAction::HavocAffectedPlaces),
                 );
-                self.push_branch(interner, operations, statement.span, ControlShape::Switch);
-                self.lower_expression(
+                let branch =
+                    self.push_branch(interner, operations, statement.span, ControlShape::Switch);
+                let discriminant = self.lower_expression(
                     interner,
                     &statement.discriminant,
                     places,
@@ -1777,21 +1827,30 @@ impl<'source> FunctionLowering<'source> {
                     unsupported,
                     false,
                 );
+                set_branch_predicate(
+                    operations,
+                    branch,
+                    discriminant.map(|shape| shape.key),
+                    None,
+                );
                 for case in &statement.cases {
                     if let Some(test) = &case.test {
-                        self.push_branch(
+                        let branch = self.push_branch(
                             interner,
                             operations,
                             test.span(),
                             ControlShape::Conditional,
                         );
-                        self.lower_expression(
+                        let lowered = self.lower_expression(
                             interner,
                             test,
                             places,
                             operations,
                             unsupported,
                             false,
+                        );
+                        self.bind_branch_predicate(
+                            interner, places, operations, branch, test, lowered,
                         );
                     }
                     for statement in &case.consequent {
@@ -2521,19 +2580,27 @@ impl<'source> FunctionLowering<'source> {
                 Some(self.temporary_shape(places, unary.span))
             }
             Expression::ConditionalExpression(conditional) => {
-                self.push_branch(
+                let branch = self.push_branch(
                     interner,
                     operations,
                     conditional.span,
                     ControlShape::Conditional,
                 );
-                self.lower_expression(
+                let lowered = self.lower_expression(
                     interner,
                     &conditional.test,
                     places,
                     operations,
                     unsupported,
                     false,
+                );
+                self.bind_branch_predicate(
+                    interner,
+                    places,
+                    operations,
+                    branch,
+                    &conditional.test,
+                    lowered,
                 );
                 self.lower_expression(
                     interner,
@@ -2553,18 +2620,19 @@ impl<'source> FunctionLowering<'source> {
                 )
             }
             Expression::LogicalExpression(logical) => {
-                if matches!(
+                let branch = matches!(
                     logical.operator,
                     LogicalOperator::And | LogicalOperator::Or | LogicalOperator::Coalesce
-                ) {
+                )
+                .then(|| {
                     self.push_branch(
                         interner,
                         operations,
                         logical.span,
                         ControlShape::Conditional,
-                    );
-                }
-                self.lower_expression(
+                    )
+                });
+                let lowered = self.lower_expression(
                     interner,
                     &logical.left,
                     places,
@@ -2572,6 +2640,16 @@ impl<'source> FunctionLowering<'source> {
                     unsupported,
                     false,
                 );
+                if let Some(branch) = branch {
+                    self.bind_branch_predicate(
+                        interner,
+                        places,
+                        operations,
+                        branch,
+                        &logical.left,
+                        lowered,
+                    );
+                }
                 self.lower_expression(
                     interner,
                     &logical.right,
@@ -3764,6 +3842,32 @@ impl<'source> FunctionLowering<'source> {
         }
     }
 
+    fn bind_branch_predicate(
+        &mut self,
+        interner: &crate::internal_core::StableKeyInterner,
+        places: &mut PlaceTableBuilder,
+        operations: &mut [OperationDraft],
+        branch: MirOpId,
+        expression: &Expression<'_>,
+        lowered: Option<PlaceShape>,
+    ) {
+        let nil_test = ts_nil_test(expression);
+        let predicate_place_key = if let Some(operand) = ts_null_operand(expression) {
+            self.lower_expression(
+                interner,
+                operand,
+                places,
+                &mut Vec::new(),
+                &mut Vec::new(),
+                false,
+            )
+            .map(|shape| shape.key)
+        } else {
+            lowered.map(|shape| shape.key)
+        };
+        set_branch_predicate(operations, branch, predicate_place_key, nil_test);
+    }
+
     fn push_branch(
         &self,
         interner: &crate::internal_core::StableKeyInterner,
@@ -4885,6 +4989,55 @@ export function flow(user, index, enabled) {
                 .iter()
                 .any(|terminator| matches!(terminator.kind, MirTerminatorKind::Return { .. }))
         );
+    }
+
+    #[test]
+    fn ts_branch_operations_bind_if_switch_ternary_and_logical_condition_places() {
+        let (output, interner) = lower(
+            "src/branches.ts",
+            r#"
+export function flow(flag, other, kind) {
+  if (flag) {}
+  switch (kind) { case other: break; default: break; }
+  const selected = flag ? kind : other;
+  const both = flag && other;
+  const either = flag || other;
+}
+"#,
+        );
+
+        let predicates = output
+            .operations
+            .iter()
+            .filter_map(|operation| match operation.kind {
+                MirOperationKind::Branch {
+                    predicate_place, ..
+                } => Some(predicate_place),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(predicates.len(), 6, "{output:#?}");
+        assert!(predicates.iter().all(Option::is_some), "{output:#?}");
+
+        let keys = predicates
+            .into_iter()
+            .flatten()
+            .map(|predicate| {
+                let place = output
+                    .places
+                    .iter()
+                    .find(|place| place.id == predicate)
+                    .expect("predicate place should survive remapping");
+                interner.resolve(place.stable_key).to_string()
+            })
+            .collect::<Vec<_>>();
+        for name in ["flag", "other", "kind"] {
+            assert!(
+                keys.iter()
+                    .any(|key| key.ends_with(&format!("root_name={}:{}", name.len(), name))),
+                "{name}: {keys:?}"
+            );
+        }
     }
 
     #[test]

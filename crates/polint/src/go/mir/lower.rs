@@ -458,6 +458,28 @@ fn set_branch_region(operations: &mut [OperationDraft], branch: MirOpId, region:
     *stored = region;
 }
 
+fn set_branch_predicate(
+    operations: &mut [OperationDraft],
+    branch: MirOpId,
+    predicate_place_key: Option<String>,
+    nil_test: Option<BranchNilTest>,
+) {
+    let operation = operations
+        .iter_mut()
+        .find(|operation| operation.id == branch)
+        .expect("branch operation should exist");
+    let OperationKindDraft::Branch {
+        predicate_place_key: stored_place,
+        nil_test: stored_nil_test,
+        ..
+    } = &mut operation.kind
+    else {
+        panic!("branch operation id should identify a branch");
+    };
+    *stored_place = predicate_place_key;
+    *stored_nil_test = nil_test;
+}
+
 #[derive(Debug, Default)]
 struct GoMirLowering {
     bodies: Vec<MirBody>,
@@ -977,12 +999,29 @@ impl<'source> FunctionLowering<'source> {
             | "expression_switch_statement"
             | "type_switch_statement"
             | "switch_statement" => {
-                self.push_branch(interner, operations, statement, None, None);
+                let branch = self.push_branch(interner, operations, statement, None, None);
                 for index in 0..statement.named_child_count() as u32 {
                     let Some(child) = statement.named_child(index) else {
                         continue;
                     };
                     self.lower_statement(interner, child, places, operations, unsupported);
+                }
+                if let Some(condition) = go_branch_condition(statement) {
+                    let predicate = go_nil_operand(self.source, condition).unwrap_or(condition);
+                    let predicate_place_key = self
+                        .lower_expression(
+                            interner,
+                            predicate,
+                            places,
+                            &mut Vec::new(),
+                            &mut Vec::new(),
+                            false,
+                        )
+                        .map(|shape| shape.key);
+                    let nil_test = (statement.kind() == "for_statement")
+                        .then(|| go_nil_test(self.source, condition))
+                        .flatten();
+                    set_branch_predicate(operations, branch, predicate_place_key, nil_test);
                 }
             }
             "return_statement" => {
@@ -2313,6 +2352,23 @@ fn node_text<'source>(source: &'source str, node: Node<'_>) -> Option<&'source s
     source.get(node.start_byte()..node.end_byte())
 }
 
+fn go_branch_condition(statement: Node<'_>) -> Option<Node<'_>> {
+    match statement.kind() {
+        "expression_switch_statement" | "type_switch_statement" | "switch_statement" => {
+            statement.child_by_field_name("value")
+        }
+        "for_statement" => {
+            let header = statement.named_child(0)?;
+            match header.kind() {
+                "for_clause" => header.child_by_field_name("condition"),
+                "range_clause" | "block" => None,
+                _ => Some(header),
+            }
+        }
+        _ => None,
+    }
+}
+
 fn go_nil_test(source: &str, condition: Node<'_>) -> Option<BranchNilTest> {
     if condition.kind() != "binary_expression" {
         return None;
@@ -2901,6 +2957,58 @@ func flow(user User, index int) bool {
                 .terminators
                 .iter()
                 .any(|terminator| matches!(terminator.kind, MirTerminatorKind::Return { .. }))
+        );
+    }
+
+    #[test]
+    fn go_branch_operations_bind_if_switch_and_logical_condition_places() {
+        let (output, interner) = lower(
+            r#"
+package auth
+
+func flow(left bool, right bool, kind int) {
+    if left && right {}
+    switch kind { case 1: return; default: return }
+    for left || right { return }
+}
+"#,
+        );
+
+        let predicates = output
+            .operations
+            .iter()
+            .filter_map(|operation| match operation.kind {
+                MirOperationKind::Branch {
+                    predicate_place, ..
+                } => Some(predicate_place),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(predicates.len(), 3, "{output:#?}");
+        assert!(predicates.iter().all(Option::is_some), "{output:#?}");
+
+        let keys = predicates
+            .into_iter()
+            .flatten()
+            .map(|predicate| {
+                let place = output
+                    .places
+                    .iter()
+                    .find(|place| place.id == predicate)
+                    .expect("predicate place should survive remapping");
+                interner.resolve(place.stable_key).to_string()
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            keys.iter().any(|key| key.ends_with("root_name=4:kind")),
+            "{keys:?}"
+        );
+        assert!(
+            keys.iter()
+                .filter(|key| key.ends_with("root_name=5:right"))
+                .count()
+                >= 2,
+            "{keys:?}"
         );
     }
 
