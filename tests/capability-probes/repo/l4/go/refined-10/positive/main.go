@@ -1,5 +1,6 @@
 package positive
 
-func seedTargetGo10() {}
-func seedCallerGo10() { seedTargetGo10() }
+type holderGo10 struct{}
 
+func (h holderGo10) seedTargetGo10() {}
+func seedCallerGo10() { holderGo10{}.seedTargetGo10() }

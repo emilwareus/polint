@@ -11,7 +11,7 @@ Same-function call-event guard and lifecycle queries use refined call facts and
 CFG dominance or post-dominance when those relations are available. MIR
 operation order and source spans remain fallback ordering sources when CFG rows
 are absent. The API remains preview because interprocedural proof, write-field
-events, and resource identity pairing are deferred.
+events, resource identity pairing, and per-exit cleanup proof are deferred.
 
 ```rust
 #[polint::rule(id = "local/require-auth-before-dangerous-call", description = "Auth guard", severity = "error")]
@@ -63,8 +63,10 @@ pub(crate) fn transaction_cleanup(ctx: &mut RuleCtx<'_>, control: ControlFlow<'_
 - `minimum_precision` filters the private call facts considered by the query.
 - `max_depth` is present for a stable query shape, but the current engine only evaluates
   same-function depth. Values above `1` do not enable interprocedural search yet.
-- `require_error_cleanup` is surfaced as evidence. Cleanup calls must
-  post-dominate the matching start when CFG relation facts are available.
+- `require_error_cleanup` is surfaced as evidence. A cleanup call clears a start
+  when it post-dominates that start, which one call reaching every exit does.
+  Cleanup split across exits is not yet proved: a function that calls cleanup
+  separately on each path, or from a `finally` block, is still reported.
 
 Returned diagnostics include the common policy evidence header documented in
 [evidence.md](evidence.md), plus target, function, control scope, required

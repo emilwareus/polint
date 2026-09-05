@@ -1,7 +1,8 @@
 package twinunrealizable
 
-func seedTargetGo10() {}
-func seedCallerGo10() {
-	if false { seedTargetGo10() }
-}
+type holderGo10 struct{}
 
+func (h holderGo10) seedTargetGo10() {}
+func seedCallerGo10() {
+	if false { holderGo10{}.seedTargetGo10() }
+}

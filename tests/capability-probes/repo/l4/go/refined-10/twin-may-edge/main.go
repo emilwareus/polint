@@ -1,8 +1,9 @@
 package twinmayedge
 
-func seedTargetGo10() {}
+type holderGo10 struct{}
+
+func (h holderGo10) seedTargetGo10() {}
 func seedCallerGo10() {
-	chosen := seedTargetGo10
+	chosen := holderGo10{}.seedTargetGo10
 	chosen()
 }
-

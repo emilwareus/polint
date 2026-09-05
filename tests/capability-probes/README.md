@@ -19,9 +19,11 @@ fact surface because the raw abstract-domain store is intentionally not a public
 - **L3 — intraprocedural flow-sensitive:** branch refinement, reachability, initialization,
   dominance/post-dominance for guards and cleanup, and same-function source-to-sink flow.
   Guarded, initialized, all-exit-cleanup, reachable, and sanitized variants are twins.
-- **L4 — seed:** two-function taint, entrypoint-to-danger reachability, and direct-versus-refined
-  call edges. The seed contains exactly 60 cases across Go and TypeScript. It records the current
-  pass rate but does not certify L4 or fail CI.
+- **L4 — seed:** interprocedural taint through helpers, carriers, and return values;
+  entrypoint-to-danger reachability across call chains and methods; and direct-versus-refined call
+  edges. The seed contains exactly 60 cases across Go and TypeScript, each a distinct program
+  shape rather than a renamed copy, so the recorded rate reflects that many independent
+  conclusions. It records the current pass rate but does not certify L4 or fail CI.
 
 ## Certification
 
@@ -65,6 +67,9 @@ cargo test -p polint --lib --all-features --locked \
 6. Run all three suite tests. Check the printed per-level/per-language rates and confirm every new
    twin remains quiet.
 
-`capability_probe_manifest_has_unique_ids_and_cases` rejects duplicate IDs or case directories
-and preserves the 60-case L4 seed size. `capability_probe_suite_is_deterministic` runs the corpus
-twice and compares byte-serialized results.
+`capability_probe_manifest_has_unique_ids_and_cases` rejects duplicate IDs or case directories,
+preserves the 60-case L4 seed size, and requires every certified level and language to keep at
+least four probes, each with a twin. The roll-up gate iterates the certified levels and languages
+rather than whichever buckets the manifest produces, so deleting or relabelling a level's probes
+fails the gate instead of passing vacuously. `capability_probe_suite_is_deterministic` runs the
+corpus twice and compares byte-serialized results.

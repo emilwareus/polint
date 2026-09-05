@@ -21,6 +21,16 @@ use crate::sdk::prelude::*;
 const SUITE_SCHEMA: &str = "polint-capability-probes-1";
 const PROBE_RULE_ID: &str = "capability/probe";
 
+/// Levels whose claims CI enforces. A claim with no probes is a dropped claim,
+/// so certification is checked against this list rather than against whichever
+/// buckets the manifest happens to produce.
+const CERTIFIED_LEVELS: [Level; 3] = [Level::L1, Level::L2, Level::L3];
+const PROBE_LANGUAGES: [ProbeLanguage; 2] = [ProbeLanguage::Go, ProbeLanguage::Typescript];
+
+/// Floor on cases per certified level and language, so shrinking a bucket to a
+/// single easy probe cannot keep the gate green.
+const MINIMUM_CERTIFIED_CASES: usize = 4;
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ProbeSuite {
@@ -527,9 +537,11 @@ fn refined_must_edge(
                     && file_is_in_scope(db, function.file, scope)
             })
             && edge.target_function.is_some_and(|target| {
-                db.functions()
-                    .iter()
-                    .any(|function| function.id == target && function.name == target_name)
+                db.functions().iter().any(|function| {
+                    function.id == target
+                        && function.name == target_name
+                        && file_is_in_scope(db, function.file, scope)
+                })
             })
     })
 }
@@ -600,8 +612,7 @@ fn detect(db: &crate::core::AnalysisDb, detector: &str, scope: &str) -> bool {
     }
 }
 
-fn diagnostic_item(path: &str, observed: bool) -> ObservedItem {
-    assert!(observed);
+fn diagnostic_item(path: &str) -> ObservedItem {
     ObservedItem::Diagnostic(ObservedDiagnostic {
         rule_id: PROBE_RULE_ID.to_string(),
         relative_path: path.to_string(),
@@ -628,7 +639,7 @@ fn expected_item(path: &str) -> ExpectedItem {
 
 fn case_passes(expected_report: bool, reported: bool, case_path: &str) -> bool {
     let expected = expected_report.then(|| expected_item(case_path));
-    let observed = reported.then(|| diagnostic_item(case_path, true));
+    let observed = reported.then(|| diagnostic_item(case_path));
     let matches = match_case(
         expected.as_slice(),
         observed.as_slice(),
@@ -639,7 +650,7 @@ fn case_passes(expected_report: bool, reported: bool, case_path: &str) -> bool {
             row.outcome,
             MatchOutcome::TruePositive | MatchOutcome::TrueNegative
         )
-    }) || matches.is_empty()
+    })
 }
 
 fn run_case(
@@ -727,14 +738,12 @@ fn buckets(results: &[CaseResult]) -> BTreeMap<(Level, ProbeLanguage), Bucket> {
 fn capability_probe_certification_rollup() {
     let results = run_suite();
     let buckets = buckets(&results);
-    let mut gate_failures = Vec::new();
-    for ((level, language), bucket) in buckets {
+    for ((level, language), bucket) in &buckets {
         let positive_rate = if bucket.positive_total == 0 {
             0.0
         } else {
             bucket.positive_passed as f64 / bucket.positive_total as f64
         };
-        let twins_hold = bucket.twins_passed == bucket.twins_total;
         eprintln!(
             "{level:?} {language:?}: positives {}/{} ({:.1}%), twins {}/{} ({:.1}%){}",
             bucket.positive_passed,
@@ -747,22 +756,42 @@ fn capability_probe_certification_rollup() {
             } else {
                 bucket.twins_passed as f64 / bucket.twins_total as f64 * 100.0
             },
-            if level == Level::L4 { " [seed]" } else { "" }
+            if *level == Level::L4 { " [seed]" } else { "" }
         );
-        if !bucket.failures.is_empty() {
-            for failure in &bucket.failures {
-                eprintln!("  - {failure}");
-            }
+        for failure in &bucket.failures {
+            eprintln!("  - {failure}");
         }
-        if level != Level::L4 && (positive_rate < 0.95 || !twins_hold) {
-            gate_failures.push(format!(
-                "{level:?} {language:?}: positives {}/{}, twins {}/{}; failures: {}",
-                bucket.positive_passed,
-                bucket.positive_total,
-                bucket.twins_passed,
-                bucket.twins_total,
-                bucket.failures.join(", ")
-            ));
+    }
+
+    let mut gate_failures = Vec::new();
+    for level in CERTIFIED_LEVELS {
+        for language in PROBE_LANGUAGES {
+            let Some(bucket) = buckets.get(&(level, language)) else {
+                gate_failures.push(format!(
+                    "{level:?} {language:?}: no probes ran; a certified claim must be probed"
+                ));
+                continue;
+            };
+            if bucket.positive_total < MINIMUM_CERTIFIED_CASES
+                || bucket.twins_total < MINIMUM_CERTIFIED_CASES
+            {
+                gate_failures.push(format!(
+                    "{level:?} {language:?}: {} positives and {} twins is below the \
+                     {MINIMUM_CERTIFIED_CASES}-case floor for a certified claim",
+                    bucket.positive_total, bucket.twins_total
+                ));
+            }
+            let positive_rate = bucket.positive_passed as f64 / bucket.positive_total as f64;
+            if positive_rate < 0.95 || bucket.twins_passed != bucket.twins_total {
+                gate_failures.push(format!(
+                    "{level:?} {language:?}: positives {}/{}, twins {}/{}; failures: {}",
+                    bucket.positive_passed,
+                    bucket.positive_total,
+                    bucket.twins_passed,
+                    bucket.twins_total,
+                    bucket.failures.join(", ")
+                ));
+            }
         }
     }
     assert!(
@@ -809,4 +838,24 @@ fn capability_probe_manifest_has_unique_ids_and_cases() {
         .map(|probe| 1 + probe.twins.len())
         .sum::<usize>();
     assert_eq!(l4_cases, 60, "the L4 seed must contain exactly 60 cases");
+
+    for level in CERTIFIED_LEVELS {
+        for language in PROBE_LANGUAGES {
+            let probes = suite
+                .probe
+                .iter()
+                .filter(|probe| probe.level == level && probe.language == language)
+                .collect::<Vec<_>>();
+            assert!(
+                probes.len() >= MINIMUM_CERTIFIED_CASES,
+                "{level:?} {language:?} has {} probes; a certified claim needs at least \
+                 {MINIMUM_CERTIFIED_CASES}",
+                probes.len()
+            );
+            assert!(
+                probes.iter().all(|probe| !probe.twins.is_empty()),
+                "{level:?} {language:?} has a probe with no must-not-report twin"
+            );
+        }
+    }
 }
