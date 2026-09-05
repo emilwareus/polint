@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[rustfmt::skip]
 #[cfg(test)] mod debug;
+mod completeness;
 #[cfg(test)]
 mod dispatch_tests;
 pub(crate) mod go_syntax_projection;
@@ -398,6 +399,7 @@ pub(crate) struct KernelOutput {
     pub(crate) db: AnalysisDb,
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) capability_support: CapabilitySupportView,
+    pub(crate) completeness: crate::core::CompletenessView,
     #[cfg_attr(
         not(test),
         expect(
@@ -522,6 +524,12 @@ impl AnalysisKernel {
             store_status,
         );
         run_report.provider_outputs = provider_outputs;
+        let completeness = completeness::view_from_run(
+            input.plan,
+            &db,
+            &run_report.provider_outcomes,
+            &diagnostics,
+        );
         #[cfg(test)]
         let run_report = run_report.with_scc_closure_debug(scc_closure_debug);
 
@@ -529,6 +537,7 @@ impl AnalysisKernel {
             db,
             diagnostics,
             capability_support,
+            completeness,
             run_report,
             runtime_blocked_rules,
         })
