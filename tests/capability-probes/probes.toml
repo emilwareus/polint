@@ -1,0 +1,399 @@
+schema = "polint-capability-probes-1"
+
+[[probe]]
+id = "l1-go-banned-call"
+level = "l1"
+language = "go"
+detector = "event:dangerousExec"
+positive = "l1/go/banned-call/positive"
+twins = ["l1/go/banned-call/twin-string"]
+
+[[probe]]
+id = "l1-typescript-banned-call"
+level = "l1"
+language = "typescript"
+detector = "event:dangerousExec"
+positive = "l1/typescript/banned-call/positive"
+twins = ["l1/typescript/banned-call/twin-string"]
+
+[[probe]]
+id = "l1-go-dangerous-first-argument"
+level = "l1"
+language = "go"
+detector = "call_literal:runCommand:0:unsafe"
+positive = "l1/go/dangerous-argument/positive"
+twins = ["l1/go/dangerous-argument/twin-safe-position"]
+
+[[probe]]
+id = "l1-typescript-dangerous-first-argument"
+level = "l1"
+language = "typescript"
+detector = "call_literal:runCommand:0:unsafe"
+positive = "l1/typescript/dangerous-argument/positive"
+twins = ["l1/typescript/dangerous-argument/twin-safe-position"]
+
+[[probe]]
+id = "l1-go-forbidden-import"
+level = "l1"
+language = "go"
+detector = "import:example.com/forbidden"
+positive = "l1/go/forbidden-import/positive"
+twins = ["l1/go/forbidden-import/twin-similar"]
+
+[[probe]]
+id = "l1-typescript-forbidden-import"
+level = "l1"
+language = "typescript"
+detector = "import:@internal/forbidden"
+positive = "l1/typescript/forbidden-import/positive"
+twins = ["l1/typescript/forbidden-import/twin-similar"]
+
+[[probe]]
+id = "l1-go-forbidden-literal"
+level = "l1"
+language = "go"
+detector = "string:INSECURE_MODE"
+positive = "l1/go/forbidden-literal/positive"
+twins = ["l1/go/forbidden-literal/twin-comment"]
+
+[[probe]]
+id = "l1-typescript-forbidden-literal"
+level = "l1"
+language = "typescript"
+detector = "string:INSECURE_MODE"
+positive = "l1/typescript/forbidden-literal/positive"
+twins = ["l1/typescript/forbidden-literal/twin-comment"]
+[[probe]]
+id = "l2-go-aliased-import-symbol"
+level = "l2"
+language = "go"
+detector = "symbol_ref:ForbiddenAlias:/bad/"
+positive = "l2/go/aliased-import/positive"
+twins = ["l2/go/aliased-import/twin-safe-module"]
+
+[[probe]]
+id = "l2-typescript-aliased-import-symbol"
+level = "l2"
+language = "typescript"
+detector = "symbol_ref:ForbiddenAlias:/bad/"
+positive = "l2/typescript/aliased-import/positive"
+twins = ["l2/typescript/aliased-import/twin-safe-module"]
+
+[[probe]]
+id = "l2-go-cross-file-symbol-identity"
+level = "l2"
+language = "go"
+detector = "symbol_ref:ForbiddenCross:/bad/"
+positive = "l2/go/cross-file/positive"
+twins = ["l2/go/cross-file/twin-same-name-safe"]
+
+[[probe]]
+id = "l2-typescript-cross-file-symbol-identity"
+level = "l2"
+language = "typescript"
+detector = "symbol_ref:ForbiddenCross:/bad/"
+positive = "l2/typescript/cross-file/positive"
+twins = ["l2/typescript/cross-file/twin-same-name-safe"]
+
+[[probe]]
+id = "l2-go-barrel-reexport"
+level = "l2"
+language = "go"
+detector = "symbol_ref:ForbiddenBarrel:/bad/"
+positive = "l2/go/barrel/positive"
+twins = ["l2/go/barrel/twin-safe-module"]
+
+[[probe]]
+id = "l2-typescript-barrel-reexport"
+level = "l2"
+language = "typescript"
+detector = "module_reachable:app.ts:/bad/"
+positive = "l2/typescript/barrel/positive"
+twins = ["l2/typescript/barrel/twin-safe-module"]
+
+[[probe]]
+id = "l2-go-dot-import-symbol"
+level = "l2"
+language = "go"
+detector = "symbol_ref:ForbiddenDot:/bad/"
+positive = "l2/go/dot-import/positive"
+twins = ["l2/go/dot-import/twin-safe-module"]
+
+[[probe]]
+id = "l2-typescript-namespace-import-symbol"
+level = "l2"
+language = "typescript"
+detector = "symbol_ref:ForbiddenNamespace:/bad/"
+positive = "l2/typescript/namespace-import/positive"
+twins = ["l2/typescript/namespace-import/twin-safe-module"]
+
+[[probe]]
+id = "l2-go-unresolved-import-unknown"
+level = "l2"
+language = "go"
+detector = "unresolved_import:example.com/missing/capability"
+positive = "l2/go/unresolved-import/positive"
+twins = ["l2/go/unresolved-import/twin-resolved"]
+
+[[probe]]
+id = "l2-typescript-unresolved-import-unknown"
+level = "l2"
+language = "typescript"
+detector = "unresolved_import:./missing-capability"
+positive = "l2/typescript/unresolved-import/positive"
+twins = ["l2/typescript/unresolved-import/twin-resolved"]
+[[probe]]
+id = "l3-go-nil-after-other-branch"
+level = "l3"
+language = "go"
+detector = "call_domain:useNil:nilness:nil"
+positive = "l3/go/nil-other-branch/positive"
+twins = ["l3/go/nil-other-branch/twin-guarded"]
+
+[[probe]]
+id = "l3-typescript-null-after-other-branch"
+level = "l3"
+language = "typescript"
+detector = "call_domain:useNull:nilness:nil"
+positive = "l3/typescript/null-other-branch/positive"
+twins = ["l3/typescript/null-other-branch/twin-guarded"]
+
+[[probe]]
+id = "l3-go-constant-join"
+level = "l3"
+language = "go"
+detector = "call_domain:useMaybeInit:constants:unsafe"
+positive = "l3/go/maybe-init/positive"
+twins = ["l3/go/maybe-init/twin-initialized"]
+
+[[probe]]
+id = "l3-typescript-use-before-init"
+level = "l3"
+language = "typescript"
+detector = "call_domain:useBeforeInit:initializedness:maybe_uninitialized"
+positive = "l3/typescript/use-before-init/positive"
+twins = ["l3/typescript/use-before-init/twin-initialized"]
+
+[[probe]]
+id = "l3-go-missing-cleanup-return"
+level = "l3"
+language = "go"
+detector = "cleanup:beginProbe:cleanupProbe"
+positive = "l3/go/missing-cleanup/positive"
+twins = ["l3/go/missing-cleanup/twin-all-exits"]
+
+[[probe]]
+id = "l3-typescript-missing-cleanup-return"
+level = "l3"
+language = "typescript"
+detector = "cleanup:beginProbe:cleanupProbe"
+positive = "l3/typescript/missing-cleanup/positive"
+twins = ["l3/typescript/missing-cleanup/twin-finally"]
+
+[[probe]]
+id = "l3-go-guard-on-other-branch"
+level = "l3"
+language = "go"
+detector = "guard:sensitiveWrite:authorizeProbe"
+positive = "l3/go/guard-other-branch/positive"
+twins = ["l3/go/guard-other-branch/twin-dominating"]
+
+[[probe]]
+id = "l3-typescript-guard-on-other-branch"
+level = "l3"
+language = "typescript"
+detector = "guard:sensitiveWrite:authorizeProbe"
+positive = "l3/typescript/guard-other-branch/positive"
+twins = ["l3/typescript/guard-other-branch/twin-dominating"]
+
+[[probe]]
+id = "l3-go-constant-impossible-branch"
+level = "l3"
+language = "go"
+detector = "call_domain:impossibleSink:reachability:unreachable"
+positive = "l3/go/impossible-branch/positive"
+twins = ["l3/go/impossible-branch/twin-reachable"]
+
+[[probe]]
+id = "l3-typescript-constant-impossible-branch"
+level = "l3"
+language = "typescript"
+detector = "call_domain:impossibleSink:reachability:unreachable"
+positive = "l3/typescript/impossible-branch/positive"
+twins = ["l3/typescript/impossible-branch/twin-reachable"]
+
+[[probe]]
+id = "l3-go-local-taint"
+level = "l3"
+language = "go"
+detector = "flow:probeToken:dangerousLog:sanitizeProbe"
+positive = "l3/go/local-taint/positive"
+twins = ["l3/go/local-taint/twin-sanitized"]
+
+[[probe]]
+id = "l3-typescript-local-taint"
+level = "l3"
+language = "typescript"
+detector = "flow:probeToken:dangerousLog:sanitizeProbe"
+positive = "l3/typescript/local-taint/positive"
+twins = ["l3/typescript/local-taint/twin-sanitized"]
+
+[[probe]]
+id = "l4-go-helper-taint-01"
+level = "l4"
+language = "go"
+detector = "flow:seedTokenGo01:seedSinkGo01:seedSanitizeGo01"
+positive = "l4/go/flow-01/positive"
+twins = ["l4/go/flow-01/twin-sanitized", "l4/go/flow-01/twin-unrealizable"]
+
+[[probe]]
+id = "l4-go-helper-taint-02"
+level = "l4"
+language = "go"
+detector = "flow:seedTokenGo02:seedSinkGo02:seedSanitizeGo02"
+positive = "l4/go/flow-02/positive"
+twins = ["l4/go/flow-02/twin-sanitized", "l4/go/flow-02/twin-unrealizable"]
+
+[[probe]]
+id = "l4-go-helper-taint-03"
+level = "l4"
+language = "go"
+detector = "flow:seedTokenGo03:seedSinkGo03:seedSanitizeGo03"
+positive = "l4/go/flow-03/positive"
+twins = ["l4/go/flow-03/twin-sanitized", "l4/go/flow-03/twin-unrealizable"]
+
+[[probe]]
+id = "l4-go-helper-taint-04"
+level = "l4"
+language = "go"
+detector = "flow:seedTokenGo04:seedSinkGo04:seedSanitizeGo04"
+positive = "l4/go/flow-04/positive"
+twins = ["l4/go/flow-04/twin-sanitized", "l4/go/flow-04/twin-unrealizable"]
+
+[[probe]]
+id = "l4-go-helper-taint-05"
+level = "l4"
+language = "go"
+detector = "flow:seedTokenGo05:seedSinkGo05:seedSanitizeGo05"
+positive = "l4/go/flow-05/positive"
+twins = ["l4/go/flow-05/twin-sanitized", "l4/go/flow-05/twin-unrealizable"]
+
+[[probe]]
+id = "l4-go-entry-reachability-06"
+level = "l4"
+language = "go"
+detector = "reach:main:seedDangerGo06"
+positive = "l4/go/reach-06/positive"
+twins = ["l4/go/reach-06/twin-unreachable", "l4/go/reach-06/twin-dynamic-unreachable"]
+
+[[probe]]
+id = "l4-go-entry-reachability-07"
+level = "l4"
+language = "go"
+detector = "reach:main:seedDangerGo07"
+positive = "l4/go/reach-07/positive"
+twins = ["l4/go/reach-07/twin-unreachable", "l4/go/reach-07/twin-dynamic-unreachable"]
+
+[[probe]]
+id = "l4-go-entry-reachability-08"
+level = "l4"
+language = "go"
+detector = "reach:main:seedDangerGo08"
+positive = "l4/go/reach-08/positive"
+twins = ["l4/go/reach-08/twin-unreachable", "l4/go/reach-08/twin-dynamic-unreachable"]
+
+[[probe]]
+id = "l4-go-refined-must-09"
+level = "l4"
+language = "go"
+detector = "refined_must:seedCallerGo09:seedTargetGo09"
+positive = "l4/go/refined-09/positive"
+twins = ["l4/go/refined-09/twin-may-edge", "l4/go/refined-09/twin-unrealizable"]
+
+[[probe]]
+id = "l4-go-refined-must-10"
+level = "l4"
+language = "go"
+detector = "refined_must:seedCallerGo10:seedTargetGo10"
+positive = "l4/go/refined-10/positive"
+twins = ["l4/go/refined-10/twin-may-edge", "l4/go/refined-10/twin-unrealizable"]
+
+[[probe]]
+id = "l4-typescript-helper-taint-01"
+level = "l4"
+language = "typescript"
+detector = "flow:seedTokenTs01:seedSinkTs01:seedSanitizeTs01"
+positive = "l4/typescript/flow-01/positive"
+twins = ["l4/typescript/flow-01/twin-sanitized", "l4/typescript/flow-01/twin-unrealizable"]
+
+[[probe]]
+id = "l4-typescript-helper-taint-02"
+level = "l4"
+language = "typescript"
+detector = "flow:seedTokenTs02:seedSinkTs02:seedSanitizeTs02"
+positive = "l4/typescript/flow-02/positive"
+twins = ["l4/typescript/flow-02/twin-sanitized", "l4/typescript/flow-02/twin-unrealizable"]
+
+[[probe]]
+id = "l4-typescript-helper-taint-03"
+level = "l4"
+language = "typescript"
+detector = "flow:seedTokenTs03:seedSinkTs03:seedSanitizeTs03"
+positive = "l4/typescript/flow-03/positive"
+twins = ["l4/typescript/flow-03/twin-sanitized", "l4/typescript/flow-03/twin-unrealizable"]
+
+[[probe]]
+id = "l4-typescript-helper-taint-04"
+level = "l4"
+language = "typescript"
+detector = "flow:seedTokenTs04:seedSinkTs04:seedSanitizeTs04"
+positive = "l4/typescript/flow-04/positive"
+twins = ["l4/typescript/flow-04/twin-sanitized", "l4/typescript/flow-04/twin-unrealizable"]
+
+[[probe]]
+id = "l4-typescript-helper-taint-05"
+level = "l4"
+language = "typescript"
+detector = "flow:seedTokenTs05:seedSinkTs05:seedSanitizeTs05"
+positive = "l4/typescript/flow-05/positive"
+twins = ["l4/typescript/flow-05/twin-sanitized", "l4/typescript/flow-05/twin-unrealizable"]
+
+[[probe]]
+id = "l4-typescript-entry-reachability-06"
+level = "l4"
+language = "typescript"
+detector = "reach:seedRootTs06:seedDangerTs06"
+positive = "l4/typescript/reach-06/positive"
+twins = ["l4/typescript/reach-06/twin-unreachable", "l4/typescript/reach-06/twin-dynamic-unreachable"]
+
+[[probe]]
+id = "l4-typescript-entry-reachability-07"
+level = "l4"
+language = "typescript"
+detector = "reach:seedRootTs07:seedDangerTs07"
+positive = "l4/typescript/reach-07/positive"
+twins = ["l4/typescript/reach-07/twin-unreachable", "l4/typescript/reach-07/twin-dynamic-unreachable"]
+
+[[probe]]
+id = "l4-typescript-entry-reachability-08"
+level = "l4"
+language = "typescript"
+detector = "reach:seedRootTs08:seedDangerTs08"
+positive = "l4/typescript/reach-08/positive"
+twins = ["l4/typescript/reach-08/twin-unreachable", "l4/typescript/reach-08/twin-dynamic-unreachable"]
+
+[[probe]]
+id = "l4-typescript-refined-must-09"
+level = "l4"
+language = "typescript"
+detector = "refined_must:seedCallerTs09:seedTargetTs09"
+positive = "l4/typescript/refined-09/positive"
+twins = ["l4/typescript/refined-09/twin-may-edge", "l4/typescript/refined-09/twin-unrealizable"]
+
+[[probe]]
+id = "l4-typescript-refined-must-10"
+level = "l4"
+language = "typescript"
+detector = "refined_must:seedCallerTs10:seedTargetTs10"
+positive = "l4/typescript/refined-10/positive"
+twins = ["l4/typescript/refined-10/twin-may-edge", "l4/typescript/refined-10/twin-unrealizable"]

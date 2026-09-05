@@ -1,0 +1,3 @@
+package safe
+
+func ForbiddenCross() {}
