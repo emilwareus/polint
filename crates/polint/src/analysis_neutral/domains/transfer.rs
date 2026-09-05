@@ -186,12 +186,29 @@ impl EdgeTransfer {
     pub fn apply_branch_assumption(
         _cx: &TransferCx<'_>,
         predicate_place: Option<PlaceId>,
+        nil_on_true: Option<bool>,
         sense: BranchSense,
         state: &mut ProductState,
     ) {
         let Some(place) = predicate_place else {
             return;
         };
+        if let Some(nil_on_true) = nil_on_true {
+            let desired_nil = nil_on_true == matches!(sense, BranchSense::True);
+            if !refine_nilness(
+                state,
+                place,
+                if desired_nil {
+                    NilnessDomain::Nil
+                } else {
+                    NilnessDomain::NonNil
+                },
+            ) {
+                state.core.reachability = ReachabilityDomain::Unreachable;
+            }
+            state.reduce_value_only(4);
+            return;
+        }
         match sense {
             BranchSense::True => {
                 if !refine_truthiness(state, place, TruthinessDomain::Truthy)
@@ -213,6 +230,23 @@ impl EdgeTransfer {
         }
         state.reduce_value_only(4);
     }
+}
+
+fn refine_nilness(state: &mut ProductState, place: PlaceId, desired: NilnessDomain) -> bool {
+    let current = state
+        .core
+        .nilness
+        .get(&place)
+        .copied()
+        .unwrap_or_else(NilnessDomain::bottom);
+    if matches!(
+        (current, desired),
+        (NilnessDomain::Nil, NilnessDomain::NonNil) | (NilnessDomain::NonNil, NilnessDomain::Nil)
+    ) {
+        return false;
+    }
+    state.core.nilness.insert(place, desired);
+    true
 }
 
 fn refine_truthiness(state: &mut ProductState, place: PlaceId, desired: TruthinessDomain) -> bool {
@@ -585,6 +619,7 @@ mod tests {
         EdgeTransfer::apply_branch_assumption(
             &TransferCx::empty_for_test(),
             Some(place),
+            None,
             BranchSense::True,
             &mut state,
         );
@@ -601,11 +636,37 @@ mod tests {
         EdgeTransfer::apply_branch_assumption(
             &TransferCx::empty_for_test(),
             None,
+            None,
             BranchSense::True,
             &mut state,
         );
 
         assert!(!state.core.truthiness.contains_key(&unrelated));
+    }
+
+    #[test]
+    fn relational_nil_constraint_refines_opposite_edges() {
+        let place = PlaceId(7);
+        let mut true_edge = ProductState::entry();
+        let mut false_edge = ProductState::entry();
+
+        EdgeTransfer::apply_branch_assumption(
+            &TransferCx::empty_for_test(),
+            Some(place),
+            Some(false),
+            BranchSense::True,
+            &mut true_edge,
+        );
+        EdgeTransfer::apply_branch_assumption(
+            &TransferCx::empty_for_test(),
+            Some(place),
+            Some(false),
+            BranchSense::False,
+            &mut false_edge,
+        );
+
+        assert_eq!(true_edge.core.nilness[&place], NilnessDomain::NonNil);
+        assert_eq!(false_edge.core.nilness[&place], NilnessDomain::Nil);
     }
 
     #[test]
@@ -706,6 +767,7 @@ mod tests {
         EdgeTransfer::apply_branch_assumption(
             &TransferCx::empty_for_test(),
             Some(place),
+            None,
             BranchSense::True,
             &mut state,
         );
@@ -726,6 +788,7 @@ mod tests {
         EdgeTransfer::apply_branch_assumption(
             &TransferCx::empty_for_test(),
             Some(place),
+            None,
             BranchSense::True,
             &mut state,
         );

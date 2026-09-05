@@ -41,6 +41,7 @@ pub enum MirOperationKind {
     Branch {
         predicate: MirPredicateId,
         predicate_place: Option<PlaceId>,
+        nil_on_true: Option<bool>,
     },
     Call {
         site: CallSiteId,

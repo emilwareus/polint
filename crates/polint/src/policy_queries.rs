@@ -336,9 +336,10 @@ fn missing_guard_calls(
             if !event_matches_pattern(event, &query.event) {
                 continue;
             }
-            let has_guard = function_events[..index]
-                .iter()
-                .any(|candidate| guard_matches_event(candidate, &query.guard));
+            let has_guard = function_events[..index].iter().any(|candidate| {
+                guard_matches_event(candidate, &query.guard)
+                    && event_dominates(db, candidate, event)
+            });
             if has_guard {
                 continue;
             }
@@ -397,9 +398,10 @@ fn missing_cleanup_calls(
             if !event_matches_pattern(event, &query.start) {
                 continue;
             }
-            let has_cleanup = function_events[index + 1..]
-                .iter()
-                .any(|candidate| event_matches_pattern(candidate, &query.cleanup));
+            let has_cleanup = function_events[index + 1..].iter().any(|candidate| {
+                event_matches_pattern(candidate, &query.cleanup)
+                    && event_postdominates(db, candidate, event)
+            });
             if has_cleanup {
                 continue;
             }
@@ -437,6 +439,77 @@ fn missing_cleanup_calls(
     }
 
     results
+}
+
+fn event_dominates(
+    db: &AnalysisDb,
+    candidate: &ControlCallEvent,
+    event: &ControlCallEvent,
+) -> bool {
+    match (candidate.block, event.block) {
+        (Some(candidate), Some(event)) if candidate == event => true,
+        (Some(candidate), Some(event)) => {
+            db.cfg_dominators().is_empty()
+                || relation_reaches(
+                    event,
+                    candidate,
+                    db.cfg_dominators()
+                        .iter()
+                        .map(|fact| (fact.dominated, fact.dominator)),
+                )
+        }
+        _ => true,
+    }
+}
+
+fn event_postdominates(
+    db: &AnalysisDb,
+    candidate: &ControlCallEvent,
+    event: &ControlCallEvent,
+) -> bool {
+    match (candidate.block, event.block) {
+        (Some(candidate), Some(event)) if candidate == event => true,
+        (Some(candidate), Some(event)) => {
+            db.cfg_postdominators().is_empty()
+                || relation_reaches(
+                    event,
+                    candidate,
+                    db.cfg_postdominators()
+                        .iter()
+                        .map(|fact| (fact.postdominated, fact.postdominator)),
+                )
+        }
+        _ => true,
+    }
+}
+
+fn relation_reaches(
+    start: crate::analysis_neutral::cfg::ids::BasicBlockId,
+    target: crate::analysis_neutral::cfg::ids::BasicBlockId,
+    edges: impl IntoIterator<
+        Item = (
+            crate::analysis_neutral::cfg::ids::BasicBlockId,
+            crate::analysis_neutral::cfg::ids::BasicBlockId,
+        ),
+    >,
+) -> bool {
+    let mut by_source = BTreeMap::<_, Vec<_>>::new();
+    for (source, destination) in edges {
+        by_source.entry(source).or_default().push(destination);
+    }
+    let mut seen = BTreeSet::from([start]);
+    let mut queue = VecDeque::from([start]);
+    while let Some(current) = queue.pop_front() {
+        for destination in by_source.get(&current).into_iter().flatten().copied() {
+            if destination == target {
+                return true;
+            }
+            if seen.insert(destination) {
+                queue.push_back(destination);
+            }
+        }
+    }
+    false
 }
 
 #[derive(Debug, Clone)]
@@ -1125,6 +1198,7 @@ struct SearchState {
 #[derive(Debug, Clone)]
 struct ControlCallEvent {
     function: FunctionId,
+    block: Option<crate::analysis_neutral::cfg::ids::BasicBlockId>,
     file: String,
     range: crate::diagnostics::TextRange,
     target_label: String,
@@ -1267,6 +1341,7 @@ fn control_event_for_edge(
     let target_label = best_call_target_label(db, edge, site_by_id);
     Some(ControlCallEvent {
         function: edge.caller,
+        block: cfg_block_for_operation(db, site.body, site.operation),
         file: db.path_for(site.file),
         range: site.span.diagnostic_range(),
         target_label,
@@ -1287,6 +1362,7 @@ fn control_event_for_site(
     let label = call_site_label(site);
     ControlCallEvent {
         function: site.caller,
+        block: cfg_block_for_operation(db, site.body, site.operation),
         file: db.path_for(site.file),
         range: site.span.diagnostic_range(),
         target_label: label.clone(),
@@ -1297,6 +1373,17 @@ fn control_event_for_site(
         precision: site.precision,
         confidence: None,
     }
+}
+
+fn cfg_block_for_operation(
+    db: &AnalysisDb,
+    body: MirBodyId,
+    operation: MirOpId,
+) -> Option<crate::analysis_neutral::cfg::ids::BasicBlockId> {
+    db.cfg_nodes()
+        .iter()
+        .find(|node| node.body == body && node.operation == Some(operation))
+        .map(|node| node.block)
 }
 
 fn control_order(
@@ -3430,6 +3517,7 @@ mod tests {
             kind: MirOperationKind::Branch {
                 predicate: MirPredicateId(operation.0),
                 predicate_place: None,
+                nil_on_true: None,
             },
             stable_key: interner.intern(format!("mir:op:{:05}", operation.0)),
             status: MirStatus::Resolved,

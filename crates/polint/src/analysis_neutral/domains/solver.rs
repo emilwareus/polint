@@ -582,7 +582,7 @@ impl SolverResult {
 fn branch_assumption(
     edge: CfgEdgeKind,
     operation: Option<&MirOperation>,
-) -> Option<(Option<PlaceId>, BranchSense)> {
+) -> Option<(Option<PlaceId>, Option<bool>, BranchSense)> {
     let sense = match edge {
         CfgEdgeKind::True => BranchSense::True,
         CfgEdgeKind::False => BranchSense::False,
@@ -590,10 +590,12 @@ fn branch_assumption(
     };
     operation.and_then(|operation| {
         if let MirOperationKind::Branch {
-            predicate_place, ..
+            predicate_place,
+            nil_on_true,
+            ..
         } = operation.kind
         {
-            Some((predicate_place, sense))
+            Some((predicate_place, nil_on_true, sense))
         } else {
             None
         }
@@ -606,8 +608,8 @@ fn apply_branch(
     operation: Option<&MirOperation>,
     state: &mut ProductState,
 ) {
-    if let Some((predicate, sense)) = branch_assumption(kind, operation) {
-        EdgeTransfer::apply_branch_assumption(transfer_cx, predicate, sense, state);
+    if let Some((predicate, nil_on_true, sense)) = branch_assumption(kind, operation) {
+        EdgeTransfer::apply_branch_assumption(transfer_cx, predicate, nil_on_true, sense, state);
     }
 }
 
